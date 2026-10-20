@@ -18,6 +18,7 @@ type GovernanceHandler struct {
 	probes  *service.ProbeExecutor
 	verify  *service.VerifyService
 	cleanup *service.CleanupService
+	fp      *service.FingerprintService
 }
 
 func NewGovernanceHandler() *GovernanceHandler {
@@ -26,6 +27,7 @@ func NewGovernanceHandler() *GovernanceHandler {
 		probes:  service.NewProbeExecutor(8),
 		verify:  service.NewVerifyService(),
 		cleanup: service.NewCleanupService(),
+		fp:      service.NewFingerprintService(),
 	}
 }
 
@@ -398,4 +400,138 @@ func (h *GovernanceHandler) ProtectAsset(c *gin.Context) {
 		return
 	}
 	utils.SuccessWithMessage(c, "已设置保护期", gin.H{"id": id, "days": body.Days})
+}
+
+// --- 指纹规则（条件树） ---
+
+func (h *GovernanceHandler) fpRepo() (repo.FingerprintRepo, error) {
+	if repo.Default() == nil {
+		return nil, errors.New("数据层未初始化")
+	}
+	return repo.Default().Fingerprints(), nil
+}
+
+// ListFingerprints 规则列表。GET /api/governance/fingerprints
+func (h *GovernanceHandler) ListFingerprints(c *gin.Context) {
+	fp, err := h.fpRepo()
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	rules, err := fp.ListRules(c.Request.Context(), false)
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"items": rules, "total": len(rules)})
+}
+
+// UpsertFingerprint 新建或覆盖一条规则（按 name 唯一）。
+// POST /api/governance/fingerprints
+func (h *GovernanceHandler) UpsertFingerprint(c *gin.Context) {
+	var body struct {
+		Name      string          `json:"name" binding:"required"`
+		Category  string          `json:"category"`
+		Version   string          `json:"version"`
+		Enabled   *bool           `json:"enabled"`
+		Condition *repo.Condition `json:"condition_tree"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	if err := service.ValidateCondition(body.Condition); err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	fp, err := h.fpRepo()
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	enabled := true
+	if body.Enabled != nil {
+		enabled = *body.Enabled
+	}
+	rule := &repo.FpRule{
+		Name: body.Name, Category: body.Category, Version: body.Version,
+		Enabled: enabled, DSLVersion: 2, Condition: body.Condition,
+	}
+	if err := fp.UpsertRule(c.Request.Context(), rule); err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	h.fp.Invalidate() // 规则变了，缓存立刻失效
+	utils.SuccessWithMessage(c, "已保存", rule)
+}
+
+// DeleteFingerprint 按名字删规则。DELETE /api/governance/fingerprints/:name
+func (h *GovernanceHandler) DeleteFingerprint(c *gin.Context) {
+	name := c.Param("name")
+	fp, err := h.fpRepo()
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	if err := fp.DeleteRule(c.Request.Context(), name); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			utils.NotFound(c, "规则不存在")
+			return
+		}
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	h.fp.Invalidate()
+	utils.SuccessWithMessage(c, "已删除", nil)
+}
+
+// PreviewFingerprint 用样例响应试跑规则，不落库。
+// POST /api/governance/fingerprints/preview
+func (h *GovernanceHandler) PreviewFingerprint(c *gin.Context) {
+	var body struct {
+		Condition *repo.Condition `json:"condition_tree"`
+		Sample    struct {
+			StatusCode int               `json:"status_code"`
+			Title      string            `json:"title"`
+			Server     string            `json:"server"`
+			Headers    map[string]string `json:"headers"`
+			Body       string            `json:"body"`
+		} `json:"sample"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	if err := service.ValidateCondition(body.Condition); err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	matched := h.fp.EvalTree(body.Condition, service.ResponseSnapshot{
+		StatusCode: body.Sample.StatusCode,
+		Title:      body.Sample.Title,
+		Server:     body.Sample.Server,
+		Headers:    body.Sample.Headers,
+		Body:       body.Sample.Body,
+	})
+	utils.Success(c, gin.H{"matched": matched})
+}
+
+// SiteFingerprints 某站点命中的指纹。GET /api/assets/:id/fingerprints
+func (h *GovernanceHandler) SiteFingerprints(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "非法资产 ID")
+		return
+	}
+	fp, err := h.fpRepo()
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	hits, err := fp.ListHits(c.Request.Context(), id)
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"items": hits, "total": len(hits)})
 }

@@ -76,6 +76,11 @@ func SetupRouter() *gin.Engine {
 				protected.POST("/runs/:id/execute", middleware.AdminMiddleware(), govHandler.ExecuteRun)
 				protected.POST("/governance/archive", middleware.AdminMiddleware(), govHandler.ArchiveLost)
 				protected.POST("/assets/:id/protect", middleware.AdminMiddleware(), govHandler.ProtectAsset)
+				protected.GET("/assets/:id/fingerprints", govHandler.SiteFingerprints)
+				protected.GET("/governance/fingerprints", govHandler.ListFingerprints)
+				protected.POST("/governance/fingerprints", middleware.AdminMiddleware(), govHandler.UpsertFingerprint)
+				protected.POST("/governance/fingerprints/preview", govHandler.PreviewFingerprint)
+				protected.DELETE("/governance/fingerprints/:name", middleware.AdminMiddleware(), govHandler.DeleteFingerprint)
 			}
 
 			// User routes

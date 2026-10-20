@@ -5,8 +5,10 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -33,6 +35,12 @@ type ProbeResult struct {
 	Addr       string       `json:"addr"`
 	ElapsedMS  int64        `json:"elapsed_ms"`
 	Detail     string       `json:"detail"`
+
+	// 指纹匹配用的快照，不进 API 响应（正文可能几百 KB）
+	Title   string            `json:"title,omitempty"`
+	Server  string            `json:"server,omitempty"`
+	Body    string            `json:"-"`
+	Headers map[string]string `json:"-"`
 }
 
 // Reachable 表示这个结果能证明「站点还活着」。
@@ -45,7 +53,11 @@ func (r ProbeResult) Inconclusive() bool { return r.Outcome == ProbeInconclusive
 const (
 	probeTimeout = 8 * time.Second
 	probeUA      = "Mozilla/5.0 (compatible; 4zreark-probe/1.0)"
+	// 指纹只看头部特征，正文读 256KB 足够，避免被大文件拖住
+	probeBodyLimit = 256 << 10
 )
+
+var titleRe = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 
 // resolveIPAddr 抽成变量：单测里换掉它就能模拟 FakeIP / 私网回落，不用真去改 DNS。
 var resolveIPAddr = func(ctx context.Context, host string) ([]net.IPAddr, error) {
@@ -178,6 +190,14 @@ func ProbeEndpoint(ctx context.Context, host string, port int, scheme string) Pr
 	}
 	defer resp.Body.Close()
 
+	// 采集指纹快照：标题、Server、响应头、正文前 256KB
+	if body, rerr := io.ReadAll(io.LimitReader(resp.Body, probeBodyLimit)); rerr == nil {
+		res.Body = string(body)
+		res.Title = extractTitle(res.Body)
+	}
+	res.Server = resp.Header.Get("Server")
+	res.Headers = flattenHeaders(resp.Header)
+
 	res.Outcome = ProbeReachable
 	res.StatusCode = resp.StatusCode
 	res.ReasonCode = "http_ok"
@@ -186,6 +206,28 @@ func ProbeEndpoint(ctx context.Context, host string, port int, scheme string) Pr
 		res.ReasonCode = "http_error"
 	}
 	return res
+}
+
+// extractTitle 从 HTML 里取 <title>，压平空白并截断到 200 字符。
+func extractTitle(body string) string {
+	m := titleRe.FindStringSubmatch(body)
+	if len(m) < 2 {
+		return ""
+	}
+	t := strings.Join(strings.Fields(m[1]), " ")
+	if len([]rune(t)) > 200 {
+		t = string([]rune(t)[:200])
+	}
+	return t
+}
+
+// flattenHeaders 压成小写 key → 逗号拼接的值，方便按名字查。
+func flattenHeaders(h http.Header) map[string]string {
+	out := make(map[string]string, len(h))
+	for k, vs := range h {
+		out[strings.ToLower(k)] = strings.Join(vs, ", ")
+	}
+	return out
 }
 
 func isPrivateIP(ip net.IP) bool {

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"log"
 
 	"github.com/c1ayooo/4zreark/repo"
 )
@@ -13,9 +14,13 @@ import (
 //   - 收到任意 HTTP 响应（403/404/500 也算）→ reachable
 //   - 全部入口都连不上 → 失败计数 +1，累计到阈值才进 lost
 //   - FakeIP / 公网域名解析到私网 → inconclusive，只落流水，不计失败
-type VerifyService struct{}
+type VerifyService struct {
+	fp *FingerprintService
+}
 
-func NewVerifyService() *VerifyService { return &VerifyService{} }
+func NewVerifyService() *VerifyService {
+	return &VerifyService{fp: NewFingerprintService()}
+}
 
 // EndpointProbe 是单个入口的探测结果。
 type EndpointProbe struct {
@@ -37,6 +42,9 @@ type SiteProbeReport struct {
 	ReasonCode string          `json:"reason_code"`
 	StatusCode int             `json:"status_code"`
 	Endpoints  []EndpointProbe `json:"endpoints"`
+	// 本次探测命中的指纹（规则名与技术栈）
+	Tech         []string `json:"tech,omitempty"`
+	MatchedRules []string `json:"matched_rules,omitempty"`
 }
 
 func (s *VerifyService) stores() (*repo.AssetRepo, error) {
@@ -72,6 +80,7 @@ func (s *VerifyService) ProbeSite(ctx context.Context, siteID int64) (*SiteProbe
 
 	report := &SiteProbeReport{SiteID: siteID, Host: host, Endpoints: make([]EndpointProbe, 0, len(endpoints))}
 	worstReason := ""
+	var snapshot *ProbeResult
 	for _, ep := range endpoints {
 		res := ProbeEndpoint(ctx, report.Host, ep.Port, ep.Scheme)
 		report.Endpoints = append(report.Endpoints, EndpointProbe{
@@ -83,6 +92,8 @@ func (s *VerifyService) ProbeSite(ctx context.Context, siteID int64) (*SiteProbe
 			report.Verdict = "reachable"
 			report.StatusCode = res.StatusCode
 			report.ReasonCode = res.ReasonCode
+			r := res
+			snapshot = &r
 			break
 		}
 		if res.Inconclusive() {
@@ -98,6 +109,23 @@ func (s *VerifyService) ProbeSite(ctx context.Context, siteID int64) (*SiteProbe
 	case "reachable":
 		if err := assets.VerifySite(ctx, siteID, true, report.StatusCode, report.ReasonCode); err != nil {
 			return report, err
+		}
+		// 顺手跑指纹：命中写 fingerprint_hits，技术栈写回 sites.tech。
+		// 指纹失败不影响探测结论，只记日志。
+		if snapshot != nil && s.fp != nil {
+			ids, tech, ferr := s.fp.ApplyToSite(ctx, siteID, ResponseSnapshot{
+				StatusCode: snapshot.StatusCode,
+				Title:      snapshot.Title,
+				Server:     snapshot.Server,
+				Headers:    snapshot.Headers,
+				Body:       snapshot.Body,
+			}, nil)
+			if ferr != nil {
+				log.Printf("[Verify] 站点 %d 指纹匹配失败: %v", siteID, ferr)
+			} else {
+				report.Tech = tech
+				report.MatchedRules = ids
+			}
 		}
 	case "inconclusive":
 		if err := assets.RecordInconclusive(ctx, siteID, report.ReasonCode); err != nil {

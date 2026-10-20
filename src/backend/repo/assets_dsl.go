@@ -17,7 +17,7 @@ var ErrDSLSyntax = errors.New("资产查询语法错误")
 // 规则：值必须双引号；= 包含匹配，== 精确匹配，!= 取反（缺失字段也算不匹配）；
 // 优先级 && 高于 ||，括号可显式分组。
 var assetQueryFields = []string{
-	"text", "status_code", "title", "domain", "host", "ip", "port", "protocol",
+	"text", "app", "status_code", "title", "domain", "host", "ip", "port", "protocol",
 	"icon_hash", "discovery_type", "first_seen", "verified_at", "new_within", "verified_within",
 }
 
@@ -283,6 +283,21 @@ func (p *dslParser) buildCond(field, op, val string) (string, error) {
 			return fmt.Sprintf("%s < (%s::date + interval '1 day')", col, p.add(val)), nil
 		}
 		return fmt.Sprintf("%s::date = %s::date", col, p.add(val)), nil
+
+	case "app":
+		// 优先走 fingerprint_hits（有索引），没命中规则名时回退到 sites.tech 数组。
+		// v2 §19 记的正是这个字段：ScopesHub 自己在这里返回 500，这里两条路径都要兜住。
+		exact := p.add(strings.ToLower(val))
+		fuzzy := p.add("%" + escapeLike(strings.ToLower(val)) + "%")
+		cond := fmt.Sprintf(`(exists (select 1 from fingerprint_hits f
+		                               join fingerprint_rules fr on fr.id = f.rule_id
+		                              where f.site_id = s.id and lower(fr.name) = %s)
+		                     or exists (select 1 from jsonb_array_elements_text(s.tech) t
+		                                 where lower(t) like %s))`, exact, fuzzy)
+		if neg {
+			return "(NOT " + cond + ")", nil
+		}
+		return cond, nil
 
 	case "new_within", "verified_within":
 		col := "s.first_seen"
