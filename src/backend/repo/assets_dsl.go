@@ -1,10 +1,14 @@
 package repo
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 )
+
+// ErrDSLSyntax 标记查询串语法错误。调用方据此返回 400，而不是当成数据库错误返回 500。
+var ErrDSLSyntax = errors.New("资产查询语法错误")
 
 // 资产查询 DSL：与 ScopesHub 实测语法对齐
 //
@@ -52,7 +56,7 @@ func BuildAssetWhereFrom(q string, base int) (string, []any, error) {
 }
 
 func (p *dslParser) errf(format string, a ...any) error {
-	return fmt.Errorf("资产查询第 %d 字符：%s", p.pos+1, fmt.Sprintf(format, a...))
+	return fmt.Errorf("%w：第 %d 字符：%s", ErrDSLSyntax, p.pos+1, fmt.Sprintf(format, a...))
 }
 
 func (p *dslParser) skipSpace() {

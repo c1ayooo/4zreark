@@ -12,19 +12,33 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { useToast } from '@/components/ui/use-toast'
-import { RefreshCw, Search, ShieldCheck, ShieldAlert } from 'lucide-react'
+import { RefreshCw, Search, Radar, MoreHorizontal, ShieldCheck, ShieldAlert, Lock } from 'lucide-react'
 
 const stateLabel: Record<string, string> = {
   reachable: '可访问',
   lost: '失联',
+  archived: '已归档',
   pending: '待验证',
 }
 
 const stateVariant = (state: string): 'default' | 'secondary' | 'destructive' | 'outline' => {
   if (state === 'reachable') return 'default'
   if (state === 'lost') return 'destructive'
+  if (state === 'archived') return 'outline'
   return 'secondary'
+}
+
+const verdictLabel: Record<string, string> = {
+  reachable: '可达',
+  unreachable: '不可达',
+  inconclusive: '判不出（环境噪声）',
 }
 
 export default function AssetsPage() {
@@ -50,6 +64,27 @@ export default function AssetsPage() {
       }),
   })
 
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: ['assets'] })
+    queryClient.invalidateQueries({ queryKey: ['asset-overview'] })
+  }
+
+  const probe = useMutation({
+    mutationFn: (site: Site) => assetApi.probe(site.id),
+    onSuccess: (res) => {
+      const verdict = res.data?.verdict ?? ''
+      toast({
+        title: `${res.data?.host ?? ''} ${verdictLabel[verdict] ?? verdict}`,
+        description: (res.data?.endpoints ?? [])
+          .map((e) => `${e.scheme}:${e.port} → ${e.outcome}${e.status_code ? ` (${e.status_code})` : ''}`)
+          .join(' · '),
+        variant: verdict === 'unreachable' ? 'destructive' : 'default',
+      })
+      refresh()
+    },
+    onError: (e: any) => toast({ title: '探测失败', description: e?.message, variant: 'destructive' }),
+  })
+
   const verify = useMutation({
     mutationFn: ({ site, reachable }: { site: Site; reachable: boolean }) =>
       assetApi.verify(site.id, {
@@ -58,11 +93,16 @@ export default function AssetsPage() {
         reason: reachable ? '' : 'manual_failed',
       }),
     onSuccess: () => {
-      toast({ title: '验证状态已更新' })
-      queryClient.invalidateQueries({ queryKey: ['assets'] })
-      queryClient.invalidateQueries({ queryKey: ['asset-overview'] })
+      toast({ title: '人工判定已记录' })
+      refresh()
     },
     onError: (e: any) => toast({ title: '操作失败', description: e?.message, variant: 'destructive' }),
+  })
+
+  const protect = useMutation({
+    mutationFn: (site: Site) => assetApi.protect(site.id, 90),
+    onSuccess: () => toast({ title: '已设 90 天保护期，期间不会被自动归档' }),
+    onError: (e: any) => toast({ title: '设置失败', description: e?.message, variant: 'destructive' }),
   })
 
   const applyQuery = () => {
@@ -85,6 +125,7 @@ export default function AssetsPage() {
   const total = list.data?.total ?? 0
   const pages = Math.max(1, Math.ceil(total / pageSize))
   const stats = overview.data?.data
+  const busy = probe.isPending || verify.isPending || protect.isPending
 
   return (
     <div className="space-y-6 p-6">
@@ -94,7 +135,8 @@ export default function AssetsPage() {
           <p className="text-sm text-muted-foreground">
             原始记录 {(stats?.record_count ?? 0).toLocaleString()} 条 · 归并站点{' '}
             {(stats?.sites ?? 0).toLocaleString()} 个 · 域名 {(stats?.domains ?? 0).toLocaleString()} 个 ·
-            可访问 {(stats?.verified_sites ?? 0).toLocaleString()} 个
+            可访问 {(stats?.verified_sites ?? 0).toLocaleString()} 个 · 失联{' '}
+            {(stats?.lost_count ?? 0).toLocaleString()} 个
           </p>
         </div>
         <Button variant="outline" onClick={() => list.refetch()}>
@@ -154,7 +196,7 @@ export default function AssetsPage() {
               <TableHead>标题</TableHead>
               <TableHead className="w-[120px]">项目</TableHead>
               <TableHead className="w-[110px]">发现时间</TableHead>
-              <TableHead className="w-[90px]">连通</TableHead>
+              <TableHead className="w-[110px]">连通</TableHead>
               <TableHead className="w-[150px]">操作</TableHead>
             </TableRow>
           </TableHeader>
@@ -173,53 +215,83 @@ export default function AssetsPage() {
                 </TableCell>
               </TableRow>
             )}
-            {items.map((s) => (
-              <TableRow key={s.id}>
-                <TableCell>
-                  <div className="font-mono text-sm">{s.value}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {s.host}:{s.port} · {s.ip || '—'}
-                    {s.technology_stack.length > 0 && ` · ${s.technology_stack.join(', ')}`}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <Badge variant={s.http_status >= 200 && s.http_status < 400 ? 'default' : 'secondary'}>
-                    {s.http_status || '—'}
-                  </Badge>
-                </TableCell>
-                <TableCell className="max-w-[280px] truncate text-sm">{s.title || '—'}</TableCell>
-                <TableCell className="text-sm">{s.project_name}</TableCell>
-                <TableCell className="text-xs text-muted-foreground">
-                  {s.first_seen?.slice(0, 10)}
-                </TableCell>
-                <TableCell>
-                  <Badge variant={stateVariant(s.state)}>{stateLabel[s.state] ?? s.state}</Badge>
-                  {s.consecutive_failures > 0 && (
-                    <span className="ml-1 text-xs text-destructive">×{s.consecutive_failures}</span>
-                  )}
-                </TableCell>
-                <TableCell>
-                  <div className="flex gap-1">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => verify.mutate({ site: s, reachable: true })}
-                      disabled={verify.isPending}
-                    >
-                      <ShieldCheck className="mr-1 h-3.5 w-3.5" /> 标记可达
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => verify.mutate({ site: s, reachable: false })}
-                      disabled={verify.isPending}
-                    >
-                      <ShieldAlert className="mr-1 h-3.5 w-3.5" /> 失败
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
+            {items.map((s) => {
+              const endpoints = s.endpoints ?? []
+              return (
+                <TableRow key={s.id}>
+                  <TableCell>
+                    <div className="font-mono text-sm">{s.value}</div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1">
+                      {endpoints.length > 0 ? (
+                        endpoints.map((e) => (
+                          <span
+                            key={`${e.scheme}-${e.port}`}
+                            title={`最近状态码 ${e.status_code || '—'}`}
+                            className="rounded border px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
+                          >
+                            {e.scheme}:{e.port}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="font-mono text-[11px] text-muted-foreground">
+                          {s.protocol}:{s.port}
+                        </span>
+                      )}
+                      <span className="ml-1 text-[11px] text-muted-foreground">
+                        {s.ip || '—'}
+                        {s.technology_stack.length > 0 && ` · ${s.technology_stack.join(', ')}`}
+                      </span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={s.http_status >= 200 && s.http_status < 400 ? 'default' : 'secondary'}>
+                      {s.http_status || '—'}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="max-w-[260px] truncate text-sm">{s.title || '—'}</TableCell>
+                  <TableCell className="text-sm">{s.project_name}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {s.first_seen?.slice(0, 10)}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={stateVariant(s.state)}>{stateLabel[s.state] ?? s.state}</Badge>
+                    {s.consecutive_failures > 0 && (
+                      <span className="ml-1 text-xs text-destructive">×{s.consecutive_failures}</span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => probe.mutate(s)}
+                        disabled={busy}
+                      >
+                        <Radar className="mr-1 h-3.5 w-3.5" /> 探测
+                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button size="sm" variant="ghost" disabled={busy}>
+                            <MoreHorizontal className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => verify.mutate({ site: s, reachable: true })}>
+                            <ShieldCheck className="mr-2 h-3.5 w-3.5" /> 人工标记可达
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => verify.mutate({ site: s, reachable: false })}>
+                            <ShieldAlert className="mr-2 h-3.5 w-3.5" /> 人工标记失败
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => protect.mutate(s)}>
+                            <Lock className="mr-2 h-3.5 w-3.5" /> 保护 90 天
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )
+            })}
           </TableBody>
         </Table>
       </div>

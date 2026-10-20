@@ -235,15 +235,18 @@ func (a *AssetRepo) Overview(ctx context.Context) (*Overview, error) {
 		return nil, fmt.Errorf("资产仓储未初始化")
 	}
 	o := &Overview{}
+	// 一次扫描算完：原来 4 个独立子查询各扫一遍 sites，22 万资产时是 4 倍开销。
+	// projects / raw_records 的精确计数仍需各扫一次（表小；量级上来再换 reltuples 估算）。
 	err := a.r.pool.QueryRow(ctx, `
-		SELECT (SELECT count(*) FROM projects),
-		       (SELECT count(*) FROM sites),
-		       (SELECT count(DISTINCT host) FROM sites),
-		       (SELECT count(*) FROM sites WHERE state = 'reachable'),
-		       (SELECT count(*) FROM raw_records),
-		       (SELECT count(*) FROM sites WHERE state = 'lost'),
-		       (SELECT count(*) FROM sites WHERE first_seen >= date_trunc('day', now()))`).
-		Scan(&o.Projects, &o.Sites, &o.Domains, &o.VerifiedSites, &o.Records, &o.Lost, &o.NewToday)
+		SELECT count(*),
+		       count(DISTINCT host),
+		       count(*) FILTER (WHERE state = 'reachable'),
+		       count(*) FILTER (WHERE state = 'lost'),
+		       count(*) FILTER (WHERE first_seen >= date_trunc('day', now())),
+		       (SELECT count(*) FROM projects),
+		       (SELECT count(*) FROM raw_records)
+		  FROM sites`).
+		Scan(&o.Sites, &o.Domains, &o.VerifiedSites, &o.Lost, &o.NewToday, &o.Projects, &o.Records)
 	if err != nil {
 		return nil, err
 	}
