@@ -144,3 +144,54 @@ func (h *AssetHandler) VerifyAsset(c *gin.Context) {
 	}
 	utils.Success(c, gin.H{"id": id, "reachable": body.Reachable})
 }
+
+// IconClusters 按图标聚类。GET /api/assets/icons?project_id=&q=&page=&page_size=
+func (h *AssetHandler) IconClusters(c *gin.Context) {
+	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "60"))
+
+	items, total, err := h.assets.IconClusters(c.Request.Context(), projectID, c.Query("q"), page, pageSize)
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"items": items, "total": total, "page": page, "page_size": pageSize,
+		"view": "icons", "view_supported": true})
+}
+
+// TechClusters 按技术栈聚类。GET /api/assets/technologies?project_id=&q=&page=&page_size=
+func (h *AssetHandler) TechClusters(c *gin.Context) {
+	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "60"))
+
+	items, total, err := h.assets.TechClusters(c.Request.Context(), projectID, c.Query("q"), page, pageSize)
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"items": items, "total": total, "page": page, "page_size": pageSize,
+		"view": "technologies", "view_supported": true})
+}
+
+// IconImage 输出图标字节。GET /api/asset-icons/:sha256
+// 放在公开组：图标本身就是公开站点的 favicon，且 <img> 标签带不了 Authorization。
+func (h *AssetHandler) IconImage(c *gin.Context) {
+	sha := c.Param("sha256")
+	data, ctype, err := h.assets.IconBytes(c.Request.Context(), sha)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			c.Status(404)
+			return
+		}
+		c.Status(500)
+		return
+	}
+	if ctype == "" {
+		ctype = "image/x-icon"
+	}
+	// 内容按 sha256 寻址，永不变化，可以长缓存
+	c.Header("Cache-Control", "public, max-age=31536000, immutable")
+	c.Data(200, ctype, data)
+}

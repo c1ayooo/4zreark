@@ -73,6 +73,22 @@ export interface EndpointRow {
   last_seen: string
 }
 
+/** 按图标聚类的一行（view=icons） */
+export interface IconCluster {
+  icon_sha256: string
+  icon_mmh3: number
+  site_count: number
+  sample_host: string
+  sample_title: string
+  last_seen: string
+}
+
+/** 按技术栈聚类的一行（view=technologies） */
+export interface TechCluster {
+  name: string
+  site_count: number
+}
+
 export interface ConnectivityPolicy {
   failure_threshold: number
   first_hours: number
@@ -175,6 +191,18 @@ export const assetApi = {
   projects: () => api.get<unknown, { code: number; data: AssetProject[] }>('/projects'),
   list: (params: AssetQueryParams) =>
     api.get<unknown, { code: number; data: AssetPage }>('/assets', { params }),
+  /** 图标聚类（T4 第二步） */
+  icons: (params: { project_id?: number; q?: string; page?: number; page_size?: number }) =>
+    api.get<unknown, { code: number; data: { items: IconCluster[]; total: number } }>('/assets/icons', {
+      params,
+    }),
+  /** 技术栈聚类（T4 第二步） */
+  technologies: (params: { project_id?: number; q?: string; page?: number; page_size?: number }) =>
+    api.get<unknown, { code: number; data: { items: TechCluster[]; total: number } }>('/assets/technologies', {
+      params,
+    }),
+  /** 图标字节地址（公开路由，可直接放 <img src>） */
+  iconURL: (sha256: string) => `/api/asset-icons/${sha256}`,
   checkQuery: (q: string) =>
     api.get<unknown, { code: number; data: { valid: boolean; compiled: string } }>('/assets/query-check', {
       params: { q },

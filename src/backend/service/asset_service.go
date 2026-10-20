@@ -101,3 +101,34 @@ func (s *AssetService) RecentEvents(ctx context.Context, limit int) ([]map[strin
 	}
 	return a.RecentEvents(ctx, limit)
 }
+
+// IconClusters 按图标聚类（T4 第二步）。
+func (s *AssetService) IconClusters(ctx context.Context, projectID int64, q string, page, pageSize int) ([]*repo.IconCluster, int64, error) {
+	r := repo.Default()
+	if r == nil {
+		return nil, 0, errors.New("数据层未初始化")
+	}
+	return r.Clusters().IconClusters(ctx, projectID, q, page, pageSize)
+}
+
+// TechClusters 按技术栈聚类（T4 第二步）。
+func (s *AssetService) TechClusters(ctx context.Context, projectID int64, q string, page, pageSize int) ([]*repo.TechCluster, int64, error) {
+	r := repo.Default()
+	if r == nil {
+		return nil, 0, errors.New("数据层未初始化")
+	}
+	return r.Clusters().TechClusters(ctx, projectID, q, page, pageSize)
+}
+
+// IconBytes 读一张图标的原始字节（给 /api/asset-icons/:sha256 用）。
+func (s *AssetService) IconBytes(ctx context.Context, sha256 string) ([]byte, string, error) {
+	r := repo.Default()
+	if r == nil {
+		return nil, "", errors.New("数据层未初始化")
+	}
+	icon, err := r.Clusters().GetIcon(ctx, sha256)
+	if err != nil {
+		return nil, "", err
+	}
+	return icon.Data, icon.ContentType, nil
+}

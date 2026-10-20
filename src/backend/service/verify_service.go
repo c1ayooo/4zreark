@@ -3,7 +3,10 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
+	"net"
+	"strconv"
 
 	"github.com/c1ayooo/4zreark/repo"
 )
@@ -15,11 +18,12 @@ import (
 //   - 全部入口都连不上 → 失败计数 +1，累计到阈值才进 lost
 //   - FakeIP / 公网域名解析到私网 → inconclusive，只落流水，不计失败
 type VerifyService struct {
-	fp *FingerprintService
+	fp   *FingerprintService
+	icon *IconService
 }
 
 func NewVerifyService() *VerifyService {
-	return &VerifyService{fp: NewFingerprintService()}
+	return &VerifyService{fp: NewFingerprintService(), icon: NewIconService()}
 }
 
 // EndpointProbe 是单个入口的探测结果。
@@ -45,6 +49,8 @@ type SiteProbeReport struct {
 	// 本次探测命中的指纹（规则名与技术栈）
 	Tech         []string `json:"tech,omitempty"`
 	MatchedRules []string `json:"matched_rules,omitempty"`
+	IconSHA256   string   `json:"icon_sha256,omitempty"`
+	IconMMH3     int64    `json:"icon_mmh3,omitempty"`
 }
 
 func (s *VerifyService) stores() (*repo.AssetRepo, error) {
@@ -81,6 +87,8 @@ func (s *VerifyService) ProbeSite(ctx context.Context, siteID int64) (*SiteProbe
 	report := &SiteProbeReport{SiteID: siteID, Host: host, Endpoints: make([]EndpointProbe, 0, len(endpoints))}
 	worstReason := ""
 	var snapshot *ProbeResult
+	var hitScheme string
+	var hitPort int
 	for _, ep := range endpoints {
 		res := ProbeEndpoint(ctx, report.Host, ep.Port, ep.Scheme)
 		report.Endpoints = append(report.Endpoints, EndpointProbe{
@@ -94,6 +102,7 @@ func (s *VerifyService) ProbeSite(ctx context.Context, siteID int64) (*SiteProbe
 			report.ReasonCode = res.ReasonCode
 			r := res
 			snapshot = &r
+			hitScheme, hitPort = ep.Scheme, ep.Port
 			break
 		}
 		if res.Inconclusive() {
@@ -110,16 +119,37 @@ func (s *VerifyService) ProbeSite(ctx context.Context, siteID int64) (*SiteProbe
 		if err := assets.VerifySite(ctx, siteID, true, report.StatusCode, report.ReasonCode); err != nil {
 			return report, err
 		}
+		// 图标先抓：条件树里的 icon_hash 叶子要用它，技术栈聚类也靠它。
+		// 抓不到不影响探测结论，只记日志。
+		var icon *IconResult
+		if snapshot != nil && s.icon != nil {
+			baseURL := fmt.Sprintf("%s://%s", hitScheme, net.JoinHostPort(host, strconv.Itoa(hitPort)))
+			icon = FetchIcon(ctx, baseURL, snapshot.Body)
+			if icon != nil {
+				if ierr := s.icon.Save(ctx, siteID, icon); ierr != nil {
+					log.Printf("[Verify] 站点 %d 图标入库失败: %v", siteID, ierr)
+				} else {
+					report.IconSHA256 = icon.SHA256
+					report.IconMMH3 = icon.MMH3
+				}
+			}
+		}
+
 		// 顺手跑指纹：命中写 fingerprint_hits，技术栈写回 sites.tech。
 		// 指纹失败不影响探测结论，只记日志。
 		if snapshot != nil && s.fp != nil {
-			ids, tech, ferr := s.fp.ApplyToSite(ctx, siteID, ResponseSnapshot{
+			snap := ResponseSnapshot{
 				StatusCode: snapshot.StatusCode,
 				Title:      snapshot.Title,
 				Server:     snapshot.Server,
 				Headers:    snapshot.Headers,
 				Body:       snapshot.Body,
-			}, nil)
+			}
+			if icon != nil {
+				snap.IconSHA256 = icon.SHA256
+				snap.IconMMH3 = icon.MMH3
+			}
+			ids, tech, ferr := s.fp.ApplyToSite(ctx, siteID, snap, nil)
 			if ferr != nil {
 				log.Printf("[Verify] 站点 %d 指纹匹配失败: %v", siteID, ferr)
 			} else {

@@ -120,8 +120,10 @@ export default function AssetsPage() {
   const overview = useQuery({ queryKey: ['asset-overview'], queryFn: () => assetApi.overview() })
   const projects = useQuery({ queryKey: ['asset-projects'], queryFn: () => assetApi.projects() })
 
+  const clusterView = view === 'icons' || view === 'technologies'
   const list = useQuery({
     queryKey: ['assets', page, appliedQ, projectId, kind, catalog, view, siteGroup],
+    enabled: !clusterView,
     queryFn: () =>
       assetApi.list({
         page,
@@ -132,6 +134,30 @@ export default function AssetsPage() {
         catalog,
         view,
         site_group: siteGroup ? 1 : 0,
+      }),
+  })
+
+  const iconClusters = useQuery({
+    queryKey: ['asset-icons', projectId, appliedQ, page],
+    enabled: view === 'icons',
+    queryFn: () =>
+      assetApi.icons({
+        project_id: Number(projectId) || undefined,
+        q: appliedQ || undefined,
+        page,
+        page_size: 60,
+      }),
+  })
+
+  const techClusters = useQuery({
+    queryKey: ['asset-technologies', projectId, appliedQ, page],
+    enabled: view === 'technologies',
+    queryFn: () =>
+      assetApi.technologies({
+        project_id: Number(projectId) || undefined,
+        q: appliedQ || undefined,
+        page,
+        page_size: 60,
       }),
   })
 
@@ -315,13 +341,67 @@ export default function AssetsPage() {
         </div>
       )}
 
-      {data && data.view_supported === false && (
+      {view === 'icons' && (
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            共 {iconClusters.data?.data.total ?? 0} 组图标 · 点开站点看详情（图标按内容哈希去重）
+          </p>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            {(iconClusters.data?.data.items ?? []).map((ic) => (
+              <div key={ic.icon_sha256} className="flex flex-col items-center gap-2 rounded-md border p-3">
+                <img
+                  src={assetApi.iconURL(ic.icon_sha256)}
+                  alt={ic.sample_host}
+                  className="h-10 w-10 rounded"
+                  onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden' }}
+                />
+                <div className="w-full truncate text-center text-xs" title={ic.sample_title || ic.sample_host}>
+                  {ic.sample_title || ic.sample_host}
+                </div>
+                <div className="text-[11px] text-muted-foreground">{ic.site_count} 个站点</div>
+              </div>
+            ))}
+            {!iconClusters.isLoading && (iconClusters.data?.data.items ?? []).length === 0 && (
+              <div className="col-span-full rounded border border-dashed py-8 text-center text-sm text-muted-foreground">
+                还没有采集到图标（探测站点时会顺手抓 favicon）
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {view === 'technologies' && (
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            共 {techClusters.data?.data.total ?? 0} 种技术 · 数字是命中的站点数
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {(techClusters.data?.data.items ?? []).map((t) => (
+              <span
+                key={t.name}
+                className="rounded-full border px-3 py-1 text-sm"
+                title={`${t.site_count} 个站点`}
+              >
+                {t.name}
+                <span className="ml-1 text-xs text-muted-foreground">{t.site_count}</span>
+              </span>
+            ))}
+            {!techClusters.isLoading && (techClusters.data?.data.items ?? []).length === 0 && (
+              <div className="w-full rounded border border-dashed py-8 text-center text-sm text-muted-foreground">
+                还没有技术栈数据（需要先有指纹规则并探测过站点）
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {!clusterView && data && data.view_supported === false && (
         <div className="rounded border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
           {data.note || '这个视图还没实现'}
         </div>
       )}
 
-      {(!data || data.view_supported !== false) && (
+      {!clusterView && (!data || data.view_supported !== false) && (
         <div className="rounded-md border">
           <Table>
             <TableHeader>
@@ -484,7 +564,25 @@ export default function AssetsPage() {
 
       <div className="flex items-center justify-between text-sm">
         <span className="text-muted-foreground">
-          共 {total.toLocaleString()} 条 · 第 {page} / {pages} 页
+          共{' '}
+          {(clusterView
+            ? view === 'icons'
+              ? iconClusters.data?.data.total ?? 0
+              : techClusters.data?.data.total ?? 0
+            : total
+          ).toLocaleString()}{' '}
+          条 · 第 {page} /{' '}
+          {Math.max(
+            1,
+            Math.ceil(
+              (clusterView
+                ? view === 'icons'
+                  ? iconClusters.data?.data.total ?? 0
+                  : techClusters.data?.data.total ?? 0
+                : total) / (clusterView ? 60 : size)
+            )
+          )}{' '}
+          页
         </span>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>

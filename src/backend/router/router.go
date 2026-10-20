@@ -33,6 +33,10 @@ func SetupRouter() *gin.Engine {
 		{
 			authGroup.POST("/login", authHandler.Login)
 			authGroup.POST("/refresh", authHandler.RefreshToken)
+
+			// 图标按内容哈希寻址，公开可取：<img> 标签带不了 Authorization
+			assetHandlerPublic := api.NewAssetHandler()
+			apiGroup.GET("/asset-icons/:sha256", assetHandlerPublic.IconImage)
 		}
 
 		// Protected routes
@@ -52,6 +56,8 @@ func SetupRouter() *gin.Engine {
 				protected.GET("/projects", assetHandler.ListProjects)
 				protected.GET("/assets", assetHandler.ListAssets)
 				protected.GET("/assets/query-check", assetHandler.CheckQuery)
+				protected.GET("/assets/icons", assetHandler.IconClusters)
+				protected.GET("/assets/technologies", assetHandler.TechClusters)
 				protected.POST("/assets/import", middleware.AdminMiddleware(), assetHandler.ImportAssets)
 				protected.POST("/assets/:id/verify", assetHandler.VerifyAsset)
 				protected.GET("/events", assetHandler.ListEvents)

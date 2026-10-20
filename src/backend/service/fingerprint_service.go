@@ -19,6 +19,9 @@ type ResponseSnapshot struct {
 	Server     string
 	Headers    map[string]string
 	Body       string
+	// 图标指纹：mmh3 对齐外部资产库的 icon_hash，sha256 用来区分 mmh3 相同的不同图
+	IconMMH3   int64
+	IconSHA256 string
 }
 
 // FingerprintService 负责「规则 → 站点」的匹配与落库。
@@ -28,23 +31,25 @@ type ResponseSnapshot struct {
 //   - dsl_version=2：condition_tree，支持 and / or / not 嵌套
 //
 // 规则缓存 60 秒，写入规则时主动失效。
-type FingerprintService struct {
-	mu       sync.RWMutex
-	rules    []*repo.FpRule
-	loadedAt time.Time
-	ttl      time.Duration
-}
+// 规则缓存是**进程级共享**的：治理接口与探测执行器是两个 FingerprintService 实例，
+// 如果缓存挂在实例上，写规则时 Invalidate 的是自己那份，探测那边要等 TTL 过期才看得到。
+type FingerprintService struct{}
 
-func NewFingerprintService() *FingerprintService {
-	return &FingerprintService{ttl: 60 * time.Second}
-}
+var (
+	fpCacheMu       sync.RWMutex
+	fpCacheRules    []*repo.FpRule
+	fpCacheLoadedAt time.Time
+	fpCacheTTL      = 60 * time.Second
+)
+
+func NewFingerprintService() *FingerprintService { return &FingerprintService{} }
 
 // Invalidate 让下一次匹配重新读规则（规则变更后调用）。
 func (s *FingerprintService) Invalidate() {
-	s.mu.Lock()
-	s.rules = nil
-	s.loadedAt = time.Time{}
-	s.mu.Unlock()
+	fpCacheMu.Lock()
+	fpCacheRules = nil
+	fpCacheLoadedAt = time.Time{}
+	fpCacheMu.Unlock()
 }
 
 func (s *FingerprintService) fpRepo() (repo.FingerprintRepo, error) {
@@ -56,13 +61,13 @@ func (s *FingerprintService) fpRepo() (repo.FingerprintRepo, error) {
 
 // LoadRules 返回启用的规则，带 60 秒缓存。
 func (s *FingerprintService) LoadRules(ctx context.Context) ([]*repo.FpRule, error) {
-	s.mu.RLock()
-	if s.rules != nil && time.Since(s.loadedAt) < s.ttl {
-		out := s.rules
-		s.mu.RUnlock()
+	fpCacheMu.RLock()
+	if fpCacheRules != nil && time.Since(fpCacheLoadedAt) < fpCacheTTL {
+		out := fpCacheRules
+		fpCacheMu.RUnlock()
 		return out, nil
 	}
-	s.mu.RUnlock()
+	fpCacheMu.RUnlock()
 
 	fp, err := s.fpRepo()
 	if err != nil {
@@ -72,9 +77,9 @@ func (s *FingerprintService) LoadRules(ctx context.Context) ([]*repo.FpRule, err
 	if err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	s.rules, s.loadedAt = rules, time.Now()
-	s.mu.Unlock()
+	fpCacheMu.Lock()
+	fpCacheRules, fpCacheLoadedAt = rules, time.Now()
+	fpCacheMu.Unlock()
 	return rules, nil
 }
 
@@ -180,8 +185,14 @@ func evalLeaf(c *repo.Condition, snap ResponseSnapshot) bool {
 		n, err := strconv.Atoi(strings.TrimSpace(c.Value))
 		return err == nil && snap.StatusCode == n
 	case "icon_hash":
-		// 图标指纹要等图标库接上（G3 后续），现在一律不命中，避免误报
-		return false
+		if snap.IconSHA256 == "" && snap.IconMMH3 == 0 {
+			return false
+		}
+		// 64 位十六进制按 sha256 比，其余按 mmh3 比，两种写法都收
+		if len(c.Value) == 64 && isHex(c.Value) {
+			return strings.EqualFold(snap.IconSHA256, c.Value)
+		}
+		return strconv.FormatInt(snap.IconMMH3, 10) == strings.TrimSpace(c.Value)
 	default:
 		return false
 	}
@@ -326,4 +337,13 @@ func validateNode(c *repo.Condition, depth int) error {
 		}
 	}
 	return nil
+}
+
+func isHex(s string) bool {
+	for _, r := range s {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return false
+		}
+	}
+	return s != ""
 }
