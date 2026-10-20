@@ -57,6 +57,23 @@ func SetupRouter() *gin.Engine {
 				protected.GET("/events", assetHandler.ListEvents)
 			}
 
+			// Asset governance cycle routes（种子 → 计划 → 批次 → 执行单元）
+			govHandler := api.NewGovernanceHandler()
+			{
+				protected.GET("/seeds", govHandler.ListSeeds)
+				protected.POST("/seeds", middleware.AdminMiddleware(), govHandler.CreateSeed)
+				protected.DELETE("/seeds/:id", middleware.AdminMiddleware(), govHandler.DeleteSeed)
+				protected.GET("/plans", govHandler.ListPlans)
+				protected.POST("/plans", middleware.AdminMiddleware(), govHandler.CreatePlan)
+				protected.PUT("/plans/:id", middleware.AdminMiddleware(), govHandler.UpdatePlan)
+				protected.DELETE("/plans/:id", middleware.AdminMiddleware(), govHandler.DeletePlan)
+				protected.POST("/plans/:id/trigger", middleware.AdminMiddleware(), govHandler.TriggerPlan)
+				protected.GET("/runs", govHandler.ListRuns)
+				protected.GET("/runs/:id", govHandler.GetRun)
+				protected.GET("/runs/:id/targets", govHandler.ListTargets)
+				protected.POST("/governance/tick", middleware.AdminMiddleware(), govHandler.Tick)
+			}
+
 			// User routes
 			userHandler := api.NewUserHandler()
 			userGroup := protected.Group("/users")

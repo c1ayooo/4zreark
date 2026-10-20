@@ -108,6 +108,13 @@ func main() {
 	log.Println("Cruise scheduler started")
 	defer cruiseService.Stop()
 
+	// Start asset governance cycle scheduler（种子 → 计划 → 批次，每 60 秒推进一次）
+	log.Println("Starting governance cycle scheduler...")
+	cycleService := service.NewCycleService()
+	cycleService.Start()
+	log.Println("Governance cycle scheduler started")
+	defer cycleService.Stop()
+
 	// Initialize WebSocket hub for real-time data
 	log.Println("Initializing WebSocket hub...")
 	wsHub := api.NewHub()

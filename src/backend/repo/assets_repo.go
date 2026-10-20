@@ -462,6 +462,41 @@ func (a *AssetRepo) VerifySite(ctx context.Context, siteID int64, reachable bool
 	return tx.Commit(ctx)
 }
 
+// AssetTargetsForDomain 取种子域下已归并站点的全部入口，作为周期回归的执行单元。
+// 每个 (host, port) 一条：同 host 的 80 与 8080 是两个独立目标。
+// 没有入口记录的站点（历史数据缺）按展示协议回落 80/443，保证不会漏站点。
+func (r *Repo) AssetTargetsForDomain(ctx context.Context, projectID int64, domain string, limit int) ([]TargetInput, error) {
+	if r == nil || r.pool == nil {
+		return nil, fmt.Errorf("数据层未初始化")
+	}
+	if limit <= 0 || limit > 5000 {
+		limit = 2000
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT DISTINCT s.host,
+		       coalesce(e.port, CASE WHEN s.protocol = 'http' THEN 80 ELSE 443 END) AS port
+		  FROM sites s
+		  LEFT JOIN site_endpoints e ON e.site_id = s.id
+		 WHERE s.project_id = $1
+		   AND (s.host = $2 OR s.host LIKE '%.' || $2)
+		 ORDER BY s.host, port
+		 LIMIT $3`, projectID, domain, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []TargetInput{}
+	for rows.Next() {
+		var t TargetInput
+		if err := rows.Scan(&t.Host, &t.Port); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 func normalizeHost(h string) string {
 	h = strings.TrimSpace(strings.ToLower(h))
 	h = strings.TrimSuffix(h, ".")
