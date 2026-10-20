@@ -1,0 +1,152 @@
+# JavaScript 库指纹规则
+# 格式: 库名称: 正则表达式模式
+
+jQuery:
+  pattern: "(?i)jquery[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Vue.js:
+  pattern: "(?i)vue[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+React:
+  pattern: "(?i)react[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Angular:
+  pattern: "(?i)angular[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Bootstrap:
+  pattern: "(?i)bootstrap[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Lodash:
+  pattern: "(?i)lodash[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Underscore:
+  pattern: "(?i)underscore[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Moment.js:
+  pattern: "(?i)moment[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+D3.js:
+  pattern: "(?i)d3[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Chart.js:
+  pattern: "(?i)chart[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Three.js:
+  pattern: "(?i)three[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Axios:
+  pattern: "(?i)axios[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Layui:
+  pattern: "(?i)layui[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+ElementUI:
+  pattern: "(?i)element-ui[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Ant Design:
+  pattern: "(?i)antd[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+ECharts:
+  pattern: "(?i)echarts[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Swiper:
+  pattern: "(?i)swiper[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Zepto:
+  pattern: "(?i)zepto[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Backbone:
+  pattern: "(?i)backbone[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Ember:
+  pattern: "(?i)ember[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Knockout:
+  pattern: "(?i)knockout[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Prototype:
+  pattern: "(?i)prototype[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+MooTools:
+  pattern: "(?i)mootools[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Dojo:
+  pattern: "(?i)dojo[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+RequireJS:
+  pattern: "(?i)require[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Webpack:
+  pattern: "(?i)webpack[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Parcel:
+  pattern: "(?i)parcel[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Vite:
+  pattern: "(?i)vite[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Next.js:
+  pattern: "(?i)_next/static"
+
+Nuxt.js:
+  pattern: "(?i)_nuxt/"
+
+GSAP:
+  pattern: "(?i)gsap[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Anime.js:
+  pattern: "(?i)anime[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Velocity:
+  pattern: "(?i)velocity[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Leaflet:
+  pattern: "(?i)leaflet[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Highcharts:
+  pattern: "(?i)highcharts[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+ApexCharts:
+  pattern: "(?i)apexcharts[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+FullCalendar:
+  pattern: "(?i)fullcalendar[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+DataTables:
+  pattern: "(?i)datatables[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Select2:
+  pattern: "(?i)select2[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Flatpickr:
+  pattern: "(?i)flatpickr[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Sortable:
+  pattern: "(?i)sortable[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Popper:
+  pattern: "(?i)popper[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Tippy:
+  pattern: "(?i)tippy[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+SweetAlert:
+  pattern: "(?i)sweetalert[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Toastr:
+  pattern: "(?i)toastr[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Socket.io:
+  pattern: "(?i)socket\\.io[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Polyfill:
+  pattern: "(?i)polyfill[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Core-js:
+  pattern: "(?i)core-js[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+Babel:
+  pattern: "(?i)babel[.-]?([\\d.]+)?\\.?(min\\.)?js"
+
+TypeScript:
+  pattern: "(?i)typescript[.-]?([\\d.]+)?\\.?(min\\.)?js"

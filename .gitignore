@@ -1,0 +1,14 @@
+# 依赖与构建产物
+src/frontend/node_modules/
+src/frontend/dist/
+src/backend/4zreark
+*.exe
+
+# 凭据（不入库）
+.pgpass.local
+*.local
+
+# 参考素材：上游源码与发版包，非本项目代码
+reference/
+releases/
+*.zip

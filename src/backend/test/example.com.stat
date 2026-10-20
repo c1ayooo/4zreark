@@ -1,0 +1,1 @@
+{"url":"https://example.com","error":"","counts":{},"sources":{},"failed":1,"req_total":2,"check":0,"found":0,"filtered":0,"fuzzy":0,"wafed":0,"end":0,"skipped":0,"offset":0,"total":9646,"start_time":1765156896,"end_time":1765156901,"word_count":9646,"word":"{?0}","dictionaries":null,"rule_files":null,"rule_filter":""}

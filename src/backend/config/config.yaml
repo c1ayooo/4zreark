@@ -1,0 +1,65 @@
+# Moon Gazing Tower Configuration
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  mode: "debug"  # debug, release, test
+
+jwt:
+  secret: "4zreark-secret-key-change-in-production"
+  expire: 7200  # 2 hours in seconds
+  issuer: "4zreark"
+
+mongodb:
+  # 迁移期保留该段兼容现有加载逻辑；PG 化后由 postgres 段取代
+  uri: "mongodb://127.0.0.1:27017"
+  database: "4zreark"
+  timeout: 10
+
+postgres:
+  host: "127.0.0.1"
+  port: 25433
+  user: "zre"
+  password: ""
+  dbname: "zreark"
+  schema: "zre"
+  sslmode: "disable"
+  max_conns: 20
+  min_conns: 2
+
+# 已决定移除 Redis：队列 / 去重 / 登出由 PG 承担。该段待代码层删掉 go-redis 后一并移除
+redis:
+  host: "127.0.0.1"
+  port: 26379
+  password: ""
+  db: 0
+
+scanner:
+  worker_count: 10
+  timeout: 300
+  retry_count: 3
+  retry_delay: 5
+
+log:
+  level: "debug"
+  file: "logs/app.log"
+  max_size: 100
+  max_backups: 3
+  max_age: 7
+
+alert:
+  enabled: true
+  types:
+    - email
+    - dingtalk
+    - feishu
+
+# 第三方 API 配置 (用于子域名收集)
+thirdparty:
+  fofa:
+    email: ""
+    key: ""
+  hunter:
+    key: ""
+  quake:
+    key: ""

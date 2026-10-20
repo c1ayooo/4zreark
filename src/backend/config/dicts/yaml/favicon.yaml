@@ -1,0 +1,250 @@
+# Favicon Hash to Technology Mapping
+# favicon 哈希指纹映射配置
+# 使用 MMH3 哈希值 (Shodan 兼容格式)
+
+# Web Servers
+"-305179312":
+  name: Nginx
+  category: WebServer
+
+"442749392":
+  name: Apache
+  category: WebServer
+
+"2107788765":
+  name: Tomcat
+  category: WebServer
+
+# Security / Network
+"116323821":
+  name: Fortinet FortiGate
+  category: Firewall
+
+"-656811182":
+  name: WebLogic
+  category: Middleware
+
+"81586312":
+  name: VMware vCenter
+  category: Virtualization
+
+# DevOps / Monitoring
+"1354567368":
+  name: Jenkins
+  category: CI/CD
+
+"-1299022545":
+  name: Grafana
+  category: Monitoring
+
+"-1395064523":
+  name: GitLab
+  category: DevOps
+
+# Frameworks
+"-297069493":
+  name: Spring Boot
+  category: Framework
+
+# Database Management
+"-1840324437":
+  name: phpMyAdmin
+  category: Database
+
+# Chinese OA Systems
+"-2057558656":
+  name: 致远OA
+  category: OA
+
+"-1613689898":
+  name: 泛微OA
+  category: OA
+
+"-1608669882":
+  name: 用友NC
+  category: ERP
+
+"1550510902":
+  name: 宝塔面板
+  category: Panel
+
+# Network Equipment
+"1165982433":
+  name: H3C
+  category: Network
+
+"-1362833534":
+  name: 海康威视
+  category: Camera
+
+# CMS
+"876876147":
+  name: WordPress
+  category: CMS
+
+"-1913773037":
+  name: Drupal
+  category: CMS
+
+"1141747440":
+  name: Joomla
+  category: CMS
+
+"-244067125":
+  name: Confluence
+  category: Wiki
+
+# Mail
+"-1550974173":
+  name: Exchange
+  category: Mail
+
+"1485257654":
+  name: Outlook Web
+  category: Mail
+
+# DevOps Tools
+"-127886975":
+  name: SonarQube
+  category: DevOps
+
+"1848946384":
+  name: Nexus
+  category: DevOps
+
+"-1007328082":
+  name: Harbor
+  category: DevOps
+
+# Monitoring
+"-1409757037":
+  name: Zabbix
+  category: Monitoring
+
+"1937761975":
+  name: Nagios
+  category: Monitoring
+
+"-64033846":
+  name: Kibana
+  category: Monitoring
+
+# Database
+"-335242539":
+  name: Elasticsearch
+  category: Database
+
+# Message Queue
+"999357577":
+  name: RabbitMQ
+  category: MessageQueue
+
+# Registry/Config
+"-1297069493":
+  name: Nacos
+  category: Registry
+
+"1750368403":
+  name: Apollo
+  category: Config
+
+# Version Control
+"-1008701576":
+  name: Gogs
+  category: DevOps
+
+"1395064524":
+  name: Gitea
+  category: DevOps
+
+# Storage
+"-760750498":
+  name: MinIO
+  category: Storage
+
+# Container
+"1648758437":
+  name: Portainer
+  category: Container
+
+"-427292688":
+  name: Rancher
+  category: Container
+
+"735701364":
+  name: Kubernetes Dashboard
+  category: Container
+
+# API
+"-666629591":
+  name: Swagger UI
+  category: API
+
+# Project Management
+"1071567237":
+  name: 禅道
+  category: ProjectManagement
+
+# Chinese Frameworks
+"-839587023":
+  name: JEECG
+  category: Framework
+
+"602463657":
+  name: 若依
+  category: Framework
+
+"-1166125415":
+  name: Fastadmin
+  category: Framework
+
+"-1141203101":
+  name: ThinkPHP
+  category: Framework
+
+"-529343342":
+  name: Shiro
+  category: Framework
+
+# Chinese OA
+"1485257655":
+  name: 蓝凌OA
+  category: OA
+
+"-266008933":
+  name: 通达OA
+  category: OA
+
+"1708240621":
+  name: 万户OA
+  category: OA
+
+# Load Balancer
+"116323822":
+  name: F5 BIG-IP
+  category: LoadBalancer
+
+# Others
+"-1014748015":
+  name: Atlassian Jira
+  category: ProjectManagement
+
+"1067091789":
+  name: Atlassian Bitbucket
+  category: DevOps
+
+"-1182896567":
+  name: GitBucket
+  category: DevOps
+
+"1571621425":
+  name: Redmine
+  category: ProjectManagement
+
+"-1016466679":
+  name: MediaWiki
+  category: Wiki
+
+"1211935310":
+  name: DokuWiki
+  category: Wiki
