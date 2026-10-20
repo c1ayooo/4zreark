@@ -9,7 +9,6 @@ import (
 	"github.com/c1ayooo/4zreark/utils"
 
 	"github.com/gin-gonic/gin"
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 type POCHandler struct {
@@ -96,7 +95,7 @@ func (h *POCHandler) CreatePOC(c *gin.Context) {
 	}
 
 	if err := h.pocService.Create(&poc); err != nil {
-		utils.InternalError(c, "Failed to create POC")
+		utils.InternalError(c, "Failed to create POC: "+err.Error())
 		return
 	}
 
@@ -144,7 +143,7 @@ func (h *POCHandler) UpdatePOC(c *gin.Context) {
 	delete(update, "_id")
 	delete(update, "created_at")
 
-	if err := h.pocService.Update(id, bson.M(update)); err != nil {
+	if err := h.pocService.Update(id, update); err != nil {
 		utils.InternalError(c, "Failed to update POC")
 		return
 	}

@@ -5,163 +5,141 @@ import (
 	"errors"
 	"time"
 
-	"github.com/c1ayooo/4zreark/database"
 	"github.com/c1ayooo/4zreark/models"
+	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/scanner/vulnscan"
-
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+// VulnService 的读写全部走 repo 层：这里不再出现集合名、bson 或游标。
 type VulnService struct{}
 
 func NewVulnService() *VulnService {
 	return &VulnService{}
 }
 
-// CreateVulnerability creates a new vulnerability
+func (s *VulnService) store() (repo.VulnRepo, error) {
+	r := repo.Default()
+	if r == nil {
+		return nil, errors.New("数据库未就绪")
+	}
+	return r.Vulns(), nil
+}
+
+func (s *VulnService) pocs() (repo.PocRepo, error) {
+	r := repo.Default()
+	if r == nil {
+		return nil, errors.New("数据库未就绪")
+	}
+	return r.Pocs(), nil
+}
+
+// CreateVulnerability 创建漏洞
 func (s *VulnService) CreateVulnerability(vuln *models.Vulnerability) error {
-	ctx, cancel := database.NewContext()
-	defer cancel()
-
-	collection := database.GetCollection(models.CollectionVulnerabilities)
-
-	vuln.ID = primitive.NewObjectID()
-	vuln.Status = models.VulnStatusNew
-	vuln.CreatedAt = time.Now()
-	vuln.UpdatedAt = time.Now()
-
-	_, err := collection.InsertOne(ctx, vuln)
+	store, err := s.store()
 	if err != nil {
+		return err
+	}
+	vuln.Status = models.VulnStatusNew
+
+	ctx, cancel := dbCtx()
+	defer cancel()
+	if err := store.Create(ctx, vuln); err != nil {
+		if errors.Is(err, repo.ErrDuplicate) {
+			return errors.New("该漏洞已存在（同一模板与目标）")
+		}
 		return errors.New("创建漏洞失败")
 	}
-
 	return nil
 }
 
-// GetVulnByID retrieves vulnerability by ID
+// GetVulnByID 按 ID 取漏洞
 func (s *VulnService) GetVulnByID(vulnID string) (*models.Vulnerability, error) {
-	ctx, cancel := database.NewContext()
-	defer cancel()
-
-	objID, err := primitive.ObjectIDFromHex(vulnID)
-	if err != nil {
+	if !repo.ValidID(vulnID) {
 		return nil, errors.New("无效的漏洞ID")
 	}
-
-	collection := database.GetCollection(models.CollectionVulnerabilities)
-
-	var vuln models.Vulnerability
-	err = collection.FindOne(ctx, bson.M{"_id": objID}).Decode(&vuln)
+	store, err := s.store()
 	if err != nil {
-		return nil, errors.New("漏洞不存在")
+		return nil, err
 	}
-
-	return &vuln, nil
-}
-
-// ListVulnerabilities lists vulnerabilities with filtering and pagination
-func (s *VulnService) ListVulnerabilities(workspaceID string, severity string, status string, keyword string, page, pageSize int) ([]*models.Vulnerability, int64, error) {
-	ctx, cancel := database.NewContext()
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	collection := database.GetCollection(models.CollectionVulnerabilities)
-
-	filter := bson.M{}
-
-	if workspaceID != "" {
-		wsID, _ := primitive.ObjectIDFromHex(workspaceID)
-		filter["workspace_id"] = wsID
-	}
-
-	if severity != "" {
-		filter["severity"] = severity
-	}
-
-	if status != "" {
-		filter["status"] = status
-	}
-
-	if keyword != "" {
-		filter["$or"] = []bson.M{
-			{"name": bson.M{"$regex": keyword, "$options": "i"}},
-			{"target": bson.M{"$regex": keyword, "$options": "i"}},
-			{"description": bson.M{"$regex": keyword, "$options": "i"}},
-		}
-	}
-
-	// Get total count
-	total, err := collection.CountDocuments(ctx, filter)
+	vuln, err := store.GetByID(ctx, vulnID)
 	if err != nil {
-		return nil, 0, errors.New("查询漏洞数量失败")
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil, errors.New("漏洞不存在")
+		}
+		return nil, errors.New("查询漏洞失败")
 	}
+	return vuln, nil
+}
 
-	// Query with pagination
-	opts := options.Find().
-		SetSkip(int64((page - 1) * pageSize)).
-		SetLimit(int64(pageSize)).
-		SetSort(bson.D{
-			{Key: "severity", Value: 1},
-			{Key: "created_at", Value: -1},
-		})
+// ListVulnerabilities 分页查询漏洞
+func (s *VulnService) ListVulnerabilities(workspaceID, severity, status, keyword string, page, pageSize int) ([]*models.Vulnerability, int64, error) {
+	store, err := s.store()
+	if err != nil {
+		return nil, 0, err
+	}
+	ctx, cancel := dbCtx()
+	defer cancel()
 
-	cursor, err := collection.Find(ctx, filter, opts)
+	vulns, total, err := store.List(ctx, repo.VulnFilter{
+		WorkspaceID: workspaceID,
+		Severity:    severity,
+		Status:      status,
+		Keyword:     keyword,
+		Page:        page,
+		PageSize:    pageSize,
+	})
 	if err != nil {
 		return nil, 0, errors.New("查询漏洞列表失败")
 	}
-	defer cursor.Close(ctx)
-
-	var vulns []*models.Vulnerability
-	if err = cursor.All(ctx, &vulns); err != nil {
-		return nil, 0, errors.New("解析漏洞数据失败")
-	}
-
 	return vulns, total, nil
 }
 
-// UpdateVulnerability updates a vulnerability
+// UpdateVulnerability 更新漏洞字段
 func (s *VulnService) UpdateVulnerability(vulnID string, updates map[string]interface{}) error {
-	ctx, cancel := database.NewContext()
-	defer cancel()
-
-	objID, err := primitive.ObjectIDFromHex(vulnID)
-	if err != nil {
+	if !repo.ValidID(vulnID) {
 		return errors.New("无效的漏洞ID")
 	}
-
-	collection := database.GetCollection(models.CollectionVulnerabilities)
-
-	updates["updated_at"] = time.Now()
-	_, err = collection.UpdateOne(ctx, bson.M{"_id": objID}, bson.M{"$set": updates})
+	store, err := s.store()
 	if err != nil {
+		return err
+	}
+	ctx, cancel := dbCtx()
+	defer cancel()
+
+	if err := store.UpdateFields(ctx, vulnID, updates); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return errors.New("漏洞不存在")
+		}
 		return errors.New("更新漏洞失败")
 	}
-
 	return nil
 }
 
-// DeleteVulnerability deletes a vulnerability
+// DeleteVulnerability 删除漏洞
 func (s *VulnService) DeleteVulnerability(vulnID string) error {
-	ctx, cancel := database.NewContext()
-	defer cancel()
-
-	objID, err := primitive.ObjectIDFromHex(vulnID)
-	if err != nil {
+	if !repo.ValidID(vulnID) {
 		return errors.New("无效的漏洞ID")
 	}
-
-	collection := database.GetCollection(models.CollectionVulnerabilities)
-
-	_, err = collection.DeleteOne(ctx, bson.M{"_id": objID})
+	store, err := s.store()
 	if err != nil {
+		return err
+	}
+	ctx, cancel := dbCtx()
+	defer cancel()
+
+	if err := store.Delete(ctx, vulnID); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return errors.New("漏洞不存在")
+		}
 		return errors.New("删除漏洞失败")
 	}
-
 	return nil
 }
 
-// MarkAsFixed marks a vulnerability as fixed
+// MarkAsFixed 标记已修复
 func (s *VulnService) MarkAsFixed(vulnID string, fixedBy string) error {
 	return s.UpdateVulnerability(vulnID, map[string]interface{}{
 		"status":   models.VulnStatusFixed,
@@ -170,317 +148,242 @@ func (s *VulnService) MarkAsFixed(vulnID string, fixedBy string) error {
 	})
 }
 
-// MarkAsIgnored marks a vulnerability as ignored
+// MarkAsIgnored 标记忽略
 func (s *VulnService) MarkAsIgnored(vulnID string) error {
 	return s.UpdateVulnerability(vulnID, map[string]interface{}{
 		"status": models.VulnStatusIgnored,
 	})
 }
 
-// MarkAsFalsePositive marks a vulnerability as false positive
+// MarkAsFalsePositive 标记误报
 func (s *VulnService) MarkAsFalsePositive(vulnID string) error {
 	return s.UpdateVulnerability(vulnID, map[string]interface{}{
 		"status": models.VulnStatusFalse,
 	})
 }
 
-// GetVulnStats returns vulnerability statistics
+// GetVulnStats 按等级汇总，供报告摘要使用
 func (s *VulnService) GetVulnStats(workspaceID string) (*models.ReportSummary, error) {
-	ctx, cancel := database.NewContext()
+	store, err := s.store()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	collection := database.GetCollection(models.CollectionVulnerabilities)
-
-	filter := bson.M{}
-	if workspaceID != "" {
-		wsID, _ := primitive.ObjectIDFromHex(workspaceID)
-		filter["workspace_id"] = wsID
-	}
-
-	// Count by severity
-	pipeline := []bson.M{
-		{"$match": filter},
-		{"$group": bson.M{
-			"_id":   "$severity",
-			"count": bson.M{"$sum": 1},
-		}},
-	}
-
-	cursor, err := collection.Aggregate(ctx, pipeline)
+	counts, total, err := store.SeverityCounts(ctx, workspaceID)
 	if err != nil {
 		return nil, errors.New("统计失败")
 	}
-	defer cursor.Close(ctx)
 
-	var results []struct {
-		ID    string `bson:"_id"`
-		Count int    `bson:"count"`
+	summary := &models.ReportSummary{
+		TotalVulns:    int(total),
+		CriticalCount: int(counts["critical"]),
+		HighCount:     int(counts["high"]),
+		MediumCount:   int(counts["medium"]),
+		LowCount:      int(counts["low"]),
+		InfoCount:     int(counts["info"]),
 	}
-	if err = cursor.All(ctx, &results); err != nil {
-		return nil, errors.New("解析统计数据失败")
-	}
-
-	summary := &models.ReportSummary{}
-	for _, r := range results {
-		switch r.ID {
-		case "critical":
-			summary.CriticalCount = r.Count
-		case "high":
-			summary.HighCount = r.Count
-		case "medium":
-			summary.MediumCount = r.Count
-		case "low":
-			summary.LowCount = r.Count
-		case "info":
-			summary.InfoCount = r.Count
-		}
-		summary.TotalVulns += r.Count
-	}
-
 	return summary, nil
 }
 
-// CreatePOC creates a new POC
+// ---------------------------------------------------------------- POC
+
+// CreatePOC 创建 POC
 func (s *VulnService) CreatePOC(poc *models.POC) error {
-	ctx, cancel := database.NewContext()
-	defer cancel()
-
-	collection := database.GetCollection(models.CollectionPOCs)
-
-	poc.ID = primitive.NewObjectID()
-	poc.Enabled = true
-	poc.CreatedAt = time.Now()
-	poc.UpdatedAt = time.Now()
-
-	_, err := collection.InsertOne(ctx, poc)
+	store, err := s.pocs()
 	if err != nil {
+		return err
+	}
+	poc.Enabled = true
+
+	ctx, cancel := dbCtx()
+	defer cancel()
+	if err := store.Create(ctx, poc); err != nil {
+		if errors.Is(err, repo.ErrDuplicate) {
+			return errors.New("POC 已存在（同一模板 ID）")
+		}
 		return errors.New("创建POC失败")
 	}
-
 	return nil
 }
 
-// GetPOCByID retrieves POC by ID
+// GetPOCByID 按 ID 取 POC
 func (s *VulnService) GetPOCByID(pocID string) (*models.POC, error) {
-	ctx, cancel := database.NewContext()
-	defer cancel()
-
-	objID, err := primitive.ObjectIDFromHex(pocID)
-	if err != nil {
+	if !repo.ValidID(pocID) {
 		return nil, errors.New("无效的POC ID")
 	}
-
-	collection := database.GetCollection(models.CollectionPOCs)
-
-	var poc models.POC
-	err = collection.FindOne(ctx, bson.M{"_id": objID}).Decode(&poc)
+	store, err := s.pocs()
 	if err != nil {
-		return nil, errors.New("POC不存在")
+		return nil, err
 	}
-
-	return &poc, nil
-}
-
-// ListPOCs lists POCs with filtering and pagination
-func (s *VulnService) ListPOCs(pocType string, severity string, tags []string, keyword string, page, pageSize int) ([]*models.POC, int64, error) {
-	ctx, cancel := database.NewContext()
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	collection := database.GetCollection(models.CollectionPOCs)
-
-	filter := bson.M{}
-
-	if pocType != "" {
-		filter["type"] = pocType
-	}
-
-	if severity != "" {
-		filter["severity"] = severity
-	}
-
-	if len(tags) > 0 {
-		filter["tags"] = bson.M{"$all": tags}
-	}
-
-	if keyword != "" {
-		filter["$or"] = []bson.M{
-			{"name": bson.M{"$regex": keyword, "$options": "i"}},
-			{"description": bson.M{"$regex": keyword, "$options": "i"}},
-		}
-	}
-
-	// Get total count
-	total, err := collection.CountDocuments(ctx, filter)
+	poc, err := store.GetByID(ctx, pocID)
 	if err != nil {
-		return nil, 0, errors.New("查询POC数量失败")
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil, errors.New("POC不存在")
+		}
+		return nil, errors.New("查询POC失败")
 	}
+	return poc, nil
+}
 
-	// Query with pagination
-	opts := options.Find().
-		SetSkip(int64((page - 1) * pageSize)).
-		SetLimit(int64(pageSize)).
-		SetSort(bson.D{{Key: "name", Value: 1}})
+// ListPOCs 分页查询 POC
+func (s *VulnService) ListPOCs(pocType, severity string, tags []string, keyword string, page, pageSize int) ([]*models.POC, int64, error) {
+	store, err := s.pocs()
+	if err != nil {
+		return nil, 0, err
+	}
+	ctx, cancel := dbCtx()
+	defer cancel()
 
-	cursor, err := collection.Find(ctx, filter, opts)
+	pocs, total, err := store.List(ctx, repo.POCFilter{
+		Type:     pocType,
+		Severity: severity,
+		Tags:     tags,
+		Keyword:  keyword,
+		Page:     page,
+		PageSize: pageSize,
+	})
 	if err != nil {
 		return nil, 0, errors.New("查询POC列表失败")
 	}
-	defer cursor.Close(ctx)
-
-	var pocs []*models.POC
-	if err = cursor.All(ctx, &pocs); err != nil {
-		return nil, 0, errors.New("解析POC数据失败")
-	}
-
 	return pocs, total, nil
 }
 
-// UpdatePOC updates a POC
+// UpdatePOC 更新 POC
 func (s *VulnService) UpdatePOC(pocID string, updates map[string]interface{}) error {
-	ctx, cancel := database.NewContext()
-	defer cancel()
-
-	objID, err := primitive.ObjectIDFromHex(pocID)
-	if err != nil {
+	if !repo.ValidID(pocID) {
 		return errors.New("无效的POC ID")
 	}
-
-	collection := database.GetCollection(models.CollectionPOCs)
-
-	updates["updated_at"] = time.Now()
-	_, err = collection.UpdateOne(ctx, bson.M{"_id": objID}, bson.M{"$set": updates})
+	store, err := s.pocs()
 	if err != nil {
+		return err
+	}
+	ctx, cancel := dbCtx()
+	defer cancel()
+
+	if err := store.UpdateFields(ctx, pocID, updates); err != nil {
+		if errors.Is(err, repo.ErrDuplicate) {
+			return errors.New("POC 模板 ID 已被占用")
+		}
+		if errors.Is(err, repo.ErrNotFound) {
+			return errors.New("POC不存在")
+		}
 		return errors.New("更新POC失败")
 	}
-
 	return nil
 }
 
-// DeletePOC deletes a POC
+// DeletePOC 删除 POC
 func (s *VulnService) DeletePOC(pocID string) error {
-	ctx, cancel := database.NewContext()
-	defer cancel()
-
-	objID, err := primitive.ObjectIDFromHex(pocID)
-	if err != nil {
+	if !repo.ValidID(pocID) {
 		return errors.New("无效的POC ID")
 	}
-
-	collection := database.GetCollection(models.CollectionPOCs)
-
-	_, err = collection.DeleteOne(ctx, bson.M{"_id": objID})
+	store, err := s.pocs()
 	if err != nil {
+		return err
+	}
+	ctx, cancel := dbCtx()
+	defer cancel()
+
+	if err := store.Delete(ctx, pocID); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return errors.New("POC不存在")
+		}
 		return errors.New("删除POC失败")
 	}
-
 	return nil
 }
 
-// TogglePOC enables or disables a POC
+// TogglePOC 启用或停用 POC
 func (s *VulnService) TogglePOC(pocID string, enabled bool) error {
-	return s.UpdatePOC(pocID, map[string]interface{}{
-		"enabled": enabled,
-	})
+	return s.UpdatePOC(pocID, map[string]interface{}{"enabled": enabled})
 }
 
-// CreateReport creates a vulnerability report
+// ---------------------------------------------------------------- 报告
+
+// CreateReport 创建报告
 func (s *VulnService) CreateReport(report *models.VulnReport) error {
-	ctx, cancel := database.NewContext()
-	defer cancel()
+	store, err := s.store()
+	if err != nil {
+		return err
+	}
 
-	collection := database.GetCollection(models.CollectionVulnReports)
-
-	report.ID = primitive.NewObjectID()
-	report.CreatedAt = time.Now()
-
-	// Get vulnerability statistics
-	stats, _ := s.GetVulnStats(report.WorkspaceID.Hex())
-	if stats != nil {
+	if stats, err := s.GetVulnStats(report.WorkspaceID.Hex()); err == nil && stats != nil {
 		report.Summary = *stats
 	}
 
-	_, err := collection.InsertOne(ctx, report)
-	if err != nil {
+	ctx, cancel := dbCtx()
+	defer cancel()
+	if err := store.CreateReport(ctx, report); err != nil {
 		return errors.New("创建报告失败")
 	}
-
 	return nil
 }
 
-// ListReports lists vulnerability reports
+// ListReports 分页查询报告
 func (s *VulnService) ListReports(workspaceID string, page, pageSize int) ([]*models.VulnReport, int64, error) {
-	ctx, cancel := database.NewContext()
+	store, err := s.store()
+	if err != nil {
+		return nil, 0, err
+	}
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	collection := database.GetCollection(models.CollectionVulnReports)
-
-	filter := bson.M{}
-	if workspaceID != "" {
-		wsID, _ := primitive.ObjectIDFromHex(workspaceID)
-		filter["workspace_id"] = wsID
-	}
-
-	total, _ := collection.CountDocuments(ctx, filter)
-
-	opts := options.Find().
-		SetSkip(int64((page - 1) * pageSize)).
-		SetLimit(int64(pageSize)).
-		SetSort(bson.D{{Key: "created_at", Value: -1}})
-
-	cursor, err := collection.Find(ctx, filter, opts)
+	reports, total, err := store.ListReports(ctx, workspaceID, page, pageSize)
 	if err != nil {
 		return nil, 0, errors.New("查询报告失败")
 	}
-	defer cursor.Close(ctx)
-
-	var reports []*models.VulnReport
-	if err = cursor.All(ctx, &reports); err != nil {
-		return nil, 0, errors.New("解析报告数据失败")
-	}
-
 	return reports, total, nil
 }
 
-// GetReportByID gets a report by ID
+// GetReportByID 按 ID 取报告
 func (s *VulnService) GetReportByID(reportID string) (*models.VulnReport, error) {
-	ctx, cancel := database.NewContext()
-	defer cancel()
-
-	objID, err := primitive.ObjectIDFromHex(reportID)
-	if err != nil {
+	if !repo.ValidID(reportID) {
 		return nil, errors.New("无效的报告ID")
 	}
-
-	collection := database.GetCollection(models.CollectionVulnReports)
-
-	var report models.VulnReport
-	err = collection.FindOne(ctx, bson.M{"_id": objID}).Decode(&report)
+	store, err := s.store()
 	if err != nil {
-		return nil, errors.New("报告不存在")
+		return nil, err
 	}
-
-	return &report, nil
-}
-
-// DeleteReport deletes a report
-func (s *VulnService) DeleteReport(reportID string) error {
-	ctx, cancel := database.NewContext()
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	objID, err := primitive.ObjectIDFromHex(reportID)
+	report, err := store.GetReport(ctx, reportID)
 	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil, errors.New("报告不存在")
+		}
+		return nil, errors.New("查询报告失败")
+	}
+	return report, nil
+}
+
+// DeleteReport 删除报告
+func (s *VulnService) DeleteReport(reportID string) error {
+	if !repo.ValidID(reportID) {
 		return errors.New("无效的报告ID")
 	}
-
-	collection := database.GetCollection(models.CollectionVulnReports)
-
-	_, err = collection.DeleteOne(ctx, bson.M{"_id": objID})
+	store, err := s.store()
 	if err != nil {
+		return err
+	}
+	ctx, cancel := dbCtx()
+	defer cancel()
+
+	if err := store.DeleteReport(ctx, reportID); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return errors.New("报告不存在")
+		}
 		return errors.New("删除报告失败")
 	}
-
 	return nil
 }
+
+// ---------------------------------------------------------------- 统计
 
 // VulnStatistics 漏洞统计数据
 type VulnStatistics struct {
@@ -504,285 +407,142 @@ type TrendDataPoint struct {
 
 // GetVulnStatistics 获取漏洞统计数据
 func (s *VulnService) GetVulnStatistics(workspaceID string) (*VulnStatistics, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	store, err := s.store()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	collection := database.GetCollection(models.CollectionVulnerabilities)
-
-	filter := bson.M{}
-	if workspaceID != "" {
-		wsID, _ := primitive.ObjectIDFromHex(workspaceID)
-		filter["workspace_id"] = wsID
+	sev, status, typ, total, err := store.GroupCounts(ctx, workspaceID)
+	if err != nil {
+		return nil, errors.New("统计失败")
 	}
 
 	stats := &VulnStatistics{
-		BySeverity: make(map[string]int64),
-		ByStatus:   make(map[string]int64),
-		ByType:     make(map[string]int64),
+		Total:      total,
+		BySeverity: sev,
+		ByStatus:   status,
+		ByType:     typ,
 	}
 
-	// 总数
-	total, _ := collection.CountDocuments(ctx, filter)
-	stats.Total = total
-
-	// 按严重程度统计
-	severityPipeline := []bson.M{
-		{"$match": filter},
-		{"$group": bson.M{"_id": "$severity", "count": bson.M{"$sum": 1}}},
+	if recent, err := store.Recent(ctx, workspaceID, 10); err == nil {
+		stats.RecentVulns = recent
 	}
-	cursor, err := collection.Aggregate(ctx, severityPipeline)
-	if err == nil {
-		var results []struct {
-			ID    string `bson:"_id"`
-			Count int64  `bson:"count"`
-		}
-		cursor.All(ctx, &results)
-		for _, r := range results {
-			stats.BySeverity[r.ID] = r.Count
-		}
-		cursor.Close(ctx)
-	}
-
-	// 按状态统计
-	statusPipeline := []bson.M{
-		{"$match": filter},
-		{"$group": bson.M{"_id": "$status", "count": bson.M{"$sum": 1}}},
-	}
-	cursor, err = collection.Aggregate(ctx, statusPipeline)
-	if err == nil {
-		var results []struct {
-			ID    string `bson:"_id"`
-			Count int64  `bson:"count"`
-		}
-		cursor.All(ctx, &results)
-		for _, r := range results {
-			stats.ByStatus[r.ID] = r.Count
-		}
-		cursor.Close(ctx)
-	}
-
-	// 按类型统计
-	typePipeline := []bson.M{
-		{"$match": filter},
-		{"$group": bson.M{"_id": "$type", "count": bson.M{"$sum": 1}}},
-	}
-	cursor, err = collection.Aggregate(ctx, typePipeline)
-	if err == nil {
-		var results []struct {
-			ID    string `bson:"_id"`
-			Count int64  `bson:"count"`
-		}
-		cursor.All(ctx, &results)
-		for _, r := range results {
-			if r.ID != "" {
-				stats.ByType[r.ID] = r.Count
-			}
-		}
-		cursor.Close(ctx)
-	}
-
-	// 最近漏洞
-	opts := options.Find().
-		SetLimit(10).
-		SetSort(bson.D{{Key: "created_at", Value: -1}})
-	cursor, err = collection.Find(ctx, filter, opts)
-	if err == nil {
-		cursor.All(ctx, &stats.RecentVulns)
-		cursor.Close(ctx)
-	}
-
-	// 趋势数据（最近30天）
-	stats.TrendData = s.getVulnTrendData(ctx, filter, 30)
-
+	stats.TrendData = s.buildTrend(store, workspaceID, 30)
 	return stats, nil
 }
 
-// getVulnTrendData 获取漏洞趋势数据
-func (s *VulnService) getVulnTrendData(ctx context.Context, filter bson.M, days int) []TrendDataPoint {
-	collection := database.GetCollection(models.CollectionVulnerabilities)
+// buildTrend 把聚合行铺成按天连续的序列，缺失的日期补零。
+func (s *VulnService) buildTrend(store repo.VulnRepo, workspaceID string, days int) []TrendDataPoint {
+	ctx, cancel := dbCtx()
+	defer cancel()
 
-	endDate := time.Now()
-	startDate := endDate.AddDate(0, 0, -days)
-
-	// 添加日期过滤
-	dateFilter := bson.M{
-		"created_at": bson.M{
-			"$gte": startDate,
-			"$lte": endDate,
-		},
-	}
-	for k, v := range filter {
-		dateFilter[k] = v
-	}
-
-	pipeline := []bson.M{
-		{"$match": dateFilter},
-		{"$group": bson.M{
-			"_id": bson.M{
-				"date":     bson.M{"$dateToString": bson.M{"format": "%Y-%m-%d", "date": "$created_at"}},
-				"severity": "$severity",
-			},
-			"count": bson.M{"$sum": 1},
-		}},
-		{"$sort": bson.M{"_id.date": 1}},
-	}
-
-	cursor, err := collection.Aggregate(ctx, pipeline)
+	rows, err := store.Trend(ctx, workspaceID, days)
 	if err != nil {
 		return nil
 	}
-	defer cursor.Close(ctx)
 
-	var results []struct {
-		ID struct {
-			Date     string `bson:"date"`
-			Severity string `bson:"severity"`
-		} `bson:"_id"`
-		Count int64 `bson:"count"`
-	}
-	cursor.All(ctx, &results)
-
-	// 按日期聚合
-	dateMap := make(map[string]*TrendDataPoint)
-	for _, r := range results {
-		if _, exists := dateMap[r.ID.Date]; !exists {
-			dateMap[r.ID.Date] = &TrendDataPoint{Date: r.ID.Date}
+	byDate := make(map[string]*TrendDataPoint, len(rows))
+	for _, row := range rows {
+		point, ok := byDate[row.Date]
+		if !ok {
+			point = &TrendDataPoint{Date: row.Date}
+			byDate[row.Date] = point
 		}
-		switch r.ID.Severity {
+		switch row.Severity {
 		case "critical":
-			dateMap[r.ID.Date].Critical = r.Count
+			point.Critical = row.Count
 		case "high":
-			dateMap[r.ID.Date].High = r.Count
+			point.High = row.Count
 		case "medium":
-			dateMap[r.ID.Date].Medium = r.Count
+			point.Medium = row.Count
 		case "low":
-			dateMap[r.ID.Date].Low = r.Count
+			point.Low = row.Count
 		case "info":
-			dateMap[r.ID.Date].Info = r.Count
+			point.Info = row.Count
 		}
 	}
 
-	// 转为数组
-	var trendData []TrendDataPoint
+	start := time.Now().AddDate(0, 0, -days)
+	out := make([]TrendDataPoint, 0, days+1)
 	for i := 0; i <= days; i++ {
-		date := startDate.AddDate(0, 0, i).Format("2006-01-02")
-		if point, exists := dateMap[date]; exists {
-			trendData = append(trendData, *point)
+		date := start.AddDate(0, 0, i).Format("2006-01-02")
+		if point, ok := byDate[date]; ok {
+			out = append(out, *point)
 		} else {
-			trendData = append(trendData, TrendDataPoint{Date: date})
+			out = append(out, TrendDataPoint{Date: date})
 		}
 	}
-
-	return trendData
+	return out
 }
 
 // VerifyVulnerability 验证漏洞（重新扫描）
 func (s *VulnService) VerifyVulnerability(vulnID string) (*models.Vulnerability, bool, error) {
-	// 获取漏洞信息
 	vuln, err := s.GetVulnByID(vulnID)
 	if err != nil {
 		return nil, false, err
 	}
 
 	verified := false
-
-	// 使用 Nuclei CLI 扫描器重新验证
 	if vulnscan.GlobalNucleiScanner != nil && vulnscan.GlobalNucleiScanner.IsAvailable() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 
-		// 尝试使用原始模板 ID 验证
 		templateID := vuln.TemplateID
 		if templateID == "" {
-			templateID = vuln.Type // 退回使用漏洞类型
+			templateID = vuln.Type
 		}
-
 		if templateID != "" && vuln.Target != "" {
-			result, err := vulnscan.GlobalNucleiScanner.VerifyVulnerability(ctx, vuln.Target, templateID)
-			if err == nil && result != nil {
+			if result, err := vulnscan.GlobalNucleiScanner.VerifyVulnerability(ctx, vuln.Target, templateID); err == nil && result != nil {
 				verified = true
 			}
 		}
 	}
 
-	// 更新验证时间和状态
-	updateData := map[string]interface{}{
-		"last_verified_at": time.Now(),
-	}
+	updates := map[string]interface{}{"last_verified_at": time.Now()}
 	if verified {
-		updateData["status"] = models.VulnStatusConfirmed
+		updates["status"] = models.VulnStatusConfirmed
 	}
-	s.UpdateVulnerability(vulnID, updateData)
+	s.UpdateVulnerability(vulnID, updates)
 
-	// 重新获取更新后的漏洞信息
-	vuln, _ = s.GetVulnByID(vulnID)
-
-	return vuln, verified, nil
+	updated, _ := s.GetVulnByID(vulnID)
+	return updated, verified, nil
 }
 
 // BatchUpdateStatus 批量更新状态
 func (s *VulnService) BatchUpdateStatus(vulnIDs []string, status models.VulnStatus) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	store, err := s.store()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	collection := database.GetCollection(models.CollectionVulnerabilities)
-
-	var objectIDs []primitive.ObjectID
-	for _, id := range vulnIDs {
-		objID, err := primitive.ObjectIDFromHex(id)
-		if err == nil {
-			objectIDs = append(objectIDs, objID)
+	if _, err := store.BatchUpdateStatus(ctx, vulnIDs, string(status)); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return errors.New("无有效的漏洞ID")
 		}
-	}
-
-	if len(objectIDs) == 0 {
-		return errors.New("无有效的漏洞ID")
-	}
-
-	update := bson.M{
-		"$set": bson.M{
-			"status":     status,
-			"updated_at": time.Now(),
-		},
-	}
-
-	_, err := collection.UpdateMany(ctx, bson.M{"_id": bson.M{"$in": objectIDs}}, update)
-	if err != nil {
 		return errors.New("批量更新失败")
 	}
-
 	return nil
 }
 
-// GetVulnsByTaskID 根据任务ID获取漏洞
+// GetVulnsByTaskID 根据任务 ID 获取漏洞
 func (s *VulnService) GetVulnsByTaskID(taskID string, page, pageSize int) ([]*models.Vulnerability, int64, error) {
-	ctx, cancel := database.NewContext()
-	defer cancel()
-
-	objID, err := primitive.ObjectIDFromHex(taskID)
-	if err != nil {
+	if !repo.ValidID(taskID) {
 		return nil, 0, errors.New("无效的任务ID")
 	}
+	store, err := s.store()
+	if err != nil {
+		return nil, 0, err
+	}
+	ctx, cancel := dbCtx()
+	defer cancel()
 
-	collection := database.GetCollection(models.CollectionVulnerabilities)
-
-	filter := bson.M{"task_id": objID}
-
-	total, _ := collection.CountDocuments(ctx, filter)
-
-	opts := options.Find().
-		SetSkip(int64((page - 1) * pageSize)).
-		SetLimit(int64(pageSize)).
-		SetSort(bson.D{{Key: "severity", Value: 1}, {Key: "created_at", Value: -1}})
-
-	cursor, err := collection.Find(ctx, filter, opts)
+	vulns, total, err := store.ListByTaskID(ctx, taskID, page, pageSize)
 	if err != nil {
 		return nil, 0, errors.New("查询漏洞失败")
 	}
-	defer cursor.Close(ctx)
-
-	var vulns []*models.Vulnerability
-	cursor.All(ctx, &vulns)
-
 	return vulns, total, nil
 }

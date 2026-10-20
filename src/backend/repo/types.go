@@ -2,6 +2,7 @@ package repo
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -16,6 +17,12 @@ import (
 // idFromString 校验并解析 24 位十六进制 ID。
 func idFromString(s string) (primitive.ObjectID, error) {
 	return primitive.ObjectIDFromHex(s)
+}
+
+// ValidID 供 service 层校验路径参数，避免把 mongo 的 primitive 类型带进上层。
+func ValidID(s string) bool {
+	_, err := idFromString(s)
+	return err == nil
 }
 
 // timeToPG 把零值时间转成 NULL，避免写库报错或落成 0001-01-01。
@@ -40,6 +47,44 @@ func textArray(ss []string) []string {
 		return []string{}
 	}
 	return ss
+}
+
+// boolValue 处理 enabled / installed 这类布尔列。
+func boolValue(v any) (any, error) {
+	switch x := v.(type) {
+	case nil:
+		return nil, nil
+	case bool:
+		return x, nil
+	case string:
+		return x == "true" || x == "1", nil
+	case float64:
+		return x != 0, nil
+	default:
+		return nil, fmt.Errorf("无法转成 boolean: %T", v)
+	}
+}
+
+// intValue 处理 intel_id 这类 bigint 列，空值落成 NULL。
+func intValue(v any) (any, error) {
+	switch x := v.(type) {
+	case nil:
+		return nil, nil
+	case int:
+		if x == 0 {
+			return nil, nil
+		}
+		return int64(x), nil
+	case int64:
+		if x == 0 {
+			return nil, nil
+		}
+		return x, nil
+	case float64:
+		return int64(x), nil
+	default:
+		return nil, fmt.Errorf("无法转成 bigint: %T", v)
+	}
 }
 
 // jsonb 把结构体序列化成 jsonb 列的值，nil 落成 {}。

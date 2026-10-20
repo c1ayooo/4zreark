@@ -287,7 +287,7 @@ CREATE INDEX IF NOT EXISTS vuln_tags_gin          ON vulnerabilities USING gin (
 
 CREATE TABLE IF NOT EXISTS pocs (
     id          char(24)    PRIMARY KEY,
-    template_id text        NOT NULL UNIQUE,
+    template_id text        NOT NULL DEFAULT '',
     name        text        NOT NULL DEFAULT '',
     description text        NOT NULL DEFAULT '',
     author      text        NOT NULL DEFAULT '',
@@ -307,6 +307,9 @@ CREATE TABLE IF NOT EXISTS pocs (
     CONSTRAINT pocs_origin_chk CHECK (origin IN ('manual','intel','import'))
 );
 
+-- 手工创建的 POC 没有 Nuclei 模板 ID，空串不能参与唯一约束，
+-- 所以唯一性只覆盖非空的 template_id（与 vulnerabilities 的去重口径一致）。
+CREATE UNIQUE INDEX IF NOT EXISTS pocs_template_uq ON pocs (template_id) WHERE template_id <> '';
 CREATE INDEX IF NOT EXISTS pocs_sev_idx     ON pocs (severity, enabled);
 CREATE INDEX IF NOT EXISTS pocs_tags_gin    ON pocs USING gin (tags);
 CREATE INDEX IF NOT EXISTS pocs_name_trgm   ON pocs USING gin (name gin_trgm_ops);

@@ -18,6 +18,9 @@ import (
 // ErrNotFound 表示记录不存在，service 层据此转成对应的业务错误。
 var ErrNotFound = errors.New("record not found")
 
+// ErrDuplicate 表示唯一约束冲突（同一模板+目标的漏洞、同一模板 ID 的 POC 等）。
+var ErrDuplicate = errors.New("duplicate record")
+
 // cst 固定用东八区算分区边界：DDL 里的分区是按 +08:00 切的。
 var cst = time.FixedZone("CST", 8*3600)
 
@@ -164,6 +167,10 @@ func (r *Repo) Tasks() TaskRepo { return &taskRepo{r: r} }
 func (r *Repo) Jobs() JobRepo { return &jobRepo{r: r} }
 
 func (r *Repo) Results() ResultRepo { return &resultRepo{r: r} }
+
+func (r *Repo) Vulns() VulnRepo { return &vulnRepo{r: r} }
+
+func (r *Repo) Pocs() PocRepo { return &pocRepo{r: r} }
 
 // isUniqueViolation 判断是否唯一约束冲突。
 func isUniqueViolation(err error) bool {
