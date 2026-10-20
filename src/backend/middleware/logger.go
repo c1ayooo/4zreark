@@ -2,10 +2,11 @@ package middleware
 
 import (
 	"context"
+	"log"
 	"time"
 
-	"github.com/c1ayooo/4zreark/database"
 	"github.com/c1ayooo/4zreark/models"
+	"github.com/c1ayooo/4zreark/repo"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -52,12 +53,17 @@ func OperationLogMiddleware() gin.HandlerFunc {
 	}
 }
 
-func saveOperationLog(log models.OperationLog) {
+func saveOperationLog(entry models.OperationLog) {
+	r := repo.Default()
+	if r == nil {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	collection := database.GetCollection(models.CollectionOperationLog)
-	_, _ = collection.InsertOne(ctx, log)
+	if err := r.Audits().Add(ctx, &entry); err != nil {
+		log.Printf("[audit] 写操作日志失败: %v", err)
+	}
 }
 
 func getModuleFromPath(path string) string {

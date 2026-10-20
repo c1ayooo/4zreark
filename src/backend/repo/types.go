@@ -49,6 +49,25 @@ func textArray(ss []string) []string {
 	return ss
 }
 
+// ParseID 把 24 位十六进制串解析成 ObjectID。服务层做模型映射时需要它，
+// 由 repo 包出面，避免上层 import mongo 的 primitive。
+func ParseID(s string) (primitive.ObjectID, error) {
+	return idFromString(s)
+}
+
+// jsonUnmarshal 解析 jsonb 列。
+func jsonUnmarshal(b []byte, v any) error {
+	return json.Unmarshal(b, v)
+}
+
+// timeOrNow 零值时间落成当前时间。
+func timeOrNow(t time.Time) time.Time {
+	if t.IsZero() {
+		return time.Now()
+	}
+	return t.UTC()
+}
+
 // boolValue 处理 enabled / installed 这类布尔列。
 func boolValue(v any) (any, error) {
 	switch x := v.(type) {

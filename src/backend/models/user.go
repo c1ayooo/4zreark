@@ -47,7 +47,8 @@ type Permission struct {
 
 // OperationLog represents operation audit logs
 type OperationLog struct {
-	ID        primitive.ObjectID `json:"id" bson:"_id,omitempty"`
+	ID int64 `json:"id"` // PG 是 bigserial
+
 	UserID    primitive.ObjectID `json:"user_id" bson:"user_id"`
 	Username  string             `json:"username" bson:"username"`
 	Action    string             `json:"action" bson:"action"`

@@ -90,7 +90,7 @@ type CruiseTaskUpdateRequest struct {
 
 // CruiseLog 巡航执行日志
 type CruiseLog struct {
-	ID          primitive.ObjectID `json:"id" bson:"_id,omitempty"`
+	ID          string             `json:"id"` // PG 是 bigserial，响应里本来就是字符串
 	CruiseID    primitive.ObjectID `json:"cruise_id" bson:"cruise_id"`
 	TaskID      primitive.ObjectID `json:"task_id" bson:"task_id"`
 	Status      string             `json:"status" bson:"status"` // success, failed, running

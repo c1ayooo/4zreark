@@ -1,183 +1,169 @@
 package service
 
 import (
-	"context"
 	"errors"
 	"time"
 
-	"github.com/c1ayooo/4zreark/database"
 	"github.com/c1ayooo/4zreark/models"
-
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"github.com/c1ayooo/4zreark/repo"
 )
 
+// PluginService 覆盖插件、指纹规则、字典三块。读写全部走 repo 层。
 type PluginService struct{}
 
 func NewPluginService() *PluginService {
 	return &PluginService{}
 }
 
-// CreatePlugin creates a new plugin
+func (s *PluginService) plugins() (repo.PluginRepo, error) {
+	r := repo.Default()
+	if r == nil {
+		return nil, errors.New("数据库未就绪")
+	}
+	return r.Plugins(), nil
+}
+
+func (s *PluginService) dicts() (repo.DictRepo, error) {
+	r := repo.Default()
+	if r == nil {
+		return nil, errors.New("数据库未就绪")
+	}
+	return r.Dictionaries(), nil
+}
+
+func (s *PluginService) rules() (repo.FingerprintRepo, error) {
+	r := repo.Default()
+	if r == nil {
+		return nil, errors.New("数据库未就绪")
+	}
+	return r.Fingerprints(), nil
+}
+
+// CreatePlugin 创建插件
 func (s *PluginService) CreatePlugin(plugin *models.Plugin) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	store, err := s.plugins()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	collection := database.GetCollection(models.CollectionPlugins)
-
-	// Check if plugin name already exists
-	var existing models.Plugin
-	err := collection.FindOne(ctx, bson.M{"name": plugin.Name}).Decode(&existing)
-	if err == nil {
+	if _, err := store.GetByName(ctx, plugin.Name); err == nil {
 		return errors.New("插件名称已存在")
 	}
 
-	plugin.ID = primitive.NewObjectID()
 	plugin.Installed = true
 	plugin.Enabled = true
 	plugin.CreatedAt = time.Now()
 	plugin.UpdatedAt = time.Now()
 
-	_, err = collection.InsertOne(ctx, plugin)
-	if err != nil {
+	if err := store.Create(ctx, plugin); err != nil {
+		if errors.Is(err, repo.ErrDuplicate) {
+			return errors.New("插件名称已存在")
+		}
 		return errors.New("创建插件失败")
 	}
-
 	return nil
 }
 
-// GetPluginByID retrieves plugin by ID
+// GetPluginByID 按 ID 取插件
 func (s *PluginService) GetPluginByID(pluginID string) (*models.Plugin, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	objID, err := primitive.ObjectIDFromHex(pluginID)
-	if err != nil {
+	if !repo.ValidID(pluginID) {
 		return nil, errors.New("无效的插件ID")
 	}
-
-	collection := database.GetCollection(models.CollectionPlugins)
-
-	var plugin models.Plugin
-	err = collection.FindOne(ctx, bson.M{"_id": objID}).Decode(&plugin)
+	store, err := s.plugins()
 	if err != nil {
-		return nil, errors.New("插件不存在")
+		return nil, err
 	}
-
-	return &plugin, nil
-}
-
-// ListPlugins lists plugins with filtering and pagination
-func (s *PluginService) ListPlugins(pluginType string, language string, enabled *bool, keyword string, page, pageSize int) ([]*models.Plugin, int64, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	collection := database.GetCollection(models.CollectionPlugins)
-
-	filter := bson.M{}
-
-	if pluginType != "" {
-		filter["type"] = pluginType
-	}
-
-	if language != "" {
-		filter["language"] = language
-	}
-
-	if enabled != nil {
-		filter["enabled"] = *enabled
-	}
-
-	if keyword != "" {
-		filter["$or"] = []bson.M{
-			{"name": bson.M{"$regex": keyword, "$options": "i"}},
-			{"description": bson.M{"$regex": keyword, "$options": "i"}},
-		}
-	}
-
-	// Get total count
-	total, err := collection.CountDocuments(ctx, filter)
+	plugin, err := store.GetByID(ctx, pluginID)
 	if err != nil {
-		return nil, 0, errors.New("查询插件数量失败")
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil, errors.New("插件不存在")
+		}
+		return nil, errors.New("查询插件失败")
 	}
+	return plugin, nil
+}
 
-	// Query with pagination
-	opts := options.Find().
-		SetSkip(int64((page - 1) * pageSize)).
-		SetLimit(int64(pageSize)).
-		SetSort(bson.D{{Key: "name", Value: 1}})
+// ListPlugins 分页查询插件
+func (s *PluginService) ListPlugins(pluginType, language string, enabled *bool, keyword string, page, pageSize int) ([]*models.Plugin, int64, error) {
+	store, err := s.plugins()
+	if err != nil {
+		return nil, 0, err
+	}
+	ctx, cancel := dbCtx()
+	defer cancel()
 
-	cursor, err := collection.Find(ctx, filter, opts)
+	plugins, total, err := store.List(ctx, repo.PluginFilter{
+		Type:     pluginType,
+		Language: language,
+		Enabled:  enabled,
+		Keyword:  keyword,
+		Page:     page,
+		PageSize: pageSize,
+	})
 	if err != nil {
 		return nil, 0, errors.New("查询插件列表失败")
 	}
-	defer cursor.Close(ctx)
-
-	var plugins []*models.Plugin
-	if err = cursor.All(ctx, &plugins); err != nil {
-		return nil, 0, errors.New("解析插件数据失败")
-	}
-
 	return plugins, total, nil
 }
 
-// UpdatePlugin updates a plugin
+// UpdatePlugin 更新插件
 func (s *PluginService) UpdatePlugin(pluginID string, updates map[string]interface{}) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	objID, err := primitive.ObjectIDFromHex(pluginID)
-	if err != nil {
+	if !repo.ValidID(pluginID) {
 		return errors.New("无效的插件ID")
 	}
-
-	collection := database.GetCollection(models.CollectionPlugins)
-
-	updates["updated_at"] = time.Now()
-	_, err = collection.UpdateOne(ctx, bson.M{"_id": objID}, bson.M{"$set": updates})
+	store, err := s.plugins()
 	if err != nil {
+		return err
+	}
+	ctx, cancel := dbCtx()
+	defer cancel()
+
+	if err := store.UpdateFields(ctx, pluginID, updates); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return errors.New("插件不存在")
+		}
 		return errors.New("更新插件失败")
 	}
-
 	return nil
 }
 
-// DeletePlugin deletes a plugin
+// DeletePlugin 删除插件
 func (s *PluginService) DeletePlugin(pluginID string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	objID, err := primitive.ObjectIDFromHex(pluginID)
-	if err != nil {
+	if !repo.ValidID(pluginID) {
 		return errors.New("无效的插件ID")
 	}
-
-	collection := database.GetCollection(models.CollectionPlugins)
-
-	_, err = collection.DeleteOne(ctx, bson.M{"_id": objID})
+	store, err := s.plugins()
 	if err != nil {
+		return err
+	}
+	ctx, cancel := dbCtx()
+	defer cancel()
+
+	if err := store.Delete(ctx, pluginID); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return errors.New("插件不存在")
+		}
 		return errors.New("删除插件失败")
 	}
-
 	return nil
 }
 
-// TogglePlugin enables or disables a plugin
+// TogglePlugin 启停插件
 func (s *PluginService) TogglePlugin(pluginID string, enabled bool) error {
-	return s.UpdatePlugin(pluginID, map[string]interface{}{
-		"enabled": enabled,
-	})
+	return s.UpdatePlugin(pluginID, map[string]interface{}{"enabled": enabled})
 }
 
-// InstallPlugin installs a plugin
+// InstallPlugin 安装插件
 func (s *PluginService) InstallPlugin(pluginID string) error {
-	return s.UpdatePlugin(pluginID, map[string]interface{}{
-		"installed": true,
-	})
+	return s.UpdatePlugin(pluginID, map[string]interface{}{"installed": true})
 }
 
-// UninstallPlugin uninstalls a plugin
+// UninstallPlugin 卸载插件
 func (s *PluginService) UninstallPlugin(pluginID string) error {
 	return s.UpdatePlugin(pluginID, map[string]interface{}{
 		"installed": false,
@@ -185,160 +171,166 @@ func (s *PluginService) UninstallPlugin(pluginID string) error {
 	})
 }
 
-// CreateFingerprintRule creates a fingerprint rule
+// ---------------------------------------------------------------- 指纹规则
+//
+// 这里只提供旧的扁平视图（models.FingerprintRule）。
+// 条件树那套走 governance 的 /api/governance/fingerprints。
+
 func (s *PluginService) CreateFingerprintRule(rule *models.FingerprintRule) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	store, err := s.rules()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	collection := database.GetCollection(models.CollectionFingerprintRules)
-
-	rule.ID = primitive.NewObjectID()
-	rule.Enabled = true
-	rule.CreatedAt = time.Now()
-	rule.UpdatedAt = time.Now()
-
-	_, err := collection.InsertOne(ctx, rule)
-	if err != nil {
-		return errors.New("创建指纹规则失败")
+	legacy := make([]repo.LegacyMatch, 0, len(rule.Rules))
+	for _, m := range rule.Rules {
+		legacy = append(legacy, repo.LegacyMatch{
+			Type:     m.Type,
+			Key:      m.Key,
+			Pattern:  m.Pattern,
+			Operator: m.Operator,
+		})
 	}
 
+	fp := &repo.FpRule{
+		Name:       rule.Name,
+		Category:   rule.Category,
+		Version:    rule.Version,
+		Legacy:     legacy,
+		Enabled:    true,
+		DSLVersion: 1, // 扁平规则按 AND 语义执行
+		Source:     "plugin",
+	}
+	if err := store.UpsertRule(ctx, fp); err != nil {
+		return errors.New("创建指纹规则失败")
+	}
+	if id, convErr := repo.ParseID(fp.ID); convErr == nil {
+		rule.ID = id
+	}
+	rule.Enabled = true
 	return nil
 }
 
-// ListFingerprintRules lists fingerprint rules
-func (s *PluginService) ListFingerprintRules(category string, keyword string, page, pageSize int) ([]*models.FingerprintRule, int64, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func (s *PluginService) ListFingerprintRules(category, keyword string, page, pageSize int) ([]*models.FingerprintRule, int64, error) {
+	store, err := s.rules()
+	if err != nil {
+		return nil, 0, err
+	}
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	collection := database.GetCollection(models.CollectionFingerprintRules)
-
-	filter := bson.M{}
-
-	if category != "" {
-		filter["category"] = category
-	}
-
-	if keyword != "" {
-		filter["name"] = bson.M{"$regex": keyword, "$options": "i"}
-	}
-
-	total, _ := collection.CountDocuments(ctx, filter)
-
-	opts := options.Find().
-		SetSkip(int64((page - 1) * pageSize)).
-		SetLimit(int64(pageSize)).
-		SetSort(bson.D{{Key: "name", Value: 1}})
-
-	cursor, err := collection.Find(ctx, filter, opts)
+	rows, total, err := store.ListRulesFiltered(ctx, category, keyword, page, pageSize)
 	if err != nil {
 		return nil, 0, errors.New("查询指纹规则失败")
 	}
-	defer cursor.Close(ctx)
 
-	var rules []*models.FingerprintRule
-	if err = cursor.All(ctx, &rules); err != nil {
-		return nil, 0, errors.New("解析指纹规则数据失败")
+	out := make([]*models.FingerprintRule, 0, len(rows))
+	for _, r := range rows {
+		matches := make([]models.FingerprintMatch, 0, len(r.Legacy))
+		for _, m := range r.Legacy {
+			matches = append(matches, models.FingerprintMatch{
+				Type:     m.Type,
+				Key:      m.Key,
+				Pattern:  m.Pattern,
+				Operator: m.Operator,
+			})
+		}
+		item := models.FingerprintRule{
+			Name:      r.Name,
+			Category:  r.Category,
+			Version:   r.Version,
+			Rules:     matches,
+			Enabled:   r.Enabled,
+			Source:    r.Source,
+			CreatedAt: r.CreatedAt,
+			UpdatedAt: r.UpdatedAt,
+		}
+		if id, convErr := repo.ParseID(r.ID); convErr == nil {
+			item.ID = id
+		}
+		out = append(out, &item)
 	}
-
-	return rules, total, nil
+	return out, total, nil
 }
 
-// DeleteFingerprintRule deletes a fingerprint rule
 func (s *PluginService) DeleteFingerprintRule(ruleID string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	objID, err := primitive.ObjectIDFromHex(ruleID)
-	if err != nil {
+	if !repo.ValidID(ruleID) {
 		return errors.New("无效的规则ID")
 	}
-
-	collection := database.GetCollection(models.CollectionFingerprintRules)
-
-	_, err = collection.DeleteOne(ctx, bson.M{"_id": objID})
+	store, err := s.rules()
 	if err != nil {
+		return err
+	}
+	ctx, cancel := dbCtx()
+	defer cancel()
+
+	if err := store.DeleteRuleByID(ctx, ruleID); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return errors.New("规则不存在")
+		}
 		return errors.New("删除规则失败")
 	}
-
 	return nil
 }
 
-// CreateDictionary creates a dictionary
+// ---------------------------------------------------------------- 字典
+
 func (s *PluginService) CreateDictionary(dict *models.Dictionary) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	collection := database.GetCollection(models.CollectionDictionaries)
-
-	dict.ID = primitive.NewObjectID()
+	store, err := s.dicts()
+	if err != nil {
+		return err
+	}
 	dict.CreatedAt = time.Now()
 	dict.UpdatedAt = time.Now()
 
-	_, err := collection.InsertOne(ctx, dict)
-	if err != nil {
+	ctx, cancel := dbCtx()
+	defer cancel()
+	if err := store.Create(ctx, dict); err != nil {
+		if errors.Is(err, repo.ErrDuplicate) {
+			return errors.New("同类型同名的字典已存在")
+		}
 		return errors.New("创建字典失败")
 	}
-
 	return nil
 }
 
-// ListDictionaries lists dictionaries
 func (s *PluginService) ListDictionaries(dictType string, page, pageSize int) ([]*models.Dictionary, int64, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	store, err := s.dicts()
+	if err != nil {
+		return nil, 0, err
+	}
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	collection := database.GetCollection(models.CollectionDictionaries)
-
-	filter := bson.M{}
-
-	if dictType != "" {
-		filter["type"] = dictType
-	}
-
-	total, _ := collection.CountDocuments(ctx, filter)
-
-	opts := options.Find().
-		SetSkip(int64((page - 1) * pageSize)).
-		SetLimit(int64(pageSize)).
-		SetSort(bson.D{{Key: "name", Value: 1}})
-
-	cursor, err := collection.Find(ctx, filter, opts)
+	dicts, total, err := store.List(ctx, dictType, page, pageSize)
 	if err != nil {
 		return nil, 0, errors.New("查询字典失败")
 	}
-	defer cursor.Close(ctx)
-
-	var dicts []*models.Dictionary
-	if err = cursor.All(ctx, &dicts); err != nil {
-		return nil, 0, errors.New("解析字典数据失败")
-	}
-
 	return dicts, total, nil
 }
 
-// DeleteDictionary deletes a dictionary
 func (s *PluginService) DeleteDictionary(dictID string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	objID, err := primitive.ObjectIDFromHex(dictID)
-	if err != nil {
+	if !repo.ValidID(dictID) {
 		return errors.New("无效的字典ID")
 	}
+	store, err := s.dicts()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := dbCtx()
+	defer cancel()
 
-	collection := database.GetCollection(models.CollectionDictionaries)
-
-	// Check if it's a builtin dictionary
-	var dict models.Dictionary
-	err = collection.FindOne(ctx, bson.M{"_id": objID}).Decode(&dict)
+	dict, err := store.GetByID(ctx, dictID)
 	if err == nil && dict.IsBuiltin {
 		return errors.New("不能删除内置字典")
 	}
-
-	_, err = collection.DeleteOne(ctx, bson.M{"_id": objID})
-	if err != nil {
+	if err := store.Delete(ctx, dictID); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return errors.New("字典不存在")
+		}
 		return errors.New("删除字典失败")
 	}
-
 	return nil
 }

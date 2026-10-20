@@ -172,6 +172,16 @@ func (r *Repo) Vulns() VulnRepo { return &vulnRepo{r: r} }
 
 func (r *Repo) Pocs() PocRepo { return &pocRepo{r: r} }
 
+func (r *Repo) Plugins() PluginRepo { return &pluginRepo{r: r} }
+
+func (r *Repo) Dictionaries() DictRepo { return &dictRepo{r: r} }
+
+func (r *Repo) Nodes() NodeRepo { return &nodeRepo{r: r} }
+
+func (r *Repo) Cruises() CruiseRepo { return &cruiseRepo{r: r} }
+
+func (r *Repo) Audits() AuditRepo { return &auditRepo{r: r} }
+
 // isUniqueViolation 判断是否唯一约束冲突。
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError

@@ -8,7 +8,8 @@
 
 ## 目录
 
-• `src/backend` — Go 1.24，127 个 `.go`，188 条路由，module `github.com/c1ayooo/4zreark`；当前数据层仍是 MongoDB（16 个集合、209 处调用、10 处聚合）
+• `src/backend` — Go 1.24，188 条路由，module `github.com/c1ayooo/4zreark`；数据层已全部落 PostgreSQL，
+  `database/` 包（Mongo 连接）已删除，启动不再连 Mongo
 • `src/frontend` — React 18 + Vite 5 + TS + Tailwind + Radix + TanStack，20 个页面、25 个组件
 • `docs/` — 两份设计方案
 • `reference/v0.6-源码` — 上游早期 v0.6（GORM + PG、114 路由、前端只有 dist），仅作功能与页面参考

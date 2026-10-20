@@ -12,7 +12,6 @@ import (
 type Config struct {
 	Server     ServerConfig     `mapstructure:"server"`
 	JWT        JWTConfig        `mapstructure:"jwt"`
-	MongoDB    MongoDBConfig    `mapstructure:"mongodb"`
 	Postgres   PostgresConfig   `mapstructure:"postgres"`
 	Scanner    ScannerConfig    `mapstructure:"scanner"`
 	Log        LogConfig        `mapstructure:"log"`
@@ -30,12 +29,6 @@ type JWTConfig struct {
 	Secret string `mapstructure:"secret"`
 	Expire int    `mapstructure:"expire"`
 	Issuer string `mapstructure:"issuer"`
-}
-
-type MongoDBConfig struct {
-	URI      string `mapstructure:"uri"`
-	Database string `mapstructure:"database"`
-	Timeout  int    `mapstructure:"timeout"`
 }
 
 // PostgresConfig 是数据层唯一存储配置，键名与交接规格 §5 一致，不要改名。

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -71,10 +72,13 @@ type FpHit struct {
 // FingerprintRepo 是指纹规则与命中的唯一数据入口。
 type FingerprintRepo interface {
 	ListRules(ctx context.Context, enabledOnly bool) ([]*FpRule, error)
+	// ListRulesFiltered 供旧的扁平规则列表使用（分类精确 + 名称模糊 + 分页）。
+	ListRulesFiltered(ctx context.Context, category, keyword string, page, pageSize int) ([]*FpRule, int64, error)
 	GetRuleByName(ctx context.Context, name string) (*FpRule, error)
 	UpsertRule(ctx context.Context, r *FpRule) error
 	SetRuleEnabled(ctx context.Context, name string, enabled bool) error
 	DeleteRule(ctx context.Context, name string) error
+	DeleteRuleByID(ctx context.Context, id string) error
 
 	// SaveHits 覆盖写：命中集合以本次匹配结果为准。
 	SaveHits(ctx context.Context, siteID int64, ruleIDs []string, recordID *int64, evidence map[string]any) error
@@ -185,6 +189,49 @@ func (r *fingerprintRepo) UpsertRule(ctx context.Context, rule *FpRule) error {
 func (r *fingerprintRepo) SetRuleEnabled(ctx context.Context, name string, enabled bool) error {
 	tag, err := r.r.pool.Exec(ctx,
 		`update fingerprint_rules set enabled = $2, updated_at = now() where name = $1`, name, enabled)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *fingerprintRepo) ListRulesFiltered(ctx context.Context, category, keyword string, page, pageSize int) ([]*FpRule, int64, error) {
+	page, pageSize = vulnPage(page, pageSize)
+	kw := strings.TrimSpace(keyword)
+	args := []any{category, kw, likePattern(kw)}
+
+	const where = `where ($1 = '' or category = $1) and ($2 = '' or name ilike $3)`
+
+	var total int64
+	if err := r.r.pool.QueryRow(ctx, `select count(*) from fingerprint_rules `+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	rows, err := r.r.pool.Query(ctx,
+		`select `+fpRuleColumns+` from fingerprint_rules `+where+`
+		  order by name limit $4 offset $5`,
+		append(args, pageSize, (page-1)*pageSize)...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	out := []*FpRule{}
+	for rows.Next() {
+		rule, err := scanFpRule(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, rule)
+	}
+	return out, total, rows.Err()
+}
+
+func (r *fingerprintRepo) DeleteRuleByID(ctx context.Context, id string) error {
+	tag, err := r.r.pool.Exec(ctx, `delete from fingerprint_rules where id = $1`, id)
 	if err != nil {
 		return err
 	}

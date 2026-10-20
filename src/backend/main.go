@@ -16,7 +16,6 @@ import (
 
 	"github.com/c1ayooo/4zreark/api"
 	"github.com/c1ayooo/4zreark/config"
-	"github.com/c1ayooo/4zreark/database"
 	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/router"
 	"github.com/c1ayooo/4zreark/service"
@@ -60,12 +59,6 @@ func main() {
 	}
 	defer pg.Close()
 	log.Println("PostgreSQL 就绪，启动自检通过")
-
-	// ---------------------------------------------------------------- 迁移期临时依赖
-	// TODO(分片 B/C/D)：Mongo 是尚未迁完的数据访问路径（结果、POC、巡航、情报），迁完后连同 database 包的 mongo 一并删除。
-	// 迁移期间不做双写：下列服务只读/写旧库，与新库无交集。
-	database.InitMongoDB(&cfg.MongoDB)
-	defer database.CloseMongoDB()
 
 	// Initialize default admin user
 	userService := service.NewUserService()

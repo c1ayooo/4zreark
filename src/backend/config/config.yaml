@@ -10,12 +10,6 @@ jwt:
   expire: 7200  # 2 hours in seconds
   issuer: "4zreark"
 
-mongodb:
-  # 迁移期保留该段兼容现有加载逻辑；PG 化后由 postgres 段取代
-  uri: "mongodb://127.0.0.1:27017"
-  database: "4zreark"
-  timeout: 10
-
 postgres:
   host: "127.0.0.1"
   port: 25433
