@@ -45,6 +45,18 @@ func SetupRouter() *gin.Engine {
 			protected.PUT("/auth/profile", authHandler.UpdateProfile)
 			protected.PUT("/auth/password", authHandler.ChangePassword)
 
+			// Asset governance routes（ScopesHub 复刻 P0）
+			assetHandler := api.NewAssetHandler()
+			{
+				protected.GET("/overview", assetHandler.Overview)
+				protected.GET("/projects", assetHandler.ListProjects)
+				protected.GET("/assets", assetHandler.ListAssets)
+				protected.GET("/assets/query-check", assetHandler.CheckQuery)
+				protected.POST("/assets/import", middleware.AdminMiddleware(), assetHandler.ImportAssets)
+				protected.POST("/assets/:id/verify", assetHandler.VerifyAsset)
+				protected.GET("/events", assetHandler.ListEvents)
+			}
+
 			// User routes
 			userHandler := api.NewUserHandler()
 			userGroup := protected.Group("/users")

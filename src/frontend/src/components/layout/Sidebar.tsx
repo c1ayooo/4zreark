@@ -16,12 +16,14 @@ import {
   Layers,
   Calendar,
   Network,
+  Database,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 const menuItems = [
   { path: '/dashboard', icon: LayoutDashboard, label: '仪表盘' },
   { path: '/topology', icon: Network, label: '资产星图' },
+  { path: '/assets', icon: Database, label: '资产探索' },
   { path: '/tasks', icon: ListTodo, label: '任务管理' },
   { path: '/cruise', icon: Calendar, label: '自动巡航' },
   { path: '/vulnerabilities', icon: Shield, label: '漏洞管理' },

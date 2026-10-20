@@ -27,6 +27,7 @@ import TakeoverPage from '@/pages/takeover/TakeoverPage'
 import QueuePage from '@/pages/queue/QueuePage'
 import { CruisePage } from '@/pages/cruise'
 import TopologyPage from '@/pages/topology/TopologyPage'
+import AssetsPage from '@/pages/assets/AssetsPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore()
@@ -58,6 +59,7 @@ function App() {
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/topology" element={<TopologyPage />} />
+          <Route path="/assets" element={<AssetsPage />} />
           <Route path="/tasks" element={<TasksPage />} />
           <Route path="/tasks/new" element={<TaskCreatePage />} />
           <Route path="/tasks/:id" element={<TaskDetailPage />} />
