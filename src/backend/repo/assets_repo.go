@@ -115,59 +115,6 @@ func scanSite(scan func(...any) error) (*Site, error) {
 	return &s, nil
 }
 
-// ListSites 按 DSL 过滤分页返回站点。
-func (a *AssetRepo) ListSites(ctx context.Context, projectID int64, q string, page, pageSize int) ([]*Site, int64, error) {
-	if a == nil || a.r == nil {
-		return nil, 0, fmt.Errorf("资产仓储未初始化")
-	}
-	where := []string{"1=1"}
-	params := []any{}
-	base := 1
-	if projectID > 0 {
-		params = append(params, projectID)
-		where = append(where, fmt.Sprintf("s.project_id = $%d", len(params)))
-		base = len(params) + 1
-	}
-	// DSL 编译时直接按起始偏移生成占位符，避免字符串替换在 $10 以上互相覆盖
-	expr, dslArgs, err := BuildAssetWhereFrom(q, base)
-	if err != nil {
-		return nil, 0, err
-	}
-	if expr != "" {
-		where = append(where, expr)
-		params = append(params, dslArgs...)
-	}
-	cond := strings.Join(where, " AND ")
-
-	var total int64
-	countSQL := "SELECT count(*) FROM sites s JOIN projects p ON p.id = s.project_id WHERE " + cond
-	if err := a.r.pool.QueryRow(ctx, countSQL, params...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("统计资产失败: %w", err)
-	}
-
-	offset := (page - 1) * pageSize
-	params = append(params, pageSize, offset)
-	sql := fmt.Sprintf(`SELECT %s FROM sites s JOIN projects p ON p.id = s.project_id
-		WHERE %s ORDER BY s.first_seen DESC, s.id DESC LIMIT $%d OFFSET $%d`,
-		siteColumns, cond, len(params)-1, len(params))
-
-	rows, err := a.r.pool.Query(ctx, sql, params...)
-	if err != nil {
-		return nil, 0, fmt.Errorf("查询资产失败: %w", err)
-	}
-	defer rows.Close()
-
-	out := []*Site{}
-	for rows.Next() {
-		s, err := scanSite(rows.Scan)
-		if err != nil {
-			return nil, 0, fmt.Errorf("解析资产失败: %w", err)
-		}
-		out = append(out, s)
-	}
-	return out, total, rows.Err()
-}
-
 // Project 是资产归属边界。
 type Project struct {
 	ID          int64     `json:"id"`

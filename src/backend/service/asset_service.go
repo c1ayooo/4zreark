@@ -38,20 +38,21 @@ func (s *AssetService) ListProjects(ctx context.Context) ([]*repo.Project, error
 	return a.ListProjects(ctx)
 }
 
-// ListAssets 支持 DSL 查询串 q；语法错误会带上出错位置返回给前端。
-func (s *AssetService) ListAssets(ctx context.Context, projectID int64, q string, page, pageSize int) ([]*repo.Site, int64, error) {
+// ListAssets 是资产列表：view × kind × catalog 三层正交维度 + DSL 查询串。
+// DSL 语法错误会带上出错位置返回；结构化参数非法则静默回落缺省（v4 §11.4 的容错边界）。
+func (s *AssetService) ListAssets(ctx context.Context, q repo.AssetQuery) (*repo.AssetPage, error) {
 	a, err := s.repo()
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	if page < 1 {
-		page = 1
+	switch {
+	case q.PageSize < 1:
+		q.PageSize = 20
+	case q.PageSize > 500:
+		// 硬上限 500：请求 1000 返回 500 条，而不是回落到 20
+		q.PageSize = 500
 	}
-	if pageSize < 1 || pageSize > 200 {
-		pageSize = 20
-	}
-	// DSL 由 repo 在查询时编译：它知道 project_id 已经占了哪个占位符
-	return a.ListSites(ctx, projectID, q, page, pageSize)
+	return a.ListAssets(ctx, q)
 }
 
 // CheckQuery 只编译不查库，供前端语法框实时反馈。

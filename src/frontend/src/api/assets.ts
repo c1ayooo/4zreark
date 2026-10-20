@@ -37,6 +37,71 @@ export interface Site {
   endpoints: AssetEndpoint[]
 }
 
+/** kind=domain 的一行 */
+export interface DomainRow {
+  host: string
+  site_count: number
+  project_id: number
+  project_code: string
+  project_name: string
+  reachable_count: number
+  last_seen: string
+}
+
+/** kind=ip 的一行 */
+export interface IPRow {
+  ip: string
+  site_count: number
+  domain_count: number
+  project_id: number
+  last_seen: string
+}
+
+/** site_group=0（展开到入口）的一行 */
+export interface EndpointRow {
+  site_id: number
+  host: string
+  port: number
+  protocol: string
+  value: string
+  title: string
+  http_status: number
+  state: string
+  project_id: number
+  project_name: string
+  record_count: number
+  last_seen: string
+}
+
+export interface ConnectivityPolicy {
+  failure_threshold: number
+  first_hours: number
+  second_hours: number
+  repeat_hours: number
+  cleanup_days: number
+  auto_cleanup: boolean
+}
+
+export type AssetKind = 'site' | 'domain' | 'ip'
+export type AssetCatalog = 'all' | 'verified' | 'candidates'
+export type AssetView = '' | 'clues' | 'candidates' | 'lost' | 'icons' | 'technologies' | 'apps' | 'media'
+
+export interface AssetPage {
+  items: (Site | DomainRow | IPRow | EndpointRow)[]
+  total: number
+  page: number
+  page_size: number
+  kind: AssetKind
+  catalog: string
+  view: string
+  lifecycle: string
+  site_group: boolean
+  /** false 表示这个视图还没实现，note 里写了替代接口或无数据源 */
+  view_supported: boolean
+  note?: string
+  connectivity_policy?: ConnectivityPolicy
+}
+
 export interface ProbeEndpointResult {
   scheme: string
   port: number
@@ -55,6 +120,8 @@ export interface ProbeReport {
   reason_code: string
   status_code: number
   endpoints: ProbeEndpointResult[]
+  tech?: string[]
+  matched_rules?: string[]
 }
 
 export interface OverviewData {
@@ -92,14 +159,22 @@ export interface AssetProject {
   lost_count: number
 }
 
+export interface AssetQueryParams {
+  page: number
+  page_size: number
+  q?: string
+  project_id?: number
+  kind?: AssetKind
+  catalog?: AssetCatalog
+  view?: AssetView
+  site_group?: 0 | 1
+}
+
 export const assetApi = {
   overview: () => api.get<unknown, { code: number; data: OverviewData }>('/overview'),
   projects: () => api.get<unknown, { code: number; data: AssetProject[] }>('/projects'),
-  list: (params: { page: number; page_size: number; q?: string; project_id?: number }) =>
-    api.get<unknown, { code: number; data: { items: Site[] }; total: number; page: number; size: number }>(
-      '/assets',
-      { params }
-    ),
+  list: (params: AssetQueryParams) =>
+    api.get<unknown, { code: number; data: AssetPage }>('/assets', { params }),
   checkQuery: (q: string) =>
     api.get<unknown, { code: number; data: { valid: boolean; compiled: string } }>('/assets/query-check', {
       params: { q },
@@ -107,7 +182,7 @@ export const assetApi = {
   /** 人工判定，不发网络请求 */
   verify: (id: number, body: { reachable: boolean; status_code?: number; reason?: string }) =>
     api.post<unknown, { code: number; message: string }>(`/assets/${id}/verify`, body),
-  /** 真实探测：服务端会发 HTTP 请求，并写回连通性与验证流水 */
+  /** 真实探测：服务端会发 HTTP 请求，并写回连通性、指纹与验证流水 */
   probe: (id: number) =>
     api.post<unknown, { code: number; message: string; data: ProbeReport }>(`/assets/${id}/probe`),
   /** 人工删除保护期（这段时间内不会被自动归档） */

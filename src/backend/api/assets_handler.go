@@ -43,14 +43,26 @@ func (h *AssetHandler) ListProjects(c *gin.Context) {
 	utils.Success(c, ps)
 }
 
-// ListAssets 资产列表，支持 DSL 查询串 q。
-// GET /api/assets?page=1&page_size=20&q=status_code="200"&&domain="example.com"
+// ListAssets 资产列表：view × kind × catalog 三层维度 + DSL。
+// GET /api/assets?kind=site&catalog=verified&view=lost&site_group=1&page=1&page_size=20&q=...
+//
+// 容错口径（v4 §11.4）：q 语法错误明确报错；kind/catalog/view 非法值静默回落缺省。
 func (h *AssetHandler) ListAssets(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
+	siteGroup := c.DefaultQuery("site_group", "1") != "0"
 
-	sites, total, err := h.assets.ListAssets(c.Request.Context(), projectID, c.Query("q"), page, pageSize)
+	res, err := h.assets.ListAssets(c.Request.Context(), repo.AssetQuery{
+		ProjectID: projectID,
+		Q:         c.Query("q"),
+		Kind:      c.Query("kind"),
+		Catalog:   c.Query("catalog"),
+		View:      c.Query("view"),
+		SiteGroup: siteGroup,
+		Page:      page,
+		PageSize:  pageSize,
+	})
 	if err != nil {
 		if errors.Is(err, repo.ErrDSLSyntax) {
 			utils.Error(c, utils.ErrCodeInvalidParams, err.Error())
@@ -59,7 +71,7 @@ func (h *AssetHandler) ListAssets(c *gin.Context) {
 		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
 		return
 	}
-	utils.SuccessWithPagination(c, gin.H{"items": sites, "q": c.Query("q")}, total, page, pageSize)
+	utils.Success(c, res)
 }
 
 // CheckQuery 只校验查询串，不查库，供前端语法框实时反馈。
