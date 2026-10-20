@@ -163,6 +163,8 @@ func (r *Repo) Tasks() TaskRepo { return &taskRepo{r: r} }
 
 func (r *Repo) Jobs() JobRepo { return &jobRepo{r: r} }
 
+func (r *Repo) Results() ResultRepo { return &resultRepo{r: r} }
+
 // isUniqueViolation 判断是否唯一约束冲突。
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError

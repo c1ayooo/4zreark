@@ -35,8 +35,10 @@ type ScanResult struct {
 	Tags        []string           `json:"tags" bson:"tags"`
 	Project     string             `json:"project" bson:"project"`
 	Source      string             `json:"source" bson:"source"` // 来源：主动扫描/被动发现
-	CreatedAt   time.Time          `json:"created_at" bson:"created_at"`
-	UpdatedAt   time.Time          `json:"updated_at" bson:"updated_at"`
+	// DedupKey 跨月去重键（task_id|type|业务键），由 repo 生成，不入响应体
+	DedupKey  string    `json:"-" bson:"dedup_key,omitempty"`
+	CreatedAt time.Time `json:"created_at" bson:"created_at"`
+	UpdatedAt time.Time `json:"updated_at" bson:"updated_at"`
 }
 
 // SubdomainResult 子域名结果
