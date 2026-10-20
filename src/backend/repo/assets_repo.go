@@ -38,6 +38,17 @@ type Site struct {
 	LastSeen            time.Time  `json:"last_seen"`
 	VerifiedAt          *time.Time `json:"verified_at"`
 	NextVerificationAt  *time.Time `json:"next_verification_at"`
+	// Endpoints 是站点的全部入口（协议 + 端口）。
+	// 站点按 host 归并，所以 http:80 / https:443 / http:8080 都挂在这一个站点下，
+	// 端口视图只能从这里读，sites.port 只是 https 优先的展示值。
+	Endpoints []Endpoint `json:"endpoints"`
+}
+
+// Endpoint 是站点的入口（协议 + 端口）。
+type Endpoint struct {
+	Scheme     string `json:"scheme"`
+	Port       int    `json:"port"`
+	StatusCode int    `json:"status_code"`
 }
 
 // RawRecord 是一次采集得到的证据，只追加不覆盖业务状态。
@@ -55,9 +66,10 @@ type RawRecord struct {
 
 // ImportResult 汇总一次导入。
 type ImportResult struct {
-	Records    int `json:"records"`
-	NewSites   int `json:"new_sites"`
-	DupRecords int `json:"dup_records"`
+	Records      int `json:"records"`
+	NewSites     int `json:"new_sites"`
+	DupRecords   int `json:"dup_records"`
+	NewEndpoints int `json:"new_endpoints"`
 }
 
 // AssetRepo 是资产治理域的唯一数据入口。
@@ -69,16 +81,19 @@ const siteColumns = `s.id, s.project_id, p.code, p.name, s.host, s.port, s.proto
 	coalesce(s.ip::text,''), s.http_status, coalesce(s.title,''), coalesce(s.icon_sha256,''),
 	s.tech, s.discovery_type, s.state, s.consecutive_failures, s.retry_step, s.cleanup_eligible,
 	s.verification_status, coalesce(s.verification_reason,''), s.attempts, s.max_attempts,
-	s.first_seen, s.last_seen, s.verified_at, s.next_verification_at`
+	s.first_seen, s.last_seen, s.verified_at, s.next_verification_at,
+	coalesce((SELECT jsonb_agg(jsonb_build_object('scheme', e.scheme, 'port', e.port,
+	                                             'status_code', e.status_code) ORDER BY e.port, e.scheme)
+	            FROM site_endpoints e WHERE e.site_id = s.id), '[]'::jsonb)`
 
 func scanSite(scan func(...any) error) (*Site, error) {
 	var s Site
-	var tech []byte
+	var tech, eps []byte
 	err := scan(&s.ID, &s.ProjectID, &s.ProjectCode, &s.ProjectName, &s.Host, &s.Port,
 		&s.Protocol, &s.Value, &s.IP, &s.HTTPStatus, &s.Title, &s.IconSHA256, &tech,
 		&s.DiscoveryType, &s.State, &s.ConsecutiveFailures, &s.RetryStep, &s.CleanupEligible,
 		&s.VerificationStatus, &s.VerificationReason, &s.Attempts, &s.MaxAttempts,
-		&s.FirstSeen, &s.LastSeen, &s.VerifiedAt, &s.NextVerificationAt)
+		&s.FirstSeen, &s.LastSeen, &s.VerifiedAt, &s.NextVerificationAt, &eps)
 	if err != nil {
 		return nil, err
 	}
@@ -87,6 +102,12 @@ func scanSite(scan func(...any) error) (*Site, error) {
 	}
 	if s.Tech == nil {
 		s.Tech = []string{}
+	}
+	if len(eps) > 0 {
+		_ = json.Unmarshal(eps, &s.Endpoints)
+	}
+	if s.Endpoints == nil {
+		s.Endpoints = []Endpoint{}
 	}
 	return &s, nil
 }
@@ -358,6 +379,25 @@ func (a *AssetRepo) ImportRecords(ctx context.Context, projectID int64, source s
 		}
 		if siteInserted {
 			res.NewSites++
+		}
+
+		// 入口：站点按 host 归并，端口视图落在这里。
+		// 同 host 的 http:80 与 http:8080 靠 (site_id, scheme, port) 区分，不会互相覆盖。
+		var epInserted bool
+		err = tx.QueryRow(ctx, `
+			INSERT INTO site_endpoints (site_id, scheme, host, port, status_code)
+			VALUES ($1,$2,$3,$4,$5)
+			ON CONFLICT (site_id, scheme, port) DO UPDATE SET
+				status_code = CASE WHEN EXCLUDED.status_code > 0 THEN EXCLUDED.status_code
+				                   ELSE site_endpoints.status_code END,
+				last_seen_at = now()
+			RETURNING (xmax = 0)`,
+			siteID, proto, host, port, rec.StatusCode).Scan(&epInserted)
+		if err != nil {
+			return nil, fmt.Errorf("归并站点入口失败: %w", err)
+		}
+		if epInserted {
+			res.NewEndpoints++
 		}
 
 		// 回填 raw_records.site_id，P4 的事件需要从证据反查站点

@@ -123,21 +123,24 @@ CREATE INDEX IF NOT EXISTS targets_due_idx ON run_targets (state, lease_until);
 -- ---------------------------------------------------------------- 站点入口（P1）
 
 -- P0 的 sites 只存了一个展示用 protocol/value（https 优先）。
--- 协议折叠后同一个站点会同时有 http 与 https 两个入口，必须单独成表，
--- 否则「sites=152734 / site_entries=152745」这种口径差在复刻里表达不出来。
+-- 站点按 host 归并（site_key = sha1(project|host)），同一个 host 的 http:80、https:443
+-- 以及 http:8080 这类非标准入口都落在这一个站点下，端口视图只能靠本表还原。
+-- 唯一键是 (site_id, scheme, port) 而不是 (site_id, scheme)：
+-- 否则同 host 的 http:80 与 http:8080 会互相覆盖，端口视图还是缺。
 CREATE TABLE IF NOT EXISTS site_endpoints (
     id           bigserial   PRIMARY KEY,
     site_id      bigint      NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     scheme       text        NOT NULL,
     host         text        NOT NULL,
-    -- P0 的 sites.port 是真实端口（未折叠），这里保持一致
     port         integer     NOT NULL,
     status_code  integer,
     verified_at  timestamptz,
     last_seen_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT endpoints_scheme_chk CHECK (scheme IN ('http','https')),
-    UNIQUE (site_id, scheme)
+    UNIQUE (site_id, scheme, port)
 );
+
+CREATE INDEX IF NOT EXISTS site_endpoints_site_idx ON site_endpoints (site_id, port);
 
 -- ---------------------------------------------------------------- 关系与证据（P4）
 

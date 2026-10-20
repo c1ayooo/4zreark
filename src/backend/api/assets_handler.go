@@ -113,7 +113,8 @@ func (h *AssetHandler) ImportAssets(c *gin.Context) {
 		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
 		return
 	}
-	utils.SuccessWithMessage(c, fmt.Sprintf("导入 %d 条，新增站点 %d 个，重复 %d 条", res.Records, res.NewSites, res.DupRecords), res)
+	utils.SuccessWithMessage(c, fmt.Sprintf("导入 %d 条，新增站点 %d 个、入口 %d 个，重复 %d 条",
+		res.Records, res.NewSites, res.NewEndpoints, res.DupRecords), res)
 }
 
 // VerifyAsset 手动触发一次可达性判定（P0 只落状态，不发网络请求）。
