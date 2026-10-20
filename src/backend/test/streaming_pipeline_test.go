@@ -10,7 +10,7 @@ import (
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/service/pipeline"
 
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"github.com/c1ayooo/4zreark/oid"
 )
 
 // ========== StreamingPipeline 集成测试 ==========
@@ -24,7 +24,7 @@ func TestStreamingPipelineFullFlow(t *testing.T) {
 
 	// 创建测试任务
 	task := &models.Task{
-		ID:        primitive.NewObjectID(),
+		ID:        oid.NewObjectID(),
 		Name:      "Full Pipeline Test",
 		Type:      models.TaskTypeFull,
 		Targets:   []string{"swirecocacola.com"},
@@ -115,7 +115,7 @@ func TestStreamingPipelineSubdomainOnly(t *testing.T) {
 	fmt.Println("仅测试子域名发现，不进行后续端口/指纹扫描")
 
 	task := &models.Task{
-		ID:        primitive.NewObjectID(),
+		ID:        oid.NewObjectID(),
 		Name:      "Subdomain Only Test",
 		Type:      models.TaskTypeSubdomain,
 		Targets:   []string{"swirecocacola.com"},
@@ -176,7 +176,7 @@ func TestStreamingPipelinePortScanOnly(t *testing.T) {
 	printSeparator("StreamingPipeline 端口扫描测试")
 
 	task := &models.Task{
-		ID:        primitive.NewObjectID(),
+		ID:        oid.NewObjectID(),
 		Name:      "Port Scan Test",
 		Type:      models.TaskTypePortScan,
 		Targets:   []string{"example.com"}, // 使用 example.com 因为更快
@@ -241,7 +241,7 @@ func TestStreamingPipelineCrawlerBatch(t *testing.T) {
 	printSeparator("StreamingPipeline 爬虫批量模式测试")
 
 	task := &models.Task{
-		ID:        primitive.NewObjectID(),
+		ID:        oid.NewObjectID(),
 		Name:      "Crawler Batch Test",
 		Type:      models.TaskTypeCrawler,
 		Targets:   []string{"example.com"}, // 使用单个目标简化测试
@@ -305,7 +305,7 @@ func TestStreamingPipelineIPTarget(t *testing.T) {
 	printSeparator("StreamingPipeline IP目标测试")
 
 	task := &models.Task{
-		ID:        primitive.NewObjectID(),
+		ID:        oid.NewObjectID(),
 		Name:      "IP Target Test",
 		Type:      models.TaskTypePortScan,
 		Targets:   []string{"45.33.32.156"}, // scanme.nmap.org 的 IP
@@ -366,7 +366,7 @@ func TestStreamingPipelineMultipleTargets(t *testing.T) {
 	printSeparator("StreamingPipeline 多目标测试")
 
 	task := &models.Task{
-		ID:        primitive.NewObjectID(),
+		ID:        oid.NewObjectID(),
 		Name:      "Multiple Targets Test",
 		Type:      models.TaskTypePortScan,
 		Targets:   []string{"scanme.nmap.org", "example.com"},

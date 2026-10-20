@@ -13,8 +13,6 @@ import (
 	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/service/notify"
 	"github.com/c1ayooo/4zreark/service/pipeline"
-
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 // runningTask 正在运行的任务信息
@@ -543,7 +541,7 @@ func (e *TaskExecutor) executeStreamingPipeline(task *models.Task, jobID int64, 
 				WorkspaceID: task.WorkspaceID,
 				Type:        models.ResultTypeSubdomain,
 				Source:      r.Source,
-				Data: bson.M{
+				Data: map[string]interface{}{
 					"subdomain":    r.Host,   // 子域名完整名称
 					"domain":       r.Domain, // 根域名
 					"root_domain":  r.RootDomain,
@@ -576,7 +574,7 @@ func (e *TaskExecutor) executeStreamingPipeline(task *models.Task, jobID int64, 
 					WorkspaceID: task.WorkspaceID,
 					Type:        models.ResultTypePort,
 					Source:      "gogo",
-					Data: bson.M{
+					Data: map[string]interface{}{
 						"host":    r.Host,
 						"ip":      r.IP,
 						"port":    r.Port,
@@ -592,7 +590,7 @@ func (e *TaskExecutor) executeStreamingPipeline(task *models.Task, jobID int64, 
 				WorkspaceID: task.WorkspaceID,
 				Type:        models.ResultTypeService,
 				Source:      "fingerprint",
-				Data: bson.M{
+				Data: map[string]interface{}{
 					"url":          r.URL,
 					"host":         r.Host,
 					"ip":           r.IP,
@@ -613,7 +611,7 @@ func (e *TaskExecutor) executeStreamingPipeline(task *models.Task, jobID int64, 
 				WorkspaceID: task.WorkspaceID,
 				Type:        models.ResultTypeVuln,
 				Source:      r.Source,
-				Data: bson.M{
+				Data: map[string]interface{}{
 					"vuln_id":     r.VulnID,
 					"name":        r.Name,
 					"target":      r.Target,
@@ -647,7 +645,7 @@ func (e *TaskExecutor) executeStreamingPipeline(task *models.Task, jobID int64, 
 				WorkspaceID: task.WorkspaceID,
 				Type:        resultType,
 				Source:      r.Source,
-				Data: bson.M{
+				Data: map[string]interface{}{
 					"url":          normalizedURL,
 					"input":        normalizedInput,
 					"target":       normalizedInput, // 同时存储 target 字段供前端显示
@@ -669,7 +667,7 @@ func (e *TaskExecutor) executeStreamingPipeline(task *models.Task, jobID int64, 
 				WorkspaceID: task.WorkspaceID,
 				Type:        models.ResultTypeSensitive,
 				Source:      r.Source,
-				Data: bson.M{
+				Data: map[string]interface{}{
 					"target":     r.Target,
 					"url":        r.URL,
 					"type":       r.Type,

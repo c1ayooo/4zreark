@@ -7,8 +7,8 @@ import (
 	"github.com/c1ayooo/4zreark/service"
 	"github.com/c1ayooo/4zreark/utils"
 
+	"github.com/c1ayooo/4zreark/oid"
 	"github.com/gin-gonic/gin"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type PluginHandler struct {
@@ -309,7 +309,7 @@ func (h *PluginHandler) CreateDictionary(c *gin.Context) {
 	}
 
 	if userID != nil {
-		uid, _ := primitive.ObjectIDFromHex(userID.(string))
+		uid, _ := oid.ObjectIDFromHex(userID.(string))
 		dict.CreatedBy = uid
 	}
 

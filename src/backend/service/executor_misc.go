@@ -9,8 +9,6 @@ import (
 	"github.com/c1ayooo/4zreark/scanner/fingerprint"
 	"github.com/c1ayooo/4zreark/scanner/vulnscan"
 	"github.com/c1ayooo/4zreark/scanner/webscan"
-
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 // executeFingerprintScan 执行指纹扫描
@@ -40,7 +38,7 @@ func (e *TaskExecutor) executeFingerprintScan(task *models.Task, jobID int64) {
 				WorkspaceID: task.WorkspaceID,
 				Type:        models.ResultTypeService,
 				Source:      "主动扫描",
-				Data: bson.M{
+				Data: map[string]interface{}{
 					"target":     target,
 					"name":       fp.Name,
 					"version":    fp.Version,
@@ -84,7 +82,7 @@ func (e *TaskExecutor) executeVulnScan(task *models.Task, jobID int64) {
 				WorkspaceID: task.WorkspaceID,
 				Type:        models.ResultTypeVuln,
 				Source:      "主动扫描",
-				Data: bson.M{
+				Data: map[string]interface{}{
 					"target":      target,
 					"name":        vuln.Name,
 					"severity":    vuln.Severity,
@@ -144,7 +142,7 @@ func (e *TaskExecutor) executeContentScan(task *models.Task, jobID int64) {
 				WorkspaceID: task.WorkspaceID,
 				Type:        models.ResultTypeDirScan,
 				Source:      "spray",
-				Data: bson.M{
+				Data: map[string]interface{}{
 					"target":       target,
 					"url":          entry.URL,
 					"path":         entry.Path,
@@ -190,7 +188,7 @@ func (e *TaskExecutor) executeSensitiveScan(task *models.Task, jobID int64) {
 				WorkspaceID: task.WorkspaceID,
 				Type:        models.ResultTypeSensitive,
 				Source:      "主动扫描",
-				Data: bson.M{
+				Data: map[string]interface{}{
 					"target":   target,
 					"type":     finding.Type,
 					"pattern":  finding.Pattern,
@@ -250,7 +248,7 @@ func (e *TaskExecutor) executeCrawlerScan(task *models.Task, jobID int64) {
 						WorkspaceID: task.WorkspaceID,
 						Type:        models.ResultTypeCrawler,
 						Source:      "katana",
-						Data: bson.M{
+						Data: map[string]interface{}{
 							"target":      target,
 							"url":         url.URL,
 							"method":      url.Method,
@@ -279,7 +277,7 @@ func (e *TaskExecutor) executeCrawlerScan(task *models.Task, jobID int64) {
 						WorkspaceID: task.WorkspaceID,
 						Type:        models.ResultTypeCrawler,
 						Source:      "rad",
-						Data: bson.M{
+						Data: map[string]interface{}{
 							"target":  target,
 							"url":     url.URL,
 							"method":  url.Method,

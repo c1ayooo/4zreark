@@ -5,18 +5,18 @@ import (
 	"fmt"
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"github.com/c1ayooo/4zreark/oid"
 )
 
 // 类型映射集中在这里，对应交接规格 §4：
-//   primitive.ObjectID → char(24)
+//   oid.ObjectID → char(24)
 //   time.Time 零值     → NULL
 //   []string           → text[]
-//   bson.M / 结构体     → jsonb
+//   map[string]interface{} / 结构体     → jsonb
 
 // idFromString 校验并解析 24 位十六进制 ID。
-func idFromString(s string) (primitive.ObjectID, error) {
-	return primitive.ObjectIDFromHex(s)
+func idFromString(s string) (oid.ObjectID, error) {
+	return oid.ObjectIDFromHex(s)
 }
 
 // ValidID 供 service 层校验路径参数，避免把 mongo 的 primitive 类型带进上层。
@@ -51,7 +51,7 @@ func textArray(ss []string) []string {
 
 // ParseID 把 24 位十六进制串解析成 ObjectID。服务层做模型映射时需要它，
 // 由 repo 包出面，避免上层 import mongo 的 primitive。
-func ParseID(s string) (primitive.ObjectID, error) {
+func ParseID(s string) (oid.ObjectID, error) {
 	return idFromString(s)
 }
 

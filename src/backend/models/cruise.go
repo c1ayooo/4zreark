@@ -3,7 +3,7 @@ package models
 import (
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"github.com/c1ayooo/4zreark/oid"
 )
 
 // CruiseStatus 巡航任务状态
@@ -17,11 +17,11 @@ const (
 
 // CruiseTask 巡航任务（定时自动扫描）
 type CruiseTask struct {
-	ID          primitive.ObjectID `json:"id" bson:"_id,omitempty"`
-	WorkspaceID primitive.ObjectID `json:"workspace_id" bson:"workspace_id"`
-	Name        string             `json:"name" bson:"name"`
-	Description string             `json:"description" bson:"description"`
-	Status      CruiseStatus       `json:"status" bson:"status"`
+	ID          oid.ObjectID `json:"id" bson:"_id,omitempty"`
+	WorkspaceID oid.ObjectID `json:"workspace_id" bson:"workspace_id"`
+	Name        string       `json:"name" bson:"name"`
+	Description string       `json:"description" bson:"description"`
+	Status      CruiseStatus `json:"status" bson:"status"`
 
 	// 定时配置
 	CronExpr string `json:"cron_expr" bson:"cron_expr"` // Cron 表达式，如 "0 2 * * *" 每天凌晨2点
@@ -50,10 +50,10 @@ type CruiseTask struct {
 	LastStatus   string    `json:"last_status,omitempty" bson:"last_status,omitempty"`   // 最近一次执行状态
 
 	// 元数据
-	CreatedBy primitive.ObjectID `json:"created_by" bson:"created_by"`
-	Tags      []string           `json:"tags" bson:"tags"`
-	CreatedAt time.Time          `json:"created_at" bson:"created_at"`
-	UpdatedAt time.Time          `json:"updated_at" bson:"updated_at"`
+	CreatedBy oid.ObjectID `json:"created_by" bson:"created_by"`
+	Tags      []string     `json:"tags" bson:"tags"`
+	CreatedAt time.Time    `json:"created_at" bson:"created_at"`
+	UpdatedAt time.Time    `json:"updated_at" bson:"updated_at"`
 }
 
 // CruiseTaskCreateRequest 创建巡航任务请求
@@ -90,17 +90,17 @@ type CruiseTaskUpdateRequest struct {
 
 // CruiseLog 巡航执行日志
 type CruiseLog struct {
-	ID          string             `json:"id"` // PG 是 bigserial，响应里本来就是字符串
-	CruiseID    primitive.ObjectID `json:"cruise_id" bson:"cruise_id"`
-	TaskID      primitive.ObjectID `json:"task_id" bson:"task_id"`
-	Status      string             `json:"status" bson:"status"` // success, failed, running
-	StartTime   time.Time          `json:"start_time" bson:"start_time"`
-	EndTime     time.Time          `json:"end_time,omitempty" bson:"end_time,omitempty"`
-	Duration    int64              `json:"duration" bson:"duration"` // 秒
-	ResultCount int                `json:"result_count" bson:"result_count"`
-	VulnCount   int                `json:"vuln_count" bson:"vuln_count"`
-	Error       string             `json:"error,omitempty" bson:"error,omitempty"`
-	CreatedAt   time.Time          `json:"created_at" bson:"created_at"`
+	ID          string       `json:"id"` // PG 是 bigserial，响应里本来就是字符串
+	CruiseID    oid.ObjectID `json:"cruise_id" bson:"cruise_id"`
+	TaskID      oid.ObjectID `json:"task_id" bson:"task_id"`
+	Status      string       `json:"status" bson:"status"` // success, failed, running
+	StartTime   time.Time    `json:"start_time" bson:"start_time"`
+	EndTime     time.Time    `json:"end_time,omitempty" bson:"end_time,omitempty"`
+	Duration    int64        `json:"duration" bson:"duration"` // 秒
+	ResultCount int          `json:"result_count" bson:"result_count"`
+	VulnCount   int          `json:"vuln_count" bson:"vuln_count"`
+	Error       string       `json:"error,omitempty" bson:"error,omitempty"`
+	CreatedAt   time.Time    `json:"created_at" bson:"created_at"`
 }
 
 // GetCronDescription 获取 Cron 表达式的中文描述

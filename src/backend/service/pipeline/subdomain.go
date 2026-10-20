@@ -7,7 +7,6 @@ import (
 
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/scanner/subdomain"
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 // runSubdomainScan 执行子域名扫描
@@ -188,7 +187,7 @@ func (p *ScanPipeline) saveSubdomainResult(sub subdomain.SubdomainResult, domain
 		WorkspaceID: p.task.WorkspaceID,
 		Type:        models.ResultTypeSubdomain,
 		Source:      "pipeline",
-		Data: bson.M{
+		Data: map[string]interface{}{
 			"subdomain":    sub.Subdomain,
 			"domain":       domain,
 			"full_domain":  sub.FullDomain,
@@ -216,7 +215,7 @@ func (p *ScanPipeline) saveUnverifiedSubdomainResult(subdomain, domain string) {
 		WorkspaceID: p.task.WorkspaceID,
 		Type:        models.ResultTypeSubdomain,
 		Source:      "ksubdomain",
-		Data: bson.M{
+		Data: map[string]interface{}{
 			"subdomain":   subdomain,
 			"domain":      domain,
 			"full_domain": subdomain,
@@ -244,7 +243,7 @@ func (p *ScanPipeline) saveEnrichedSubdomainResult(subInfo SubdomainInfo, domain
 		WorkspaceID: p.task.WorkspaceID,
 		Type:        models.ResultTypeSubdomain,
 		Source:      "httpx",
-		Data: bson.M{
+		Data: map[string]interface{}{
 			"subdomain":    subInfo.Host,
 			"domain":       domain,
 			"full_domain":  subInfo.Host,
@@ -277,7 +276,7 @@ func (p *ScanPipeline) saveTakeoverResult(result *subdomain.TakeoverResult) {
 		WorkspaceID: p.task.WorkspaceID,
 		Type:        models.ResultTypeTakeover,
 		Source:      "takeover_scanner",
-		Data: bson.M{
+		Data: map[string]interface{}{
 			"subdomain":    result.Domain,
 			"cname":        result.CNAME,
 			"provider":     result.Service,

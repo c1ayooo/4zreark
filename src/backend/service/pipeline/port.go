@@ -8,8 +8,6 @@ import (
 
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/scanner/core"
-
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 // runCDNDetection 执行CDN检测
@@ -233,7 +231,7 @@ func (p *ScanPipeline) savePortResult(port core.PortResult, host string) {
 		WorkspaceID: p.task.WorkspaceID,
 		Type:        models.ResultTypePort,
 		Source:      "gogo",
-		Data: bson.M{
+		Data: map[string]interface{}{
 			"ip":          host,
 			"host":        host,
 			"port":        port.Port,

@@ -8,7 +8,6 @@ import (
 
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/scanner/webscan"
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 // runURLScan 执行URL扫描 (使用 Katana 批量模式)
@@ -192,7 +191,7 @@ func (p *ScanPipeline) saveURLResult(url webscan.KatanaCrawledURL, source string
 		WorkspaceID: p.task.WorkspaceID,
 		Type:        models.ResultTypeCrawler,
 		Source:      source,
-		Data: bson.M{
+		Data: map[string]interface{}{
 			"url":         url.URL,
 			"method":      url.Method,
 			"status_code": url.StatusCode,
@@ -215,7 +214,7 @@ func (p *ScanPipeline) saveDirScanResultFromSpray(entry webscan.SprayEntry) {
 		WorkspaceID: p.task.WorkspaceID,
 		Type:        models.ResultTypeDirScan,
 		Source:      "spray",
-		Data: bson.M{
+		Data: map[string]interface{}{
 			"url":          entry.URL,
 			"path":         entry.Path,
 			"status":       entry.StatusCode,

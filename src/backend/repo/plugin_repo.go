@@ -10,8 +10,8 @@ import (
 
 	"github.com/c1ayooo/4zreark/models"
 
+	"github.com/c1ayooo/4zreark/oid"
 	"github.com/jackc/pgx/v5"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // PluginFilter 是插件列表的查询条件。
@@ -124,7 +124,7 @@ func scanPlugin(row pgx.Row) (*models.Plugin, error) {
 
 func (r *pluginRepo) Create(ctx context.Context, p *models.Plugin) error {
 	if p.ID.IsZero() {
-		p.ID = primitive.NewObjectID()
+		p.ID = oid.NewObjectID()
 	}
 	if p.CreatedAt.IsZero() {
 		p.CreatedAt = time.Now()
@@ -288,7 +288,7 @@ func scanDict(row pgx.Row) (*models.Dictionary, error) {
 
 func (r *dictRepo) Create(ctx context.Context, d *models.Dictionary) error {
 	if d.ID.IsZero() {
-		d.ID = primitive.NewObjectID()
+		d.ID = oid.NewObjectID()
 	}
 	if d.CreatedAt.IsZero() {
 		d.CreatedAt = time.Now()

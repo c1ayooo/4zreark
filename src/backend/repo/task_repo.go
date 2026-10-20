@@ -10,8 +10,8 @@ import (
 
 	"github.com/c1ayooo/4zreark/models"
 
+	"github.com/c1ayooo/4zreark/oid"
 	"github.com/jackc/pgx/v5"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // TaskRepo 是 tasks / task_templates / task_logs 的唯一数据入口。
@@ -149,7 +149,7 @@ func objectIDValue(v any) (any, error) {
 	switch x := v.(type) {
 	case nil:
 		return nil, nil
-	case primitive.ObjectID:
+	case oid.ObjectID:
 		if x.IsZero() {
 			return nil, nil
 		}
@@ -159,7 +159,7 @@ func objectIDValue(v any) (any, error) {
 			return nil, nil
 		}
 		return x, nil
-	case *primitive.ObjectID:
+	case *oid.ObjectID:
 		if x == nil || x.IsZero() {
 			return nil, nil
 		}
@@ -232,15 +232,15 @@ func scanTask(row pgx.Row) (*models.Task, error) {
 }
 
 // objectIDFromHex 把库里读出的 24 位十六进制转成 ObjectID；全零按零值处理。
-func objectIDFromHex(s string) (primitive.ObjectID, error) {
+func objectIDFromHex(s string) (oid.ObjectID, error) {
 	if s == "" || s == "000000000000000000000000" {
-		return primitive.NilObjectID, nil
+		return oid.NilObjectID, nil
 	}
-	oid, err := primitive.ObjectIDFromHex(s)
+	parsed, err := oid.ObjectIDFromHex(s)
 	if err != nil {
-		return primitive.NilObjectID, fmt.Errorf("库里的 id 不是合法 ObjectID: %s", s)
+		return oid.NilObjectID, fmt.Errorf("库里的 id 不是合法 ObjectID: %s", s)
 	}
-	return oid, nil
+	return parsed, nil
 }
 
 func (r *taskRepo) Create(ctx context.Context, t *models.Task) error {
@@ -275,14 +275,14 @@ func (r *taskRepo) Create(ctx context.Context, t *models.Task) error {
 }
 
 // workspaceIDHex 把零值 workspace 落成 DDL 里的默认值，避免写 NULL。
-func workspaceIDHex(id primitive.ObjectID) string {
+func workspaceIDHex(id oid.ObjectID) string {
 	if id.IsZero() {
 		return "000000000000000000000000"
 	}
 	return id.Hex()
 }
 
-func objectIDOrNil(id primitive.ObjectID) any {
+func objectIDOrNil(id oid.ObjectID) any {
 	if id.IsZero() {
 		return nil
 	}

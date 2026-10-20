@@ -7,7 +7,6 @@ import (
 
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/scanner/vulnscan"
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 // runVulnScan 执行漏洞扫描
@@ -55,7 +54,7 @@ func (p *ScanPipeline) saveVulnResult(vuln vulnscan.VulnResult, target string) {
 		WorkspaceID: p.task.WorkspaceID,
 		Type:        models.ResultTypeVuln,
 		Source:      "pipeline",
-		Data: bson.M{
+		Data: map[string]interface{}{
 			"target":      target,
 			"name":        vuln.Name,
 			"severity":    vuln.Severity,

@@ -10,8 +10,8 @@ import (
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/repo"
 
+	"github.com/c1ayooo/4zreark/oid"
 	"github.com/robfig/cron/v3"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // 调度器与 entryMap 必须是进程级的。
@@ -165,7 +165,7 @@ func (s *CruiseService) unscheduleCruise(cruiseID string) {
 }
 
 // executeCruise 执行巡航任务
-func (s *CruiseService) executeCruise(cruiseID primitive.ObjectID) {
+func (s *CruiseService) executeCruise(cruiseID oid.ObjectID) {
 	hexID := cruiseID.Hex()
 	log.Printf("[CruiseService] Executing cruise: %s", hexID)
 
@@ -200,7 +200,7 @@ func (s *CruiseService) executeCruise(cruiseID primitive.ObjectID) {
 
 	if err := s.taskService.CreateTask(task); err != nil {
 		log.Printf("[CruiseService] Failed to create task for cruise %s: %v", cruise.Name, err)
-		s.recordCruiseLog(cruiseID, primitive.NilObjectID, "failed", startTime, time.Now(), 0, 0, err.Error())
+		s.recordCruiseLog(cruiseID, oid.NilObjectID, "failed", startTime, time.Now(), 0, 0, err.Error())
 		s.updateCruiseStatus(cruiseID, models.CruiseStatusEnabled)
 		s.incrementFailCount(cruiseID)
 		return
@@ -284,7 +284,7 @@ func (s *CruiseService) executeCruise(cruiseID primitive.ObjectID) {
 }
 
 // CreateCruise 创建巡航任务
-func (s *CruiseService) CreateCruise(req *models.CruiseTaskCreateRequest, userID, workspaceID primitive.ObjectID) (*models.CruiseTask, error) {
+func (s *CruiseService) CreateCruise(req *models.CruiseTaskCreateRequest, userID, workspaceID oid.ObjectID) (*models.CruiseTask, error) {
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 	if _, err := parser.Parse(req.CronExpr); err != nil {
 		return nil, fmt.Errorf("invalid cron expression: %v", err)
@@ -297,7 +297,7 @@ func (s *CruiseService) CreateCruise(req *models.CruiseTaskCreateRequest, userID
 	}
 
 	cruise := &models.CruiseTask{
-		ID:               primitive.NewObjectID(),
+		ID:               oid.NewObjectID(),
 		WorkspaceID:      workspaceID,
 		Name:             req.Name,
 		Description:      req.Description,
@@ -433,7 +433,7 @@ func (s *CruiseService) GetCruise(cruiseID string) (*models.CruiseTask, error) {
 }
 
 // ListCruises 列出巡航任务
-func (s *CruiseService) ListCruises(workspaceID primitive.ObjectID, page, pageSize int, search string) ([]models.CruiseTask, int64, error) {
+func (s *CruiseService) ListCruises(workspaceID oid.ObjectID, page, pageSize int, search string) ([]models.CruiseTask, int64, error) {
 	store, err := s.store()
 	if err != nil {
 		return nil, 0, err
@@ -476,7 +476,7 @@ func (s *CruiseService) EnableCruise(cruiseID string) error {
 
 // DisableCruise 禁用巡航任务
 func (s *CruiseService) DisableCruise(cruiseID string) error {
-	objID, err := primitive.ObjectIDFromHex(cruiseID)
+	objID, err := oid.ObjectIDFromHex(cruiseID)
 	if err != nil {
 		return err
 	}
@@ -486,7 +486,7 @@ func (s *CruiseService) DisableCruise(cruiseID string) error {
 
 // RunNow 立即执行一次
 func (s *CruiseService) RunNow(cruiseID string) error {
-	objID, err := primitive.ObjectIDFromHex(cruiseID)
+	objID, err := oid.ObjectIDFromHex(cruiseID)
 	if err != nil {
 		return err
 	}
@@ -516,7 +516,7 @@ func (s *CruiseService) GetCruiseLogs(cruiseID string, page, pageSize int) ([]mo
 }
 
 // GetStats 获取巡航统计
-func (s *CruiseService) GetStats(workspaceID primitive.ObjectID) map[string]interface{} {
+func (s *CruiseService) GetStats(workspaceID oid.ObjectID) map[string]interface{} {
 	store, err := s.store()
 	if err != nil {
 		return map[string]interface{}{"total": 0, "enabled": 0, "disabled": 0, "running": 0}
@@ -542,7 +542,7 @@ func (s *CruiseService) GetStats(workspaceID primitive.ObjectID) map[string]inte
 
 // ---------------------------------------------------------------- 内部写入
 
-func (s *CruiseService) updateCruiseStatus(cruiseID primitive.ObjectID, status models.CruiseStatus) error {
+func (s *CruiseService) updateCruiseStatus(cruiseID oid.ObjectID, status models.CruiseStatus) error {
 	store, err := s.store()
 	if err != nil {
 		return err
@@ -552,7 +552,7 @@ func (s *CruiseService) updateCruiseStatus(cruiseID primitive.ObjectID, status m
 	return store.SetStatus(ctx, cruiseID.Hex(), string(status))
 }
 
-func (s *CruiseService) updateNextRunTime(cruiseID primitive.ObjectID, nextRun time.Time) {
+func (s *CruiseService) updateNextRunTime(cruiseID oid.ObjectID, nextRun time.Time) {
 	if nextRun.IsZero() {
 		return
 	}
@@ -567,7 +567,7 @@ func (s *CruiseService) updateNextRunTime(cruiseID primitive.ObjectID, nextRun t
 	}
 }
 
-func (s *CruiseService) updateLastRun(cruiseID primitive.ObjectID, taskID string, lastRun time.Time) {
+func (s *CruiseService) updateLastRun(cruiseID oid.ObjectID, taskID string, lastRun time.Time) {
 	store, err := s.store()
 	if err != nil {
 		return
@@ -579,7 +579,7 @@ func (s *CruiseService) updateLastRun(cruiseID primitive.ObjectID, taskID string
 	}
 }
 
-func (s *CruiseService) updateLastStatus(cruiseID primitive.ObjectID, status string) {
+func (s *CruiseService) updateLastStatus(cruiseID oid.ObjectID, status string) {
 	store, err := s.store()
 	if err != nil {
 		return
@@ -589,7 +589,7 @@ func (s *CruiseService) updateLastStatus(cruiseID primitive.ObjectID, status str
 	_ = store.SetLastStatus(ctx, cruiseID.Hex(), status)
 }
 
-func (s *CruiseService) incrementSuccessCount(cruiseID primitive.ObjectID) {
+func (s *CruiseService) incrementSuccessCount(cruiseID oid.ObjectID) {
 	store, err := s.store()
 	if err != nil {
 		return
@@ -599,7 +599,7 @@ func (s *CruiseService) incrementSuccessCount(cruiseID primitive.ObjectID) {
 	_ = store.IncrSuccess(ctx, cruiseID.Hex())
 }
 
-func (s *CruiseService) incrementFailCount(cruiseID primitive.ObjectID) {
+func (s *CruiseService) incrementFailCount(cruiseID oid.ObjectID) {
 	store, err := s.store()
 	if err != nil {
 		return
@@ -609,7 +609,7 @@ func (s *CruiseService) incrementFailCount(cruiseID primitive.ObjectID) {
 	_ = store.IncrFail(ctx, cruiseID.Hex())
 }
 
-func (s *CruiseService) recordCruiseLog(cruiseID, taskID primitive.ObjectID, status string,
+func (s *CruiseService) recordCruiseLog(cruiseID, taskID oid.ObjectID, status string,
 	startTime, endTime time.Time, resultCount, vulnCount int, errMsg string) {
 
 	store, err := s.store()
@@ -643,7 +643,7 @@ func (s *CruiseService) recordCruiseLog(cruiseID, taskID primitive.ObjectID, sta
 	}
 }
 
-func (s *CruiseService) updateCruiseLog(cruiseID, taskID primitive.ObjectID, status string,
+func (s *CruiseService) updateCruiseLog(cruiseID, taskID oid.ObjectID, status string,
 	endTime time.Time, duration int64, resultCount, vulnCount int, errMsg string) {
 
 	store, err := s.store()

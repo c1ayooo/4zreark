@@ -9,8 +9,8 @@ import (
 
 	"github.com/c1ayooo/4zreark/models"
 
+	"github.com/c1ayooo/4zreark/oid"
 	"github.com/jackc/pgx/v5"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // UserRepo 是用户与登录态的唯一数据入口。
@@ -65,7 +65,7 @@ func scanUser(row pgx.Row) (*models.User, error) {
 	if err != nil {
 		return nil, err
 	}
-	oid, err := primitive.ObjectIDFromHex(hexID)
+	oid, err := oid.ObjectIDFromHex(hexID)
 	if err != nil {
 		return nil, fmt.Errorf("库里的 id 不是合法 ObjectID: %s", hexID)
 	}
@@ -227,7 +227,7 @@ func (r *userRepo) List(ctx context.Context, page, pageSize int, keyword string)
 			&u.Avatar, &u.Role, &u.Status, &u.TokenVersion, &lastLogin, &createdAt, &updatedAt, &t); err != nil {
 			return nil, 0, err
 		}
-		oid, err := primitive.ObjectIDFromHex(hexID)
+		oid, err := oid.ObjectIDFromHex(hexID)
 		if err != nil {
 			return nil, 0, fmt.Errorf("库里的 id 不是合法 ObjectID: %s", hexID)
 		}

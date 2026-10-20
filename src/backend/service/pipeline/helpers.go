@@ -9,8 +9,6 @@ import (
 
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/service/notify"
-
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 // parseTargets 解析目标
@@ -125,7 +123,7 @@ func (p *ScanPipeline) updateProgress(current, total int, message string) {
 
 // completeTask 完成任务
 func (p *ScanPipeline) completeTask() {
-	stats := bson.M{
+	stats := map[string]interface{}{
 		"total_results":         p.totalResults,
 		"discovered_assets":     len(p.discoveredAssets),
 		"discovered_ports":      len(p.discoveredPorts),

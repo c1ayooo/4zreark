@@ -9,8 +9,8 @@ import (
 
 	"github.com/c1ayooo/4zreark/models"
 
+	"github.com/c1ayooo/4zreark/oid"
 	"github.com/jackc/pgx/v5"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // CruiseRepo 是巡航任务与执行日志的仓储入口。
@@ -128,7 +128,7 @@ func scanCruise(row pgx.Row) (*models.CruiseTask, error) {
 
 func (r *cruiseRepo) Create(ctx context.Context, c *models.CruiseTask) error {
 	if c.ID.IsZero() {
-		c.ID = primitive.NewObjectID()
+		c.ID = oid.NewObjectID()
 	}
 	if c.CreatedAt.IsZero() {
 		c.CreatedAt = time.Now()

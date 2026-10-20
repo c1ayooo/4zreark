@@ -12,7 +12,7 @@ import (
 	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/utils"
 
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"github.com/c1ayooo/4zreark/oid"
 )
 
 // dbTimeout 与改造前保持一致：调用方不传超时，统一 10s。
@@ -68,7 +68,7 @@ func (s *UserService) Register(username, password, email string) (*models.User, 
 
 	now := time.Now()
 	user := &models.User{
-		ID:        primitive.NewObjectID(),
+		ID:        oid.NewObjectID(),
 		Username:  username,
 		Password:  hashedPassword,
 		Email:     email,
@@ -260,7 +260,7 @@ func (s *UserService) InitAdmin() error {
 	}
 
 	created, err := ur.EnsureAdmin(ctx, &models.User{
-		ID:       primitive.NewObjectID(),
+		ID:       oid.NewObjectID(),
 		Username: "admin",
 		Password: hashedPassword,
 		Email:    "admin@localhost",

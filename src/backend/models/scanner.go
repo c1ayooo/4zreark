@@ -3,7 +3,7 @@ package models
 import (
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"github.com/c1ayooo/4zreark/oid"
 )
 
 // NodeType represents different types of scanner nodes
@@ -27,12 +27,12 @@ const (
 
 // ScannerNode represents a distributed scanner node
 type ScannerNode struct {
-	ID          primitive.ObjectID `json:"id" bson:"_id,omitempty"`
-	NodeID      string             `json:"node_id" bson:"node_id"` // unique node identifier
-	Name        string             `json:"name" bson:"name"`
-	Description string             `json:"description" bson:"description"`
-	Type        NodeType           `json:"type" bson:"type"`
-	Status      NodeStatus         `json:"status" bson:"status"`
+	ID          oid.ObjectID `json:"id" bson:"_id,omitempty"`
+	NodeID      string       `json:"node_id" bson:"node_id"` // unique node identifier
+	Name        string       `json:"name" bson:"name"`
+	Description string       `json:"description" bson:"description"`
+	Type        NodeType     `json:"type" bson:"type"`
+	Status      NodeStatus   `json:"status" bson:"status"`
 
 	// Node Info
 	IP      string `json:"ip" bson:"ip"`
@@ -71,13 +71,13 @@ type NodeSystemInfo struct {
 
 // Plugin represents a scanner plugin
 type Plugin struct {
-	ID          primitive.ObjectID `json:"id" bson:"_id,omitempty"`
-	Name        string             `json:"name" bson:"name"`
-	Description string             `json:"description" bson:"description"`
-	Author      string             `json:"author" bson:"author"`
-	Version     string             `json:"version" bson:"version"`
-	Type        string             `json:"type" bson:"type"`         // scanner, processor, reporter
-	Language    string             `json:"language" bson:"language"` // go, python
+	ID          oid.ObjectID `json:"id" bson:"_id,omitempty"`
+	Name        string       `json:"name" bson:"name"`
+	Description string       `json:"description" bson:"description"`
+	Author      string       `json:"author" bson:"author"`
+	Version     string       `json:"version" bson:"version"`
+	Type        string       `json:"type" bson:"type"`         // scanner, processor, reporter
+	Language    string       `json:"language" bson:"language"` // go, python
 
 	// Plugin Configuration
 	EntryFile string                 `json:"entry_file" bson:"entry_file"`
@@ -101,10 +101,10 @@ type Plugin struct {
 
 // FingerprintRule represents fingerprint detection rules
 type FingerprintRule struct {
-	ID       primitive.ObjectID `json:"id" bson:"_id,omitempty"`
-	Name     string             `json:"name" bson:"name"`
-	Category string             `json:"category" bson:"category"` // cms, framework, server, os
-	Version  string             `json:"version" bson:"version"`
+	ID       oid.ObjectID `json:"id" bson:"_id,omitempty"`
+	Name     string       `json:"name" bson:"name"`
+	Category string       `json:"category" bson:"category"` // cms, framework, server, os
+	Version  string       `json:"version" bson:"version"`
 
 	// Detection Rules
 	Rules []FingerprintMatch `json:"rules" bson:"rules"`
@@ -126,16 +126,16 @@ type FingerprintMatch struct {
 
 // Dictionary represents wordlist dictionaries
 type Dictionary struct {
-	ID          primitive.ObjectID `json:"id" bson:"_id,omitempty"`
-	Name        string             `json:"name" bson:"name"`
-	Type        string             `json:"type" bson:"type"` // subdomain, directory, username, password
-	Description string             `json:"description" bson:"description"`
-	FilePath    string             `json:"file_path" bson:"file_path"`
-	LineCount   int                `json:"line_count" bson:"line_count"`
-	IsBuiltin   bool               `json:"is_builtin" bson:"is_builtin"`
-	CreatedBy   primitive.ObjectID `json:"created_by" bson:"created_by"`
-	CreatedAt   time.Time          `json:"created_at" bson:"created_at"`
-	UpdatedAt   time.Time          `json:"updated_at" bson:"updated_at"`
+	ID          oid.ObjectID `json:"id" bson:"_id,omitempty"`
+	Name        string       `json:"name" bson:"name"`
+	Type        string       `json:"type" bson:"type"` // subdomain, directory, username, password
+	Description string       `json:"description" bson:"description"`
+	FilePath    string       `json:"file_path" bson:"file_path"`
+	LineCount   int          `json:"line_count" bson:"line_count"`
+	IsBuiltin   bool         `json:"is_builtin" bson:"is_builtin"`
+	CreatedBy   oid.ObjectID `json:"created_by" bson:"created_by"`
+	CreatedAt   time.Time    `json:"created_at" bson:"created_at"`
+	UpdatedAt   time.Time    `json:"updated_at" bson:"updated_at"`
 }
 
 // Collection names for scanner components

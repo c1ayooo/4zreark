@@ -10,8 +10,8 @@ import (
 
 	"github.com/c1ayooo/4zreark/models"
 
+	"github.com/c1ayooo/4zreark/oid"
 	"github.com/jackc/pgx/v5"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // NodeRepo 是扫描节点的仓储入口。
@@ -112,7 +112,7 @@ func scanNode(row pgx.Row) (*models.ScannerNode, error) {
 
 func (r *nodeRepo) Create(ctx context.Context, n *models.ScannerNode) error {
 	if n.ID.IsZero() {
-		n.ID = primitive.NewObjectID()
+		n.ID = oid.NewObjectID()
 	}
 	if n.CreatedAt.IsZero() {
 		n.CreatedAt = time.Now()

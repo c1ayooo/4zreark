@@ -7,8 +7,8 @@ import (
 	"github.com/c1ayooo/4zreark/service"
 	"github.com/c1ayooo/4zreark/utils"
 
+	"github.com/c1ayooo/4zreark/oid"
 	"github.com/gin-gonic/gin"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type TaskHandler struct {
@@ -96,12 +96,12 @@ func (h *TaskHandler) CreateTask(c *gin.Context) {
 	}
 
 	if req.WorkspaceID != "" {
-		wsID, _ := primitive.ObjectIDFromHex(req.WorkspaceID)
+		wsID, _ := oid.ObjectIDFromHex(req.WorkspaceID)
 		task.WorkspaceID = wsID
 	}
 
 	if userID != nil {
-		uid, _ := primitive.ObjectIDFromHex(userID.(string))
+		uid, _ := oid.ObjectIDFromHex(userID.(string))
 		task.CreatedBy = uid
 	}
 
@@ -329,12 +329,12 @@ func (h *TaskHandler) CreateTaskTemplate(c *gin.Context) {
 	}
 
 	if req.WorkspaceID != "" {
-		wsID, _ := primitive.ObjectIDFromHex(req.WorkspaceID)
+		wsID, _ := oid.ObjectIDFromHex(req.WorkspaceID)
 		template.WorkspaceID = wsID
 	}
 
 	if userID != nil {
-		uid, _ := primitive.ObjectIDFromHex(userID.(string))
+		uid, _ := oid.ObjectIDFromHex(userID.(string))
 		template.CreatedBy = uid
 	}
 
@@ -395,12 +395,12 @@ func (h *TaskHandler) CreateTaskFromTemplate(c *gin.Context) {
 	}
 
 	if req.WorkspaceID != "" {
-		wsID, _ := primitive.ObjectIDFromHex(req.WorkspaceID)
+		wsID, _ := oid.ObjectIDFromHex(req.WorkspaceID)
 		task.WorkspaceID = wsID
 	}
 
 	if userID != nil {
-		uid, _ := primitive.ObjectIDFromHex(userID.(string))
+		uid, _ := oid.ObjectIDFromHex(userID.(string))
 		task.CreatedBy = uid
 	}
 

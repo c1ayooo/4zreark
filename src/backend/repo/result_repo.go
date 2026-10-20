@@ -15,10 +15,9 @@ import (
 
 	"github.com/c1ayooo/4zreark/models"
 
+	"github.com/c1ayooo/4zreark/oid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // ResultRepo 是 scan_results / result_dedup 的唯一数据入口。
@@ -36,7 +35,7 @@ type ResultRepo interface {
 	StatsByTask(ctx context.Context, taskID string) (map[string]int64, error)
 
 	ListSubdomains(ctx context.Context, taskID string, page, pageSize int, search string) ([]*models.ScanResult, int64, error)
-	ServiceDataByHost(ctx context.Context, taskID string) (map[string]bson.M, error)
+	ServiceDataByHost(ctx context.Context, taskID string) (map[string]map[string]interface{}, error)
 	AggregatePorts(ctx context.Context, taskID string, page, pageSize int, search string) ([]PortGroup, int64, error)
 
 	SetTags(ctx context.Context, id string, tags []string) error
@@ -94,45 +93,39 @@ func scanResultRow(row pgx.Row) (*models.ScanResult, error) {
 	}
 
 	var err error
-	if res.ID, err = primitive.ObjectIDFromHex(hexID); err != nil {
+	if res.ID, err = oid.ObjectIDFromHex(hexID); err != nil {
 		return nil, fmt.Errorf("结果 ID 非法(%q): %w", hexID, err)
 	}
-	if res.TaskID, err = primitive.ObjectIDFromHex(taskHex); err != nil {
+	if res.TaskID, err = oid.ObjectIDFromHex(taskHex); err != nil {
 		return nil, fmt.Errorf("结果 task_id 非法(%q): %w", taskHex, err)
 	}
-	if res.WorkspaceID, err = primitive.ObjectIDFromHex(wsHex); err != nil {
+	if res.WorkspaceID, err = oid.ObjectIDFromHex(wsHex); err != nil {
 		return nil, fmt.Errorf("结果 workspace_id 非法(%q): %w", wsHex, err)
 	}
 	return res, nil
 }
 
-// decodeResultData 把 jsonb 解成 bson.M。
+// decodeResultData 把 jsonb 解成 map[string]interface{}。
 // PG 的 JSON 数字统一解成 float64，而 Mongo 时代下游有 int32/int64 的类型断言，
 // 这里把整数值还原成 int64，保证响应体数字形态与改造前一致。
-func decodeResultData(raw []byte) bson.M {
+func decodeResultData(raw []byte) map[string]interface{} {
 	if len(raw) == 0 {
-		return bson.M{}
+		return map[string]interface{}{}
 	}
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {
-		return bson.M{}
+		return map[string]interface{}{}
 	}
-	if m, ok := normalizeJSONValue(v).(bson.M); ok {
+	if m, ok := normalizeJSONValue(v).(map[string]interface{}); ok {
 		return m
 	}
-	return bson.M{}
+	return map[string]interface{}{}
 }
 
 func normalizeJSONValue(v any) any {
 	switch t := v.(type) {
-	case map[string]any:
-		m := make(bson.M, len(t))
-		for k, vv := range t {
-			m[k] = normalizeJSONValue(vv)
-		}
-		return m
-	case bson.M:
-		m := make(bson.M, len(t))
+	case map[string]interface{}:
+		m := make(map[string]interface{}, len(t))
 		for k, vv := range t {
 			m[k] = normalizeJSONValue(vv)
 		}
@@ -154,7 +147,7 @@ func normalizeJSONValue(v any) any {
 
 // --- data 取值（写库时的列提取与去重键推导） ---
 
-func dataString(data bson.M, key string) string {
+func dataString(data map[string]interface{}, key string) string {
 	if v, ok := data[key]; ok {
 		if s, ok := v.(string); ok {
 			return s
@@ -163,7 +156,7 @@ func dataString(data bson.M, key string) string {
 	return ""
 }
 
-func dataInt(data bson.M, key string) (int, bool) {
+func dataInt(data map[string]interface{}, key string) (int, bool) {
 	v, ok := data[key]
 	if !ok || v == nil {
 		return 0, false
@@ -186,7 +179,7 @@ func dataInt(data bson.M, key string) (int, bool) {
 }
 
 // dataIP 只接受合法 IP：库里的 ip 是 inet 列，主机名/域名一律留 NULL。
-func dataIP(data bson.M, key string) string {
+func dataIP(data map[string]interface{}, key string) string {
 	s := strings.TrimSpace(dataString(data, key))
 	if s == "" || net.ParseIP(s) == nil {
 		return ""
@@ -194,9 +187,9 @@ func dataIP(data bson.M, key string) string {
 	return s
 }
 
-func nonNilData(data bson.M) bson.M {
+func nonNilData(data map[string]interface{}) map[string]interface{} {
 	if data == nil {
-		return bson.M{}
+		return map[string]interface{}{}
 	}
 	return data
 }
@@ -207,7 +200,7 @@ type derived struct {
 	port, status  any
 }
 
-func deriveColumns(data bson.M) derived {
+func deriveColumns(data map[string]interface{}) derived {
 	d := derived{
 		host: dataString(data, "host"),
 		url:  dataString(data, "url"),
@@ -238,7 +231,7 @@ func BuildDedupKey(taskID string, typ models.ResultType, parts ...string) string
 // BuildDedupKeyFromData 用于没有明确业务键的类型：
 // 对 data 做规范化 JSON 摘要（Go 的 map 序列化键有序，摘要稳定），
 // 同样内容的重复发现会被收敛，内容不同的不会互相覆盖。
-func BuildDedupKeyFromData(taskID string, typ models.ResultType, data bson.M) string {
+func BuildDedupKeyFromData(taskID string, typ models.ResultType, data map[string]interface{}) string {
 	b, err := json.Marshal(nonNilData(data))
 	if err != nil {
 		b = []byte(fmt.Sprintf("%v", data))
@@ -287,7 +280,7 @@ func execInsert(ctx context.Context, ex dbExecutor, res *models.ScanResult) erro
 func (r *resultRepo) Create(ctx context.Context, res *models.ScanResult) error {
 	now := time.Now()
 	if res.ID.IsZero() {
-		res.ID = primitive.NewObjectID()
+		res.ID = oid.NewObjectID()
 	}
 	if res.CreatedAt.IsZero() {
 		res.CreatedAt = now
@@ -304,7 +297,7 @@ func (r *resultRepo) CreateWithDedup(ctx context.Context, res *models.ScanResult
 
 	now := time.Now()
 	if res.ID.IsZero() {
-		res.ID = primitive.NewObjectID()
+		res.ID = oid.NewObjectID()
 	}
 	if res.CreatedAt.IsZero() {
 		res.CreatedAt = now
@@ -376,7 +369,7 @@ func (r *resultRepo) BatchCreate(ctx context.Context, results []models.ScanResul
 	now := time.Now()
 	for i := range results {
 		if results[i].ID.IsZero() {
-			results[i].ID = primitive.NewObjectID()
+			results[i].ID = oid.NewObjectID()
 		}
 		if results[i].CreatedAt.IsZero() {
 			results[i].CreatedAt = now
@@ -527,7 +520,7 @@ func (r *resultRepo) ListSubdomains(ctx context.Context, taskID string, page, pa
 
 // ServiceDataByHost 取任务下全部 service 结果的 data，按 host 建索引，
 // 供子域名列表补充 title / status_code / 指纹 / url。
-func (r *resultRepo) ServiceDataByHost(ctx context.Context, taskID string) (map[string]bson.M, error) {
+func (r *resultRepo) ServiceDataByHost(ctx context.Context, taskID string) (map[string]map[string]interface{}, error) {
 	rows, err := r.r.pool.Query(ctx,
 		`select data from scan_results where task_id = $1 and type = $2 order by created_at`,
 		taskID, string(models.ResultTypeService))
@@ -536,7 +529,7 @@ func (r *resultRepo) ServiceDataByHost(ctx context.Context, taskID string) (map[
 	}
 	defer rows.Close()
 
-	out := make(map[string]bson.M)
+	out := make(map[string]map[string]interface{})
 	for rows.Next() {
 		var raw []byte
 		if err := rows.Scan(&raw); err != nil {

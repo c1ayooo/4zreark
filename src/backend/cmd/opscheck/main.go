@@ -15,7 +15,7 @@ import (
 	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/service"
 
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"github.com/c1ayooo/4zreark/oid"
 )
 
 var fails int
@@ -138,7 +138,7 @@ func main() {
 	dicts, dtotal, err := plugins.ListDictionaries("subdomain", 1, 20)
 	check("字典列表命中", err == nil && dtotal >= 1 && len(dicts) >= 1, fmt.Sprint(dtotal))
 
-	builtinID := primitive.NewObjectID()
+	builtinID := oid.NewObjectID()
 	builtin := &models.Dictionary{Name: "内置字典-验收", Type: "dir", IsBuiltin: true}
 	builtin.ID = builtinID
 	if err := r.Dictionaries().Create(ctx, builtin); err != nil {
@@ -198,7 +198,7 @@ func main() {
 	// 重复注册同一 node_id 走更新，不应多出一条
 	n2 := *n
 	n2.IP = "10.9.9.10"
-	n2.ID = primitive.NilObjectID
+	n2.ID = oid.NilObjectID
 	if err := nodes.RegisterNode(&n2); err != nil {
 		check("重复注册走更新", false, err.Error())
 	}
@@ -255,7 +255,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer cruises.Stop()
-	ws := primitive.NewObjectID()
+	ws := oid.NewObjectID()
 	c, err := cruises.CreateCruise(&models.CruiseTaskCreateRequest{
 		Name:       "验收巡航-A",
 		CronExpr:   "0 3 * * *",
@@ -263,7 +263,7 @@ func main() {
 		TargetType: "ip",
 		TaskType:   models.TaskTypePortScan,
 		Tags:       []string{"acceptance"},
-	}, primitive.NewObjectID(), ws)
+	}, oid.NewObjectID(), ws)
 	if err != nil {
 		fmt.Println("创建巡航失败:", err)
 		os.Exit(1)
@@ -274,7 +274,7 @@ func main() {
 	if _, err := cruises.CreateCruise(&models.CruiseTaskCreateRequest{
 		Name: "坏表达式", CronExpr: "not a cron", Targets: []string{"a"},
 		TaskType: models.TaskTypePortScan,
-	}, primitive.NewObjectID(), ws); err == nil {
+	}, oid.NewObjectID(), ws); err == nil {
 		check("非法 cron 被拒", false, "未报错")
 	} else {
 		check("非法 cron 被拒", true, "")
@@ -310,7 +310,7 @@ func main() {
 
 	// 执行计数与日志：直接走仓储，避免真的起一次扫描
 	cr := r.Cruises()
-	taskHex := primitive.NewObjectID()
+	taskHex := oid.NewObjectID()
 	if err := cr.MarkRun(ctx, c.ID.Hex(), taskHex.Hex(), time.Now()); err != nil {
 		check("MarkRun", false, err.Error())
 	}
@@ -358,7 +358,7 @@ func main() {
 	// ---------------------------------------------------------------- 审计
 	fmt.Println("[5] 操作审计")
 	audits := r.Audits()
-	userID := primitive.NewObjectID()
+	userID := oid.NewObjectID()
 	if err := audits.Add(ctx, &models.OperationLog{
 		UserID: userID, Username: "admin", Action: "POST", Module: "验收",
 		Target: "/api/acceptance", IP: "127.0.0.1", UserAgent: "opscheck", Status: 1,

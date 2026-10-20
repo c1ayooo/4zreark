@@ -13,8 +13,7 @@ import (
 	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/service"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"github.com/c1ayooo/4zreark/oid"
 )
 
 var fails int
@@ -40,16 +39,16 @@ func main() {
 	}
 	svc := service.NewResultService()
 
-	taskID := primitive.NewObjectID()
+	taskID := oid.NewObjectID()
 	if len(os.Args) > 1 {
-		id, err := primitive.ObjectIDFromHex(os.Args[1])
+		id, err := oid.ObjectIDFromHex(os.Args[1])
 		if err != nil {
 			fmt.Println("task id 非法:", err)
 			os.Exit(1)
 		}
 		taskID = id
 	}
-	wsID := primitive.NewObjectID()
+	wsID := oid.NewObjectID()
 	fmt.Printf("task_id = %s\n\n", taskID.Hex())
 
 	// --- 1. 普通写入与回读 ---
@@ -61,7 +60,7 @@ func main() {
 		Source:      "unit",
 		Project:     "p1",
 		Tags:        []string{"a", "b"},
-		Data: bson.M{
+		Data: map[string]interface{}{
 			"subdomain":   "plain.example.com",
 			"domain":      "example.com",
 			"status_code": 200,
@@ -93,10 +92,10 @@ func main() {
 	// --- 2. 子域名去重 ---
 	fmt.Println("[2] 子域名去重")
 	r1 := &models.ScanResult{TaskID: taskID, Type: models.ResultTypeSubdomain, Source: "s1",
-		Data: bson.M{"subdomain": "dup.example.com", "domain": "example.com"}}
+		Data: map[string]interface{}{"subdomain": "dup.example.com", "domain": "example.com"}}
 	check("首次写入", svc.CreateResultWithDedup(r1) == nil, "失败")
 	r2 := &models.ScanResult{TaskID: taskID, Type: models.ResultTypeSubdomain, Source: "s2",
-		Data: bson.M{"subdomain": "dup.example.com", "domain": "example.com", "title": "第二次"}}
+		Data: map[string]interface{}{"subdomain": "dup.example.com", "domain": "example.com", "title": "第二次"}}
 	check("重复写入", svc.CreateResultWithDedup(r2) == nil, "失败")
 	_, total, _ = svc.GetResultsByTask(taskID.Hex(), models.ResultTypeSubdomain, 1, 50, "dup.example.com", 0)
 	check("重复写入不新增行", total == 1, fmt.Sprintf("total=%d", total))
@@ -110,11 +109,11 @@ func main() {
 	fmt.Println("[3] 端口去重")
 	for i, svcName := range []string{"http", "https"} {
 		res := &models.ScanResult{TaskID: taskID, Type: models.ResultTypePort, Source: "nmap",
-			Data: bson.M{"ip": "10.0.0.9", "host": "h1.example.com", "port": 8080, "service": svcName}}
+			Data: map[string]interface{}{"ip": "10.0.0.9", "host": "h1.example.com", "port": 8080, "service": svcName}}
 		check(fmt.Sprintf("写入端口结果 %d", i+1), svc.CreateResultWithDedup(res) == nil, "失败")
 	}
 	other := &models.ScanResult{TaskID: taskID, Type: models.ResultTypePort, Source: "nmap",
-		Data: bson.M{"ip": "10.0.0.9", "host": "h1.example.com", "port": 8443, "service": "https"}}
+		Data: map[string]interface{}{"ip": "10.0.0.9", "host": "h1.example.com", "port": 8443, "service": "https"}}
 	check("不同端口另起一行", svc.CreateResultWithDedup(other) == nil, "失败")
 	stats, err := svc.GetResultStats(taskID.Hex())
 	check("统计按类型计数", err == nil && stats["port"] == 2, fmt.Sprintf("stats=%v err=%v", stats, err))
@@ -122,7 +121,7 @@ func main() {
 	// --- 4. service 结果与子域名联合查询 ---
 	fmt.Println("[4] 子域名联合 service 信息")
 	svcRes := &models.ScanResult{TaskID: taskID, Type: models.ResultTypeService, Source: "httpx",
-		Data: bson.M{
+		Data: map[string]interface{}{
 			"url":          "https://plain.example.com:443/",
 			"host":         "plain.example.com",
 			"title":        "示例站点",
@@ -181,7 +180,7 @@ func main() {
 	fmt.Println("[7] 搜索与过滤")
 	// 目录扫描结果同时带 status 与 status_code（改造前就是这样），status_code 筛选走的是 status
 	dirRes := &models.ScanResult{TaskID: taskID, Type: models.ResultTypeDirScan, Source: "dirscan",
-		Data: bson.M{"url": "https://plain.example.com/admin", "status": 403, "status_code": 403}}
+		Data: map[string]interface{}{"url": "https://plain.example.com/admin", "status": 403, "status_code": 403}}
 	check("写入目录扫描结果", svc.CreateResultWithDedup(dirRes) == nil, "失败")
 	_, st, _ := svc.GetResultsByTask(taskID.Hex(), "", 1, 50, "", 403)
 	check("status_code 过滤", st == 1, fmt.Sprintf("total=%d", st))
@@ -214,13 +213,13 @@ func main() {
 	// --- 10. 批量写与批量删 ---
 	fmt.Println("[10] 批量写 / 批量删")
 	batch := []models.ScanResult{
-		{TaskID: taskID, Type: models.ResultTypeURL, Data: bson.M{"url": "https://a/"}},
-		{TaskID: taskID, Type: models.ResultTypeURL, Data: bson.M{"url": "https://b/"}},
+		{TaskID: taskID, Type: models.ResultTypeURL, Data: map[string]interface{}{"url": "https://a/"}},
+		{TaskID: taskID, Type: models.ResultTypeURL, Data: map[string]interface{}{"url": "https://b/"}},
 	}
 	check("批量写入", svc.BatchCreateResults(batch) == nil, "失败")
 	ins, upd, err := svc.BatchCreateResultsWithDedup([]models.ScanResult{
-		{TaskID: taskID, Type: models.ResultTypeURL, Data: bson.M{"url": "https://a/"}},
-		{TaskID: taskID, Type: models.ResultTypeURL, Data: bson.M{"url": "https://c/"}},
+		{TaskID: taskID, Type: models.ResultTypeURL, Data: map[string]interface{}{"url": "https://a/"}},
+		{TaskID: taskID, Type: models.ResultTypeURL, Data: map[string]interface{}{"url": "https://c/"}},
 	})
 	check("批量去重返回 新增1/更新1", err == nil && ins == 1 && upd == 1, fmt.Sprintf("ins=%d upd=%d err=%v", ins, upd, err))
 	all, _ = svc.ExportResults(taskID.Hex(), models.ResultTypeURL)
@@ -239,7 +238,7 @@ func main() {
 	_, after, _ := svc.GetResultsByTask(taskID.Hex(), "", 1, 1, "", 0)
 	check("删除后为空", after == 0, fmt.Sprintf("total=%d", after))
 	again := &models.ScanResult{TaskID: taskID, Type: models.ResultTypeSubdomain,
-		Data: bson.M{"subdomain": "dup.example.com", "domain": "example.com"}}
+		Data: map[string]interface{}{"subdomain": "dup.example.com", "domain": "example.com"}}
 	check("同一去重键可重新写入", svc.CreateResultWithDedup(again) == nil, "失败")
 	_, re, _ := svc.GetResultsByTask(taskID.Hex(), "", 1, 1, "", 0)
 	check("重写后 1 条", re == 1, fmt.Sprintf("total=%d", re))

@@ -10,8 +10,6 @@ import (
 	"github.com/c1ayooo/4zreark/scanner/subdomain"
 	"github.com/c1ayooo/4zreark/scanner/subdomain/thirdparty"
 	"github.com/c1ayooo/4zreark/scanner/webscan"
-
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 // executeSubdomainScan 执行子域名扫描
@@ -48,7 +46,7 @@ func (e *TaskExecutor) executeSubdomainScan(task *models.Task, jobID int64) {
 				WorkspaceID: task.WorkspaceID,
 				Type:        models.ResultTypeSubdomain,
 				Source:      "直接输入",
-				Data: bson.M{
+				Data: map[string]interface{}{
 					"subdomain":   target,
 					"domain":      target,
 					"full_domain": target,
@@ -94,7 +92,7 @@ func (e *TaskExecutor) executeSubdomainScan(task *models.Task, jobID int64) {
 				WorkspaceID: task.WorkspaceID,
 				Type:        models.ResultTypeSubdomain,
 				Source:      "ksubdomain+httpx",
-				Data: bson.M{
+				Data: map[string]interface{}{
 					"subdomain":    httpResult.Host,
 					"domain":       target,
 					"full_domain":  httpResult.Host,
@@ -231,7 +229,7 @@ func (e *TaskExecutor) executeTakeoverScan(task *models.Task, jobID int64) {
 				WorkspaceID: task.WorkspaceID,
 				Type:        models.ResultTypeTakeover,
 				Source:      "takeover_scanner",
-				Data: bson.M{
+				Data: map[string]interface{}{
 					"subdomain":    tr.Domain,
 					"cname":        tr.CNAME,
 					"provider":     tr.Service,

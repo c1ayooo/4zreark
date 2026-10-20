@@ -8,8 +8,8 @@ import (
 	"github.com/c1ayooo/4zreark/service"
 	"github.com/c1ayooo/4zreark/utils"
 
+	"github.com/c1ayooo/4zreark/oid"
 	"github.com/gin-gonic/gin"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type VulnHandler struct {
@@ -109,15 +109,15 @@ func (h *VulnHandler) CreateVulnerability(c *gin.Context) {
 	}
 
 	if req.WorkspaceID != "" {
-		wsID, _ := primitive.ObjectIDFromHex(req.WorkspaceID)
+		wsID, _ := oid.ObjectIDFromHex(req.WorkspaceID)
 		vuln.WorkspaceID = wsID
 	}
 	if req.AssetID != "" {
-		assetID, _ := primitive.ObjectIDFromHex(req.AssetID)
+		assetID, _ := oid.ObjectIDFromHex(req.AssetID)
 		vuln.AssetID = assetID
 	}
 	if req.TaskID != "" {
-		taskID, _ := primitive.ObjectIDFromHex(req.TaskID)
+		taskID, _ := oid.ObjectIDFromHex(req.TaskID)
 		vuln.TaskID = taskID
 	}
 
@@ -432,12 +432,12 @@ func (h *VulnHandler) CreateReport(c *gin.Context) {
 	}
 
 	if req.WorkspaceID != "" {
-		wsID, _ := primitive.ObjectIDFromHex(req.WorkspaceID)
+		wsID, _ := oid.ObjectIDFromHex(req.WorkspaceID)
 		report.WorkspaceID = wsID
 	}
 
 	if userID != nil {
-		uid, _ := primitive.ObjectIDFromHex(userID.(string))
+		uid, _ := oid.ObjectIDFromHex(userID.(string))
 		report.CreatedBy = uid
 	}
 

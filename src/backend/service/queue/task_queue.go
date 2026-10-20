@@ -12,7 +12,7 @@ import (
 
 	"github.com/c1ayooo/4zreark/repo"
 
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"github.com/c1ayooo/4zreark/oid"
 )
 
 // TaskQueue 通用任务队列。
@@ -165,7 +165,7 @@ type checkpointEnvelope struct {
 func (q *TaskQueue) enqueue(ctx context.Context, taskType string, payload map[string]interface{}, priority int, delay time.Duration) (*Task, error) {
 	// task_id 留零值：通用队列作业不对应 tasks 表记录，只是占位满足 NOT NULL
 	jobID, err := q.jobs.Enqueue(ctx, repo.EnqueueJobInput{
-		TaskID:      primitive.NilObjectID.Hex(),
+		TaskID:      oid.NilObjectID.Hex(),
 		Kind:        repo.JobKindJob,
 		Priority:    priority,
 		Payload:     payloadEnvelope{Type: taskType, Payload: payload},

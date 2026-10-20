@@ -10,8 +10,8 @@ import (
 
 	"github.com/c1ayooo/4zreark/models"
 
+	"github.com/c1ayooo/4zreark/oid"
 	"github.com/jackc/pgx/v5"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // VulnFilter 是漏洞列表的查询条件，和原来 Mongo 的 filter 一一对应。
@@ -177,7 +177,7 @@ func scanVuln(row pgx.Row) (*models.Vulnerability, error) {
 
 func (r *vulnRepo) Create(ctx context.Context, v *models.Vulnerability) error {
 	if v.ID.IsZero() {
-		v.ID = primitive.NewObjectID()
+		v.ID = oid.NewObjectID()
 	}
 	if v.Status == "" {
 		v.Status = models.VulnStatusNew
@@ -524,7 +524,7 @@ func scanReport(row pgx.Row) (*models.VulnReport, error) {
 
 func (r *vulnRepo) CreateReport(ctx context.Context, rep *models.VulnReport) error {
 	if rep.ID.IsZero() {
-		rep.ID = primitive.NewObjectID()
+		rep.ID = oid.NewObjectID()
 	}
 	if rep.CreatedAt.IsZero() {
 		rep.CreatedAt = time.Now()

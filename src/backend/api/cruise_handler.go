@@ -9,8 +9,8 @@ import (
 	"github.com/c1ayooo/4zreark/service"
 	"github.com/c1ayooo/4zreark/utils"
 
+	"github.com/c1ayooo/4zreark/oid"
 	"github.com/gin-gonic/gin"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // CruiseHandler 巡航任务处理器
@@ -72,13 +72,13 @@ func (h *CruiseHandler) CreateCruise(c *gin.Context) {
 		utils.Error(c, http.StatusUnauthorized, "User not authenticated")
 		return
 	}
-	userObjID, _ := primitive.ObjectIDFromHex(userID.(string))
+	userObjID, _ := oid.ObjectIDFromHex(userID.(string))
 	log.Printf("[CruiseHandler] UserID: %s", userObjID.Hex())
 
 	// 获取工作区ID（可选）
-	var workspaceID primitive.ObjectID
+	var workspaceID oid.ObjectID
 	if wsID := c.GetHeader("X-Workspace-ID"); wsID != "" {
-		workspaceID, _ = primitive.ObjectIDFromHex(wsID)
+		workspaceID, _ = oid.ObjectIDFromHex(wsID)
 		log.Printf("[CruiseHandler] WorkspaceID: %s", workspaceID.Hex())
 	} else {
 		log.Printf("[CruiseHandler] No WorkspaceID provided")
@@ -189,9 +189,9 @@ func (h *CruiseHandler) ListCruises(c *gin.Context) {
 	}
 
 	// 获取工作区ID（可选）
-	var workspaceID primitive.ObjectID
+	var workspaceID oid.ObjectID
 	if wsID := c.GetHeader("X-Workspace-ID"); wsID != "" {
-		workspaceID, _ = primitive.ObjectIDFromHex(wsID)
+		workspaceID, _ = oid.ObjectIDFromHex(wsID)
 	}
 
 	cruises, total, err := h.cruiseService.ListCruises(workspaceID, page, pageSize, search)
@@ -317,9 +317,9 @@ func (h *CruiseHandler) GetCruiseLogs(c *gin.Context) {
 // @Router /api/v1/cruises/stats [get]
 func (h *CruiseHandler) GetCruiseStats(c *gin.Context) {
 	// 获取工作区ID（可选）
-	var workspaceID primitive.ObjectID
+	var workspaceID oid.ObjectID
 	if wsID := c.GetHeader("X-Workspace-ID"); wsID != "" {
-		workspaceID, _ = primitive.ObjectIDFromHex(wsID)
+		workspaceID, _ = oid.ObjectIDFromHex(wsID)
 	}
 
 	stats := h.cruiseService.GetStats(workspaceID)

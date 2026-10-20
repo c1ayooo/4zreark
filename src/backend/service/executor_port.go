@@ -8,8 +8,6 @@ import (
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/scanner/core"
 	"github.com/c1ayooo/4zreark/scanner/portscan"
-
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 // executePortScan 执行端口扫描
@@ -72,7 +70,7 @@ func (e *TaskExecutor) executePortScan(task *models.Task, jobID int64) {
 					WorkspaceID: task.WorkspaceID,
 					Type:        models.ResultTypePort,
 					Source:      "主动扫描",
-					Data: bson.M{
+					Data: map[string]interface{}{
 						"host":        target,
 						"port":        port.Port,
 						"service":     port.Service,

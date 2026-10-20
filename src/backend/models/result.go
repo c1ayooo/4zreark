@@ -3,8 +3,7 @@ package models
 import (
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"github.com/c1ayooo/4zreark/oid"
 )
 
 // ResultType 扫描结果类型
@@ -27,14 +26,14 @@ const (
 
 // ScanResult 扫描结果基础结构
 type ScanResult struct {
-	ID          primitive.ObjectID `json:"id" bson:"_id,omitempty"`
-	TaskID      primitive.ObjectID `json:"task_id" bson:"task_id"`
-	WorkspaceID primitive.ObjectID `json:"workspace_id" bson:"workspace_id"`
-	Type        ResultType         `json:"type" bson:"type"`
-	Data        bson.M             `json:"data" bson:"data"`
-	Tags        []string           `json:"tags" bson:"tags"`
-	Project     string             `json:"project" bson:"project"`
-	Source      string             `json:"source" bson:"source"` // 来源：主动扫描/被动发现
+	ID          oid.ObjectID           `json:"id" bson:"_id,omitempty"`
+	TaskID      oid.ObjectID           `json:"task_id" bson:"task_id"`
+	WorkspaceID oid.ObjectID           `json:"workspace_id" bson:"workspace_id"`
+	Type        ResultType             `json:"type" bson:"type"`
+	Data        map[string]interface{} `json:"data" bson:"data"`
+	Tags        []string               `json:"tags" bson:"tags"`
+	Project     string                 `json:"project" bson:"project"`
+	Source      string                 `json:"source" bson:"source"` // 来源：主动扫描/被动发现
 	// DedupKey 跨月去重键（task_id|type|业务键），由 repo 生成，不入响应体
 	DedupKey  string    `json:"-" bson:"dedup_key,omitempty"`
 	CreatedAt time.Time `json:"created_at" bson:"created_at"`

@@ -9,8 +9,8 @@ import (
 
 	"github.com/c1ayooo/4zreark/models"
 
+	"github.com/c1ayooo/4zreark/oid"
 	"github.com/jackc/pgx/v5"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // POCFilter 是 POC 列表的查询条件。Enabled 为 nil 表示不按启停过滤。
@@ -227,7 +227,7 @@ func (r *pocRepo) Upsert(ctx context.Context, p *models.POC) error {
 
 func normalizePOC(p *models.POC) {
 	if p.ID.IsZero() {
-		p.ID = primitive.NewObjectID()
+		p.ID = oid.NewObjectID()
 	}
 	if p.Origin == "" {
 		p.Origin = "manual"

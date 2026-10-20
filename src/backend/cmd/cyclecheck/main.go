@@ -12,7 +12,7 @@ import (
 	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/service"
 
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"github.com/c1ayooo/4zreark/oid"
 )
 
 var fails int
@@ -47,7 +47,7 @@ func main() {
 		fmt.Println("没有可用项目:", err)
 		os.Exit(1)
 	}
-	tag := primitive.NewObjectID().Hex()[:8]
+	tag := oid.NewObjectID().Hex()[:8]
 	domain := "demo.org" // 已有站点里大量 *.demo.org
 	fmt.Printf("project_id=%d 探针标记=%s\n\n", projectID, tag)
 

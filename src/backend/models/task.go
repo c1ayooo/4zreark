@@ -3,7 +3,7 @@ package models
 import (
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"github.com/c1ayooo/4zreark/oid"
 )
 
 // TaskType represents different types of scan tasks
@@ -38,12 +38,12 @@ const (
 
 // Task represents a scan task
 type Task struct {
-	ID          primitive.ObjectID `json:"id" bson:"_id,omitempty"`
-	WorkspaceID primitive.ObjectID `json:"workspace_id" bson:"workspace_id"`
-	Name        string             `json:"name" bson:"name"`
-	Description string             `json:"description" bson:"description"`
-	Type        TaskType           `json:"type" bson:"type"`
-	Status      TaskStatus         `json:"status" bson:"status"`
+	ID          oid.ObjectID `json:"id" bson:"_id,omitempty"`
+	WorkspaceID oid.ObjectID `json:"workspace_id" bson:"workspace_id"`
+	Name        string       `json:"name" bson:"name"`
+	Description string       `json:"description" bson:"description"`
+	Type        TaskType     `json:"type" bson:"type"`
+	Status      TaskStatus   `json:"status" bson:"status"`
 
 	// Target Configuration
 	Targets    []string `json:"targets" bson:"targets"`         // IPs, domains, URLs
@@ -71,10 +71,10 @@ type Task struct {
 	LastError  string `json:"last_error,omitempty" bson:"last_error,omitempty"`
 
 	// Metadata
-	CreatedBy primitive.ObjectID `json:"created_by" bson:"created_by"`
-	Tags      []string           `json:"tags" bson:"tags"`
-	CreatedAt time.Time          `json:"created_at" bson:"created_at"`
-	UpdatedAt time.Time          `json:"updated_at" bson:"updated_at"`
+	CreatedBy oid.ObjectID `json:"created_by" bson:"created_by"`
+	Tags      []string     `json:"tags" bson:"tags"`
+	CreatedAt time.Time    `json:"created_at" bson:"created_at"`
+	UpdatedAt time.Time    `json:"updated_at" bson:"updated_at"`
 }
 
 // TaskConfig represents task configuration options
@@ -143,27 +143,27 @@ type TaskResultStats struct {
 
 // TaskTemplate represents reusable task templates
 type TaskTemplate struct {
-	ID          primitive.ObjectID `json:"id" bson:"_id,omitempty"`
-	WorkspaceID primitive.ObjectID `json:"workspace_id" bson:"workspace_id"`
-	Name        string             `json:"name" bson:"name"`
-	Description string             `json:"description" bson:"description"`
-	Type        TaskType           `json:"type" bson:"type"`
-	Config      TaskConfig         `json:"config" bson:"config"`
-	IsPublic    bool               `json:"is_public" bson:"is_public"`
-	CreatedBy   primitive.ObjectID `json:"created_by" bson:"created_by"`
-	CreatedAt   time.Time          `json:"created_at" bson:"created_at"`
-	UpdatedAt   time.Time          `json:"updated_at" bson:"updated_at"`
+	ID          oid.ObjectID `json:"id" bson:"_id,omitempty"`
+	WorkspaceID oid.ObjectID `json:"workspace_id" bson:"workspace_id"`
+	Name        string       `json:"name" bson:"name"`
+	Description string       `json:"description" bson:"description"`
+	Type        TaskType     `json:"type" bson:"type"`
+	Config      TaskConfig   `json:"config" bson:"config"`
+	IsPublic    bool         `json:"is_public" bson:"is_public"`
+	CreatedBy   oid.ObjectID `json:"created_by" bson:"created_by"`
+	CreatedAt   time.Time    `json:"created_at" bson:"created_at"`
+	UpdatedAt   time.Time    `json:"updated_at" bson:"updated_at"`
 }
 
 // TaskLog represents task execution logs
 type TaskLog struct {
 	// id 在 PG 里是 bigserial，用字符串承载，响应体里仍是字符串
-	ID        string             `json:"id" bson:"_id,omitempty"`
-	TaskID    primitive.ObjectID `json:"task_id" bson:"task_id"`
-	Level     string             `json:"level" bson:"level"` // info, warn, error
-	Message   string             `json:"message" bson:"message"`
-	Detail    string             `json:"detail,omitempty" bson:"detail,omitempty"`
-	CreatedAt time.Time          `json:"created_at" bson:"created_at"`
+	ID        string       `json:"id" bson:"_id,omitempty"`
+	TaskID    oid.ObjectID `json:"task_id" bson:"task_id"`
+	Level     string       `json:"level" bson:"level"` // info, warn, error
+	Message   string       `json:"message" bson:"message"`
+	Detail    string       `json:"detail,omitempty" bson:"detail,omitempty"`
+	CreatedAt time.Time    `json:"created_at" bson:"created_at"`
 }
 
 // Collection names for tasks

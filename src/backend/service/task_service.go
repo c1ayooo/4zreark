@@ -8,7 +8,7 @@ import (
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/repo"
 
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"github.com/c1ayooo/4zreark/oid"
 )
 
 // TaskService 负责任务的增删改查、状态流转与入队。
@@ -43,7 +43,7 @@ func (s *TaskService) CreateTask(task *models.Task) error {
 	}
 
 	if task.ID.IsZero() {
-		task.ID = primitive.NewObjectID()
+		task.ID = oid.NewObjectID()
 	}
 	task.Status = models.TaskStatusPending
 	task.Progress = 0
@@ -156,7 +156,7 @@ func normalizeTaskUpdates(in map[string]interface{}) (map[string]any, error) {
 	return out, nil
 }
 
-// flattenResultStats 兼容两种入参：models.TaskResultStats 结构体，或 bson.M 之类
+// flattenResultStats 兼容两种入参：models.TaskResultStats 结构体，或 map[string]interface{} 之类
 // 的松散 map（pipeline 里用的就是后者，键名还不完全一样）。
 func flattenResultStats(v any) map[string]any {
 	out := map[string]any{}
@@ -182,7 +182,7 @@ func flattenResultStats(v any) map[string]any {
 	case map[string]any:
 		for k, val := range stats {
 			switch k {
-			// 旧版 bson.M 里有 result_stats 内层键；只有能对上列名的才落库
+			// 旧版 map[string]interface{} 里有 result_stats 内层键；只有能对上列名的才落库
 			case "total_targets", "scanned_targets", "discovered_assets",
 				"discovered_vulns", "discovered_ports", "last_scanned_index":
 				put(k, val)
@@ -481,7 +481,7 @@ func (s *TaskService) CreateTaskTemplate(template *models.TaskTemplate) error {
 	}
 
 	if template.ID.IsZero() {
-		template.ID = primitive.NewObjectID()
+		template.ID = oid.NewObjectID()
 	}
 	template.CreatedAt = time.Now()
 	template.UpdatedAt = time.Now()
