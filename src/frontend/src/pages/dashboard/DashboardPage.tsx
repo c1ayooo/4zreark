@@ -94,9 +94,9 @@ export default function DashboardPage() {
             <Server className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{stats?.assets.total || 0}</div>
+            <div className="text-2xl font-bold">{stats?.assets?.total || 0}</div>
             <p className="text-xs text-muted-foreground">
-              新增 {stats?.assets.recentlyAdded || 0} 个
+              新增 {stats?.assets?.recentlyAdded || 0} 个
             </p>
           </CardContent>
         </Card>
@@ -107,9 +107,9 @@ export default function DashboardPage() {
             <Shield className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{stats?.vulnerabilities.total || 0}</div>
+            <div className="text-2xl font-bold">{stats?.vulnerabilities?.total || 0}</div>
             <p className="text-xs text-muted-foreground">
-              待修复 {stats?.vulnerabilities.open || 0} 个
+              待修复 {stats?.vulnerabilities?.open || 0} 个
             </p>
           </CardContent>
         </Card>
@@ -120,9 +120,9 @@ export default function DashboardPage() {
             <ListTodo className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{stats?.tasks.total || 0}</div>
+            <div className="text-2xl font-bold">{stats?.tasks?.total || 0}</div>
             <p className="text-xs text-muted-foreground">
-              运行中 {stats?.tasks.running || 0} 个
+              运行中 {stats?.tasks?.running || 0} 个
             </p>
           </CardContent>
         </Card>
@@ -133,9 +133,9 @@ export default function DashboardPage() {
             <HardDrive className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{stats?.nodes.total || 0}</div>
+            <div className="text-2xl font-bold">{stats?.nodes?.total || 0}</div>
             <p className="text-xs text-muted-foreground">
-              在线 {stats?.nodes.online || 0} 个
+              在线 {stats?.nodes?.online || 0} 个
             </p>
           </CardContent>
         </Card>
@@ -293,28 +293,28 @@ export default function DashboardPage() {
             <div className="flex items-center gap-3 p-4 rounded-lg bg-muted">
               <Clock className="h-8 w-8 text-yellow-500" />
               <div>
-                <p className="text-2xl font-bold">{stats?.tasks.running || 0}</p>
+                <p className="text-2xl font-bold">{stats?.tasks?.running || 0}</p>
                 <p className="text-sm text-muted-foreground">运行中</p>
               </div>
             </div>
             <div className="flex items-center gap-3 p-4 rounded-lg bg-muted">
               <CheckCircle className="h-8 w-8 text-green-500" />
               <div>
-                <p className="text-2xl font-bold">{stats?.tasks.completed || 0}</p>
+                <p className="text-2xl font-bold">{stats?.tasks?.completed || 0}</p>
                 <p className="text-sm text-muted-foreground">已完成</p>
               </div>
             </div>
             <div className="flex items-center gap-3 p-4 rounded-lg bg-muted">
               <XCircle className="h-8 w-8 text-red-500" />
               <div>
-                <p className="text-2xl font-bold">{stats?.tasks.failed || 0}</p>
+                <p className="text-2xl font-bold">{stats?.tasks?.failed || 0}</p>
                 <p className="text-sm text-muted-foreground">失败</p>
               </div>
             </div>
             <div className="flex items-center gap-3 p-4 rounded-lg bg-muted">
               <AlertTriangle className="h-8 w-8 text-orange-500" />
               <div>
-                <p className="text-2xl font-bold">{stats?.vulnerabilities.recentlyFound || 0}</p>
+                <p className="text-2xl font-bold">{stats?.vulnerabilities?.recentlyFound || 0}</p>
                 <p className="text-sm text-muted-foreground">新发现漏洞</p>
               </div>
             </div>
