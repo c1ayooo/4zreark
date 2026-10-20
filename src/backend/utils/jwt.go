@@ -14,17 +14,25 @@ type Claims struct {
 	UserID   string `json:"user_id"`
 	Username string `json:"username"`
 	Role     string `json:"role"`
+	Ver      int    `json:"ver"` // 登录态版本号，对应 users.token_version
 	jwt.RegisteredClaims
 }
 
-// GenerateToken generates a new JWT token
+// GenerateToken generates a new JWT token（版本号取 0，兼容旧调用）
 func GenerateToken(userID, username, role string) (string, error) {
+	return GenerateTokenWithVersion(userID, username, role, 0)
+}
+
+// GenerateTokenWithVersion 把 users.token_version 写进 claims，
+// 改密 / 禁用后旧 token 因版本号对不上而立即失效，不依赖外部存储。
+func GenerateTokenWithVersion(userID, username, role string, ver int) (string, error) {
 	cfg := config.GetConfig()
 
 	claims := Claims{
 		UserID:   userID,
 		Username: username,
 		Role:     role,
+		Ver:      ver,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(cfg.JWT.Expire) * time.Second)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -70,5 +78,5 @@ func RefreshToken(tokenString string) (string, error) {
 		return tokenString, nil // Token still valid, no need to refresh
 	}
 
-	return GenerateToken(claims.UserID, claims.Username, claims.Role)
+	return GenerateTokenWithVersion(claims.UserID, claims.Username, claims.Role, claims.Ver)
 }

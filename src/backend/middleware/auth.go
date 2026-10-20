@@ -31,16 +31,16 @@ func AuthMiddleware() gin.HandlerFunc {
 
 		tokenString := parts[1]
 
-		// Check if token is blacklisted
-		if userService.IsTokenBlacklisted(tokenString) {
-			utils.Unauthorized(c, "Token已失效，请重新登录")
+		claims, err := utils.ParseToken(tokenString)
+		if err != nil {
+			utils.Unauthorized(c, "Token无效或已过期")
 			c.Abort()
 			return
 		}
 
-		claims, err := utils.ParseToken(tokenString)
-		if err != nil {
-			utils.Unauthorized(c, "Token无效或已过期")
+		// 一次查询同时校验：单端登出黑名单 + 全端失效版本号
+		if userService.IsTokenRevoked(tokenString, claims.UserID, claims.Ver) {
+			utils.Unauthorized(c, "Token已失效，请重新登录")
 			c.Abort()
 			return
 		}

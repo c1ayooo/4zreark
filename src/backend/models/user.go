@@ -8,18 +8,21 @@ import (
 
 // User represents a user in the system
 type User struct {
-	ID        primitive.ObjectID `json:"id" bson:"_id,omitempty"`
-	Username  string             `json:"username" bson:"username"`
-	Password  string             `json:"-" bson:"password"`
-	Email     string             `json:"email" bson:"email"`
-	Phone     string             `json:"phone" bson:"phone"`
-	Nickname  string             `json:"nickname" bson:"nickname"`
-	Avatar    string             `json:"avatar" bson:"avatar"`
-	Role      string             `json:"role" bson:"role"`     // admin, user, viewer
-	Status    int                `json:"status" bson:"status"` // 1: active, 0: disabled
-	LastLogin time.Time          `json:"last_login" bson:"last_login"`
-	CreatedAt time.Time          `json:"created_at" bson:"created_at"`
-	UpdatedAt time.Time          `json:"updated_at" bson:"updated_at"`
+	ID       primitive.ObjectID `json:"id" bson:"_id,omitempty"`
+	Username string             `json:"username" bson:"username"`
+	Password string             `json:"-" bson:"password"`
+	Email    string             `json:"email" bson:"email"`
+	Phone    string             `json:"phone" bson:"phone"`
+	Nickname string             `json:"nickname" bson:"nickname"`
+	Avatar   string             `json:"avatar" bson:"avatar"`
+	Role     string             `json:"role" bson:"role"`     // admin, user, viewer
+	Status   int                `json:"status" bson:"status"` // 1: active, 0: disabled
+	// TokenVersion 登录态版本号：改密 / 禁用 / 踢下线时 +1，旧 token 立即失效。
+	// json:"-" 保证响应体字段与改造前一致。
+	TokenVersion int       `json:"-" bson:"token_version"`
+	LastLogin    time.Time `json:"last_login" bson:"last_login"`
+	CreatedAt    time.Time `json:"created_at" bson:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at" bson:"updated_at"`
 }
 
 // Role represents user roles

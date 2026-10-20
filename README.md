@@ -45,6 +45,13 @@ export GOFLAGS=-mod=mod
 go build -o 4zreark .
 ```
 
+启动前导出数据库密码（密码不入库文件，按交接规格 §5 走环境变量；未设置则启动自检失败、退出码 2）：
+
+```bash
+export ZRE_PG_PASSWORD=$(cat ../../.pgpass.local)
+./4zreark
+```
+
 ```bash
 cd src/frontend
 npm ci --registry=https://registry.npmmirror.com

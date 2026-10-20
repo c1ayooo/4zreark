@@ -5,16 +5,19 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/c1ayooo/4zreark/api"
 	"github.com/c1ayooo/4zreark/config"
 	"github.com/c1ayooo/4zreark/database"
+	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/router"
 	"github.com/c1ayooo/4zreark/service"
 
@@ -43,11 +46,27 @@ func main() {
 	// Set Gin mode
 	gin.SetMode(cfg.Server.Mode)
 
-	// Initialize MongoDB
+	// ---------------------------------------------------------------- PostgreSQL
+	// 唯一存储。连接 + 启动自检（连接、迁移账本、必需表、当月/次月分区）任一项不过即以退出码 2 退出。
+	initCtx, initCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	pg, pgErr := repo.Open(initCtx, &cfg.Postgres)
+	if pgErr == nil {
+		pgErr = pg.SelfCheck(initCtx)
+	}
+	initCancel()
+	if pgErr != nil {
+		log.Printf("[FATAL] PostgreSQL 启动自检失败: %v", pgErr)
+		os.Exit(2)
+	}
+	defer pg.Close()
+	log.Println("PostgreSQL 就绪，启动自检通过")
+
+	// ---------------------------------------------------------------- 迁移期临时依赖
+	// TODO(分片 B/C/D)：以下两块是尚未迁完的数据访问路径，迁完后连同 database 包的 mongo/redis 一并删除。
+	// 迁移期间不做双写：下列服务只读/写旧库，与新库无交集。
 	database.InitMongoDB(&cfg.MongoDB)
 	defer database.CloseMongoDB()
 
-	// Initialize Redis
 	database.InitRedis(&cfg.Redis)
 	defer database.CloseRedis()
 
