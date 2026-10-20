@@ -115,6 +115,13 @@ func main() {
 	log.Println("Governance cycle scheduler started")
 	defer cycleService.Stop()
 
+	// Start asset probe executor（批次执行单元 → 真实 HTTP 探测 → 写回站点连通性）
+	log.Println("Starting asset probe executor...")
+	probeExecutor := service.NewProbeExecutor(8)
+	probeExecutor.Start()
+	log.Println("Asset probe executor started")
+	defer probeExecutor.Stop()
+
 	// Initialize WebSocket hub for real-time data
 	log.Println("Initializing WebSocket hub...")
 	wsHub := api.NewHub()

@@ -5,9 +5,12 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // Site 是归并后的资产（可访问站点），字段口径对齐 ScopesHub 实测结构。
@@ -495,6 +498,88 @@ func (r *Repo) AssetTargetsForDomain(ctx context.Context, projectID int64, domai
 		out = append(out, t)
 	}
 	return out, rows.Err()
+}
+
+// AssetEndpoints 取一个站点的全部入口，供探测使用（含真实端口）。
+func (a *AssetRepo) AssetEndpoints(ctx context.Context, siteID int64) ([]Endpoint, error) {
+	if a == nil || a.r == nil {
+		return nil, fmt.Errorf("资产仓储未初始化")
+	}
+	rows, err := a.r.pool.Query(ctx,
+		`SELECT scheme, port, coalesce(status_code, 0)
+		   FROM site_endpoints WHERE site_id = $1 ORDER BY port, scheme`, siteID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []Endpoint{}
+	for rows.Next() {
+		var e Endpoint
+		if err := rows.Scan(&e.Scheme, &e.Port, &e.StatusCode); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// SiteHost 取站点的主机名，探测时要用。
+func (a *AssetRepo) SiteHost(ctx context.Context, siteID int64) (string, error) {
+	if a == nil || a.r == nil {
+		return "", fmt.Errorf("资产仓储未初始化")
+	}
+	var host string
+	err := a.r.pool.QueryRow(ctx, `SELECT host FROM sites WHERE id = $1`, siteID).Scan(&host)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return host, err
+}
+
+// SiteIDByHost 按 (项目, host) 找站点。站点按 host 归并，所以这个组合唯一。
+func (a *AssetRepo) SiteIDByHost(ctx context.Context, projectID int64, host string) (int64, error) {
+	if a == nil || a.r == nil {
+		return 0, fmt.Errorf("资产仓储未初始化")
+	}
+	var id int64
+	err := a.r.pool.QueryRow(ctx,
+		`SELECT id FROM sites WHERE project_id = $1 AND host = $2 LIMIT 1`, projectID, host).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return id, err
+}
+
+// RecordInconclusive 记一次「判不出真假」的探测：只落流水、推下一次检查，不动失败计数。
+// FakeIP、公网域名解析到私网这两种情况走这里——它们既不能证明站点活着，也不能证明站点没了。
+func (a *AssetRepo) RecordInconclusive(ctx context.Context, siteID int64, reasonCode string) error {
+	if a == nil || a.r == nil {
+		return fmt.Errorf("资产仓储未初始化")
+	}
+	firstHours := 24
+	_ = a.r.pool.QueryRow(ctx, `SELECT first_hours FROM connectivity_policies WHERE id = 1`).Scan(&firstHours)
+
+	tx, err := a.r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE sites SET attempts = attempts + 1,
+		                 verification_status = 'pending',
+		                 verification_reason = nullif($2, ''),
+		                 next_verification_at = now() + make_interval(hours => $3)
+		 WHERE id = $1`, siteID, reasonCode, firstHours); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO verifications (site_id, status, reason_code, attempts) VALUES ($1,'inconclusive',$2,1)`,
+		siteID, reasonCode); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func normalizeHost(h string) string {

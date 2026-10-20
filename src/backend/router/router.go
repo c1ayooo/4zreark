@@ -72,6 +72,10 @@ func SetupRouter() *gin.Engine {
 				protected.GET("/runs/:id", govHandler.GetRun)
 				protected.GET("/runs/:id/targets", govHandler.ListTargets)
 				protected.POST("/governance/tick", middleware.AdminMiddleware(), govHandler.Tick)
+				protected.POST("/assets/:id/probe", middleware.AdminMiddleware(), govHandler.ProbeAsset)
+				protected.POST("/runs/:id/execute", middleware.AdminMiddleware(), govHandler.ExecuteRun)
+				protected.POST("/governance/archive", middleware.AdminMiddleware(), govHandler.ArchiveLost)
+				protected.POST("/assets/:id/protect", middleware.AdminMiddleware(), govHandler.ProtectAsset)
 			}
 
 			// User routes

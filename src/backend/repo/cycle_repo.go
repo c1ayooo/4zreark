@@ -61,6 +61,7 @@ type Run struct {
 type RunTarget struct {
 	ID         int64      `json:"id"`
 	RunID      int64      `json:"run_id"`
+	ProjectID  int64      `json:"project_id"`
 	Host       string     `json:"host"`
 	Port       int        `json:"port"`
 	State      string     `json:"state"`
@@ -483,10 +484,11 @@ func (r *runRepo) ListTargets(ctx context.Context, runID int64, state string, li
 		limit = 200
 	}
 	rows, err := r.r.pool.Query(ctx,
-		`select id, run_id, host, port, state, attempts, lease_until
-		   from run_targets
-		  where run_id = $1 and ($2 = '' or state = $2)
-		  order by id limit $3`, runID, state, limit)
+		`select t.id, t.run_id, (select project_id from runs r where r.id = t.run_id),
+		        t.host, t.port, t.state, t.attempts, t.lease_until
+		   from run_targets t
+		  where t.run_id = $1 and ($2 = '' or t.state = $2)
+		  order by t.id limit $3`, runID, state, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -495,7 +497,8 @@ func (r *runRepo) ListTargets(ctx context.Context, runID int64, state string, li
 	out := []*RunTarget{}
 	for rows.Next() {
 		var t RunTarget
-		if err := rows.Scan(&t.ID, &t.RunID, &t.Host, &t.Port, &t.State, &t.Attempts, &t.LeaseUntil); err != nil {
+		if err := rows.Scan(&t.ID, &t.RunID, &t.ProjectID, &t.Host, &t.Port,
+			&t.State, &t.Attempts, &t.LeaseUntil); err != nil {
 			return nil, err
 		}
 		out = append(out, &t)
@@ -524,7 +527,8 @@ func (r *runRepo) ClaimTargets(ctx context.Context, runID int64, lease time.Dura
 		        attempts = t.attempts + 1
 		   from picked
 		  where t.id = picked.id
-		  returning t.id, t.run_id, t.host, t.port, t.state, t.attempts, t.lease_until`,
+		  returning t.id, t.run_id, (select project_id from runs r where r.id = t.run_id),
+		            t.host, t.port, t.state, t.attempts, t.lease_until`,
 		runID, limit, lease.Seconds())
 	if err != nil {
 		return nil, err
@@ -534,7 +538,8 @@ func (r *runRepo) ClaimTargets(ctx context.Context, runID int64, lease time.Dura
 	out := []*RunTarget{}
 	for rows.Next() {
 		var t RunTarget
-		if err := rows.Scan(&t.ID, &t.RunID, &t.Host, &t.Port, &t.State, &t.Attempts, &t.LeaseUntil); err != nil {
+		if err := rows.Scan(&t.ID, &t.RunID, &t.ProjectID, &t.Host, &t.Port,
+			&t.State, &t.Attempts, &t.LeaseUntil); err != nil {
 			return nil, err
 		}
 		out = append(out, &t)
