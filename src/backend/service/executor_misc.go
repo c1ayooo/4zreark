@@ -14,12 +14,12 @@ import (
 )
 
 // executeFingerprintScan 执行指纹扫描
-func (e *TaskExecutor) executeFingerprintScan(task *models.Task) {
+func (e *TaskExecutor) executeFingerprintScan(task *models.Task, jobID int64) {
 	log.Printf("[TaskExecutor] Executing fingerprint scan for task: %s", task.ID.Hex())
 
 	targets := task.Targets
 	if len(targets) == 0 {
-		e.failTask(task, "没有目标")
+		e.failTask(task, jobID, "没有目标")
 		return
 	}
 
@@ -54,16 +54,16 @@ func (e *TaskExecutor) executeFingerprintScan(task *models.Task) {
 	}
 
 	e.saveResults(task, results)
-	e.completeTask(task, len(results))
+	e.completeTask(task, jobID, len(results))
 }
 
 // executeVulnScan 执行漏洞扫描
-func (e *TaskExecutor) executeVulnScan(task *models.Task) {
+func (e *TaskExecutor) executeVulnScan(task *models.Task, jobID int64) {
 	log.Printf("[TaskExecutor] Executing vuln scan for task: %s", task.ID.Hex())
 
 	targets := task.Targets
 	if len(targets) == 0 {
-		e.failTask(task, "没有目标")
+		e.failTask(task, jobID, "没有目标")
 		return
 	}
 
@@ -100,22 +100,22 @@ func (e *TaskExecutor) executeVulnScan(task *models.Task) {
 	}
 
 	e.saveResults(task, results)
-	e.completeTask(task, len(results))
+	e.completeTask(task, jobID, len(results))
 }
 
 // executeContentScan 执行目录扫描 (使用 Spray)
-func (e *TaskExecutor) executeContentScan(task *models.Task) {
+func (e *TaskExecutor) executeContentScan(task *models.Task, jobID int64) {
 	log.Printf("[TaskExecutor] Executing content scan with Spray for task: %s", task.ID.Hex())
 
 	targets := task.Targets
 	if len(targets) == 0 {
-		e.failTask(task, "没有目标")
+		e.failTask(task, jobID, "没有目标")
 		return
 	}
 
 	sprayScanner := webscan.NewSprayScanner()
 	if sprayScanner == nil || !sprayScanner.IsAvailable() {
-		e.failTask(task, "Spray 扫描器不可用")
+		e.failTask(task, jobID, "Spray 扫描器不可用")
 		return
 	}
 
@@ -160,16 +160,16 @@ func (e *TaskExecutor) executeContentScan(task *models.Task) {
 	}
 
 	e.saveResults(task, results)
-	e.completeTask(task, len(results))
+	e.completeTask(task, jobID, len(results))
 }
 
 // executeSensitiveScan 执行敏感信息扫描
-func (e *TaskExecutor) executeSensitiveScan(task *models.Task) {
+func (e *TaskExecutor) executeSensitiveScan(task *models.Task, jobID int64) {
 	log.Printf("[TaskExecutor] Executing sensitive scan for task: %s", task.ID.Hex())
 
 	targets := task.Targets
 	if len(targets) == 0 {
-		e.failTask(task, "没有目标")
+		e.failTask(task, jobID, "没有目标")
 		return
 	}
 
@@ -205,16 +205,16 @@ func (e *TaskExecutor) executeSensitiveScan(task *models.Task) {
 	}
 
 	e.saveResults(task, results)
-	e.completeTask(task, len(results))
+	e.completeTask(task, jobID, len(results))
 }
 
 // executeCrawlerScan 执行爬虫扫描 (Katana + Rad)
-func (e *TaskExecutor) executeCrawlerScan(task *models.Task) {
+func (e *TaskExecutor) executeCrawlerScan(task *models.Task, jobID int64) {
 	log.Printf("[TaskExecutor] Executing crawler scan for task: %s", task.ID.Hex())
 
 	targets := task.Targets
 	if len(targets) == 0 {
-		e.failTask(task, "没有目标")
+		e.failTask(task, jobID, "没有目标")
 		return
 	}
 
@@ -296,5 +296,5 @@ func (e *TaskExecutor) executeCrawlerScan(task *models.Task) {
 	}
 
 	e.saveResults(task, results)
-	e.completeTask(task, len(results))
+	e.completeTask(task, jobID, len(results))
 }

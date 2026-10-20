@@ -13,12 +13,12 @@ import (
 )
 
 // executePortScan 执行端口扫描
-func (e *TaskExecutor) executePortScan(task *models.Task) {
+func (e *TaskExecutor) executePortScan(task *models.Task, jobID int64) {
 	log.Printf("[TaskExecutor] Executing port scan for task: %s", task.ID.Hex())
 
 	targets := task.Targets
 	if len(targets) == 0 {
-		e.failTask(task, "没有目标")
+		e.failTask(task, jobID, "没有目标")
 		return
 	}
 
@@ -40,7 +40,7 @@ func (e *TaskExecutor) executePortScan(task *models.Task) {
 
 	gogoScanner := portscan.NewGoGoScannerWithConfig(gogoConfig)
 	if !gogoScanner.IsAvailable() {
-		e.failTask(task, "GoGo 端口扫描器初始化失败")
+		e.failTask(task, jobID, "GoGo 端口扫描器初始化失败")
 		return
 	}
 
@@ -89,7 +89,7 @@ func (e *TaskExecutor) executePortScan(task *models.Task) {
 	}
 
 	e.saveResults(task, results)
-	e.completeTask(task, len(results))
+	e.completeTask(task, jobID, len(results))
 }
 
 // runPortScanMode 根据模式运行端口扫描

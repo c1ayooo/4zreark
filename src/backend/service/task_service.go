@@ -1,165 +1,228 @@
 package service
 
 import (
-	"context"
 	"errors"
-	"fmt"
 	"log"
 	"time"
 
-	"github.com/c1ayooo/4zreark/database"
 	"github.com/c1ayooo/4zreark/models"
+	"github.com/c1ayooo/4zreark/repo"
 
-	"github.com/go-redis/redis/v8"
-	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+// TaskService 负责任务的增删改查、状态流转与入队。
+// 数据全部走 repo，本文件不出现任何 SQL 或驱动调用。
 type TaskService struct{}
 
 func NewTaskService() *TaskService {
 	return &TaskService{}
 }
 
+func (s *TaskService) stores() (repo.TaskRepo, repo.JobRepo, error) {
+	r := repo.Default()
+	if r == nil {
+		return nil, nil, errors.New("数据层未初始化")
+	}
+	return r.Tasks(), r.Jobs(), nil
+}
+
+// jobPayload 是扫描作业的载荷：worker 靠它知道该跑哪种流水线。
+func jobPayload(taskType models.TaskType) map[string]any {
+	return map[string]any{"type": string(taskType)}
+}
+
 // CreateTask creates a new task
 func (s *TaskService) CreateTask(task *models.Task) error {
-	ctx, cancel := database.NewContext()
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	collection := database.GetCollection(models.CollectionTasks)
-
-	task.ID = primitive.NewObjectID()
-	task.Status = models.TaskStatusPending
-	task.Progress = 0
-	task.CreatedAt = time.Now()
-	task.UpdatedAt = time.Now()
-
-	_, err := collection.InsertOne(ctx, task)
+	tasks, jobs, err := s.stores()
 	if err != nil {
-		return fmt.Errorf("创建任务失败: %w", err)
+		return err
 	}
 
-	// Add to Redis task queue
-	s.enqueueTask(task)
+	if task.ID.IsZero() {
+		task.ID = primitive.NewObjectID()
+	}
+	task.Status = models.TaskStatusPending
+	task.Progress = 0
+	now := time.Now()
+	task.CreatedAt = now
+	task.UpdatedAt = now
 
+	if err := tasks.Create(ctx, task); err != nil {
+		return errors.New("创建任务失败: " + err.Error())
+	}
+
+	if _, err := jobs.Enqueue(ctx, repo.EnqueueJobInput{
+		TaskID:   task.ID.Hex(),
+		Kind:     repo.JobKindScan,
+		Priority: 100,
+		Payload:  jobPayload(task.Type),
+	}); err != nil {
+		// 任务已落库但没有作业，worker 不会执行它；这属于必须让调用方知道的状态
+		log.Printf("[TaskService] 任务 %s 入队失败: %v", task.ID.Hex(), err)
+		return errors.New("任务创建成功但入队失败: " + err.Error())
+	}
+
+	log.Printf("[TaskService] 任务 %s 已创建并入队", task.ID.Hex())
 	return nil
 }
 
 // GetTaskByID retrieves task by ID
 func (s *TaskService) GetTaskByID(taskID string) (*models.Task, error) {
-	ctx, cancel := database.NewContext()
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	objID, err := primitive.ObjectIDFromHex(taskID)
+	tasks, _, err := s.stores()
 	if err != nil {
-		return nil, fmt.Errorf("无效的任务ID: %w", err)
+		return nil, err
 	}
 
-	collection := database.GetCollection(models.CollectionTasks)
-
-	var task models.Task
-	err = collection.FindOne(ctx, bson.M{"_id": objID}).Decode(&task)
-	if err != nil {
-		return nil, fmt.Errorf("任务不存在: %w", err)
+	task, err := tasks.GetByID(ctx, taskID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil, errors.New("任务不存在")
 	}
-
-	return &task, nil
+	if err != nil {
+		return nil, errors.New("查询任务失败: " + err.Error())
+	}
+	return task, nil
 }
 
 // ListTasks lists tasks with filtering and pagination
 func (s *TaskService) ListTasks(workspaceID string, taskType string, status string, page, pageSize int) ([]*models.Task, int64, error) {
-	ctx, cancel := database.NewContext()
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	collection := database.GetCollection(models.CollectionTasks)
-
-	filter := bson.M{}
-
-	if workspaceID != "" {
-		wsID, _ := primitive.ObjectIDFromHex(workspaceID)
-		filter["workspace_id"] = wsID
-	}
-
-	if taskType != "" {
-		filter["type"] = taskType
-	}
-
-	if status != "" {
-		filter["status"] = status
-	}
-
-	// Get total count
-	total, err := collection.CountDocuments(ctx, filter)
+	tasks, _, err := s.stores()
 	if err != nil {
-		return nil, 0, fmt.Errorf("查询任务数量失败: %w", err)
+		return nil, 0, err
 	}
 
-	// Query with pagination
-	opts := options.Find().
-		SetSkip(int64((page - 1) * pageSize)).
-		SetLimit(int64(pageSize)).
-		SetSort(bson.D{{Key: "created_at", Value: -1}})
-
-	cursor, err := collection.Find(ctx, filter, opts)
+	list, total, err := tasks.List(ctx, workspaceID, taskType, status, page, pageSize)
 	if err != nil {
-		return nil, 0, fmt.Errorf("查询任务列表失败: %w", err)
+		return nil, 0, errors.New("查询任务列表失败: " + err.Error())
 	}
-	defer cursor.Close(ctx)
-
-	var tasks []*models.Task
-	if err = cursor.All(ctx, &tasks); err != nil {
-		return nil, 0, fmt.Errorf("解析任务数据失败: %w", err)
-	}
-
-	return tasks, total, nil
+	return list, total, nil
 }
 
 // UpdateTask updates a task
 func (s *TaskService) UpdateTask(taskID string, updates map[string]interface{}) error {
-	ctx, cancel := database.NewContext()
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	objID, err := primitive.ObjectIDFromHex(taskID)
+	tasks, _, err := s.stores()
 	if err != nil {
-		return fmt.Errorf("无效的任务ID: %w", err)
+		return err
 	}
 
-	collection := database.GetCollection(models.CollectionTasks)
-
-	updates["updated_at"] = time.Now()
-	_, err = collection.UpdateOne(ctx, bson.M{"_id": objID}, bson.M{"$set": updates})
+	fields, err := normalizeTaskUpdates(updates)
 	if err != nil {
-		return fmt.Errorf("更新任务失败: %w", err)
+		return err
+	}
+	if len(fields) == 0 {
+		return nil
 	}
 
+	if err := tasks.UpdateFields(ctx, taskID, fields); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return errors.New("任务不存在")
+		}
+		return errors.New("更新任务失败: " + err.Error())
+	}
 	return nil
+}
+
+// normalizeTaskUpdates 把调用方传进来的松散 map 归一成 tasks 表的列键。
+// 旧版把 result_stats 当一个嵌套对象存，PG 里是拆开的列，所以这里要摊平。
+func normalizeTaskUpdates(in map[string]interface{}) (map[string]any, error) {
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		switch k {
+		case "result_stats":
+			for col, val := range flattenResultStats(v) {
+				out[col] = val
+			}
+		case "error":
+			// 旧版 failTask 写的键名是 error，实际列是 last_error
+			out["last_error"] = v
+		case "result_count":
+			// 旧版写了个没有对应列的派生值，故意丢弃
+		default:
+			out[k] = v
+		}
+	}
+	return out, nil
+}
+
+// flattenResultStats 兼容两种入参：models.TaskResultStats 结构体，或 bson.M 之类
+// 的松散 map（pipeline 里用的就是后者，键名还不完全一样）。
+func flattenResultStats(v any) map[string]any {
+	out := map[string]any{}
+	put := func(col string, val any) {
+		if val != nil {
+			out[col] = val
+		}
+	}
+
+	switch stats := v.(type) {
+	case models.TaskResultStats:
+		put("total_targets", stats.TotalTargets)
+		put("scanned_targets", stats.ScannedTargets)
+		put("discovered_assets", stats.DiscoveredAssets)
+		put("discovered_vulns", stats.DiscoveredVulns)
+		put("discovered_ports", stats.DiscoveredPorts)
+		put("last_scanned_index", stats.LastScannedIndex)
+		put("completed_stages", stats.CompletedStages)
+	case *models.TaskResultStats:
+		if stats != nil {
+			return flattenResultStats(*stats)
+		}
+	case map[string]any:
+		for k, val := range stats {
+			switch k {
+			// 旧版 bson.M 里有 result_stats 内层键；只有能对上列名的才落库
+			case "total_targets", "scanned_targets", "discovered_assets",
+				"discovered_vulns", "discovered_ports", "last_scanned_index":
+				put(k, val)
+			case "completed_stages":
+				put("completed_stages", val)
+			}
+		}
+	case map[string]int:
+		for k, val := range stats {
+			switch k {
+			case "total_targets", "scanned_targets", "discovered_assets",
+				"discovered_vulns", "discovered_ports", "last_scanned_index":
+				put(k, val)
+			}
+		}
+	}
+	return out
 }
 
 // DeleteTask deletes a task
 func (s *TaskService) DeleteTask(taskID string) error {
-	ctx, cancel := database.NewContext()
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	objID, err := primitive.ObjectIDFromHex(taskID)
+	tasks, _, err := s.stores()
 	if err != nil {
-		return fmt.Errorf("无效的任务ID: %w", err)
+		return err
 	}
 
-	// Check if task is running and cancel it first
-	task, _ := s.GetTaskByID(taskID)
-	if task != nil && task.Status == models.TaskStatusRunning {
-		// 先取消正在运行的任务
+	// 运行中的任务先取消，避免 worker 还在跑而记录已被删
+	if task, err := tasks.GetByID(ctx, taskID); err == nil && task.Status == models.TaskStatusRunning {
 		_ = s.CancelTask(taskID)
 	}
 
-	collection := database.GetCollection(models.CollectionTasks)
-
-	_, err = collection.DeleteOne(ctx, bson.M{"_id": objID})
-	if err != nil {
-		return fmt.Errorf("删除任务失败: %w", err)
+	if err := tasks.Delete(ctx, taskID); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return errors.New("任务不存在")
+		}
+		return errors.New("删除任务失败: " + err.Error())
 	}
-
 	return nil
 }
 
@@ -174,15 +237,13 @@ func (s *TaskService) StartTask(taskID string) error {
 		return errors.New("任务状态不允许启动")
 	}
 
-	err = s.UpdateTask(taskID, map[string]interface{}{
+	if err := s.UpdateTask(taskID, map[string]interface{}{
 		"status":     models.TaskStatusRunning,
 		"started_at": time.Now(),
-	})
-	if err != nil {
+	}); err != nil {
 		return err
 	}
 
-	// 更新任务状态后入队执行
 	task.Status = models.TaskStatusRunning
 	s.enqueueTask(task)
 
@@ -200,9 +261,13 @@ func (s *TaskService) PauseTask(taskID string) error {
 		return errors.New("只能暂停正在运行的任务")
 	}
 
-	return s.UpdateTask(taskID, map[string]interface{}{
+	if err := s.UpdateTask(taskID, map[string]interface{}{
 		"status": models.TaskStatusPaused,
-	})
+	}); err != nil {
+		return err
+	}
+	s.discardQueued(taskID)
+	return nil
 }
 
 // ResumeTask resumes a paused task
@@ -216,17 +281,14 @@ func (s *TaskService) ResumeTask(taskID string) error {
 		return errors.New("只能恢复已暂停的任务")
 	}
 
-	err = s.UpdateTask(taskID, map[string]interface{}{
+	if err := s.UpdateTask(taskID, map[string]interface{}{
 		"status": models.TaskStatusRunning,
-	})
-	if err != nil {
+	}); err != nil {
 		return err
 	}
 
-	// Re-enqueue task to continue
 	task.Status = models.TaskStatusRunning
 	s.enqueueTask(task)
-
 	return nil
 }
 
@@ -241,9 +303,13 @@ func (s *TaskService) CancelTask(taskID string) error {
 		return errors.New("已完成的任务不能取消")
 	}
 
-	return s.UpdateTask(taskID, map[string]interface{}{
+	if err := s.UpdateTask(taskID, map[string]interface{}{
 		"status": models.TaskStatusCancelled,
-	})
+	}); err != nil {
+		return err
+	}
+	s.discardQueued(taskID)
+	return nil
 }
 
 // RetryTask retries a failed or cancelled task (继续从断点处扫描)
@@ -258,20 +324,16 @@ func (s *TaskService) RetryTask(taskID string) error {
 	}
 
 	// 保留已有的扫描进度，从断点继续
-	err = s.UpdateTask(taskID, map[string]interface{}{
+	if err := s.UpdateTask(taskID, map[string]interface{}{
 		"status":      models.TaskStatusPending,
 		"retry_count": task.RetryCount + 1,
 		"last_error":  "",
-		// 不重置 progress 和 result_stats，保留已有进度
-	})
-	if err != nil {
+	}); err != nil {
 		return err
 	}
 
-	// Re-enqueue task
 	task.Status = models.TaskStatusPending
 	s.enqueueTask(task)
-
 	return nil
 }
 
@@ -305,17 +367,13 @@ func (s *TaskService) RescanTask(taskID string, fromScratch bool) error {
 			CompletedStages:  []string{},
 		}
 	}
-	// 如果不是从头开始，保留已有的进度信息，从断点继续
 
-	err = s.UpdateTask(taskID, updates)
-	if err != nil {
+	if err := s.UpdateTask(taskID, updates); err != nil {
 		return err
 	}
 
-	// Re-enqueue task
 	task.Status = models.TaskStatusPending
 	s.enqueueTask(task)
-
 	return nil
 }
 
@@ -344,262 +402,181 @@ func (s *TaskService) FailTask(taskID string, errorMsg string) error {
 
 // GetTaskStats returns task statistics
 func (s *TaskService) GetTaskStats(workspaceID string) (map[string]interface{}, error) {
-	ctx, cancel := database.NewContext()
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	collection := database.GetCollection(models.CollectionTasks)
-
-	filter := bson.M{}
-	if workspaceID != "" {
-		wsID, _ := primitive.ObjectIDFromHex(workspaceID)
-		filter["workspace_id"] = wsID
-	}
-
-	// Count by status
-	pipeline := []bson.M{
-		{"$match": filter},
-		{"$group": bson.M{
-			"_id":   "$status",
-			"count": bson.M{"$sum": 1},
-		}},
-	}
-
-	cursor, err := collection.Aggregate(ctx, pipeline)
-	if err != nil {
-		return nil, errors.New("统计失败")
-	}
-	defer cursor.Close(ctx)
-
-	stats := make(map[string]interface{})
-	statusStats := make(map[string]int)
-
-	var results []struct {
-		ID    string `bson:"_id"`
-		Count int    `bson:"count"`
-	}
-	if err = cursor.All(ctx, &results); err != nil {
-		return nil, errors.New("解析统计数据失败")
-	}
-
-	total := 0
-	running := 0
-	completed := 0
-	failed := 0
-	pending := 0
-
-	for _, r := range results {
-		statusStats[r.ID] = r.Count
-		total += r.Count
-
-		// 根据状态分类
-		switch r.ID {
-		case string(models.TaskStatusRunning):
-			running = r.Count
-		case string(models.TaskStatusCompleted):
-			completed = r.Count
-		case string(models.TaskStatusFailed):
-			failed = r.Count
-		case string(models.TaskStatusPending):
-			pending = r.Count
-		}
-	}
-
-	stats["total"] = total
-	stats["running"] = running
-	stats["completed"] = completed
-	stats["failed"] = failed
-	stats["pending"] = pending
-	stats["by_status"] = statusStats
-
-	return stats, nil
-}
-
-// enqueueTask adds task to Redis queue
-func (s *TaskService) enqueueTask(task *models.Task) {
-	ctx := context.Background()
-	rdb := database.GetRedis()
-
-	// Add to task queue
-	queueKey := "task:queue:" + string(task.Type)
-	log.Printf("[TaskService] Enqueueing task %s to queue: %s", task.ID.Hex(), queueKey)
-	rdb.RPush(ctx, queueKey, task.ID.Hex())
-
-	// Set task status in Redis
-	statusKey := "task:status:" + task.ID.Hex()
-	rdb.Set(ctx, statusKey, string(task.Status), 24*time.Hour)
-	log.Printf("[TaskService] Task %s enqueued successfully", task.ID.Hex())
-}
-
-// DequeueTask gets next task from queue
-func (s *TaskService) DequeueTask(taskType string) (*models.Task, error) {
-	ctx := context.Background()
-	rdb := database.GetRedis()
-
-	queueKey := "task:queue:" + taskType
-	result, err := rdb.LPop(ctx, queueKey).Result()
-	if err == redis.Nil {
-		return nil, nil // No task in queue
-	}
+	tasks, _, err := s.stores()
 	if err != nil {
 		return nil, err
 	}
 
-	return s.GetTaskByID(result)
+	counts, err := tasks.StatusCounts(ctx, workspaceID)
+	if err != nil {
+		return nil, errors.New("统计失败: " + err.Error())
+	}
+
+	total := 0
+	for _, n := range counts {
+		total += n
+	}
+
+	stats := map[string]interface{}{
+		"total":     total,
+		"running":   counts[string(models.TaskStatusRunning)],
+		"completed": counts[string(models.TaskStatusCompleted)],
+		"failed":    counts[string(models.TaskStatusFailed)],
+		"pending":   counts[string(models.TaskStatusPending)],
+		"by_status": counts,
+	}
+	return stats, nil
+}
+
+// enqueueTask 把任务丢进 task_jobs。失败只记日志：这里是状态流转的收尾，
+// 调用方拿到的错误应该反映状态变更本身是否成功。
+func (s *TaskService) enqueueTask(task *models.Task) {
+	ctx, cancel := dbCtx()
+	defer cancel()
+
+	_, jobs, err := s.stores()
+	if err != nil {
+		log.Printf("[TaskService] 入队失败（数据层未就绪）: %v", err)
+		return
+	}
+	if _, err := jobs.Enqueue(ctx, repo.EnqueueJobInput{
+		TaskID:   task.ID.Hex(),
+		Kind:     repo.JobKindScan,
+		Priority: 100,
+		Payload:  jobPayload(task.Type),
+	}); err != nil {
+		log.Printf("[TaskService] 任务 %s 入队失败: %v", task.ID.Hex(), err)
+		return
+	}
+	log.Printf("[TaskService] 任务 %s 已入队", task.ID.Hex())
+}
+
+// discardQueued 在暂停/取消时清掉还没被领取的作业，避免取消后又被执行。
+func (s *TaskService) discardQueued(taskID string) {
+	ctx, cancel := dbCtx()
+	defer cancel()
+
+	_, jobs, err := s.stores()
+	if err != nil {
+		return
+	}
+	if n, err := jobs.DiscardQueuedForTask(ctx, taskID); err != nil {
+		log.Printf("[TaskService] 清理任务 %s 的排队作业失败: %v", taskID, err)
+	} else if n > 0 {
+		log.Printf("[TaskService] 任务 %s 已丢弃 %d 个排队作业", taskID, n)
+	}
 }
 
 // CreateTaskTemplate creates a task template
 func (s *TaskService) CreateTaskTemplate(template *models.TaskTemplate) error {
-	ctx, cancel := database.NewContext()
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	collection := database.GetCollection(models.CollectionTaskTemplates)
+	tasks, _, err := s.stores()
+	if err != nil {
+		return err
+	}
 
-	template.ID = primitive.NewObjectID()
+	if template.ID.IsZero() {
+		template.ID = primitive.NewObjectID()
+	}
 	template.CreatedAt = time.Now()
 	template.UpdatedAt = time.Now()
 
-	_, err := collection.InsertOne(ctx, template)
-	if err != nil {
-		return errors.New("创建任务模板失败")
+	if err := tasks.CreateTemplate(ctx, template); err != nil {
+		return errors.New("创建任务模板失败: " + err.Error())
 	}
-
 	return nil
 }
 
 // ListTaskTemplates lists task templates
 func (s *TaskService) ListTaskTemplates(workspaceID string, isPublic *bool) ([]*models.TaskTemplate, error) {
-	ctx, cancel := database.NewContext()
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	collection := database.GetCollection(models.CollectionTaskTemplates)
-
-	filter := bson.M{}
-	if workspaceID != "" {
-		wsID, _ := primitive.ObjectIDFromHex(workspaceID)
-		filter["$or"] = []bson.M{
-			{"workspace_id": wsID},
-			{"is_public": true},
-		}
-	}
-	if isPublic != nil {
-		filter["is_public"] = *isPublic
-	}
-
-	cursor, err := collection.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
+	tasks, _, err := s.stores()
 	if err != nil {
-		return nil, errors.New("查询任务模板失败")
-	}
-	defer cursor.Close(ctx)
-
-	var templates []*models.TaskTemplate
-	if err = cursor.All(ctx, &templates); err != nil {
-		return nil, errors.New("解析任务模板数据失败")
+		return nil, err
 	}
 
-	return templates, nil
+	list, err := tasks.ListTemplates(ctx, workspaceID, isPublic)
+	if err != nil {
+		return nil, errors.New("查询任务模板失败: " + err.Error())
+	}
+	return list, nil
 }
 
 // GetTaskTemplate gets a task template by ID
 func (s *TaskService) GetTaskTemplate(templateID string) (*models.TaskTemplate, error) {
-	ctx, cancel := database.NewContext()
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	objID, err := primitive.ObjectIDFromHex(templateID)
+	tasks, _, err := s.stores()
 	if err != nil {
-		return nil, errors.New("无效的模板ID")
+		return nil, err
 	}
 
-	collection := database.GetCollection(models.CollectionTaskTemplates)
-
-	var template models.TaskTemplate
-	err = collection.FindOne(ctx, bson.M{"_id": objID}).Decode(&template)
-	if err != nil {
+	t, err := tasks.GetTemplate(ctx, templateID)
+	if errors.Is(err, repo.ErrNotFound) {
 		return nil, errors.New("模板不存在")
 	}
-
-	return &template, nil
+	if err != nil {
+		return nil, errors.New("查询模板失败: " + err.Error())
+	}
+	return t, nil
 }
 
 // DeleteTaskTemplate deletes a task template
 func (s *TaskService) DeleteTaskTemplate(templateID string) error {
-	ctx, cancel := database.NewContext()
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	objID, err := primitive.ObjectIDFromHex(templateID)
+	tasks, _, err := s.stores()
 	if err != nil {
-		return errors.New("无效的模板ID")
+		return err
 	}
 
-	collection := database.GetCollection(models.CollectionTaskTemplates)
-
-	_, err = collection.DeleteOne(ctx, bson.M{"_id": objID})
-	if err != nil {
-		return errors.New("删除模板失败")
+	if err := tasks.DeleteTemplate(ctx, templateID); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return errors.New("模板不存在")
+		}
+		return errors.New("删除模板失败: " + err.Error())
 	}
-
 	return nil
 }
 
 // AddTaskLog adds a log entry for a task
 func (s *TaskService) AddTaskLog(taskID string, level string, message string, detail string) error {
-	ctx, cancel := database.NewContext()
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	objID, err := primitive.ObjectIDFromHex(taskID)
+	tasks, _, err := s.stores()
 	if err != nil {
-		return errors.New("无效的任务ID")
+		return err
 	}
 
-	collection := database.GetCollection(models.CollectionTaskLogs)
-
-	log := &models.TaskLog{
-		ID:        primitive.NewObjectID(),
-		TaskID:    objID,
-		Level:     level,
-		Message:   message,
-		Detail:    detail,
-		CreatedAt: time.Now(),
+	if err := tasks.AddLog(ctx, taskID, level, message, detail); err != nil {
+		return errors.New("添加日志失败: " + err.Error())
 	}
-
-	_, err = collection.InsertOne(ctx, log)
-	if err != nil {
-		return errors.New("添加日志失败")
-	}
-
 	return nil
 }
 
 // GetTaskLogs gets logs for a task
 func (s *TaskService) GetTaskLogs(taskID string, page, pageSize int) ([]*models.TaskLog, int64, error) {
-	ctx, cancel := database.NewContext()
+	ctx, cancel := dbCtx()
 	defer cancel()
 
-	objID, err := primitive.ObjectIDFromHex(taskID)
+	tasks, _, err := s.stores()
 	if err != nil {
-		return nil, 0, errors.New("无效的任务ID")
+		return nil, 0, err
 	}
 
-	collection := database.GetCollection(models.CollectionTaskLogs)
-
-	filter := bson.M{"task_id": objID}
-
-	total, _ := collection.CountDocuments(ctx, filter)
-
-	opts := options.Find().
-		SetSkip(int64((page - 1) * pageSize)).
-		SetLimit(int64(pageSize)).
-		SetSort(bson.D{{Key: "created_at", Value: -1}})
-
-	cursor, err := collection.Find(ctx, filter, opts)
+	logs, total, err := tasks.ListLogs(ctx, taskID, page, pageSize)
 	if err != nil {
-		return nil, 0, errors.New("查询日志失败")
+		return nil, 0, errors.New("查询日志失败: " + err.Error())
 	}
-	defer cursor.Close(ctx)
-
-	var logs []*models.TaskLog
-	if err = cursor.All(ctx, &logs); err != nil {
-		return nil, 0, errors.New("解析日志数据失败")
-	}
-
 	return logs, total, nil
 }

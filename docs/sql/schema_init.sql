@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     is_scheduled     boolean     NOT NULL DEFAULT false,
     cron_expr        text        NOT NULL DEFAULT '',
     progress         smallint    NOT NULL DEFAULT 0,
+    progress_details jsonb       NOT NULL DEFAULT '{}'::jsonb,  -- 分模块进度，前端直接渲染
     node_id          text        NOT NULL DEFAULT '',
     started_at       timestamptz,
     completed_at     timestamptz,
@@ -123,7 +124,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     tags             text[]      NOT NULL DEFAULT '{}',
     created_at       timestamptz NOT NULL DEFAULT now(),
     updated_at       timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT tasks_type_chk CHECK (type IN ('domain','ip','url','subdomain','port','directory','vuln','asset','company','app')),
+    -- 取值来自 models.TaskType，前端 TaskCreatePage 用的也是这一套
+    CONSTRAINT tasks_type_chk CHECK (type IN ('asset_discovery','port_scan','fingerprint','vuln_scan','subdomain','takeover','dir_scan','crawler','bruteforce','monitor','full','custom')),
     CONSTRAINT tasks_status_chk CHECK (status IN ('pending','running','paused','completed','failed','cancelled')),
     CONSTRAINT tasks_progress_chk CHECK (progress BETWEEN 0 AND 100)
 );
@@ -164,6 +166,7 @@ CREATE INDEX IF NOT EXISTS task_logs_task_idx ON task_logs (task_id, created_at 
 CREATE TABLE IF NOT EXISTS task_jobs (
     id               bigserial   PRIMARY KEY,
     task_id          char(24)    NOT NULL,
+    kind             text        NOT NULL DEFAULT 'scan',
     stage            text        NOT NULL DEFAULT '',
     priority         smallint    NOT NULL DEFAULT 100,
     status           text        NOT NULL DEFAULT 'queued',
@@ -176,12 +179,14 @@ CREATE TABLE IF NOT EXISTS task_jobs (
     scheduled_at     timestamptz NOT NULL DEFAULT now(),
     created_at       timestamptz NOT NULL DEFAULT now(),
     updated_at       timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT task_jobs_status_chk CHECK (status IN ('queued','running','done','failed','dead'))
+    CONSTRAINT task_jobs_status_chk CHECK (status IN ('queued','running','done','failed','dead')),
+    CONSTRAINT task_jobs_kind_chk   CHECK (kind IN ('scan','job'))
 );
 
 CREATE INDEX IF NOT EXISTS task_jobs_claim_idx ON task_jobs (priority DESC, id) WHERE status = 'queued';
 CREATE INDEX IF NOT EXISTS task_jobs_lease_idx ON task_jobs (lease_expires_at) WHERE status = 'running';
 CREATE INDEX IF NOT EXISTS task_jobs_task_idx  ON task_jobs (task_id);
+CREATE INDEX IF NOT EXISTS task_jobs_kind_idx  ON task_jobs (kind, status, priority DESC, id);
 
 -- ---------------------------------------------------------------- 扫描结果（按月分区）
 

@@ -3,33 +3,35 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
-	"github.com/go-redis/redis/v8"
-	"github.com/google/uuid"
+	"github.com/c1ayooo/4zreark/repo"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-// TaskQueue 分布式任务队列
+// TaskQueue 通用任务队列。
+//
+// 存储从 Redis 换到了 PostgreSQL 的 task_jobs 表（kind='job'），
+// 对外暴露的方法与返回结构保持不变，/api/queue 那组接口因此不受影响。
+// 与扫描任务的区别：扫描作业 task_id 指向 tasks 表，这里的作业不关联 tasks。
 type TaskQueue struct {
-	client     *redis.Client
-	workers    int
-	handlers   map[string]TaskHandler
+	jobs     repo.JobRepo
+	workers  int
+	handlers map[string]TaskHandler
+
 	handlersMu sync.RWMutex
 	stopCh     chan struct{}
 	wg         sync.WaitGroup
 
-	// 队列配置
-	queueKey      string
-	processingKey string
-	deadLetterKey string
-	resultKey     string
-
-	// 任务超时配置
 	taskTimeout time.Duration
 	maxRetries  int
+	lease       time.Duration
 }
 
 // Task 任务定义
@@ -50,7 +52,7 @@ type Task struct {
 	WorkerID    string                 `json:"worker_id,omitempty"`
 }
 
-// TaskStatus 任务状态
+// TaskStatus 任务状态。取值与改造前一致，前端按这些字符串渲染。
 type TaskStatus string
 
 const (
@@ -76,59 +78,50 @@ type TaskResult struct {
 
 // QueueConfig 队列配置
 type QueueConfig struct {
-	RedisAddr     string
-	RedisPassword string
-	RedisDB       int
-	QueueName     string
-	Workers       int
-	TaskTimeout   time.Duration
-	MaxRetries    int
+	QueueName   string
+	Workers     int
+	TaskTimeout time.Duration
+	MaxRetries  int
 }
 
 // DefaultQueueConfig 默认配置
 func DefaultQueueConfig() *QueueConfig {
 	return &QueueConfig{
-		RedisAddr:     "localhost:6379",
-		RedisPassword: "",
-		RedisDB:       0,
-		QueueName:     "moon-gazing-tower",
-		Workers:       10,
-		TaskTimeout:   30 * time.Minute,
-		MaxRetries:    3,
+		QueueName:   "moon-gazing-tower",
+		Workers:     10,
+		TaskTimeout: 30 * time.Minute,
+		MaxRetries:  3,
 	}
 }
 
-// NewTaskQueue 创建任务队列
+// NewTaskQueue 创建任务队列。数据层未就绪时返回错误。
 func NewTaskQueue(config *QueueConfig) (*TaskQueue, error) {
 	if config == nil {
 		config = DefaultQueueConfig()
 	}
-
-	client := redis.NewClient(&redis.Options{
-		Addr:     config.RedisAddr,
-		Password: config.RedisPassword,
-		DB:       config.RedisDB,
-	})
-
-	// 测试连接
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := client.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("redis connection failed: %w", err)
+	r := repo.Default()
+	if r == nil {
+		return nil, errors.New("数据层未初始化")
+	}
+	if config.Workers <= 0 {
+		config.Workers = 10
+	}
+	if config.TaskTimeout <= 0 {
+		config.TaskTimeout = 30 * time.Minute
+	}
+	if config.MaxRetries <= 0 {
+		config.MaxRetries = 3
 	}
 
 	return &TaskQueue{
-		client:        client,
-		workers:       config.Workers,
-		handlers:      make(map[string]TaskHandler),
-		stopCh:        make(chan struct{}),
-		queueKey:      config.QueueName + ":queue",
-		processingKey: config.QueueName + ":processing",
-		deadLetterKey: config.QueueName + ":deadletter",
-		resultKey:     config.QueueName + ":result:",
-		taskTimeout:   config.TaskTimeout,
-		maxRetries:    config.MaxRetries,
+		jobs:        r.Jobs(),
+		workers:     config.Workers,
+		handlers:    make(map[string]TaskHandler),
+		stopCh:      make(chan struct{}),
+		taskTimeout: config.TaskTimeout,
+		maxRetries:  config.MaxRetries,
+		// 租约给执行时长的两倍，配合 reaper 兜住进程崩溃
+		lease: 2 * config.TaskTimeout,
 	}, nil
 }
 
@@ -143,116 +136,149 @@ func (q *TaskQueue) RegisterHandler(taskType string, handler TaskHandler) {
 func (q *TaskQueue) Start() {
 	for i := 0; i < q.workers; i++ {
 		q.wg.Add(1)
-		go q.worker(fmt.Sprintf("worker-%d", i))
+		go q.worker(fmt.Sprintf("queue-worker-%d", i))
 	}
-
-	// 启动超时任务检查
-	q.wg.Add(1)
-	go q.timeoutChecker()
-
-	log.Printf("[TaskQueue] Started %d workers", q.workers)
+	log.Printf("[TaskQueue] Started %d workers (postgres backed)", q.workers)
 }
 
 // Stop 停止队列
 func (q *TaskQueue) Stop() {
 	close(q.stopCh)
 	q.wg.Wait()
-	q.client.Close()
 	log.Println("[TaskQueue] Stopped")
+}
+
+// payloadEnvelope 是 task_jobs.payload 里存的通用队列作业结构。
+type payloadEnvelope struct {
+	Type    string                 `json:"type"`
+	Payload map[string]interface{} `json:"payload"`
+}
+
+// checkpointEnvelope 是 task_jobs.checkpoint 里存的执行结果。
+type checkpointEnvelope struct {
+	Result      interface{} `json:"result"`
+	LastError   string      `json:"last_error"`
+	Status      string      `json:"status"`
+	CompletedAt time.Time   `json:"completed_at"`
+}
+
+func (q *TaskQueue) enqueue(ctx context.Context, taskType string, payload map[string]interface{}, priority int, delay time.Duration) (*Task, error) {
+	// task_id 留零值：通用队列作业不对应 tasks 表记录，只是占位满足 NOT NULL
+	jobID, err := q.jobs.Enqueue(ctx, repo.EnqueueJobInput{
+		TaskID:      primitive.NilObjectID.Hex(),
+		Kind:        repo.JobKindJob,
+		Priority:    priority,
+		Payload:     payloadEnvelope{Type: taskType, Payload: payload},
+		MaxAttempts: q.maxRetries,
+		ScheduledAt: timeOrZero(delay),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	status := TaskStatusPending
+	if delay > 0 {
+		status = TaskStatusScheduled
+	}
+
+	return &Task{
+		ID:          strconv.FormatInt(jobID, 10),
+		Type:        taskType,
+		Payload:     payload,
+		Priority:    priority,
+		CreatedAt:   time.Now(),
+		ScheduledAt: timeOrZero(delay),
+		Status:      status,
+		MaxRetries:  q.maxRetries,
+	}, nil
+}
+
+func timeOrZero(delay time.Duration) time.Time {
+	if delay <= 0 {
+		return time.Time{}
+	}
+	return time.Now().Add(delay)
 }
 
 // Enqueue 添加任务到队列
 func (q *TaskQueue) Enqueue(ctx context.Context, taskType string, payload map[string]interface{}) (*Task, error) {
-	task := &Task{
-		ID:         uuid.New().String(),
-		Type:       taskType,
-		Payload:    payload,
-		Priority:   0,
-		CreatedAt:  time.Now(),
-		Status:     TaskStatusPending,
-		MaxRetries: q.maxRetries,
-	}
-
-	return q.enqueueTask(ctx, task)
+	return q.enqueue(ctx, taskType, payload, 0, 0)
 }
 
 // EnqueueWithPriority 添加带优先级的任务
 func (q *TaskQueue) EnqueueWithPriority(ctx context.Context, taskType string, payload map[string]interface{}, priority int) (*Task, error) {
-	task := &Task{
-		ID:         uuid.New().String(),
-		Type:       taskType,
-		Payload:    payload,
-		Priority:   priority,
-		CreatedAt:  time.Now(),
-		Status:     TaskStatusPending,
-		MaxRetries: q.maxRetries,
-	}
-
-	return q.enqueueTask(ctx, task)
+	return q.enqueue(ctx, taskType, payload, priority, 0)
 }
 
 // Schedule 调度延迟任务
 func (q *TaskQueue) Schedule(ctx context.Context, taskType string, payload map[string]interface{}, delay time.Duration) (*Task, error) {
-	task := &Task{
-		ID:          uuid.New().String(),
-		Type:        taskType,
-		Payload:     payload,
-		Priority:    0,
-		CreatedAt:   time.Now(),
-		ScheduledAt: time.Now().Add(delay),
-		Status:      TaskStatusScheduled,
-		MaxRetries:  q.maxRetries,
-	}
-
-	return q.scheduleTask(ctx, task)
+	return q.enqueue(ctx, taskType, payload, 0, delay)
 }
 
-// enqueueTask 内部入队方法
-func (q *TaskQueue) enqueueTask(ctx context.Context, task *Task) (*Task, error) {
-	data, err := json.Marshal(task)
-	if err != nil {
-		return nil, err
-	}
-
-	// 使用 ZADD 实现优先级队列，score = -priority (负数使高优先级排前面)
-	score := float64(-task.Priority)
-	err = q.client.ZAdd(ctx, q.queueKey, &redis.Z{
-		Score:  score,
-		Member: string(data),
-	}).Err()
-
-	if err != nil {
-		return nil, err
-	}
-
-	return task, nil
+func decodeEnvelope(b []byte) payloadEnvelope {
+	var env payloadEnvelope
+	_ = json.Unmarshal(b, &env)
+	return env
 }
 
-// scheduleTask 调度延迟任务
-func (q *TaskQueue) scheduleTask(ctx context.Context, task *Task) (*Task, error) {
-	data, err := json.Marshal(task)
-	if err != nil {
-		return nil, err
+func decodeCheckpoint(b []byte) checkpointEnvelope {
+	var env checkpointEnvelope
+	_ = json.Unmarshal(b, &env)
+	return env
+}
+
+// taskFromJob 把库里的作业映射回对外的 Task 结构。
+func taskFromJob(j *repo.Job) *Task {
+	env := decodeEnvelope(j.Payload)
+	cp := decodeCheckpoint(j.Checkpoint)
+
+	var status TaskStatus
+	switch j.Status {
+	case repo.JobQueued:
+		if j.ScheduledAt.After(time.Now()) {
+			status = TaskStatusScheduled
+		} else {
+			status = TaskStatusPending
+		}
+	case repo.JobRunning:
+		status = TaskStatusProcessing
+	case repo.JobDone:
+		status = TaskStatusCompleted
+	default: // failed / dead
+		status = TaskStatusFailed
 	}
 
-	// 使用时间戳作为 score
-	score := float64(task.ScheduledAt.Unix())
-	err = q.client.ZAdd(ctx, q.queueKey+":scheduled", &redis.Z{
-		Score:  score,
-		Member: string(data),
-	}).Err()
-
-	if err != nil {
-		return nil, err
+	t := &Task{
+		ID:          strconv.FormatInt(j.ID, 10),
+		Type:        env.Type,
+		Payload:     env.Payload,
+		Priority:    j.Priority,
+		CreatedAt:   j.CreatedAt,
+		ScheduledAt: j.ScheduledAt,
+		Retries:     j.Attempts,
+		MaxRetries:  j.MaxAttempts,
+		Status:      status,
+		Result:      cp.Result,
+		Error:       cp.LastError,
+		WorkerID:    j.WorkerID,
 	}
-
-	return task, nil
+	if j.Status == repo.JobRunning || j.Status == repo.JobDone {
+		t.StartedAt = j.UpdatedAt
+	}
+	if j.Status == repo.JobDone || j.Status == repo.JobDead {
+		t.CompletedAt = cp.CompletedAt
+	}
+	if j.Status == repo.JobQueued && j.Attempts > 0 {
+		t.Status = TaskStatusRetrying
+	}
+	return t
 }
 
 // worker 工作者循环
 func (q *TaskQueue) worker(workerID string) {
 	defer q.wg.Done()
 
+	backoff := 200 * time.Millisecond
 	for {
 		select {
 		case <-q.stopCh:
@@ -260,360 +286,194 @@ func (q *TaskQueue) worker(workerID string) {
 		default:
 		}
 
-		// 首先处理到期的调度任务
-		q.processScheduledTasks()
-
-		// 从队列获取任务
-		task, err := q.dequeue()
+		job, err := q.jobs.ClaimGeneric(context.Background(), workerID, q.lease)
 		if err != nil {
-			if err != redis.Nil {
-				log.Printf("[Worker %s] Dequeue error: %v", workerID, err)
-			}
-			time.Sleep(100 * time.Millisecond)
+			log.Printf("[%s] Claim error: %v", workerID, err)
+			time.Sleep(time.Second)
 			continue
 		}
+		if job == nil {
+			// 队列空：退避到 1s 上限，避免空转压着数据库
+			time.Sleep(backoff)
+			if backoff < time.Second {
+				backoff *= 2
+			}
+			continue
+		}
+		backoff = 200 * time.Millisecond
 
-		// 处理任务
-		q.processTask(workerID, task)
+		q.processJob(workerID, job)
 	}
 }
 
-// dequeue 从队列获取任务
-func (q *TaskQueue) dequeue() (*Task, error) {
-	ctx := context.Background()
-
-	// 使用 ZPOPMIN 获取最高优先级的任务
-	results, err := q.client.ZPopMin(ctx, q.queueKey, 1).Result()
-	if err != nil {
-		return nil, err
-	}
-
-	if len(results) == 0 {
-		return nil, redis.Nil
-	}
-
-	var task Task
-	if err := json.Unmarshal([]byte(results[0].Member.(string)), &task); err != nil {
-		return nil, err
-	}
-
-	// 添加到处理中集合
+// processJob 执行一条领取到的作业
+func (q *TaskQueue) processJob(workerID string, job *repo.Job) {
+	task := taskFromJob(job)
 	task.Status = TaskStatusProcessing
-	task.StartedAt = time.Now()
+	task.WorkerID = workerID
 
-	data, _ := json.Marshal(task)
-	q.client.HSet(ctx, q.processingKey, task.ID, string(data))
-
-	return &task, nil
-}
-
-// processTask 处理任务
-func (q *TaskQueue) processTask(workerID string, task *Task) {
 	q.handlersMu.RLock()
 	handler, ok := q.handlers[task.Type]
 	q.handlersMu.RUnlock()
 
-	if !ok {
-		log.Printf("[Worker %s] No handler for task type: %s", workerID, task.Type)
-		q.failTask(task, fmt.Errorf("no handler for task type: %s", task.Type))
-		return
-	}
-
-	// 创建带超时的上下文
 	ctx, cancel := context.WithTimeout(context.Background(), q.taskTimeout)
 	defer cancel()
 
-	task.WorkerID = workerID
+	if !ok {
+		q.failJob(ctx, job.ID, task, fmt.Errorf("no handler for task type: %s", task.Type))
+		return
+	}
 
-	// 执行任务
 	result, err := handler(ctx, task)
-
 	if err != nil {
-		q.handleTaskError(task, err)
+		q.failJob(ctx, job.ID, task, err)
 		return
 	}
 
-	q.completeTask(task, result)
-}
-
-// handleTaskError 处理任务错误
-func (q *TaskQueue) handleTaskError(task *Task, err error) {
-	task.Retries++
-	task.Error = err.Error()
-
-	if task.Retries >= task.MaxRetries {
-		q.failTask(task, err)
-		return
+	if err := q.jobs.Complete(ctx, job.ID, checkpointEnvelope{
+		Result:      result,
+		Status:      string(TaskStatusCompleted),
+		CompletedAt: time.Now(),
+	}); err != nil {
+		log.Printf("[%s] Complete job %d error: %v", workerID, job.ID, err)
 	}
-
-	// 重试
-	task.Status = TaskStatusRetrying
-	log.Printf("[TaskQueue] Task %s retry %d/%d: %v", task.ID, task.Retries, task.MaxRetries, err)
-
-	// 延迟重试 (指数退避)
-	delay := time.Duration(task.Retries*task.Retries) * time.Second
-	task.ScheduledAt = time.Now().Add(delay)
-
-	ctx := context.Background()
-	q.client.HDel(ctx, q.processingKey, task.ID)
-	q.scheduleTask(ctx, task)
+	log.Printf("[%s] Job %d (%s) completed", workerID, job.ID, task.Type)
 }
 
-// failTask 任务失败
-func (q *TaskQueue) failTask(task *Task, err error) {
-	task.Status = TaskStatusFailed
-	task.CompletedAt = time.Now()
-	task.Error = err.Error()
-
-	ctx := context.Background()
-
-	// 从处理中移除
-	q.client.HDel(ctx, q.processingKey, task.ID)
-
-	// 添加到死信队列
-	data, _ := json.Marshal(task)
-	q.client.RPush(ctx, q.deadLetterKey, string(data))
-
-	// 保存结果
-	q.saveResult(task)
-
-	log.Printf("[TaskQueue] Task %s failed: %v", task.ID, err)
-}
-
-// completeTask 任务完成
-func (q *TaskQueue) completeTask(task *Task, result interface{}) {
-	task.Status = TaskStatusCompleted
-	task.CompletedAt = time.Now()
-	task.Result = result
-
-	ctx := context.Background()
-
-	// 从处理中移除
-	q.client.HDel(ctx, q.processingKey, task.ID)
-
-	// 保存结果
-	q.saveResult(task)
-
-	log.Printf("[TaskQueue] Task %s completed", task.ID)
-}
-
-// saveResult 保存任务结果
-func (q *TaskQueue) saveResult(task *Task) {
-	ctx := context.Background()
-
-	result := &TaskResult{
-		TaskID:      task.ID,
-		Status:      task.Status,
-		Result:      task.Result,
-		Error:       task.Error,
-		CompletedAt: task.CompletedAt,
+// failJob 失败重试：未超次数按指数退避回队列，超了进死信（status='dead'）。
+func (q *TaskQueue) failJob(ctx context.Context, jobID int64, task *Task, err error) {
+	backoff := time.Duration((task.Retries+1)*(task.Retries+1)) * time.Second
+	status, rerr := q.jobs.Retry(ctx, jobID, err.Error(), backoff)
+	if rerr != nil {
+		log.Printf("[TaskQueue] Retry job %d error: %v", jobID, rerr)
 	}
-
-	data, _ := json.Marshal(result)
-	q.client.Set(ctx, q.resultKey+task.ID, string(data), 24*time.Hour)
+	log.Printf("[TaskQueue] Job %d (%s) failed -> %s: %v", jobID, task.Type, status, err)
 }
 
 // GetResult 获取任务结果
 func (q *TaskQueue) GetResult(ctx context.Context, taskID string) (*TaskResult, error) {
-	data, err := q.client.Get(ctx, q.resultKey+taskID).Result()
+	job, err := q.jobByID(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
-
-	var result TaskResult
-	if err := json.Unmarshal([]byte(data), &result); err != nil {
-		return nil, err
+	if job.Status != repo.JobDone && job.Status != repo.JobDead {
+		return nil, errors.New("任务结果不存在或已过期")
 	}
 
-	return &result, nil
+	cp := decodeCheckpoint(job.Checkpoint)
+	status := TaskStatusCompleted
+	if job.Status == repo.JobDead {
+		status = TaskStatusFailed
+	}
+	return &TaskResult{
+		TaskID:      taskID,
+		Status:      status,
+		Result:      cp.Result,
+		Error:       cp.LastError,
+		CompletedAt: cp.CompletedAt,
+	}, nil
 }
 
-// processScheduledTasks 处理到期的调度任务
-func (q *TaskQueue) processScheduledTasks() {
-	ctx := context.Background()
-	now := float64(time.Now().Unix())
-
-	// 获取所有到期的任务
-	results, err := q.client.ZRangeByScore(ctx, q.queueKey+":scheduled", &redis.ZRangeBy{
-		Min: "-inf",
-		Max: fmt.Sprintf("%f", now),
-	}).Result()
-
-	if err != nil || len(results) == 0 {
-		return
-	}
-
-	for _, item := range results {
-		var task Task
-		if err := json.Unmarshal([]byte(item), &task); err != nil {
-			continue
-		}
-
-		// 从调度队列移除
-		q.client.ZRem(ctx, q.queueKey+":scheduled", item)
-
-		// 添加到主队列
-		task.Status = TaskStatusPending
-		q.enqueueTask(ctx, &task)
-	}
-}
-
-// timeoutChecker 超时检查器
-func (q *TaskQueue) timeoutChecker() {
-	defer q.wg.Done()
-
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-q.stopCh:
-			return
-		case <-ticker.C:
-			q.checkTimeouts()
-		}
-	}
-}
-
-// checkTimeouts 检查超时任务
-func (q *TaskQueue) checkTimeouts() {
-	ctx := context.Background()
-
-	// 获取所有处理中的任务
-	tasks, err := q.client.HGetAll(ctx, q.processingKey).Result()
+func (q *TaskQueue) jobByID(ctx context.Context, taskID string) (*repo.Job, error) {
+	id, err := strconv.ParseInt(taskID, 10, 64)
 	if err != nil {
-		return
+		return nil, errors.New("无效的任务ID")
 	}
-
-	for taskID, data := range tasks {
-		var task Task
-		if err := json.Unmarshal([]byte(data), &task); err != nil {
-			continue
-		}
-
-		// 检查是否超时
-		if time.Since(task.StartedAt) > q.taskTimeout {
-			log.Printf("[TaskQueue] Task %s timed out", taskID)
-			q.handleTaskError(&task, fmt.Errorf("task timeout after %v", q.taskTimeout))
-		}
+	job, err := q.jobs.GetByID(ctx, id)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil, errors.New("任务不存在")
 	}
+	return job, err
 }
 
 // GetStats 获取队列统计
 func (q *TaskQueue) GetStats(ctx context.Context) (map[string]interface{}, error) {
-	pending, _ := q.client.ZCard(ctx, q.queueKey).Result()
-	scheduled, _ := q.client.ZCard(ctx, q.queueKey+":scheduled").Result()
-	processing, _ := q.client.HLen(ctx, q.processingKey).Result()
-	deadLetter, _ := q.client.LLen(ctx, q.deadLetterKey).Result()
+	counts, err := q.jobs.Stats(ctx, repo.JobKindJob)
+	if err != nil {
+		return nil, err
+	}
+	scheduled, err := q.jobs.CountScheduled(ctx, repo.JobKindJob)
+	if err != nil {
+		return nil, err
+	}
 
 	return map[string]interface{}{
-		"pending":     pending,
+		"pending":     counts[repo.JobQueued] - scheduled,
 		"scheduled":   scheduled,
-		"processing":  processing,
-		"dead_letter": deadLetter,
+		"processing":  counts[repo.JobRunning],
+		"dead_letter": counts[repo.JobDead],
 		"workers":     q.workers,
 	}, nil
 }
 
 // GetPendingTasks 获取待处理任务
 func (q *TaskQueue) GetPendingTasks(ctx context.Context, limit int64) ([]*Task, error) {
-	results, err := q.client.ZRange(ctx, q.queueKey, 0, limit-1).Result()
+	jobs, err := q.jobs.List(ctx, repo.JobKindJob, repo.JobQueued, int(limit))
 	if err != nil {
 		return nil, err
 	}
-
-	tasks := make([]*Task, 0, len(results))
-	for _, data := range results {
-		var task Task
-		if err := json.Unmarshal([]byte(data), &task); err != nil {
-			continue
-		}
-		tasks = append(tasks, &task)
-	}
-
-	return tasks, nil
+	return tasksFromJobs(jobs), nil
 }
 
 // GetProcessingTasks 获取处理中的任务
 func (q *TaskQueue) GetProcessingTasks(ctx context.Context) ([]*Task, error) {
-	results, err := q.client.HGetAll(ctx, q.processingKey).Result()
+	jobs, err := q.jobs.List(ctx, repo.JobKindJob, repo.JobRunning, 1000)
 	if err != nil {
 		return nil, err
 	}
-
-	tasks := make([]*Task, 0, len(results))
-	for _, data := range results {
-		var task Task
-		if err := json.Unmarshal([]byte(data), &task); err != nil {
-			continue
-		}
-		tasks = append(tasks, &task)
-	}
-
-	return tasks, nil
+	return tasksFromJobs(jobs), nil
 }
 
 // GetDeadLetterTasks 获取死信队列任务
 func (q *TaskQueue) GetDeadLetterTasks(ctx context.Context, limit int64) ([]*Task, error) {
-	results, err := q.client.LRange(ctx, q.deadLetterKey, 0, limit-1).Result()
+	jobs, err := q.jobs.List(ctx, repo.JobKindJob, repo.JobDead, int(limit))
 	if err != nil {
 		return nil, err
 	}
+	return tasksFromJobs(jobs), nil
+}
 
-	tasks := make([]*Task, 0, len(results))
-	for _, data := range results {
-		var task Task
-		if err := json.Unmarshal([]byte(data), &task); err != nil {
-			continue
-		}
-		tasks = append(tasks, &task)
+func tasksFromJobs(jobs []*repo.Job) []*Task {
+	tasks := make([]*Task, 0, len(jobs))
+	for _, j := range jobs {
+		tasks = append(tasks, taskFromJob(j))
 	}
-
-	return tasks, nil
+	return tasks
 }
 
 // RetryDeadLetter 重试死信队列任务
 func (q *TaskQueue) RetryDeadLetter(ctx context.Context, taskID string) error {
-	// 获取所有死信任务
-	tasks, err := q.GetDeadLetterTasks(ctx, 1000)
+	id, err := strconv.ParseInt(taskID, 10, 64)
 	if err != nil {
+		return errors.New("task not found in dead letter queue")
+	}
+	if err := q.jobs.RetryDead(ctx, id); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return errors.New("task not found in dead letter queue")
+		}
 		return err
 	}
-
-	for _, task := range tasks {
-		if task.ID == taskID {
-			// 重置任务状态
-			task.Status = TaskStatusPending
-			task.Retries = 0
-			task.Error = ""
-			task.Result = nil
-
-			// 重新入队
-			_, err := q.enqueueTask(ctx, task)
-			if err != nil {
-				return err
-			}
-
-			// 从死信队列移除 (简化处理)
-			return nil
-		}
-	}
-
-	return fmt.Errorf("task not found in dead letter queue")
+	return nil
 }
 
 // ClearDeadLetter 清空死信队列
 func (q *TaskQueue) ClearDeadLetter(ctx context.Context) error {
-	return q.client.Del(ctx, q.deadLetterKey).Err()
+	return q.jobs.ClearDead(ctx, repo.JobKindJob)
 }
 
 // GetWorkerStatus 获取Worker状态
 func (q *TaskQueue) GetWorkerStatus(ctx context.Context) (map[string]interface{}, error) {
-	processing, _ := q.client.HLen(ctx, q.processingKey).Result()
-
+	counts, err := q.jobs.Stats(ctx, repo.JobKindJob)
+	if err != nil {
+		return nil, err
+	}
+	workers, err := q.jobs.ActiveWorkers(ctx, repo.JobKindJob)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]interface{}{
-		"active":  int(processing),
+		"active":  counts[repo.JobRunning],
 		"total":   q.workers,
-		"workers": []map[string]interface{}{}, // 简化实现，暂不返回详细worker信息
+		"workers": workers,
 	}, nil
 }

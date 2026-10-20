@@ -28,12 +28,6 @@ postgres:
   min_conns: 2
 
 # 已决定移除 Redis：队列 / 去重 / 登出由 PG 承担。该段待代码层删掉 go-redis 后一并移除
-redis:
-  host: "127.0.0.1"
-  port: 26379
-  password: ""
-  db: 0
-
 scanner:
   worker_count: 10
   timeout: 300

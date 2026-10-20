@@ -9,12 +9,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/c1ayooo/4zreark/database"
 	"github.com/c1ayooo/4zreark/models"
+	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/service/notify"
 	"github.com/c1ayooo/4zreark/service/pipeline"
 
-	"github.com/go-redis/redis/v8"
 	"go.mongodb.org/mongo-driver/bson"
 )
 
@@ -28,7 +27,9 @@ type runningTask struct {
 type TaskExecutor struct {
 	taskService   *TaskService
 	resultService *ResultService
+	jobs          repo.JobRepo
 	workers       int
+	lease         time.Duration
 	stopCh        chan struct{}
 	wg            sync.WaitGroup
 	// 正在运行的任务，用于取消
@@ -45,6 +46,7 @@ func NewTaskExecutor(workers int) *TaskExecutor {
 		taskService:   NewTaskService(),
 		resultService: NewResultService(),
 		workers:       workers,
+		lease:         5 * time.Minute,
 		stopCh:        make(chan struct{}),
 		runningTasks:  make(map[string]*runningTask),
 	}
@@ -52,30 +54,31 @@ func NewTaskExecutor(workers int) *TaskExecutor {
 
 // Start 启动执行器
 func (e *TaskExecutor) Start() {
-	taskTypes := []string{
-		string(models.TaskTypeFull),
-		string(models.TaskTypeSubdomain),
-		string(models.TaskTypeTakeover),
-		string(models.TaskTypePortScan),
-		string(models.TaskTypeFingerprint),
-		string(models.TaskTypeVulnScan),
-		string(models.TaskTypeDirScan),
-		string(models.TaskTypeCrawler),
-		string(models.TaskTypeCustom),
+	if e.jobs == nil {
+		if r := repo.Default(); r != nil {
+			e.jobs = r.Jobs()
+		}
+	}
+	if e.jobs == nil {
+		log.Println("[TaskExecutor] 数据层未初始化，执行器不会启动")
+		return
 	}
 
+	// 每个 worker 领取任意类型的扫描作业，类型分派在 processTask 里做
 	for i := 0; i < e.workers; i++ {
-		for _, taskType := range taskTypes {
-			e.wg.Add(1)
-			go e.worker(i, taskType)
-		}
+		e.wg.Add(1)
+		go e.worker(i)
 	}
 
 	// 启动任务状态监控
 	e.wg.Add(1)
 	go e.taskStatusMonitor()
 
-	log.Printf("[TaskExecutor] Started %d workers for %d task types", e.workers, len(taskTypes))
+	// 启动租约回收：进程崩溃后遗留的 running 作业由它放回队列
+	e.wg.Add(1)
+	go e.reaper()
+
+	log.Printf("[TaskExecutor] Started %d workers (postgres backed, lease %s)", e.workers, e.lease)
 }
 
 // Stop 停止执行器
@@ -162,12 +165,13 @@ func (e *TaskExecutor) checkRunningTasks() {
 	}
 }
 
-// worker 工作者循环
-func (e *TaskExecutor) worker(id int, taskType string) {
+// worker 工作者循环：从 task_jobs 领取作业（SKIP LOCKED），执行完按结果收尾。
+func (e *TaskExecutor) worker(id int) {
 	defer e.wg.Done()
-	workerID := fmt.Sprintf("worker-%d-%s", id, taskType)
-	log.Printf("[%s] Worker started, listening for %s tasks", workerID, taskType)
+	workerID := fmt.Sprintf("worker-%d", id)
+	log.Printf("[%s] Worker started", workerID)
 
+	backoff := 200 * time.Millisecond
 	for {
 		select {
 		case <-e.stopCh:
@@ -175,92 +179,137 @@ func (e *TaskExecutor) worker(id int, taskType string) {
 		default:
 		}
 
-		task, err := e.dequeueRunningTask(taskType)
+		job, err := e.jobs.ClaimScan(context.Background(), workerID, e.lease)
 		if err != nil {
-			if err != redis.Nil {
-				log.Printf("[%s] Dequeue error: %v", workerID, err)
+			log.Printf("[%s] Claim error: %v", workerID, err)
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		if job == nil {
+			// 队列空：退避到 1s 上限，避免空转压着数据库
+			time.Sleep(backoff)
+			if backoff < time.Second {
+				backoff *= 2
 			}
-			time.Sleep(1 * time.Second)
+			continue
+		}
+		backoff = 200 * time.Millisecond
+
+		task, err := e.taskService.GetTaskByID(job.TaskID)
+		if err != nil {
+			log.Printf("[%s] Task %s is gone, dropping job %d", workerID, job.TaskID, job.ID)
+			e.finishJob(job.ID, "")
 			continue
 		}
 
-		if task == nil {
-			time.Sleep(1 * time.Second)
+		switch task.Status {
+		case models.TaskStatusCancelled, models.TaskStatusPaused,
+			models.TaskStatusCompleted, models.TaskStatusFailed:
+			// 排队期间任务状态已经变了，这条作业没有执行的意义
+			log.Printf("[%s] Task %s status=%s, dropping job %d", workerID, task.ID.Hex(), task.Status, job.ID)
+			e.finishJob(job.ID, "")
 			continue
+		case models.TaskStatusPending:
+			if err := e.taskService.UpdateTask(task.ID.Hex(), map[string]interface{}{
+				"status":     models.TaskStatusRunning,
+				"started_at": time.Now(),
+			}); err != nil {
+				log.Printf("[%s] Failed to start task %s: %v", workerID, task.ID.Hex(), err)
+				e.finishJob(job.ID, "启动任务失败: "+err.Error())
+				continue
+			}
+			task.Status = models.TaskStatusRunning
 		}
 
-		log.Printf("[%s] Processing task: %s", workerID, task.ID.Hex())
-		e.processTask(task)
+		log.Printf("[%s] Processing task: %s (job %d)", workerID, task.ID.Hex(), job.ID)
+		e.processTask(task, job.ID)
 	}
 }
 
-// dequeueRunningTask 获取待执行的任务
-func (e *TaskExecutor) dequeueRunningTask(taskType string) (*models.Task, error) {
-	ctx := context.Background()
-	rdb := database.GetRedis()
+// reaper 回收租约过期的作业：worker 被 kill -9 时由它把作业放回队列，
+// 顺带清理过期的 token 黑名单和 7 天前的去重键。
+func (e *TaskExecutor) reaper() {
+	defer e.wg.Done()
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
 
-	queueKey := "task:queue:" + taskType
-
-	// 检查队列长度
-	queueLen, _ := rdb.LLen(ctx, queueKey).Result()
-	if queueLen > 0 {
-		log.Printf("[TaskExecutor] Queue %s has %d tasks", queueKey, queueLen)
-	}
-
-	result, err := rdb.LPop(ctx, queueKey).Result()
-	if err == redis.Nil {
-		return nil, nil
-	}
-	if err != nil {
-		log.Printf("[TaskExecutor] LPop error for %s: %v", queueKey, err)
-		return nil, err
-	}
-
-	log.Printf("[TaskExecutor] Dequeued task ID: %s from %s", result, queueKey)
-
-	task, err := e.taskService.GetTaskByID(result)
-	if err != nil {
-		log.Printf("[TaskExecutor] Failed to get task %s: %v", result, err)
-		return nil, err
-	}
-
-	log.Printf("[TaskExecutor] Task %s status: %s", task.ID.Hex(), task.Status)
-
-	// 接受 Pending 或 Running 状态的任务
-	if task.Status != models.TaskStatusRunning && task.Status != models.TaskStatusPending {
-		log.Printf("[TaskExecutor] Task %s skipped, status: %s", task.ID.Hex(), task.Status)
-		return nil, nil
-	}
-
-	// 如果任务是 Pending 状态，更新为 Running
-	if task.Status == models.TaskStatusPending {
-		if err := e.taskService.UpdateTask(task.ID.Hex(), map[string]interface{}{
-			"status":     models.TaskStatusRunning,
-			"started_at": time.Now(),
-		}); err != nil {
-			log.Printf("[TaskExecutor] Failed to update task %s status: %v", task.ID.Hex(), err)
-			return nil, fmt.Errorf("failed to start task: %w", err)
+	for {
+		select {
+		case <-e.stopCh:
+			return
+		case <-ticker.C:
+			n, err := e.jobs.Reap(context.Background(), 50)
+			if err != nil {
+				log.Printf("[TaskExecutor] Reap error: %v", err)
+				continue
+			}
+			if n > 0 {
+				log.Printf("[TaskExecutor] Reaped %d expired jobs", n)
+			}
 		}
-		task.Status = models.TaskStatusRunning
-		log.Printf("[TaskExecutor] Task %s started (was pending)", task.ID.Hex())
 	}
+}
 
-	return task, nil
+// heartbeat 在任务执行期间续租，避免长任务被 reaper 当成崩溃回收。
+func (e *TaskExecutor) heartbeat(jobID int64, stop <-chan struct{}) {
+	interval := e.lease / 3
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			if err := e.jobs.Renew(context.Background(), jobID, e.lease); err != nil {
+				log.Printf("[TaskExecutor] Renew job %d error: %v", jobID, err)
+			}
+		}
+	}
+}
+
+// finishJob 收尾作业：errMsg 为空算完成，否则走重试策略（超次数标 dead）。
+func (e *TaskExecutor) finishJob(jobID int64, errMsg string) {
+	if jobID <= 0 || e.jobs == nil {
+		return
+	}
+	ctx := context.Background()
+	if errMsg == "" {
+		if err := e.jobs.Complete(ctx, jobID, nil); err != nil {
+			log.Printf("[TaskExecutor] Complete job %d error: %v", jobID, err)
+		}
+		return
+	}
+	status, err := e.jobs.Retry(ctx, jobID, errMsg, 30*time.Second)
+	if err != nil {
+		log.Printf("[TaskExecutor] Retry job %d error: %v", jobID, err)
+		return
+	}
+	log.Printf("[TaskExecutor] Job %d failed -> %s: %s", jobID, status, errMsg)
 }
 
 // processTask 处理任务
-func (e *TaskExecutor) processTask(task *models.Task) {
+func (e *TaskExecutor) processTask(task *models.Task, jobID int64) {
+	if jobID > 0 {
+		stopHeartbeat := make(chan struct{})
+		go e.heartbeat(jobID, stopHeartbeat)
+		defer close(stopHeartbeat)
+	}
+
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[TaskExecutor] Panic in task %s: %v", task.ID.Hex(), r)
-			e.failTask(task, "内部错误")
+			e.failTask(task, jobID, "内部错误")
 		}
 	}()
 
 	// 使用 StreamingPipeline 处理所有扫描任务
 	switch task.Type {
 	case models.TaskTypeFull:
-		e.executeStreamingPipeline(task, &pipeline.PipelineConfig{
+		e.executeStreamingPipeline(task, jobID, &pipeline.PipelineConfig{
 			SubdomainScan:          true,
 			SubdomainMaxEnumTime:   15,
 			SubdomainResolveIP:     true,
@@ -277,7 +326,7 @@ func (e *TaskExecutor) processTask(task *models.Task) {
 		})
 
 	case models.TaskTypeSubdomain:
-		e.executeStreamingPipeline(task, &pipeline.PipelineConfig{
+		e.executeStreamingPipeline(task, jobID, &pipeline.PipelineConfig{
 			SubdomainScan:          true,
 			SubdomainMaxEnumTime:   10,
 			SubdomainResolveIP:     true,
@@ -287,7 +336,7 @@ func (e *TaskExecutor) processTask(task *models.Task) {
 		})
 
 	case models.TaskTypeTakeover:
-		e.executeStreamingPipeline(task, &pipeline.PipelineConfig{
+		e.executeStreamingPipeline(task, jobID, &pipeline.PipelineConfig{
 			SubdomainScan:          true,
 			SubdomainMaxEnumTime:   10,
 			SubdomainResolveIP:     true,
@@ -297,7 +346,7 @@ func (e *TaskExecutor) processTask(task *models.Task) {
 		})
 
 	case models.TaskTypePortScan:
-		e.executeStreamingPipeline(task, &pipeline.PipelineConfig{
+		e.executeStreamingPipeline(task, jobID, &pipeline.PipelineConfig{
 			SubdomainScan: false,
 			PortScan:      true,
 			PortScanMode:  "top1000",
@@ -306,7 +355,7 @@ func (e *TaskExecutor) processTask(task *models.Task) {
 		})
 
 	case models.TaskTypeFingerprint:
-		e.executeStreamingPipeline(task, &pipeline.PipelineConfig{
+		e.executeStreamingPipeline(task, jobID, &pipeline.PipelineConfig{
 			SubdomainScan: false,
 			PortScan:      true,
 			PortScanMode:  "quick",
@@ -315,7 +364,7 @@ func (e *TaskExecutor) processTask(task *models.Task) {
 		})
 
 	case models.TaskTypeVulnScan:
-		e.executeStreamingPipeline(task, &pipeline.PipelineConfig{
+		e.executeStreamingPipeline(task, jobID, &pipeline.PipelineConfig{
 			SubdomainScan: false,
 			PortScan:      true,
 			PortScanMode:  "quick",
@@ -325,7 +374,7 @@ func (e *TaskExecutor) processTask(task *models.Task) {
 		})
 
 	case models.TaskTypeDirScan:
-		e.executeStreamingPipeline(task, &pipeline.PipelineConfig{
+		e.executeStreamingPipeline(task, jobID, &pipeline.PipelineConfig{
 			SubdomainScan: false,
 			PortScan:      true,
 			PortScanMode:  "quick",
@@ -335,7 +384,7 @@ func (e *TaskExecutor) processTask(task *models.Task) {
 		})
 
 	case models.TaskTypeCrawler:
-		e.executeStreamingPipeline(task, &pipeline.PipelineConfig{
+		e.executeStreamingPipeline(task, jobID, &pipeline.PipelineConfig{
 			SubdomainScan: false,
 			PortScan:      true,
 			PortScanMode:  "quick",
@@ -347,10 +396,10 @@ func (e *TaskExecutor) processTask(task *models.Task) {
 	case models.TaskTypeCustom:
 		// 根据用户选择的 scanTypes 构建配置
 		config := e.buildCustomConfig(task)
-		e.executeStreamingPipeline(task, config)
+		e.executeStreamingPipeline(task, jobID, config)
 
 	default:
-		e.failTask(task, "未知的任务类型: "+string(task.Type))
+		e.failTask(task, jobID, "未知的任务类型: "+string(task.Type))
 	}
 }
 
@@ -430,7 +479,7 @@ func (e *TaskExecutor) buildCustomConfig(task *models.Task) *pipeline.PipelineCo
 }
 
 // executeStreamingPipeline 使用 StreamingPipeline 执行任务
-func (e *TaskExecutor) executeStreamingPipeline(task *models.Task, config *pipeline.PipelineConfig) {
+func (e *TaskExecutor) executeStreamingPipeline(task *models.Task, jobID int64, config *pipeline.PipelineConfig) {
 	ctx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
 	taskID := task.ID.Hex()
 
@@ -453,7 +502,7 @@ func (e *TaskExecutor) executeStreamingPipeline(task *models.Task, config *pipel
 
 	// 启动流水线
 	if err := scanPipe.Start(task.Targets); err != nil {
-		e.failTask(task, fmt.Sprintf("流水线启动失败: %v", err))
+		e.failTask(task, jobID, fmt.Sprintf("流水线启动失败: %v", err))
 		return
 	}
 
@@ -473,6 +522,7 @@ func (e *TaskExecutor) executeStreamingPipeline(task *models.Task, config *pipel
 		select {
 		case <-ctx.Done():
 			log.Printf("[TaskExecutor] Task %s cancelled during result collection", taskID)
+			e.finishJob(jobID, "")
 			return
 		default:
 		}
@@ -671,17 +721,19 @@ func (e *TaskExecutor) executeStreamingPipeline(task *models.Task, config *pipel
 	currentTask, err := e.taskService.GetTaskByID(taskID)
 	if err != nil || currentTask == nil {
 		log.Printf("[TaskExecutor] Task %s was deleted during execution", taskID)
+		e.finishJob(jobID, "")
 		return
 	}
 	if currentTask.Status == models.TaskStatusCancelled {
 		log.Printf("[TaskExecutor] Task %s was cancelled during execution", taskID)
+		e.finishJob(jobID, "")
 		return
 	}
 
 	// 任务完成
 	log.Printf("[TaskExecutor] Task %s completed: subdomains=%d, ports=%d, vulns=%d, urls=%d",
 		taskID, subdomainCount, portCount, vulnCount, urlCount)
-	e.completeTask(task, resultCount)
+	e.completeTask(task, jobID, resultCount)
 }
 
 // updateProgress 更新任务进度（简单版本）
@@ -735,7 +787,7 @@ func (e *TaskExecutor) saveResults(task *models.Task, results []models.ScanResul
 }
 
 // completeTask 完成任务
-func (e *TaskExecutor) completeTask(task *models.Task, resultCount int) {
+func (e *TaskExecutor) completeTask(task *models.Task, jobID int64, resultCount int) {
 	e.taskService.UpdateTask(task.ID.Hex(), map[string]interface{}{
 		"status":       models.TaskStatusCompleted,
 		"progress":     100,
@@ -743,6 +795,7 @@ func (e *TaskExecutor) completeTask(task *models.Task, resultCount int) {
 		"result_count": resultCount,
 	})
 	log.Printf("[TaskExecutor] Task %s completed with %d results", task.ID.Hex(), resultCount)
+	e.finishJob(jobID, "")
 
 	// 发送通知
 	summary := fmt.Sprintf("扫描任务已完成\n目标: %v\n结果数量: %d", task.Targets, resultCount)
@@ -755,13 +808,14 @@ func (e *TaskExecutor) completeTask(task *models.Task, resultCount int) {
 }
 
 // failTask 任务失败
-func (e *TaskExecutor) failTask(task *models.Task, errMsg string) {
+func (e *TaskExecutor) failTask(task *models.Task, jobID int64, errMsg string) {
 	e.taskService.UpdateTask(task.ID.Hex(), map[string]interface{}{
 		"status":       models.TaskStatusFailed,
 		"completed_at": time.Now(),
 		"error":        errMsg,
 	})
 	log.Printf("[TaskExecutor] Task %s failed: %s", task.ID.Hex(), errMsg)
+	e.finishJob(jobID, errMsg)
 
 	// 发送通知
 	summary := fmt.Sprintf("扫描任务失败\n目标: %v\n错误: %s", task.Targets, errMsg)

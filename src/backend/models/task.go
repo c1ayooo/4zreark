@@ -157,7 +157,8 @@ type TaskTemplate struct {
 
 // TaskLog represents task execution logs
 type TaskLog struct {
-	ID        primitive.ObjectID `json:"id" bson:"_id,omitempty"`
+	// id 在 PG 里是 bigserial，用字符串承载，响应体里仍是字符串
+	ID        string             `json:"id" bson:"_id,omitempty"`
 	TaskID    primitive.ObjectID `json:"task_id" bson:"task_id"`
 	Level     string             `json:"level" bson:"level"` // info, warn, error
 	Message   string             `json:"message" bson:"message"`

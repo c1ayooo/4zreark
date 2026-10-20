@@ -22,14 +22,14 @@
 • `docs/方案-4zreark-Go重写与PG存储-20261020.md` — 存储层重画：表结构、索引、分区、队列、仓储拆分、迁移路径、验收口径
 • `docs/方案-4zreark-PG化与前端优化及情报模板移植-20261020.md` — 最终口径：18 张业务表 + 3 张运行态表、前端 token 与逐页改造、9 个情报源与七段流水线、里程碑与工期
 • `docs/方案-4zreark-PG改造交接规格-20261020.md` — 给编码 agent 的执行规格：类型映射、配置契约、仓储接口、逐服务顺序、关键 SQL、验收清单、四份派工分片
-• `docs/sql/schema_init.sql` — 可直接执行的初始化 DDL（30 张表、116 个索引、结果表按月分区），已在本机 PG 16 验证通过
+• `docs/sql/schema_init.sql` — 可直接执行的初始化 DDL（30 张表、117 个索引、结果表按月分区），已在本机 PG 16 验证通过
 • 存储口径：不引入 Redis。队列 `task_jobs`、跨月去重 `result_dedup`、单端登出 `token_blacklist` + `users.token_version`；迁移脚本按内容命名，不用数字序号
 
 ### 本机数据库
 
 • 容器 `4zreark-pg`（`postgres:16-alpine`），`127.0.0.1:25433`，库 `zreark`，用户 `zre`，schema `zre`
 • 密码在仓库根 `.pgpass.local`（600 权限，不入文档不入 git）
-• 当前状态：DDL 已执行，30 张表 + 116 个索引就位；应用代码尚未接 PG
+• 当前状态：DDL 已执行，30 张表 + 117 个索引就位；用户、任务、队列三域已接 PG
 
 ---
 

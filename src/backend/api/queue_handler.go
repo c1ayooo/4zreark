@@ -10,7 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// QueueHandler 队列处理器
+// QueueHandler 队列处理器（存储为 PostgreSQL 的 task_jobs，不再依赖 Redis）
 type QueueHandler struct {
 	taskQueue *queue.TaskQueue
 }

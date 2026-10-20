@@ -14,7 +14,6 @@ type Config struct {
 	JWT        JWTConfig        `mapstructure:"jwt"`
 	MongoDB    MongoDBConfig    `mapstructure:"mongodb"`
 	Postgres   PostgresConfig   `mapstructure:"postgres"`
-	Redis      RedisConfig      `mapstructure:"redis"`
 	Scanner    ScannerConfig    `mapstructure:"scanner"`
 	Log        LogConfig        `mapstructure:"log"`
 	Alert      AlertConfig      `mapstructure:"alert"`
@@ -50,13 +49,6 @@ type PostgresConfig struct {
 	SSLMode  string `mapstructure:"sslmode"`
 	MaxConns int    `mapstructure:"max_conns"`
 	MinConns int    `mapstructure:"min_conns"`
-}
-
-type RedisConfig struct {
-	Host     string `mapstructure:"host"`
-	Port     int    `mapstructure:"port"`
-	Password string `mapstructure:"password"`
-	DB       int    `mapstructure:"db"`
 }
 
 type ScannerConfig struct {

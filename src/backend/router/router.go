@@ -1,7 +1,6 @@
 package router
 
 import (
-	"fmt"
 	"log"
 	"time"
 
@@ -370,19 +369,16 @@ func SetupRouter() *gin.Engine {
 				cruiseGroup.GET("/:id/logs", cruiseHandler.GetCruiseLogs)
 			}
 
-			// 分布式任务队列 (可选，需要 Redis)
+			// 分布式任务队列（存储为 PostgreSQL 的 task_jobs，无外部依赖）
 			cfg := config.GetConfig()
 			queueConfig := &queue.QueueConfig{
-				RedisAddr:     fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port),
-				RedisPassword: cfg.Redis.Password,
-				RedisDB:       cfg.Redis.DB,
-				QueueName:     "moon-gazing-tower",
-				Workers:       cfg.Scanner.WorkerCount,
-				TaskTimeout:   time.Duration(cfg.Scanner.Timeout) * time.Second,
-				MaxRetries:    cfg.Scanner.RetryCount,
+				QueueName:   "moon-gazing-tower",
+				Workers:     cfg.Scanner.WorkerCount,
+				TaskTimeout: time.Duration(cfg.Scanner.Timeout) * time.Second,
+				MaxRetries:  cfg.Scanner.RetryCount,
 			}
 
-			log.Printf("[Router] Initializing queue with Redis: %s", queueConfig.RedisAddr)
+			log.Printf("[Router] Initializing queue on PostgreSQL")
 			queueHandler, err := api.NewQueueHandler(queueConfig)
 			if err == nil {
 				log.Printf("[Router] Queue handler initialized successfully")
@@ -400,7 +396,7 @@ func SetupRouter() *gin.Engine {
 					queueGroup.DELETE("/tasks/deadletter", queueHandler.ClearDeadLetter)
 				}
 			} else {
-				log.Printf("[Router] Queue handler not available (Redis connection failed): %v", err)
+				log.Printf("[Router] Queue handler not available: %v", err)
 			}
 		}
 	}

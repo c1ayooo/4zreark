@@ -15,12 +15,12 @@ import (
 )
 
 // executeSubdomainScan 执行子域名扫描
-func (e *TaskExecutor) executeSubdomainScan(task *models.Task) {
+func (e *TaskExecutor) executeSubdomainScan(task *models.Task, jobID int64) {
 	log.Printf("[TaskExecutor] Executing subdomain scan for task: %s", task.ID.Hex())
 
 	targets := task.Targets
 	if len(targets) == 0 {
-		e.failTask(task, "没有目标")
+		e.failTask(task, jobID, "没有目标")
 		return
 	}
 
@@ -116,7 +116,7 @@ func (e *TaskExecutor) executeSubdomainScan(task *models.Task) {
 	}
 
 	e.saveResults(task, results)
-	e.completeTask(task, len(results))
+	e.completeTask(task, jobID, len(results))
 }
 
 // collectSubdomains 收集子域名（内置扫描器 + 第三方API）
@@ -178,12 +178,12 @@ func (e *TaskExecutor) createThirdpartyManager() *thirdparty.APIManager {
 }
 
 // executeTakeoverScan 执行子域名接管检测扫描
-func (e *TaskExecutor) executeTakeoverScan(task *models.Task) {
+func (e *TaskExecutor) executeTakeoverScan(task *models.Task, jobID int64) {
 	log.Printf("[TaskExecutor] Executing takeover scan for task: %s", task.ID.Hex())
 
 	targets := task.Targets
 	if len(targets) == 0 {
-		e.failTask(task, "没有目标")
+		e.failTask(task, jobID, "没有目标")
 		return
 	}
 
@@ -204,7 +204,7 @@ func (e *TaskExecutor) executeTakeoverScan(task *models.Task) {
 	}
 
 	if len(allSubdomains) == 0 {
-		e.failTask(task, "没有有效的域名目标")
+		e.failTask(task, jobID, "没有有效的域名目标")
 		return
 	}
 
@@ -250,5 +250,5 @@ func (e *TaskExecutor) executeTakeoverScan(task *models.Task) {
 	log.Printf("[TaskExecutor] Takeover scan completed: %d vulnerable domains found", len(results))
 
 	e.saveResults(task, results)
-	e.completeTask(task, len(results))
+	e.completeTask(task, jobID, len(results))
 }
