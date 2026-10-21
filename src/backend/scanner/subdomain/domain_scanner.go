@@ -5,15 +5,18 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/useragent"
 	"io"
 	"net"
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/c1ayooo/4zreark/config"
+	"github.com/c1ayooo/4zreark/internal/recon/brute"
+	"github.com/c1ayooo/4zreark/internal/recon/cdnmatch"
+	"github.com/c1ayooo/4zreark/internal/recon/dnsres"
 	"github.com/c1ayooo/4zreark/scanner/core"
 )
 
@@ -333,7 +336,7 @@ func (s *DomainScanner) doHTTPRequest(ctx context.Context, client *http.Client, 
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("User-Agent", useragent.Pick())
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	return client.Do(req)
 }
@@ -427,68 +430,26 @@ func detectFingerprints(body string, headers http.Header) []string {
 	return fps
 }
 
-// detectCDN detects if the domain is using a CDN
+// detectCDN detects if the domain is using a CDN.
+// T12：CNAME/IP 判定统一交给 reconkit cdnmatch（一份分类器 + 可覆盖 JSON），
+// 不再维护第三张硬编码表。
 func (s *DomainScanner) detectCDN(cnames []string, ips []string) (bool, string) {
-	// CDN CNAME patterns
-	cdnPatterns := map[string][]string{
-		"Cloudflare": {"cloudflare", "cdn.cloudflare"},
-		"Akamai":     {"akamai", "akamaitechnologies", "edgekey", "edgesuite"},
-		"Fastly":     {"fastly", "fastlylb"},
-		"CloudFront": {"cloudfront.net", "awsglobalaccelerator"},
-		"Azure CDN":  {"azureedge.net", "msecnd.net"},
-		"Google CDN": {"googleusercontent", "googleapis", "gstatic"},
-		"阿里云CDN":     {"alicdn", "aliyuncs", "kunlun"},
-		"腾讯云CDN":     {"qcloud", "myqcloud", "cdntip"},
-		"百度云CDN":     {"bdimg", "baidubce", "bcebos"},
-		"网宿CDN":      {"wscdns", "wsdvs", "wsglb"},
-		"七牛CDN":      {"qiniudns", "qbox"},
-		"又拍云CDN":     {"upai", "upaiyun"},
-		"Imperva":    {"incapdns", "imperva"},
-		"StackPath":  {"stackpathdns", "highwinds"},
-		"KeyCDN":     {"keycdn"},
-		"Sucuri":     {"sucuri"},
-		"Verizon":    {"edgecast"},
-	}
-
-	// Check CNAMEs
 	for _, cname := range cnames {
-		cnameLower := strings.ToLower(cname)
-		for provider, patterns := range cdnPatterns {
-			for _, pattern := range patterns {
-				if strings.Contains(cnameLower, pattern) {
-					return true, provider
-				}
-			}
+		if r := cdnmatch.Classify(cname, nil); r.EdgeType != "" {
+			return true, r.EdgeName
 		}
 	}
-
-	// Check IP ranges for known CDN providers
-	for _, ip := range ips {
-		if provider := checkCDNByIP(ip); provider != "" {
-			return true, provider
-		}
+	if r := cdnmatch.Classify("", ips); r.EdgeType != "" {
+		return true, r.EdgeName
 	}
-
 	return false, ""
 }
 
-// checkCDNByIP checks if IP belongs to known CDN ranges
+// checkCDNByIP checks if IP belongs to known CDN ranges.
 func checkCDNByIP(ip string) string {
-	// Cloudflare IP ranges (simplified check)
-	cloudflareRanges := []string{
-		"103.21.", "103.22.", "103.31.", "104.16.", "104.17.", "104.18.",
-		"104.19.", "104.20.", "104.21.", "104.22.", "104.23.", "104.24.",
-		"104.25.", "104.26.", "104.27.", "108.162.", "131.0.", "141.101.",
-		"162.158.", "172.64.", "172.65.", "172.66.", "172.67.", "173.245.",
-		"188.114.", "190.93.", "197.234.", "198.41.",
+	if r := cdnmatch.Classify("", []string{ip}); r.EdgeType != "" {
+		return r.EdgeName
 	}
-
-	for _, prefix := range cloudflareRanges {
-		if strings.HasPrefix(ip, prefix) {
-			return "Cloudflare"
-		}
-	}
-
 	return ""
 }
 
@@ -505,79 +466,62 @@ func uniqueStrings(input []string) []string {
 	return result
 }
 
-// BruteSubdomains performs subdomain brute-force enumeration
+// BruteSubdomains performs subdomain brute-force enumeration.
+//
+// T11：直接改用 reconkit 的纯 Go 爆破（dnsres 解析池 + 令牌桶限速 +
+// 泛解析基线过滤），不再走 ksubdomain 库/子进程。HTTP 探测与指纹由调用方
+// 后续的 httpx 阶段完成，这里只负责「名字是否解析」。
 func (s *DomainScanner) BruteSubdomains(ctx context.Context, domain string, wordlist []string) *DomainScanResult {
+	start := time.Now()
 	result := &DomainScanResult{
 		Domain:       domain,
 		TotalChecked: len(wordlist),
-		StartTime:    time.Now(),
+		StartTime:    start,
 		Subdomains:   make([]SubdomainResult, 0),
 	}
 
-	// 先检测泛解析
-	s.detectWildcardDNS(ctx, domain)
-	if len(s.WildcardIPs) > 0 {
-		// 记录泛解析信息
-		var wildcardIPList []string
-		for ip := range s.WildcardIPs {
-			wildcardIPList = append(wildcardIPList, ip)
-		}
-		fmt.Printf("[*] 检测到泛解析域名 %s, 泛解析IP: %v\n", domain, wildcardIPList)
-	}
-
-	// Get domain info first
+	// 域名基础信息（NS/MX/TXT）与爆破并行没有依赖，先取。
 	domainInfo := s.GetDomainInfo(ctx, domain)
 	result.NSRecords = domainInfo.NSRecords
 	result.MXRecords = domainInfo.MXRecords
 	result.TXTRecords = domainInfo.TXTRecords
 
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	semaphore := make(chan struct{}, s.Concurrency)
-
-	// 使用批量处理提高效率
-	batchSize := 100
-	for i := 0; i < len(wordlist); i += batchSize {
-		select {
-		case <-ctx.Done():
-			result.EndTime = time.Now()
-			result.Duration = result.EndTime.Sub(result.StartTime).String()
-			return result
-		default:
-		}
-
-		end := i + batchSize
-		if end > len(wordlist) {
-			end = len(wordlist)
-		}
-		batch := wordlist[i:end]
-
-		for _, sub := range batch {
-			wg.Add(1)
-			semaphore <- struct{}{}
-
-			go func(subdomain string) {
-				defer wg.Done()
-				defer func() { <-semaphore }()
-
-				subResult := s.CheckSubdomain(ctx, subdomain, domain)
-				if subResult.Alive {
-					mu.Lock()
-					result.Subdomains = append(result.Subdomains, *subResult)
-					result.Found++
-					mu.Unlock()
-				}
-			}(sub)
-		}
+	pool := dnsres.NewPool(s.Resolvers, s.Concurrency, s.Timeout, 2)
+	hits, stats, err := brute.Brute(ctx, domain, brute.Options{
+		Words: wordlist,
+		Pool:  pool,
+		QPS:   300,
+	})
+	if err != nil {
+		fmt.Printf("[*] 子域爆破失败 %s: %v\n", domain, err)
+		result.EndTime = time.Now()
+		result.Duration = result.EndTime.Sub(result.StartTime).String()
+		return result
+	}
+	if stats.Wildcard {
+		fmt.Printf("[*] 检测到泛解析域名 %s，已过滤 %d 条泛解析命中\n", domain, stats.WildcardFiltered)
 	}
 
-	wg.Wait()
+	for _, h := range hits {
+		item := SubdomainResult{
+			Subdomain:  h.Name,
+			Domain:     domain,
+			FullDomain: h.Name,
+			IPs:        h.IPs,
+			Alive:      true,
+		}
+		if h.CNAME != "" {
+			item.CNAMEs = []string{h.CNAME}
+		}
+		result.Subdomains = append(result.Subdomains, item)
+	}
 
-	// Sort by subdomain name
 	sort.Slice(result.Subdomains, func(i, j int) bool {
 		return result.Subdomains[i].Subdomain < result.Subdomains[j].Subdomain
 	})
 
+	result.TotalChecked = stats.Probed
+	result.Found = len(result.Subdomains)
 	result.EndTime = time.Now()
 	result.Duration = result.EndTime.Sub(result.StartTime).String()
 	return result

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/c1ayooo/4zreark/models"
+	"github.com/c1ayooo/4zreark/scanner/scope"
 )
 
 // PipelineConfig 流水线配置
@@ -18,6 +19,8 @@ type PipelineConfig struct {
 	SubdomainResolveIP     bool `json:"subdomain_resolve_ip"`
 	SubdomainCheckTakeover bool `json:"subdomain_check_takeover"`
 	SubdomainHTTPProbe     bool `json:"subdomain_http_probe"` // 是否对子域名进行 HTTP 探测获取标题、状态码等
+	// SubdomainWordlist 任务级子域字典；为空时用内置词表。
+	SubdomainWordlist []string `json:"subdomain_wordlist,omitempty"`
 
 	// 端口扫描
 	PortScan     bool   `json:"port_scan"`
@@ -36,9 +39,48 @@ type PipelineConfig struct {
 
 	// 目录扫描
 	DirScan bool `json:"dir_scan"`
+	// DirWordlist 目录字典文件路径（spray -d）；为空时用 spray 默认字典。
+	DirWordlist []string `json:"dir_wordlist,omitempty"`
 
 	// 敏感信息检测
 	SensitiveScan bool `json:"sensitive_scan"`
+
+	// 节奏控制：除漏洞扫描外，所有会主动发请求的模块都受这两个参数约束。
+	// 默认值刻意保守，宁可慢，也不要因为高频请求把出口 IP 打进黑名单。
+	RatePerSec    int `json:"rate_per_sec"`    // 每秒请求上限；0=用默认 20
+	TargetDelayMs int `json:"target_delay_ms"` // 单目标之间的间隔毫秒；0=用默认 200
+}
+
+// rate 返回生效的每秒请求上限。
+func (c *PipelineConfig) rate() int {
+	if c != nil && c.RatePerSec > 0 {
+		return c.RatePerSec
+	}
+	return 20
+}
+
+// Rate 是对外暴露的生效速率，用于日志与任务详情展示。
+func (c *PipelineConfig) Rate() int { return c.rate() }
+
+// targetDelay 返回生效的单目标间隔。
+func (c *PipelineConfig) targetDelay() time.Duration {
+	ms := 200
+	if c != nil && c.TargetDelayMs > 0 {
+		ms = c.TargetDelayMs
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+// moduleConcurrency 按速率推导模块并发：每秒 N 个请求，并发不超过 N/divisor，最小 1。
+func (c *PipelineConfig) moduleConcurrency(divisor int) int {
+	if divisor <= 0 {
+		divisor = 4
+	}
+	n := c.rate() / divisor
+	if n < 1 {
+		n = 1
+	}
+	return n
 }
 
 // DefaultPipelineConfig 默认流水线配置
@@ -57,6 +99,8 @@ func DefaultPipelineConfig() *PipelineConfig {
 		WebCrawler:             false,
 		DirScan:                false,
 		SensitiveScan:          false,
+		RatePerSec:             20,
+		TargetDelayMs:          200,
 	}
 }
 
@@ -66,6 +110,7 @@ type StreamingPipeline struct {
 	cancel     context.CancelFunc
 	config     *PipelineConfig
 	task       *models.Task
+	scope      *scope.Scope
 	resultChan chan interface{} // 最终结果通道
 
 	// 模块
@@ -84,6 +129,7 @@ type StreamingPipeline struct {
 
 	// 状态
 	running bool
+	started bool
 	mu      sync.Mutex
 }
 
@@ -100,6 +146,7 @@ func NewStreamingPipeline(ctx context.Context, task *models.Task, config *Pipeli
 		cancel:          cancel,
 		config:          config,
 		task:            task,
+		scope:           scope.New(task.Targets),
 		resultChan:      make(chan interface{}, 1000),
 		progressTracker: nil, // 默认无进度追踪，需要通过 SetProgressCallback 设置
 	}
@@ -182,6 +229,11 @@ func (p *StreamingPipeline) Start(targets []string) error {
 		p.mu.Unlock()
 		return fmt.Errorf("pipeline already running")
 	}
+	if p.started {
+		// resultChan 在首轮结束时已关闭，复用实例会向已关闭通道写入。
+		p.mu.Unlock()
+		return fmt.Errorf("pipeline 已启动过，请为新任务创建实例")
+	}
 	p.running = true
 	p.mu.Unlock()
 
@@ -189,14 +241,25 @@ func (p *StreamingPipeline) Start(targets []string) error {
 
 	// 构建模块链
 	if err := p.buildModuleChain(); err != nil {
+		p.mu.Lock()
+		p.running = false
+		p.mu.Unlock()
 		return fmt.Errorf("failed to build module chain: %v", err)
 	}
 
 	// 获取入口模块
 	entryModule := p.getEntryModule()
 	if entryModule == nil {
+		p.mu.Lock()
+		p.running = false
+		p.mu.Unlock()
 		return fmt.Errorf("no entry module available")
 	}
+
+	// 只有真正要起 goroutine 时才标记为已启动，避免配置错误导致实例被误判不可复用。
+	p.mu.Lock()
+	p.started = true
+	p.mu.Unlock()
 
 	// 启动流水线处理
 	go func() {
@@ -256,7 +319,7 @@ func (p *StreamingPipeline) buildModuleChain() error {
 
 	// 敏感信息检测模块
 	if p.config.SensitiveScan {
-		p.sensitiveModule = NewSensitiveModule(p.ctx, lastModule, 10)
+		p.sensitiveModule = NewSensitiveModule(p.ctx, lastModule, p.config.moduleConcurrency(8))
 		p.sensitiveModule.SetInput(make(chan interface{}, 500))
 		p.sensitiveModule.SetProgressTracker(p.progressTracker)
 		lastModule = p.sensitiveModule
@@ -264,7 +327,9 @@ func (p *StreamingPipeline) buildModuleChain() error {
 
 	// 目录扫描模块
 	if p.config.DirScan {
-		p.dirScanModule = NewDirScanModule(p.ctx, lastModule, 20, nil)
+		p.dirScanModule = NewDirScanModule(p.ctx, lastModule, p.config.moduleConcurrency(4), p.config.DirWordlist)
+		p.dirScanModule.SetRate(p.config.rate(), p.config.moduleConcurrency(4))
+		p.dirScanModule.SetScope(p.scope)
 		p.dirScanModule.SetInput(make(chan interface{}, 500))
 		p.dirScanModule.SetProgressTracker(p.progressTracker)
 		lastModule = p.dirScanModule
@@ -272,7 +337,12 @@ func (p *StreamingPipeline) buildModuleChain() error {
 
 	// 爬虫模块
 	if p.config.WebCrawler {
-		p.crawlerModule = NewCrawlerModule(p.ctx, lastModule, 5, true, false) // 默认使用Katana
+		p.crawlerModule = NewCrawlerModule(p.ctx, lastModule, p.config.moduleConcurrency(8), true, false) // 默认使用Katana
+		// 流式模式：拿到一个可爬 URL 就开爬，结果边产出边落库；
+		// 批量模式会等上游全部结束才启动 Katana，页面长时间空白。
+		p.crawlerModule.SetBatchMode(false, 0)
+		p.crawlerModule.SetRate(p.config.rate(), p.config.moduleConcurrency(8))
+		p.crawlerModule.SetScope(p.scope)
 		p.crawlerModule.SetInput(make(chan interface{}, 500))
 		p.crawlerModule.SetProgressTracker(p.progressTracker)
 		lastModule = p.crawlerModule
@@ -280,7 +350,7 @@ func (p *StreamingPipeline) buildModuleChain() error {
 
 	// 漏洞扫描模块
 	if p.config.VulnScan {
-		p.vulnScanModule = NewVulnScanModule(p.ctx, lastModule, 10)
+		p.vulnScanModule = NewVulnScanModule(p.ctx, lastModule, 4)
 		p.vulnScanModule.SetInput(make(chan interface{}, 500))
 		p.vulnScanModule.SetProgressTracker(p.progressTracker)
 		lastModule = p.vulnScanModule
@@ -288,7 +358,9 @@ func (p *StreamingPipeline) buildModuleChain() error {
 
 	// 指纹识别模块
 	if p.config.Fingerprint {
-		p.fingerprintModule = NewFingerprintModule(p.ctx, lastModule, 20)
+		p.fingerprintModule = NewFingerprintModule(p.ctx, lastModule, p.config.moduleConcurrency(4))
+		p.fingerprintModule.SetTargetDelay(p.config.targetDelay())
+		p.fingerprintModule.SetScope(p.scope)
 		p.fingerprintModule.SetInput(make(chan interface{}, 500))
 		p.fingerprintModule.SetProgressTracker(p.progressTracker)
 		lastModule = p.fingerprintModule
@@ -297,6 +369,7 @@ func (p *StreamingPipeline) buildModuleChain() error {
 	// 端口扫描模块
 	if p.config.PortScan {
 		p.portScanModule = NewPortScanModule(p.ctx, lastModule, p.config.PortRange, p.config.PortScanMode)
+		p.portScanModule.SetRate(p.config.rate(), p.config.moduleConcurrency(2), p.config.targetDelay())
 		p.portScanModule.SetInput(make(chan interface{}, 500))
 		p.portScanModule.SetProgressTracker(p.progressTracker)
 		lastModule = p.portScanModule
@@ -312,7 +385,8 @@ func (p *StreamingPipeline) buildModuleChain() error {
 
 	// 子域名安全检测模块
 	if p.config.SubdomainScan {
-		p.securityModule = NewDomainVerifyModule(p.ctx, lastModule, 50)
+		p.securityModule = NewDomainVerifyModule(p.ctx, lastModule, p.config.moduleConcurrency(2))
+		p.securityModule.SetTargetDelay(p.config.targetDelay())
 		p.securityModule.SetInput(make(chan interface{}, 500))
 		p.securityModule.SetProgressTracker(p.progressTracker)
 		lastModule = p.securityModule
@@ -320,7 +394,14 @@ func (p *StreamingPipeline) buildModuleChain() error {
 
 	// 子域名扫描模块（入口模块）
 	if p.config.SubdomainScan {
-		p.subdomainModule = NewSubdomainScanModuleWithHTTPProbe(p.ctx, lastModule, p.config.SubdomainMaxEnumTime, p.config.SubdomainResolveIP, p.config.SubdomainHTTPProbe)
+		scanCfg := DefaultSubdomainScanConfig()
+		scanCfg.ResolveIP = p.config.SubdomainResolveIP
+		scanCfg.EnableHTTPProbe = p.config.SubdomainHTTPProbe
+		scanCfg.Wordlist = p.config.SubdomainWordlist
+		// 爆破并发跟随任务级速率，默认 20，避免 500 并发把权威 DNS 和出口 IP 一起打爆。
+		scanCfg.BruteConcurrency = p.config.rate()
+		p.subdomainModule = NewSubdomainScanModuleWithConfig(p.ctx, lastModule, scanCfg)
+		p.subdomainModule.SetScope(p.scope)
 		p.subdomainModule.SetInput(make(chan interface{}, 500))
 		p.subdomainModule.SetProgressTracker(p.progressTracker)
 		lastModule = p.subdomainModule

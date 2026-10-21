@@ -75,7 +75,7 @@ func (s *SystemService) GetSystemInfo(workspaceID string) (map[string]interface{
 func (s *SystemService) GetLiveTaskData(workspaceID string) (map[string]interface{}, error) {
 	// This would connect to your actual monitoring systems
 	taskService := NewTaskService()
-	oldTaskStats, _, _ := taskService.ListTasks(workspaceID, "", "", 1, 1)
+	oldTaskStats, _, _ := taskService.ListTasks(workspaceID, "", "", 0, 1, 1)
 
 	var totalTasks, runningTasks, completedTasks, failedTasks int
 	if oldTaskStats != nil {

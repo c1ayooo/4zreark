@@ -8,6 +8,8 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/recon/cdnmatch"
+	"github.com/c1ayooo/4zreark/internal/useragent"
 	"github.com/c1ayooo/4zreark/scanner/fingerprint"
 	"io"
 	"net"
@@ -119,7 +121,7 @@ func (h *HttpxScanner) Probe(ctx context.Context, target string) *HttpxResult {
 		}
 
 		// 设置常用 headers
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+		req.Header.Set("User-Agent", useragent.Pick())
 		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
 		req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 		req.Header.Set("Connection", "close")
@@ -223,69 +225,20 @@ func (h *HttpxScanner) extractTitle(body string) string {
 	return ""
 }
 
-// detectCDN 检测 CDN
+// detectCDN 检测 CDN（T12：CNAME/IP 统一走 reconkit cdnmatch）。
 func (h *HttpxScanner) detectCDN(host string, ips []string) (bool, string) {
-	// 1. 通过 CNAME 检测
-	cnames, err := net.LookupCNAME(host)
-	if err == nil && cnames != "" {
-		cdnCnames := map[string]string{
-			"cloudflare":        "Cloudflare",
-			"cloudfront":        "CloudFront",
-			"akamai":            "Akamai",
-			"fastly":            "Fastly",
-			"cdn.":              "CDN",
-			"cdnify":            "CDNify",
-			"edgecast":          "EdgeCast",
-			"azureedge":         "Azure CDN",
-			"googleusercontent": "Google Cloud CDN",
-			"kunlunaq":          "阿里云CDN",
-			"kunluncan":         "阿里云CDN",
-			"alikunlun":         "阿里云CDN",
-			"kunlunsl":          "阿里云CDN",
-			"cdngslb":           "阿里云CDN",
-			"tbcache":           "阿里云CDN",
-			"alicdn":            "阿里云CDN",
-			"aliyuncs":          "阿里云",
-			"qiniu":             "七牛云CDN",
-			"qiniudns":          "七牛云CDN",
-			"qbox":              "七牛云CDN",
-			"baidubce":          "百度云CDN",
-			"bcebos":            "百度云CDN",
-			"bdydns":            "百度云CDN",
-			"tcdn":              "腾讯云CDN",
-			"dnsv1":             "腾讯云CDN",
-			"tdnsv5":            "腾讯云CDN",
-			"cdn.myqcloud":      "腾讯云CDN",
-			"wangsucdn":         "网宿CDN",
-			"wsglb":             "网宿CDN",
-			"chinanetcenter":    "网宿CDN",
-			"lxdns":             "蓝汛CDN",
-			"chinacache":        "蓝汛CDN",
-			"speedcdns":         "加速乐CDN",
-			"jiashule":          "加速乐CDN",
-			"yunjiasu":          "百度云加速",
-			"yundunddos":        "云盾CDN",
-			"vercel-dns":        "Vercel",
-			"incapdns":          "Imperva",
-			"edgesuite":         "Akamai",
-		}
-
-		cnameLower := strings.ToLower(cnames)
-		for pattern, name := range cdnCnames {
-			if strings.Contains(cnameLower, pattern) {
-				return true, name
-			}
+	if cname, err := net.LookupCNAME(host); err == nil && cname != "" {
+		if r := cdnmatch.Classify(cname, nil); r.EdgeType != "" {
+			return true, r.EdgeName
 		}
 	}
-
-	// 2. 通过 IP 数量判断（多个 IP 可能是 CDN）
+	if r := cdnmatch.Classify("", ips); r.EdgeType != "" {
+		return true, r.EdgeName
+	}
+	// 多 IP 不是 CDN 的充分条件，只作为最后兜底标注（原行为保留）。
 	if len(ips) > 3 {
 		return true, "Unknown CDN"
 	}
-
-	// 3. 通过 IP 范围检测（常见 CDN IP 段）
-	// TODO: 添加更多 CDN IP 范围检测
-
 	return false, ""
 }
 
@@ -309,7 +262,7 @@ func (h *HttpxScanner) getFavicon(ctx context.Context, faviconURL string) (strin
 		return "", nil
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", useragent.Pick())
 
 	resp, err := h.client.Do(req)
 	if err != nil {

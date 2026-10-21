@@ -16,6 +16,27 @@ module.exports = {
       },
     },
     extend: {
+      fontFamily: {
+        // 界面正文保持无衬线；等宽用于侧栏、主机名、状态码、时间等需要对齐的内容。
+        sans: [
+          'Noto Sans SC Variable',
+          'Inter',
+          'PingFang SC',
+          'Microsoft YaHei',
+          'Noto Sans SC',
+          'system-ui',
+          'sans-serif',
+        ],
+        mono: [
+          'JetBrains Mono Variable',
+          'JetBrains Mono',
+          'Noto Sans SC Variable',
+          'ui-monospace',
+          'SFMono-Regular',
+          'Menlo',
+          'monospace',
+        ],
+      },
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",

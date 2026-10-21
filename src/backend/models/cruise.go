@@ -15,20 +15,30 @@ const (
 	CruiseStatusRunning  CruiseStatus = "running"  // 执行中
 )
 
+// 巡航目标来源：固定列表，或执行时从项目整体资产派生。
+const (
+	CruiseTargetSourceStatic  = "static"
+	CruiseTargetSourceProject = "project"
+)
+
 // CruiseTask 巡航任务（定时自动扫描）
 type CruiseTask struct {
 	ID          oid.ObjectID `json:"id" bson:"_id,omitempty"`
 	WorkspaceID oid.ObjectID `json:"workspace_id" bson:"workspace_id"`
-	Name        string       `json:"name" bson:"name"`
-	Description string       `json:"description" bson:"description"`
-	Status      CruiseStatus `json:"status" bson:"status"`
+	// ProjectID 是巡航归属项目；扫描结果会并入该项目资产域。
+	ProjectID int64 `json:"project_id" bson:"project_id"`
+	// TargetSource 为 static 时使用 Targets；为 project 时每次执行按项目整体资产重新派生。
+	TargetSource string       `json:"target_source" bson:"target_source"`
+	Name         string       `json:"name" bson:"name"`
+	Description  string       `json:"description" bson:"description"`
+	Status       CruiseStatus `json:"status" bson:"status"`
 
 	// 定时配置
 	CronExpr string `json:"cron_expr" bson:"cron_expr"` // Cron 表达式，如 "0 2 * * *" 每天凌晨2点
 	Timezone string `json:"timezone" bson:"timezone"`   // 时区，如 "Asia/Shanghai"
 
 	// 扫描目标
-	Targets    []string `json:"targets" bson:"targets"`         // 目标列表
+	Targets    []string `json:"targets" bson:"targets"`         // 固定目标；project 模式下仅作历史展示
 	TargetType string   `json:"target_type" bson:"target_type"` // ip, domain, url, cidr
 
 	// 扫描配置（复用 TaskConfig）
@@ -60,9 +70,11 @@ type CruiseTask struct {
 type CruiseTaskCreateRequest struct {
 	Name             string     `json:"name" binding:"required"`
 	Description      string     `json:"description"`
+	ProjectID        int64      `json:"project_id"`
+	TargetSource     string     `json:"target_source"`                // static | project
 	CronExpr         string     `json:"cron_expr" binding:"required"` // Cron 表达式
 	Timezone         string     `json:"timezone"`                     // 默认 Asia/Shanghai
-	Targets          []string   `json:"targets" binding:"required"`
+	Targets          []string   `json:"targets"`                      // static 模式必填
 	TargetType       string     `json:"target_type"`
 	TaskType         TaskType   `json:"task_type" binding:"required"`
 	Config           TaskConfig `json:"config"`
@@ -76,6 +88,8 @@ type CruiseTaskCreateRequest struct {
 type CruiseTaskUpdateRequest struct {
 	Name             *string     `json:"name"`
 	Description      *string     `json:"description"`
+	ProjectID        *int64      `json:"project_id"`
+	TargetSource     *string     `json:"target_source"`
 	CronExpr         *string     `json:"cron_expr"`
 	Timezone         *string     `json:"timezone"`
 	Targets          []string    `json:"targets"`

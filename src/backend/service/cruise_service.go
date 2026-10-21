@@ -2,8 +2,13 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,7 +17,19 @@ import (
 
 	"github.com/c1ayooo/4zreark/oid"
 	"github.com/robfig/cron/v3"
+	"golang.org/x/net/publicsuffix"
 )
+
+// 单次巡航最多派生的目标数：项目资产可能上万，任务列表和扫描队列都吃不消。
+const maxCruiseTargets = 5000
+
+// TargetPreview 是项目资产派生结果的预览。
+type TargetPreview struct {
+	TargetType string   `json:"target_type"`
+	Targets    []string `json:"targets"`
+	Total      int      `json:"total"`
+	Truncated  bool     `json:"truncated"`
+}
 
 // 调度器与 entryMap 必须是进程级的。
 // handler 每次 NewCruiseService() 都会拿到新实例，如果 cron 挂在实例上，
@@ -166,29 +183,75 @@ func (s *CruiseService) unscheduleCruise(cruiseID string) {
 
 // executeCruise 执行巡航任务
 func (s *CruiseService) executeCruise(cruiseID oid.ObjectID) {
+	s.executeCruiseWithMode(cruiseID, false)
+}
+
+// executeCruiseWithMode 执行巡航。manual=true 时允许对已禁用任务「立即执行」，
+// 执行结束后恢复原来的启用状态，不会把禁用任务顺带启用。
+func (s *CruiseService) executeCruiseWithMode(cruiseID oid.ObjectID, manual bool) {
 	hexID := cruiseID.Hex()
-	log.Printf("[CruiseService] Executing cruise: %s", hexID)
+	log.Printf("[CruiseService] Executing cruise: %s (manual=%v)", hexID, manual)
 
 	cruise, err := s.GetCruise(hexID)
 	if err != nil {
 		log.Printf("[CruiseService] Failed to get cruise %s: %v", hexID, err)
 		return
 	}
-	if cruise.Status != models.CruiseStatusEnabled {
+	if !manual && cruise.Status != models.CruiseStatusEnabled {
 		log.Printf("[CruiseService] Cruise %s is not enabled, skipping", cruise.Name)
 		return
+	}
+	if cruise.Status == models.CruiseStatusRunning {
+		log.Printf("[CruiseService] Cruise %s is already running, skipping", cruise.Name)
+		return
+	}
+
+	restoreStatus := models.CruiseStatusEnabled
+	if cruise.Status == models.CruiseStatusDisabled {
+		restoreStatus = models.CruiseStatusDisabled
 	}
 
 	s.updateCruiseStatus(cruiseID, models.CruiseStatusRunning)
 	startTime := time.Now()
 
+	if cruise.ProjectID <= 0 {
+		s.failBeforeCreate(cruiseID, cruise.Name, startTime, restoreStatus, errors.New("巡航任务未绑定归属项目"))
+		return
+	}
+
+	targets := cruise.Targets
+	sourceDesc := "固定目标"
+	if cruise.TargetSource == models.CruiseTargetSourceProject {
+		preview, err := s.PreviewProjectTargets(cruise.ProjectID, cruise.TargetType)
+		if err != nil {
+			s.failBeforeCreate(cruiseID, cruise.Name, startTime, restoreStatus, err)
+			return
+		}
+		if len(preview.Targets) == 0 {
+			s.failBeforeCreate(cruiseID, cruise.Name, startTime, restoreStatus,
+				fmt.Errorf("项目暂无 %s 类型的可监控资产", cruise.TargetType))
+			return
+		}
+		targets = preview.Targets
+		sourceDesc = fmt.Sprintf("项目 #%d 整体资产派生（%d 个目标", cruise.ProjectID, preview.Total)
+		if preview.Truncated {
+			sourceDesc += fmt.Sprintf("，已截断到 %d", len(preview.Targets))
+		}
+		sourceDesc += "）"
+	}
+	if len(targets) == 0 {
+		s.failBeforeCreate(cruiseID, cruise.Name, startTime, restoreStatus, errors.New("巡航目标为空"))
+		return
+	}
+
 	task := &models.Task{
+		ProjectID:   cruise.ProjectID,
 		WorkspaceID: cruise.WorkspaceID,
 		Name:        fmt.Sprintf("[巡航] %s - %s", cruise.Name, startTime.Format("2006-01-02 15:04")),
-		Description: fmt.Sprintf("自动巡航任务，来源: %s", cruise.Name),
+		Description: fmt.Sprintf("自动巡航任务，来源: %s（%s）", cruise.Name, sourceDesc),
 		Type:        cruise.TaskType,
 		Status:      models.TaskStatusPending,
-		Targets:     cruise.Targets,
+		Targets:     targets,
 		TargetType:  cruise.TargetType,
 		Config:      cruise.Config,
 		IsScheduled: true,
@@ -201,7 +264,8 @@ func (s *CruiseService) executeCruise(cruiseID oid.ObjectID) {
 	if err := s.taskService.CreateTask(task); err != nil {
 		log.Printf("[CruiseService] Failed to create task for cruise %s: %v", cruise.Name, err)
 		s.recordCruiseLog(cruiseID, oid.NilObjectID, "failed", startTime, time.Now(), 0, 0, err.Error())
-		s.updateCruiseStatus(cruiseID, models.CruiseStatusEnabled)
+		s.updateCruiseStatus(cruiseID, restoreStatus)
+		s.updateLastStatus(cruiseID, "failed")
 		s.incrementFailCount(cruiseID)
 		return
 	}
@@ -247,7 +311,7 @@ func (s *CruiseService) executeCruise(cruiseID oid.ObjectID) {
 				}
 
 				s.updateCruiseLog(cruiseID, taskObjID, status, endTime, duration, resultCount, vulnCount, errorMsg)
-				s.updateCruiseStatus(cruiseID, models.CruiseStatusEnabled)
+				s.updateCruiseStatus(cruiseID, restoreStatus)
 				s.updateLastStatus(cruiseID, status)
 
 				if status == "success" {
@@ -275,7 +339,7 @@ func (s *CruiseService) executeCruise(cruiseID oid.ObjectID) {
 				log.Printf("[CruiseService] Cruise %s task timeout", cruise.Name)
 				s.updateCruiseLog(cruiseID, taskObjID, "timeout", time.Now(),
 					int64(24*time.Hour.Seconds()), 0, 0, "任务执行超时")
-				s.updateCruiseStatus(cruiseID, models.CruiseStatusEnabled)
+				s.updateCruiseStatus(cruiseID, restoreStatus)
 				s.incrementFailCount(cruiseID)
 				return
 			}
@@ -290,6 +354,33 @@ func (s *CruiseService) CreateCruise(req *models.CruiseTaskCreateRequest, userID
 		return nil, fmt.Errorf("invalid cron expression: %v", err)
 	}
 
+	source, err := normalizeCruiseTargetSource(req.TargetSource)
+	if err != nil {
+		return nil, err
+	}
+	targetType := normalizeCruiseTargetType(req.TargetType)
+	if !validCruiseTargetType(targetType) {
+		return nil, fmt.Errorf("不支持的目标类型: %s", targetType)
+	}
+	if req.ProjectID <= 0 {
+		return nil, errors.New("必须选择归属项目（project_id）")
+	}
+
+	store, err := s.store()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := dbCtx()
+	defer cancel()
+
+	if err := ensureProjectExists(ctx, req.ProjectID); err != nil {
+		return nil, err
+	}
+	targets := cleanCruiseTargets(req.Targets)
+	if source == models.CruiseTargetSourceStatic && len(targets) == 0 {
+		return nil, errors.New("固定目标模式至少需要一个扫描目标")
+	}
+
 	now := time.Now()
 	timezone := req.Timezone
 	if timezone == "" {
@@ -299,13 +390,15 @@ func (s *CruiseService) CreateCruise(req *models.CruiseTaskCreateRequest, userID
 	cruise := &models.CruiseTask{
 		ID:               oid.NewObjectID(),
 		WorkspaceID:      workspaceID,
+		ProjectID:        req.ProjectID,
+		TargetSource:     source,
 		Name:             req.Name,
 		Description:      req.Description,
 		Status:           models.CruiseStatusDisabled, // 默认禁用，需手动启用
 		CronExpr:         req.CronExpr,
 		Timezone:         timezone,
-		Targets:          req.Targets,
-		TargetType:       req.TargetType,
+		Targets:          targets,
+		TargetType:       targetType,
 		TaskType:         req.TaskType,
 		Config:           req.Config,
 		NotifyOnComplete: req.NotifyOnComplete,
@@ -317,23 +410,22 @@ func (s *CruiseService) CreateCruise(req *models.CruiseTaskCreateRequest, userID
 		UpdatedAt:        now,
 	}
 
-	store, err := s.store()
-	if err != nil {
-		return nil, err
-	}
-	ctx, cancel := dbCtx()
-	defer cancel()
-
 	if err := store.Create(ctx, cruise); err != nil {
 		return nil, err
 	}
 
-	log.Printf("[CruiseService] Created cruise task: %s (ID: %s)", cruise.Name, cruise.ID.Hex())
+	log.Printf("[CruiseService] Created cruise task: %s (ID: %s, project: %d, source: %s)",
+		cruise.Name, cruise.ID.Hex(), cruise.ProjectID, cruise.TargetSource)
 	return cruise, nil
 }
 
 // UpdateCruise 更新巡航任务
 func (s *CruiseService) UpdateCruise(cruiseID string, req *models.CruiseTaskUpdateRequest) error {
+	current, err := s.GetCruise(cruiseID)
+	if err != nil {
+		return err
+	}
+
 	update := map[string]interface{}{}
 
 	if req.Name != nil {
@@ -341,6 +433,19 @@ func (s *CruiseService) UpdateCruise(cruiseID string, req *models.CruiseTaskUpda
 	}
 	if req.Description != nil {
 		update["description"] = *req.Description
+	}
+	if req.ProjectID != nil {
+		if *req.ProjectID <= 0 {
+			return errors.New("必须选择归属项目（project_id）")
+		}
+		update["project_id"] = *req.ProjectID
+	}
+	if req.TargetSource != nil {
+		source, err := normalizeCruiseTargetSource(*req.TargetSource)
+		if err != nil {
+			return err
+		}
+		update["target_source"] = source
 	}
 	if req.CronExpr != nil {
 		parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
@@ -353,10 +458,14 @@ func (s *CruiseService) UpdateCruise(cruiseID string, req *models.CruiseTaskUpda
 		update["timezone"] = *req.Timezone
 	}
 	if req.Targets != nil {
-		update["targets"] = req.Targets
+		update["targets"] = cleanCruiseTargets(req.Targets)
 	}
 	if req.TargetType != nil {
-		update["target_type"] = *req.TargetType
+		tt := normalizeCruiseTargetType(*req.TargetType)
+		if !validCruiseTargetType(tt) {
+			return fmt.Errorf("不支持的目标类型: %s", tt)
+		}
+		update["target_type"] = tt
 	}
 	if req.TaskType != nil {
 		update["task_type"] = string(*req.TaskType)
@@ -377,6 +486,32 @@ func (s *CruiseService) UpdateCruise(cruiseID string, req *models.CruiseTaskUpda
 		update["tags"] = req.Tags
 	}
 
+	// 用「更新后」的完整状态做校验，避免只改来源或只改目标时漏掉组合约束。
+	projectID := current.ProjectID
+	if req.ProjectID != nil {
+		projectID = *req.ProjectID
+	}
+	if projectID <= 0 {
+		return errors.New("必须选择归属项目（project_id）")
+	}
+	source := current.TargetSource
+	if source == "" {
+		source = models.CruiseTargetSourceStatic
+	}
+	if req.TargetSource != nil {
+		source, _ = normalizeCruiseTargetSource(*req.TargetSource)
+	}
+	targets := current.Targets
+	if req.Targets != nil {
+		targets = cleanCruiseTargets(req.Targets)
+	}
+	if source == models.CruiseTargetSourceStatic && len(targets) == 0 {
+		return errors.New("固定目标模式至少需要一个扫描目标")
+	}
+	if req.TargetType != nil && !validCruiseTargetType(normalizeCruiseTargetType(*req.TargetType)) {
+		return fmt.Errorf("不支持的目标类型: %s", *req.TargetType)
+	}
+
 	store, err := s.store()
 	if err != nil {
 		return err
@@ -384,12 +519,17 @@ func (s *CruiseService) UpdateCruise(cruiseID string, req *models.CruiseTaskUpda
 	ctx, cancel := dbCtx()
 	defer cancel()
 
+	if req.ProjectID != nil {
+		if err := ensureProjectExists(ctx, projectID); err != nil {
+			return err
+		}
+	}
 	if err := store.UpdateFields(ctx, cruiseID, update); err != nil {
 		return err
 	}
 
-	// cron 变了且任务是启用状态，重新调度
-	if req.CronExpr != nil {
+	// cron / 目标来源变了且任务是启用状态，重新调度。
+	if req.CronExpr != nil || req.TargetSource != nil || req.TargetType != nil || req.Targets != nil || req.ProjectID != nil {
 		cruise, getErr := s.GetCruise(cruiseID)
 		if getErr == nil && cruise.Status == models.CruiseStatusEnabled {
 			s.scheduleCruise(cruise)
@@ -465,6 +605,9 @@ func (s *CruiseService) EnableCruise(cruiseID string) error {
 	if err != nil {
 		return err
 	}
+	if cruise.ProjectID <= 0 {
+		return errors.New("请先编辑巡航任务并选择归属项目")
+	}
 	if cruise.Status == models.CruiseStatusEnabled {
 		return nil
 	}
@@ -484,13 +627,23 @@ func (s *CruiseService) DisableCruise(cruiseID string) error {
 	return s.updateCruiseStatus(objID, models.CruiseStatusDisabled)
 }
 
-// RunNow 立即执行一次
+// RunNow 立即执行一次（禁用的任务也可以手动执行，结束后恢复禁用状态）
 func (s *CruiseService) RunNow(cruiseID string) error {
 	objID, err := oid.ObjectIDFromHex(cruiseID)
 	if err != nil {
 		return err
 	}
-	go s.executeCruise(objID)
+	cruise, err := s.GetCruise(cruiseID)
+	if err != nil {
+		return err
+	}
+	if cruise.ProjectID <= 0 {
+		return errors.New("请先编辑巡航任务并选择归属项目")
+	}
+	if cruise.Status == models.CruiseStatusRunning {
+		return errors.New("巡航任务正在执行中")
+	}
+	go s.executeCruiseWithMode(objID, true)
 	return nil
 }
 
@@ -538,6 +691,191 @@ func (s *CruiseService) GetStats(workspaceID oid.ObjectID) map[string]interface{
 		"disabled": total - enabled - running,
 		"running":  running,
 	}
+}
+
+// PreviewProjectTargets 按目标类型预览「项目整体资产」会派生出的监控目标。
+func (s *CruiseService) PreviewProjectTargets(projectID int64, targetType string) (*TargetPreview, error) {
+	if projectID <= 0 {
+		return nil, errors.New("必须选择归属项目（project_id）")
+	}
+	tt := normalizeCruiseTargetType(targetType)
+	if !validCruiseTargetType(tt) {
+		return nil, fmt.Errorf("不支持的目标类型: %s", targetType)
+	}
+
+	// 资产表可能很大，派生比普通 CRUD 慢，单独放宽超时。
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	if err := ensureProjectExists(ctx, projectID); err != nil {
+		return nil, err
+	}
+	values, err := repo.NewAssetRepo().ProjectTargetValues(ctx, projectID, tt)
+	if err != nil {
+		return nil, err
+	}
+
+	var targets []string
+	switch tt {
+	case "domain":
+		targets = projectRootDomains(values)
+	case "ip":
+		for _, ip := range values {
+			if parsed := net.ParseIP(strings.TrimSpace(ip)); parsed != nil {
+				targets = append(targets, parsed.String())
+			}
+		}
+		targets = uniqueSorted(targets)
+	case "url":
+		for _, raw := range values {
+			u, err := url.Parse(strings.TrimSpace(raw))
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				continue
+			}
+			targets = append(targets, u.String())
+		}
+		targets = uniqueSorted(targets)
+	case "cidr":
+		for _, raw := range values {
+			_, network, err := net.ParseCIDR(strings.TrimSpace(raw))
+			if err != nil {
+				continue
+			}
+			targets = append(targets, network.String())
+		}
+		targets = uniqueSorted(targets)
+	}
+
+	total := len(targets)
+	truncated := total > maxCruiseTargets
+	if truncated {
+		targets = targets[:maxCruiseTargets]
+	}
+	return &TargetPreview{
+		TargetType: tt,
+		Targets:    targets,
+		Total:      total,
+		Truncated:  truncated,
+	}, nil
+}
+
+func normalizeCruiseTargetSource(source string) (string, error) {
+	source = strings.ToLower(strings.TrimSpace(source))
+	if source == "" {
+		return models.CruiseTargetSourceStatic, nil
+	}
+	switch source {
+	case models.CruiseTargetSourceStatic, models.CruiseTargetSourceProject:
+		return source, nil
+	default:
+		return "", fmt.Errorf("不支持的目标来源: %s", source)
+	}
+}
+
+func normalizeCruiseTargetType(targetType string) string {
+	targetType = strings.ToLower(strings.TrimSpace(targetType))
+	if targetType == "" {
+		return "domain"
+	}
+	return targetType
+}
+
+func validCruiseTargetType(targetType string) bool {
+	switch targetType {
+	case "domain", "ip", "url", "cidr":
+		return true
+	default:
+		return false
+	}
+}
+
+func cleanCruiseTargets(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// projectRootDomains 把站点主机归并成根域，避免对每个子域各跑一遍全量扫描。
+func projectRootDomains(hosts []string) []string {
+	out := make([]string, 0, len(hosts))
+	for _, raw := range hosts {
+		h := normalizeHostName(raw)
+		if h == "" || net.ParseIP(h) != nil || !strings.Contains(h, ".") {
+			continue
+		}
+		if root, err := publicsuffix.EffectiveTLDPlusOne(h); err == nil {
+			h = root
+		}
+		out = append(out, strings.ToLower(h))
+	}
+	return uniqueSorted(out)
+}
+
+func normalizeHostName(raw string) string {
+	h := strings.TrimSpace(strings.ToLower(raw))
+	if h == "" {
+		return ""
+	}
+	if strings.Contains(h, "://") {
+		if u, err := url.Parse(h); err == nil {
+			h = u.Hostname()
+		}
+	}
+	if i := strings.IndexAny(h, "/?#"); i >= 0 {
+		h = h[:i]
+	}
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		h = host
+	}
+	h = strings.Trim(h, "[]")
+	h = strings.TrimPrefix(h, "*.")
+	return strings.TrimSuffix(h, ".")
+}
+
+func uniqueSorted(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		key := strings.ToLower(v)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func ensureProjectExists(ctx context.Context, projectID int64) error {
+	p, err := repo.NewAssetRepo().GetProject(ctx, projectID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return fmt.Errorf("归属项目 %d 不存在", projectID)
+	}
+	if err != nil {
+		return err
+	}
+	if p == nil {
+		return fmt.Errorf("归属项目 %d 不存在", projectID)
+	}
+	return nil
+}
+
+func (s *CruiseService) failBeforeCreate(cruiseID oid.ObjectID, name string, startTime time.Time,
+	restoreStatus models.CruiseStatus, cause error) {
+	log.Printf("[CruiseService] Failed to prepare task for cruise %s: %v", name, cause)
+	s.recordCruiseLog(cruiseID, oid.NilObjectID, "failed", startTime, time.Now(), 0, 0, cause.Error())
+	s.updateCruiseStatus(cruiseID, restoreStatus)
+	s.updateLastStatus(cruiseID, "failed")
+	s.incrementFailCount(cruiseID)
 }
 
 // ---------------------------------------------------------------- 内部写入

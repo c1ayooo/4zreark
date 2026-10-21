@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	neturl "net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +36,9 @@ type ResultRepo interface {
 	StatsByTask(ctx context.Context, taskID string) (map[string]int64, error)
 
 	ListSubdomains(ctx context.Context, taskID string, page, pageSize int, search string) ([]*models.ScanResult, int64, error)
+	// ListURLsByTask 把 crawler 记录按 data->>'url' 去重成 URL 资产视图。
+	// 采集端只落 crawler 一种类型，URL 页签不能直接查 type='url'（那里永远是空的）。
+	ListURLsByTask(ctx context.Context, taskID string, page, pageSize int, search string) ([]*models.ScanResult, int64, error)
 	ServiceDataByHost(ctx context.Context, taskID string) (map[string]map[string]interface{}, error)
 	AggregatePorts(ctx context.Context, taskID string, page, pageSize int, search string) ([]PortGroup, int64, error)
 
@@ -205,6 +209,13 @@ func deriveColumns(data map[string]interface{}) derived {
 		host: dataString(data, "host"),
 		url:  dataString(data, "url"),
 		ip:   dataIP(data, "ip"),
+	}
+	// crawler 结果只带 url 不带 host。host 是任务资产归并与 URL 聚合的对齐键，
+	// 空着会让爬虫产出的 URL 关联不回站点，所以这里从 url 反解一次。
+	if d.host == "" && d.url != "" {
+		if u, err := neturl.Parse(d.url); err == nil && u.Hostname() != "" {
+			d.host = u.Hostname()
+		}
 	}
 	if v, ok := dataInt(data, "port"); ok {
 		d.port = v
@@ -461,6 +472,54 @@ func (r *resultRepo) ListByTask(ctx context.Context, taskID, resultType string, 
 	return list, total, nil
 }
 
+// ListURLsByTask 把 crawler 记录按 data->>'url' 去重，作为 URL 资产视图。
+// 采集端（katana）只写 type='crawler'，所以直接查 type='url' 永远是 0 条；
+// 这里用窗口函数取每个 URL 的最新一条，分页与总数都按去重后的 URL 计。
+func (r *resultRepo) ListURLsByTask(ctx context.Context, taskID string, page, pageSize int, search string) ([]*models.ScanResult, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+
+	where := "task_id = $1 and type = 'crawler' and data ? 'url'"
+	args := []any{taskID}
+	if search != "" {
+		args = append(args, "%"+strings.ToLower(search)+"%")
+		where += fmt.Sprintf(" and lower(data->>'url') like $%d", len(args))
+	}
+
+	var total int64
+	if err := r.r.pool.QueryRow(ctx,
+		"select count(distinct data->>'url') from scan_results where "+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	args = append(args, pageSize, (page-1)*pageSize)
+	stmt := fmt.Sprintf(`select %s from (
+		select %s, row_number() over (partition by data->>'url' order by created_at desc) as rn
+		from scan_results where %s
+	) t where rn = 1 order by created_at desc limit $%d offset $%d`,
+		resultColumns, resultColumns, where, len(args)-1, len(args))
+
+	rows, err := r.r.pool.Query(ctx, stmt, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	out := make([]*models.ScanResult, 0, pageSize)
+	for rows.Next() {
+		res, err := scanResultRow(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, res)
+	}
+	return out, total, rows.Err()
+}
+
 func (r *resultRepo) ExportByTask(ctx context.Context, taskID, resultType string) ([]*models.ScanResult, error) {
 	where, args := resultFilter(taskID, resultType, 0, "", "domain", "subdomain", "url", "ip", "company")
 	stmt := "select " + resultColumns + " from scan_results where " + where + " order by created_at desc, id"
@@ -483,8 +542,15 @@ func (r *resultRepo) ExportByTask(ctx context.Context, taskID, resultType string
 }
 
 func (r *resultRepo) StatsByTask(ctx context.Context, taskID string) (map[string]int64, error) {
+	// url 不是独立的结果类型，而是 crawler 记录按 URL 去重后的派生计数；
+	// 不加这一项，任务详情的 URL 页签永远是 0 条、还会被自动隐藏。
 	rows, err := r.r.pool.Query(ctx,
-		`select type, count(*) from scan_results where task_id = $1 group by type`, taskID)
+		`select type, n from (
+			select type, count(*) as n from scan_results where task_id = $1 group by type
+			union all
+			select 'url', count(distinct data->>'url') from scan_results
+			where task_id = $1 and type = 'crawler' and data ? 'url'
+		) t`, taskID)
 	if err != nil {
 		return nil, err
 	}

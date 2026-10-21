@@ -1,0 +1,13 @@
+# 剧本：对象存储桶公共列取（证明可达）
+# 服务模板：object_storage_bucket / bucket_object_hunt
+# 判据：?list-type=2 返 ListBucketResult → 桶可列（L3）；提取对象 Key 供敏感前缀研判
+id: object_storage_list
+name: 对象存储桶公共列取
+refuted_status_in: [403, 404]
+steps:
+  - name: list_bucket
+    request: { method: GET, url: "https://{{host}}/?list-type=2" }
+    expect: { status: 200, contains: ["<ListBucketResult"] }
+    extract: [{ name: sample_key, regex: "<Key>([^<]+)</Key>" }]
+limits: { max_requests: 2, per_step_timeout_ms: 8000 }
+note: 只列取目录清单与首个对象名；下载对象内容属进一步动作，按 bucket_object_hunt 前缀研判后决定。

@@ -39,6 +39,7 @@ type RunStats struct {
 	Reachable int `json:"reachable"`
 	Dead      int `json:"dead"`
 	Inconcl   int `json:"inconclusive"`
+	Skipped   int `json:"skipped"`
 	Targets   int `json:"targets_done"`
 	RunsDone  int `json:"runs_finished"`
 }
@@ -66,6 +67,23 @@ func (e *ProbeExecutor) ProcessOnce(ctx context.Context, runID int64, limit int)
 		return stats, nil
 	}
 
+	// capability.probe=false 的目标只做信息收集，不向目标发请求：
+	// 直接结案为 skipped，并记录批次以便收尾。
+	affectedRuns := map[int64]bool{}
+	active := make([]*repo.RunTarget, 0, len(targets))
+	for _, t := range targets {
+		if v, ok := t.Capability["probe"].(bool); ok && !v {
+			if err := runs.CompleteTarget(ctx, t.ID, "skipped"); err != nil {
+				log.Printf("[Probe] 执行单元 %d 标记 skipped 失败: %v", t.ID, err)
+			}
+			stats.Skipped++
+			affectedRuns[t.RunID] = true
+			continue
+		}
+		active = append(active, t)
+	}
+	targets = active
+
 	// 按 (批次, host) 分组：一个站点可能有多个入口，聚合成一次判定，
 	// 否则 443 失败、80 成功会来回抖动。
 	type group struct {
@@ -87,7 +105,6 @@ func (e *ProbeExecutor) ProcessOnce(ctx context.Context, runID int64, limit int)
 		g.targets = append(g.targets, t)
 	}
 
-	affectedRuns := map[int64]bool{}
 	sem := make(chan struct{}, e.parallel)
 	var (
 		wg sync.WaitGroup
@@ -149,8 +166,12 @@ func (e *ProbeExecutor) ProcessOnce(ctx context.Context, runID int64, limit int)
 		}(g)
 	}
 	wg.Wait()
+	finishSettledRuns(ctx, runs, affectedRuns, stats)
+	return stats, nil
+}
 
-	// 批次里没有待跑的目标了，就结案
+// finishSettledRuns 批次里没有 pending/running 目标时结案（含全量 skipped 的批次）。
+func finishSettledRuns(ctx context.Context, runs repo.RunRepo, affectedRuns map[int64]bool, stats *RunStats) {
 	for id := range affectedRuns {
 		st, err := runs.TargetStats(ctx, id)
 		if err != nil {
@@ -168,7 +189,6 @@ func (e *ProbeExecutor) ProcessOnce(ctx context.Context, runID int64, limit int)
 			}
 		}
 	}
-	return stats, nil
 }
 
 // Start 起后台循环：每 5 秒领一批执行单元。并发度靠 parallel 控制。

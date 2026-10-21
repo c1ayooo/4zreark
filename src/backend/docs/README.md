@@ -1,6 +1,6 @@
-# Moon Gazing Tower Documentation
+# 4zreark Documentation
 
-This directory contains the documentation for the Moon Gazing Tower project, built with [VitePress](https://vitepress.dev/).
+This directory contains the documentation for the 4zreark project, built with [VitePress](https://vitepress.dev/).
 
 ## Getting Started
 

@@ -1,0 +1,21 @@
+# 剧本：Spring Cloud actuator env 写入探针（只验写入生效，不落 payload）
+# 服务模板：actuator_env_write / chain_actuator_to_rce
+# 红线：只写无害探针键 4zreco.probe=verify 证明写入生效；禁止写 eureka/bootstrap 等 RCE 链属性
+id: actuator_env_write_probe
+name: Actuator env 写入生效探针
+refuted_status_in: [401, 403, 404]
+steps:
+  - name: env_read
+    request: { method: GET, url: "https://{{host}}/actuator/env" }
+    expect: { status: 200, contains_any: ["propertySources", "property"] }
+  - name: env_write_probe
+    request:
+      method: POST
+      url: "https://{{host}}/actuator/env"
+      body: '{"name":"4zreco.probe","value":"verify"}'
+    expect: { status_in: [200, 201, 204] }
+  - name: env_write_verify
+    request: { method: GET, url: "https://{{host}}/actuator/env" }
+    expect: { regex: "4zreco\\.probe" }
+limits: { max_requests: 4, per_step_timeout_ms: 8000 }
+note: 证实 = 写入生效（L4 面）；实际 RCE 链（XStream/bootstrap location）止步证明可达，须 HITL。

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { userApi } from '@/api/auth'
+import { registrationApi } from '@/api/registration'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -31,7 +32,7 @@ import {
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate, getStatusColor } from '@/lib/utils'
-import { Search, Plus, Trash2, RefreshCw, Key } from 'lucide-react'
+import { Search, Plus, Trash2, RefreshCw, Key, Ticket, Copy } from 'lucide-react'
 
 export default function UsersPage() {
   const { toast } = useToast()
@@ -49,6 +50,14 @@ export default function UsersPage() {
     nickname: '',
     role: 'user',
   })
+  const [regOpen, setRegOpen] = useState(false)
+  const [regForm, setRegForm] = useState({
+    count: 5,
+    role: 'user',
+    maxUses: 1,
+    expiresAt: '',
+  })
+  const [generatedCodes, setGeneratedCodes] = useState<string[]>([])
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['users', page, search],
@@ -58,6 +67,11 @@ export default function UsersPage() {
         pageSize: 10,
         search,
       }),
+  })
+
+  const regCodes = useQuery({
+    queryKey: ['registration-codes'],
+    queryFn: () => registrationApi.list(100),
   })
 
   const createMutation = useMutation({
@@ -82,6 +96,33 @@ export default function UsersPage() {
     onError: () => {
       toast({ title: '删除失败', variant: 'destructive' })
     },
+  })
+
+  const generateCodes = useMutation({
+    mutationFn: () =>
+      registrationApi.generate({
+        count: regForm.count,
+        role: regForm.role,
+        max_uses: regForm.maxUses,
+        expires_at: regForm.expiresAt ? new Date(regForm.expiresAt).toISOString() : null,
+      }),
+    onSuccess: (res) => {
+      setGeneratedCodes(res.data?.codes ?? [])
+      toast({ title: `已生成 ${res.data?.count ?? 0} 个注册码` })
+      queryClient.invalidateQueries({ queryKey: ['registration-codes'] })
+    },
+    onError: (e: any) =>
+      toast({ title: '生成失败', description: e?.message, variant: 'destructive' }),
+  })
+
+  const deleteCode = useMutation({
+    mutationFn: (code: string) => registrationApi.remove(code),
+    onSuccess: () => {
+      toast({ title: '注册码已删除' })
+      queryClient.invalidateQueries({ queryKey: ['registration-codes'] })
+    },
+    onError: (e: any) =>
+      toast({ title: '删除失败', description: e?.message, variant: 'destructive' }),
   })
 
   const resetPasswordMutation = useMutation({
@@ -337,6 +378,177 @@ export default function UsersPage() {
           </Button>
         </div>
       )}
+
+      {/* 注册码 */}
+      <div className="rounded-md border">
+        <div className="flex items-center justify-between border-b px-4 py-2">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <Ticket className="h-4 w-4" /> 注册码
+            </div>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              注册时填写 code；消费注册码与建用户在同一个事务里，失败不扣次数
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={() => regCodes.refetch()}>
+              <RefreshCw className="mr-1 h-3.5 w-3.5" /> 刷新
+            </Button>
+            <Button
+              onClick={() => {
+                setGeneratedCodes([])
+                setRegOpen(true)
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" /> 生成注册码
+            </Button>
+          </div>
+        </div>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>注册码</TableHead>
+              <TableHead className="w-[100px]">角色</TableHead>
+              <TableHead className="w-[110px]">使用次数</TableHead>
+              <TableHead className="w-[170px]">过期时间</TableHead>
+              <TableHead className="w-[170px]">创建时间</TableHead>
+              <TableHead className="w-[70px]">操作</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {regCodes.isLoading && (
+              <TableRow>
+                <TableCell colSpan={6} className="py-6 text-center text-muted-foreground">
+                  加载中…
+                </TableCell>
+              </TableRow>
+            )}
+            {!regCodes.isLoading && (regCodes.data?.data?.items ?? []).length === 0 && (
+              <TableRow>
+                <TableCell colSpan={6} className="py-6 text-center text-muted-foreground">
+                  还没有注册码
+                </TableCell>
+              </TableRow>
+            )}
+            {(regCodes.data?.data?.items ?? []).map((c) => (
+              <TableRow key={c.code}>
+                <TableCell className="font-mono text-xs">{c.code}</TableCell>
+                <TableCell className="text-xs">{c.role}</TableCell>
+                <TableCell className="text-sm">
+                  {c.used_count} / {c.max_uses}
+                </TableCell>
+                <TableCell className="text-xs text-muted-foreground">
+                  {c.expires_at ? formatDate(c.expires_at) : '永不过期'}
+                </TableCell>
+                <TableCell className="text-xs text-muted-foreground">
+                  {formatDate(c.created_at)}
+                </TableCell>
+                <TableCell>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => deleteCode.mutate(c.code)}
+                  >
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+
+      <Dialog open={regOpen} onOpenChange={setRegOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>生成注册码</DialogTitle>
+            <DialogDescription>
+              明文只在生成后显示一次；注册接口传 code 即可使用，角色由注册码决定。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label>数量（1–100）</Label>
+              <Input
+                type="number"
+                min={1}
+                max={100}
+                value={regForm.count}
+                onChange={(e) => setRegForm({ ...regForm, count: Number(e.target.value) || 1 })}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>角色</Label>
+              <Select
+                value={regForm.role}
+                onValueChange={(v) => setRegForm({ ...regForm, role: v })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="viewer">viewer</SelectItem>
+                  <SelectItem value="user">user</SelectItem>
+                  <SelectItem value="operator">operator</SelectItem>
+                  <SelectItem value="admin">admin</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label>每码可用次数</Label>
+              <Input
+                type="number"
+                min={1}
+                max={1000}
+                value={regForm.maxUses}
+                onChange={(e) =>
+                  setRegForm({ ...regForm, maxUses: Number(e.target.value) || 1 })
+                }
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>过期时间（可选）</Label>
+              <Input
+                type="datetime-local"
+                value={regForm.expiresAt}
+                onChange={(e) => setRegForm({ ...regForm, expiresAt: e.target.value })}
+              />
+            </div>
+          </div>
+
+          {generatedCodes.length > 0 && (
+            <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">本次生成（关闭后不再显示）</span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    navigator.clipboard?.writeText(generatedCodes.join('\n'))
+                    toast({ title: '已复制到剪贴板' })
+                  }}
+                >
+                  <Copy className="mr-1 h-3.5 w-3.5" /> 复制全部
+                </Button>
+              </div>
+              <div className="max-h-40 overflow-auto font-mono text-xs">
+                {generatedCodes.map((c) => (
+                  <div key={c}>{c}</div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRegOpen(false)}>
+              关闭
+            </Button>
+            <Button onClick={() => generateCodes.mutate()} disabled={generateCodes.isPending}>
+              {generateCodes.isPending ? '生成中…' : '生成'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* 修改密码对话框 */}
       <Dialog open={isPasswordDialogOpen} onOpenChange={setIsPasswordDialogOpen}>

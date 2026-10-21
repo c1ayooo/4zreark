@@ -38,6 +38,7 @@ func setupKatanaScanner() *webscan.KatanaScanner {
 
 // TestKatanaSingleCrawl 测试单个URL爬取
 func TestKatanaSingleCrawl(t *testing.T) {
+	requireLiveNetwork(t)
 	scanner := setupKatanaScanner()
 
 	if !scanner.IsAvailable() {
@@ -72,6 +73,7 @@ func TestKatanaSingleCrawl(t *testing.T) {
 
 // TestKatanaListCrawl 测试批量URL爬取
 func TestKatanaListCrawl(t *testing.T) {
+	requireLiveNetwork(t)
 	scanner := setupKatanaScanner()
 
 	if !scanner.IsAvailable() {
@@ -119,6 +121,7 @@ func TestKatanaListCrawl(t *testing.T) {
 
 // TestKatanaDeepCrawl 测试深度爬取
 func TestKatanaDeepCrawl(t *testing.T) {
+	requireLiveNetwork(t)
 	scanner := setupKatanaScanner()
 
 	if !scanner.IsAvailable() {

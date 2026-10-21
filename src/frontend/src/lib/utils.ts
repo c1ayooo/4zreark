@@ -49,21 +49,23 @@ export function getStatusColor(status: string) {
     case 'running':
     case 'online':
     case 'active':
-      return 'bg-green-500 text-white'
+      return 'bg-primary text-primary-foreground'
     case 'pending':
     case 'queued':
-      return 'bg-yellow-500 text-black'
+    case 'busy':
+      return 'bg-amber-500 text-black'
     case 'failed':
     case 'offline':
     case 'error':
-      return 'bg-red-500 text-white'
+      return 'bg-destructive text-destructive-foreground'
     case 'completed':
     case 'success':
-      return 'bg-blue-500 text-white'
+      return 'bg-secondary text-secondary-foreground'
     case 'paused':
     case 'stopped':
-      return 'bg-gray-500 text-white'
+    case 'disabled':
+      return 'bg-muted text-muted-foreground'
     default:
-      return 'bg-gray-400 text-white'
+      return 'bg-muted text-muted-foreground'
   }
 }

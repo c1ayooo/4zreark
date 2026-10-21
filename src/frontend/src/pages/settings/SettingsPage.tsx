@@ -1,22 +1,29 @@
 import { useState } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '@/store/auth'
 import { useAppStore } from '@/store/app'
 import { authApi } from '@/api/auth'
 import { settingsApi, ThirdPartyConfig } from '@/api/settings'
+import { retentionApi, type RetentionReport } from '@/api/retention'
+import { monitoringApi } from '@/api/monitoring'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { useConfirm } from '@/components/common/confirm-provider'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
-import { Moon, Sun, Monitor, Palette, User, Lock, Key, CheckCircle, XCircle } from 'lucide-react'
+import { MCPAccessPanel } from '@/components/settings/MCPAccessPanel'
+import { Moon, Sun, Monitor, Palette, User, Lock, Key, CheckCircle, XCircle, Plug, Database, Plus, Trash2 } from 'lucide-react'
 
 export default function SettingsPage() {
+  const confirm = useConfirm()
   const { toast } = useToast()
   const { user } = useAuthStore()
   const { theme, setTheme } = useAppStore()
+  const isAdmin = user?.role === 'admin'
   const [passwordForm, setPasswordForm] = useState({
     oldPassword: '',
     newPassword: '',
@@ -33,6 +40,55 @@ export default function SettingsPage() {
     quake_key: '',
     securitytrails_key: '',
   })
+  const [retentionReport, setRetentionReport] = useState<RetentionReport | null>(null)
+  const [presetForm, setPresetForm] = useState({ name: '', interval_hours: 24, is_default: false })
+  const queryClient = useQueryClient()
+
+  const retention = useQuery({
+    queryKey: ['retention-policy'],
+    queryFn: () => retentionApi.policy(),
+    enabled: isAdmin,
+  })
+  const retentionRun = useMutation({
+    mutationFn: (dryRun: boolean) => retentionApi.run(dryRun),
+    onSuccess: (res) => {
+      setRetentionReport(res.data)
+      toast({
+        title: res.data?.dry_run ? '试运行完成' : '清理完成',
+        description: `扫描结果 ${res.data?.scan_results ?? 0} · 原始记录 ${
+          res.data?.raw_records ?? 0
+        } · 验证 ${res.data?.verifications ?? 0} · 事件 ${res.data?.events ?? 0}`,
+      })
+    },
+    onError: (e: any) =>
+      toast({ title: '清理失败', description: e?.message, variant: 'destructive' }),
+  })
+
+  const presets = useQuery({
+    queryKey: ['monitoring-presets'],
+    queryFn: () => monitoringApi.list(),
+    enabled: isAdmin,
+  })
+  const createPreset = useMutation({
+    mutationFn: () => monitoringApi.create(presetForm),
+    onSuccess: () => {
+      toast({ title: '监控预设已创建' })
+      setPresetForm({ name: '', interval_hours: 24, is_default: false })
+      queryClient.invalidateQueries({ queryKey: ['monitoring-presets'] })
+    },
+    onError: (e: any) =>
+      toast({ title: '创建预设失败', description: e?.message, variant: 'destructive' }),
+  })
+  const removePreset = useMutation({
+    mutationFn: (id: number) => monitoringApi.remove(id),
+    onSuccess: () => {
+      toast({ title: '预设已删除' })
+      queryClient.invalidateQueries({ queryKey: ['monitoring-presets'] })
+    },
+    onError: (e: any) =>
+      toast({ title: '删除预设失败', description: e?.message, variant: 'destructive' }),
+  })
+  const presetList = presets.data?.data?.items ?? []
 
   // 获取当前 API 配置
   const { data: configData, refetch: refetchConfig } = useQuery({
@@ -141,7 +197,13 @@ export default function SettingsPage() {
       <h1 className="text-2xl font-bold">系统设置</h1>
 
       <Tabs defaultValue="appearance" className="w-full">
-        <TabsList className="grid w-full grid-cols-4 lg:w-[520px]">
+        <TabsList
+          className={
+            isAdmin
+              ? 'grid w-full grid-cols-6 lg:w-[780px]'
+              : 'grid w-full grid-cols-4 lg:w-[520px]'
+          }
+        >
           <TabsTrigger value="appearance" className="flex items-center gap-2">
             <Palette className="h-4 w-4" />
             外观设置
@@ -158,6 +220,18 @@ export default function SettingsPage() {
             <Key className="h-4 w-4" />
             API配置
           </TabsTrigger>
+          {isAdmin && (
+            <TabsTrigger value="retention" className="flex items-center gap-2">
+              <Database className="h-4 w-4" />
+              数据保留
+            </TabsTrigger>
+          )}
+          {isAdmin && (
+            <TabsTrigger value="mcp" className="flex items-center gap-2">
+              <Plug className="h-4 w-4" />
+              MCP 接入
+            </TabsTrigger>
+          )}
         </TabsList>
 
         {/* 外观设置 */}
@@ -450,6 +524,175 @@ export default function SettingsPage() {
             </Button>
           </div>
         </TabsContent>
+
+        {/* 数据保留（仅管理员）：策略来自环境变量，页面只读 + 手动清理 */}
+        {isAdmin && (
+          <TabsContent value="retention" className="mt-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>数据保留策略</CardTitle>
+                <CardDescription>
+                  定时任务按此策略清理历史流水；修改需调整服务端环境变量
+                  （ZRE_RETENTION_*）后重启
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                <div className="grid gap-4 sm:grid-cols-3">
+                  {[
+                    ['扫描结果保留', retention.data?.data.scan_results_days, '天'],
+                    ['原始记录保留', retention.data?.data.raw_records_days, '天'],
+                    ['验证记录保留', retention.data?.data.verifications_days, '天'],
+                    ['事件条数上限', retention.data?.data.events_keep, '条'],
+                    ['事件保留', retention.data?.data.events_days, '天'],
+                    ['单批处理上限', retention.data?.data.batch_limit, '条'],
+                  ].map(([label, value, unit]) => (
+                    <div key={String(label)} className="rounded-md border p-3">
+                      <div className="text-xs text-muted-foreground">{label}</div>
+                      <div className="mt-1 text-lg font-semibold">
+                        {value ?? '—'} <span className="text-xs font-normal">{unit}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => retentionRun.mutate(true)}
+                    disabled={retentionRun.isPending}
+                  >
+                    {retentionRun.isPending ? '执行中…' : '试运行（只统计）'}
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    disabled={retentionRun.isPending}
+                    onClick={async () => {
+                      if (await confirm('按当前策略执行清理？过期流水会被删除。')) {
+                        retentionRun.mutate(false)
+                      }
+                    }}
+                  >
+                    执行清理
+                  </Button>
+                  {retentionReport && (
+                    <span className="text-sm text-muted-foreground">
+                      上次{retentionReport.dry_run ? '试运行' : '清理'}：扫描结果{' '}
+                      {retentionReport.scan_results} · 原始记录 {retentionReport.raw_records} ·
+                      验证 {retentionReport.verifications} · 事件 {retentionReport.events} ·{' '}
+                      {retentionReport.duration_ms}ms
+                    </span>
+                  )}
+                </div>
+
+                {retentionReport?.errors && retentionReport.errors.length > 0 && (
+                  <div className="rounded-md border border-destructive/40 p-3 text-xs text-destructive">
+                    {retentionReport.errors.join('；')}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="mt-6">
+              <CardHeader>
+                <CardTitle>监控预设</CardTitle>
+                <CardDescription>
+                  命名模板：间隔 + 预算。设为默认后，新建计划可优先采用；批量应用走
+                  <code className="mx-1">/api/monitoring-bulk</code>
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="space-y-1">
+                    <Label>名称</Label>
+                    <Input
+                      className="w-48"
+                      value={presetForm.name}
+                      onChange={(e) => setPresetForm({ ...presetForm, name: e.target.value })}
+                      placeholder="例如：每日回归"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>间隔（小时）</Label>
+                    <Input
+                      className="w-28"
+                      type="number"
+                      min={1}
+                      max={720}
+                      value={presetForm.interval_hours}
+                      onChange={(e) =>
+                        setPresetForm({ ...presetForm, interval_hours: Number(e.target.value) || 1 })
+                      }
+                    />
+                  </div>
+                  <label className="flex h-9 items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={presetForm.is_default}
+                      onCheckedChange={(v) =>
+                        setPresetForm({ ...presetForm, is_default: v === true })
+                      }
+                    />
+                    设为默认
+                  </label>
+                  <Button
+                    size="sm"
+                    disabled={!presetForm.name.trim() || createPreset.isPending}
+                    onClick={() => createPreset.mutate()}
+                  >
+                    <Plus className="mr-2 h-4 w-4" /> 新增
+                  </Button>
+                </div>
+
+                <div className="rounded-md border">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b text-left text-xs text-muted-foreground">
+                        <th className="p-2">名称</th>
+                        <th className="p-2">间隔</th>
+                        <th className="p-2">默认</th>
+                        <th className="p-2 text-right">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {presetList.map((p) => (
+                        <tr key={p.id} className="border-b last:border-0">
+                          <td className="p-2">{p.name}</td>
+                          <td className="p-2">{p.interval_hours}h</td>
+                          <td className="p-2">
+                            {p.is_default ? <Badge>默认</Badge> : <span className="text-muted-foreground">—</span>}
+                          </td>
+                          <td className="p-2 text-right">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={removePreset.isPending}
+                              onClick={() => removePreset.mutate(p.id)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                      {presetList.length === 0 && (
+                        <tr>
+                          <td colSpan={4} className="p-6 text-center text-sm text-muted-foreground">
+                            还没有预设
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
+
+        {/* MCP / 外部平台接入（仅管理员） */}
+        {isAdmin && (
+          <TabsContent value="mcp" className="mt-6">
+            <MCPAccessPanel />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   )

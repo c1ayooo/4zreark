@@ -1,8 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { useWebSocket } from '@/hooks/useWebSocket'
-import { Cpu, HardDrive, Server, Activity } from 'lucide-react'
+import { cn } from '@/lib/utils'
 
 interface SystemData {
   cpu_usage: number
@@ -25,17 +23,50 @@ interface MonitorData {
   timestamp: number
   system: SystemData
   nodes: NodesData
-  analytics?: {
-    monthly_users: number
-    monthly_spend: number
-    monthly_revenue: number
-    monthly_transactions: number
-  }
+}
+
+function formatBytes(bytes: number) {
+  if (!bytes) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return `${Math.round((bytes / Math.pow(k, i)) * 100) / 100} ${sizes[i]}`
+}
+
+function formatPercentage(value: number) {
+  return Math.min(100, Math.max(0, value)).toFixed(1)
+}
+
+function Meter({
+  label,
+  value,
+  detail,
+}: {
+  label: string
+  value: number
+  detail: string
+}) {
+  const bar = value >= 85 ? 'hsl(var(--destructive))' : 'hsl(var(--primary))'
+  return (
+    <div>
+      <p className="text-[13px] text-muted-foreground">{label}</p>
+      <p className="mt-2 text-2xl font-semibold tabular-nums">{formatPercentage(value)}%</p>
+      <p className="mt-1 text-[13px] tabular-nums text-muted-foreground">{detail}</p>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+        <div
+          className="h-full rounded-full transition-[width] duration-500"
+          style={{ width: `${Math.min(100, Math.max(0, value))}%`, background: bar }}
+        />
+      </div>
+    </div>
+  )
 }
 
 export default function RealTimeMonitor() {
   const [monitorData, setMonitorData] = useState<MonitorData | null>(null)
-  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'connecting'>('connecting')
+  const [connectionStatus, setConnectionStatus] = useState<
+    'connected' | 'disconnected' | 'connecting'
+  >('connecting')
 
   const { isConnected } = useWebSocket('/api/ws', {
     onMessage: (message) => {
@@ -48,150 +79,80 @@ export default function RealTimeMonitor() {
   })
 
   useEffect(() => {
-    if (isConnected) {
-      setConnectionStatus('connected')
-    } else {
-      setConnectionStatus('disconnected')
-    }
+    setConnectionStatus(isConnected ? 'connected' : 'disconnected')
   }, [isConnected])
 
-  const formatBytes = (bytes: number) => {
-    if (bytes === 0) return '0 B'
-    const k = 1024
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
-  }
-
-  const formatPercentage = (value: number) => {
-    return Math.min(100, Math.max(0, value)).toFixed(1)
-  }
+  const system = monitorData?.system
+  const nodes = monitorData?.nodes
 
   return (
-    <div className="space-y-4">
-      {/* Connection Status */}
-      <div className="flex items-center gap-2">
-        <Activity className="h-4 w-4" />
-        <span className="text-sm font-medium">实时监控</span>
-        <Badge
-          variant={connectionStatus === 'connected' ? 'default' : 'secondary'}
-          className={connectionStatus === 'connected' ? 'bg-green-500' : ''}
+    <section className="border-t pt-6">
+      <div className="flex items-baseline justify-between gap-4">
+        <h2 className="text-[15px] font-semibold">运行环境</h2>
+        <span
+          className={cn(
+            'inline-flex items-center gap-1.5 text-[13px]',
+            connectionStatus === 'connected' ? 'text-primary' : 'text-destructive'
+          )}
         >
-          {connectionStatus === 'connected' ? '已连接' : connectionStatus === 'connecting' ? '连接中' : '已断开'}
-        </Badge>
+          <span className="h-1.5 w-1.5 rounded-full bg-current" />
+          {connectionStatus === 'connected'
+            ? '实时连接'
+            : connectionStatus === 'connecting'
+              ? '连接中'
+              : '已断开'}
+        </span>
       </div>
 
-      {/* System Resources */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {/* CPU Usage */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">CPU 使用率</CardTitle>
-            <Cpu className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
-              {monitorData?.system?.cpu_usage
-                ? formatPercentage(monitorData.system.cpu_usage) + '%'
-                : '0%'}
-            </div>
-            <div className="mt-2 h-2 bg-muted rounded-full overflow-hidden">
-              <div
-                className="h-full bg-blue-500 transition-all duration-500"
-                style={{
-                  width: `${monitorData?.system?.cpu_usage ? Math.min(100, monitorData.system.cpu_usage) : 0}%`
-                }}
-              />
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Memory Usage */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">内存使用</CardTitle>
-            <HardDrive className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
-              {monitorData?.system?.memory_usage
-                ? formatPercentage(monitorData.system.memory_usage) + '%'
-                : '0%'}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {monitorData?.system ?
-                `${formatBytes(monitorData.system.memory_used)} / ${formatBytes(monitorData.system.memory_total)}`
-                : '0 B / 0 B'}
-            </p>
-            <div className="mt-2 h-2 bg-muted rounded-full overflow-hidden">
-              <div
-                className="h-full bg-green-500 transition-all duration-500"
-                style={{
-                  width: `${monitorData?.system?.memory_usage ? Math.min(100, monitorData.system.memory_usage) : 0}%`
-                }}
-              />
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Disk Usage */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">磁盘使用</CardTitle>
-            <Server className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
-              {monitorData?.system?.disk_usage
-                ? formatPercentage(monitorData.system.disk_usage) + '%'
-                : '0%'}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {monitorData?.system ?
-                `${formatBytes(monitorData.system.disk_used)} / ${formatBytes(monitorData.system.disk_total)}`
-                : '0 B / 0 B'}
-            </p>
-            <div className="mt-2 h-2 bg-muted rounded-full overflow-hidden">
-              <div
-                className="h-full bg-orange-500 transition-all duration-500"
-                style={{
-                  width: `${monitorData?.system?.disk_usage ? Math.min(100, monitorData.system.disk_usage) : 0}%`
-                }}
-              />
-            </div>
-          </CardContent>
-        </Card>
+      <div className="mt-4 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+        <Meter
+          label="CPU"
+          value={system?.cpu_usage ?? 0}
+          detail={system ? `${system.cpu_usage.toFixed(1)}% 使用中` : '等待数据'}
+        />
+        <Meter
+          label="内存"
+          value={system?.memory_usage ?? 0}
+          detail={
+            system
+              ? `${formatBytes(system.memory_used)} / ${formatBytes(system.memory_total)}`
+              : '等待数据'
+          }
+        />
+        <Meter
+          label="磁盘"
+          value={system?.disk_usage ?? 0}
+          detail={
+            system
+              ? `${formatBytes(system.disk_used)} / ${formatBytes(system.disk_total)}`
+              : '等待数据'
+          }
+        />
+        <div>
+          <p className="text-[13px] text-muted-foreground">扫描节点</p>
+          <p className="mt-2 text-2xl font-semibold tabular-nums">
+            {nodes?.online ?? 0}
+            <span className="ml-1 text-base font-normal text-muted-foreground">
+              / {nodes?.total ?? 0}
+            </span>
+          </p>
+          <p
+            className={cn(
+              'mt-1 text-[13px] tabular-nums',
+              (nodes?.offline ?? 0) > 0 ? 'text-destructive' : 'text-muted-foreground'
+            )}
+          >
+            {(nodes?.offline ?? 0) > 0 ? `${nodes?.offline} 个离线` : '全部在线'}
+          </p>
+        </div>
       </div>
 
-      {/* Scan Nodes Status */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-medium">扫描节点状态</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center gap-6">
-            <div>
-              <p className="text-sm text-muted-foreground">总数</p>
-              <p className="text-2xl font-bold">{monitorData?.nodes?.total || 0}</p>
-            </div>
-            <div>
-              <p className="text-sm text-muted-foreground">在线</p>
-              <p className="text-2xl font-bold text-green-600">{monitorData?.nodes?.online || 0}</p>
-            </div>
-            <div>
-              <p className="text-sm text-muted-foreground">离线</p>
-              <p className="text-2xl font-bold text-red-600">{monitorData?.nodes?.offline || 0}</p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Last Update */}
-      {monitorData?.timestamp && (
-        <p className="text-xs text-muted-foreground text-center">
-          最后更新: {new Date(monitorData.timestamp * 1000).toLocaleString('zh-CN')}
+      {monitorData?.timestamp ? (
+        <p className="mt-4 text-[13px] tabular-nums text-muted-foreground">
+          最后更新：
+          {new Date(monitorData.timestamp * 1000).toLocaleString('zh-CN')}
         </p>
-      )}
-    </div>
+      ) : null}
+    </section>
   )
 }

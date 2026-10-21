@@ -23,6 +23,7 @@ type AssetQuery struct {
 	Catalog   string // all | verified | candidates
 	View      string // "" | clues | candidates | lost | icons | technologies | apps | media
 	SiteGroup bool   // true=归并到站点，false=展开到入口（仅 kind=site 有意义）
+	Sort      string // ""|first_seen（缺省）|risk（按 P0-P4 评分倒序）
 	Page      int
 	PageSize  int
 }
@@ -52,6 +53,7 @@ type AssetPage struct {
 	View      string              `json:"view"`
 	Lifecycle string              `json:"lifecycle"`
 	SiteGroup bool                `json:"site_group"`
+	Sort      string              `json:"sort,omitempty"`
 	Supported bool                `json:"view_supported"`
 	Note      string              `json:"note,omitempty"`
 	Policy    *ConnectivityPolicy `json:"connectivity_policy,omitempty"`
@@ -66,31 +68,34 @@ type DomainRow struct {
 	ProjectName  string    `json:"project_name"`
 	ReachableCnt int64     `json:"reachable_count"`
 	LastSeen     time.Time `json:"last_seen"`
+	ResourceType string    `json:"resource_type"`
 }
 
 // IPRow 是 IP 粒度的一行。
 type IPRow struct {
-	IP          string    `json:"ip"`
-	SiteCount   int64     `json:"site_count"`
-	DomainCount int64     `json:"domain_count"`
-	ProjectID   int64     `json:"project_id"`
-	LastSeen    time.Time `json:"last_seen"`
+	IP           string    `json:"ip"`
+	SiteCount    int64     `json:"site_count"`
+	DomainCount  int64     `json:"domain_count"`
+	ProjectID    int64     `json:"project_id"`
+	LastSeen     time.Time `json:"last_seen"`
+	ResourceType string    `json:"resource_type"`
 }
 
 // EndpointRow 是展开到入口的一行（site_group=0）。
 type EndpointRow struct {
-	SiteID      int64     `json:"site_id"`
-	Host        string    `json:"host"`
-	Port        int       `json:"port"`
-	Protocol    string    `json:"protocol"`
-	Value       string    `json:"value"`
-	Title       string    `json:"title"`
-	HTTPStatus  int       `json:"http_status"`
-	State       string    `json:"state"`
-	ProjectID   int64     `json:"project_id"`
-	ProjectName string    `json:"project_name"`
-	RecordCount int64     `json:"record_count"`
-	LastSeen    time.Time `json:"last_seen"`
+	SiteID       int64     `json:"site_id"`
+	Host         string    `json:"host"`
+	Port         int       `json:"port"`
+	Protocol     string    `json:"protocol"`
+	Value        string    `json:"value"`
+	Title        string    `json:"title"`
+	HTTPStatus   int       `json:"http_status"`
+	State        string    `json:"state"`
+	ProjectID    int64     `json:"project_id"`
+	ProjectName  string    `json:"project_name"`
+	RecordCount  int64     `json:"record_count"`
+	LastSeen     time.Time `json:"last_seen"`
+	ResourceType string    `json:"resource_type"`
 }
 
 func normalizeKind(k string) string {
@@ -107,6 +112,14 @@ func normalizeCatalog(c string) string {
 		return c
 	}
 	return "all"
+}
+
+// normalizeSort 只认 risk；其余值静默回落缺省排序（结构化参数失败不打扰用户）。
+func normalizeSort(s string) string {
+	if s == "risk" || s == "priority" {
+		return "risk"
+	}
+	return ""
 }
 
 // whereBuilder 收集 WHERE 片段与参数，占位符从 base 开始编号（与 DSL 编译器的 base 对齐）。
@@ -204,7 +217,7 @@ func (a *AssetRepo) ListAssets(ctx context.Context, q AssetQuery) (*AssetPage, e
 	page := &AssetPage{
 		Page: q.Page, PageSize: q.PageSize,
 		Kind: normalizeKind(q.Kind), Catalog: normalizeCatalog(q.Catalog),
-		View: q.View, SiteGroup: q.SiteGroup, Supported: true,
+		View: q.View, SiteGroup: q.SiteGroup, Sort: normalizeSort(q.Sort), Supported: true,
 	}
 	// site_group 只对站点粒度有意义；IP / 域名聚合本身就不可展开
 	if page.Kind != "site" {
@@ -230,10 +243,13 @@ func (a *AssetRepo) ListAssets(ctx context.Context, q AssetQuery) (*AssetPage, e
 	case "ip":
 		page.Items, page.Total, err = a.listIPs(ctx, w, q)
 	default:
-		if q.SiteGroup {
-			page.Items, page.Total, err = a.listSiteRows(ctx, w, q)
-		} else {
+		switch {
+		case !q.SiteGroup:
 			page.Items, page.Total, err = a.listEndpointRows(ctx, w, q)
+		case normalizeSort(q.Sort) == "risk":
+			page.Items, page.Total, err = a.listSiteRowsByRisk(ctx, w, q)
+		default:
+			page.Items, page.Total, err = a.listSiteRows(ctx, w, q)
 		}
 	}
 	if err != nil {
@@ -287,6 +303,9 @@ func (a *AssetRepo) listSiteRows(ctx context.Context, w *whereBuilder, q AssetQu
 		}
 		out = append(out, s)
 	}
+	if err := a.attachRisk(ctx, out); err != nil {
+		return nil, 0, err
+	}
 	return out, total, rows.Err()
 }
 
@@ -327,6 +346,7 @@ func (a *AssetRepo) listEndpointRows(ctx context.Context, w *whereBuilder, q Ass
 			&e.HTTPStatus, &e.State, &e.ProjectID, &e.ProjectName, &e.RecordCount, &e.LastSeen); err != nil {
 			return nil, 0, fmt.Errorf("解析入口失败: %w", err)
 		}
+		e.ResourceType = "endpoint"
 		out = append(out, &e)
 	}
 	return out, total, rows.Err()
@@ -365,6 +385,7 @@ func (a *AssetRepo) listDomains(ctx context.Context, w *whereBuilder, q AssetQue
 			&d.ReachableCnt, &d.LastSeen); err != nil {
 			return nil, 0, fmt.Errorf("解析域名失败: %w", err)
 		}
+		d.ResourceType = "domain"
 		out = append(out, &d)
 	}
 	return out, total, rows.Err()
@@ -401,6 +422,7 @@ func (a *AssetRepo) listIPs(ctx context.Context, w *whereBuilder, q AssetQuery) 
 		if err := rows.Scan(&r.IP, &r.SiteCount, &r.DomainCount, &r.ProjectID, &r.LastSeen); err != nil {
 			return nil, 0, fmt.Errorf("解析 IP 失败: %w", err)
 		}
+		r.ResourceType = "ip"
 		out = append(out, &r)
 	}
 	return out, total, rows.Err()

@@ -1,738 +1,433 @@
-import { useState, useEffect, useRef } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import * as THREE from 'three'
-import anime from 'animejs'
-import * as d3 from 'd3-force'
-import { Badge } from '@/components/ui/badge'
+import { useMemo } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { RefreshCw } from 'lucide-react'
+
+import type { AssetGraphData, AssetGraphEdge, AssetGraphNode, AssetGraphRel } from '@/api/assets'
+import { resultApi, type ResultType } from '@/api/results'
+import { AssetGraphCanvas } from '@/components/assets/AssetGraphCanvas'
 import { Button } from '@/components/ui/button'
-import { Loader2, X, RotateCcw } from 'lucide-react'
-import { resultApi } from '@/api/results'
-
-// Types
-interface GraphNode extends d3.SimulationNodeDatum {
-  id: string
-  name: string
-  type: string
-  val: number
-  color: string
-  data: any
-  threeObject?: THREE.Object3D
-  x?: number
-  y?: number
-  z?: number
-  vx?: number
-  vy?: number
-  vz?: number
-}
-
-interface GraphLink extends d3.SimulationLinkDatum<GraphNode> {
-  source: string | GraphNode
-  target: string | GraphNode
-  color?: string
-  threeObject?: THREE.Line
-}
+import { cn } from '@/lib/utils'
 
 interface TaskTopologyViewProps {
   taskId: string
   taskName: string
 }
 
-export default function TaskTopologyView({ 
-  taskId, 
-  taskName
-}: TaskTopologyViewProps) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
-  const [isLoadingGraph, setIsLoadingGraph] = useState(true)
+type ResultItem = Record<string, unknown>
 
-  // 获取各类数据
-  const { data: subdomainsData, isLoading: isLoadingSubdomains } = useQuery({
-    queryKey: ['topology-subdomains', taskId],
-    queryFn: () => resultApi.getTaskResults(taskId, { type: 'subdomain', pageSize: 1000 }),
-    enabled: !!taskId,
-  })
+const PAGE_SIZE = 1000
+const EMPTY: ResultItem[] = []
 
-  const { data: portsData, isLoading: isLoadingPorts } = useQuery({
-    queryKey: ['topology-ports', taskId],
-    queryFn: () => resultApi.getTaskResults(taskId, { type: 'port', pageSize: 1000 }),
-    enabled: !!taskId,
-  })
+const text = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+const num = (v: unknown): number => {
+  if (typeof v === 'number' && Number.isFinite(v)) return v
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v)
+    return Number.isFinite(n) ? n : 0
+  }
+  return 0
+}
+const strings = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim() !== '') : []
 
-  const { data: servicesData, isLoading: isLoadingServices } = useQuery({
-    queryKey: ['topology-services', taskId],
-    queryFn: () => resultApi.getTaskResults(taskId, { type: 'service', pageSize: 1000 }),
-    enabled: !!taskId,
-  })
+const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/
+const isIP = (host: string) => IPV4.test(host)
 
-  const { data: vulnsData, isLoading: isLoadingVulns } = useQuery({
-    queryKey: ['topology-vulns', taskId],
-    queryFn: () => resultApi.getTaskResults(taskId, { type: 'vuln', pageSize: 1000 }),
-    enabled: !!taskId,
-  })
+// 常见两级公共后缀。前端不引入 PSL 依赖，只保证这些后缀下的根域名取对。
+const MULTI_LABEL_SUFFIXES = new Set([
+  'com.cn', 'net.cn', 'org.cn', 'gov.cn', 'edu.cn', 'ac.cn',
+  'com.hk', 'com.tw', 'com.mo', 'co.uk', 'org.uk', 'ac.uk', 'gov.uk',
+  'co.jp', 'ne.jp', 'or.jp', 'co.kr', 'or.kr', 'com.au', 'net.au', 'org.au',
+  'co.nz', 'com.sg', 'com.my', 'co.id', 'co.in', 'net.in', 'com.br',
+  'com.mx', 'com.ar', 'com.tr', 'com.ru', 'com.ua', 'co.za', 'com.sa', 'com.eg',
+])
 
-  const { data: sensitiveData, isLoading: isLoadingSensitive } = useQuery({
-    queryKey: ['topology-sensitive', taskId],
-    queryFn: () => resultApi.getTaskResults(taskId, { type: 'sensitive', pageSize: 1000 }),
-    enabled: !!taskId,
-  })
+function rootDomain(host: string): string {
+  const labels = host.split('.').filter(Boolean)
+  if (labels.length <= 2) return labels.join('.')
+  const lastTwo = labels.slice(-2).join('.')
+  return MULTI_LABEL_SUFFIXES.has(lastTwo) ? labels.slice(-3).join('.') : lastTwo
+}
 
-  const { data: urlsData, isLoading: isLoadingUrls } = useQuery({
-    queryKey: ['topology-urls', taskId],
-    queryFn: () => resultApi.getTaskResults(taskId, { type: 'url', pageSize: 1000 }),
-    enabled: !!taskId,
-  })
+function normalizeHost(raw: string): string {
+  let v = raw.trim().toLowerCase()
+  if (!v) return ''
+  if (v.includes('://')) {
+    try {
+      v = new URL(v).hostname.toLowerCase()
+    } catch {
+      /* 保留原值继续清理 */
+    }
+  }
+  const slash = v.indexOf('/')
+  if (slash >= 0) v = v.slice(0, slash)
+  // 去掉端口；IPv6 字面量（多个冒号）原样保留。
+  if ((v.match(/:/g)?.length ?? 0) === 1) v = v.split(':')[0]
+  return v.replace(/\.$/, '')
+}
 
-  const { data: statsData, isLoading: isLoadingStats } = useQuery({
-    queryKey: ['topology-stats', taskId],
-    queryFn: () => resultApi.getResultStats(taskId),
-    enabled: !!taskId,
-  })
+function parseURL(raw: string): { host: string; scheme: string; port: number; path: string } | null {
+  const v = raw.trim()
+  if (!v) return null
+  try {
+    const u = new URL(v)
+    const scheme = u.protocol.replace(':', '').toLowerCase()
+    const port = u.port
+      ? Number(u.port)
+      : scheme === 'https'
+        ? 443
+        : scheme === 'http'
+          ? 80
+          : 0
+    const host = normalizeHost(u.hostname)
+    if (!host || !port) return null
+    return { host, scheme, port, path: `${u.pathname || '/'}${u.search}` }
+  } catch {
+    return null
+  }
+}
 
-  // 检查是否还在加载数据
-  const isDataLoading = isLoadingSubdomains || isLoadingPorts || isLoadingServices || 
-    isLoadingVulns || isLoadingSensitive || isLoadingUrls || isLoadingStats
+function techList(item: ResultItem): string[] {
+  const merged = [
+    ...strings(item.technologies),
+    ...strings(item.fingerprints),
+    ...strings(item.fingerprint),
+  ]
+  return [...new Set(merged)]
+}
 
-  // 从 API 响应中提取数据
-  const subdomains = subdomainsData?.data?.list || []
-  const ports = portsData?.data?.list || []
-  const services = servicesData?.data?.list || []
-  const vulns = vulnsData?.data?.list || []
-  const urls = urlsData?.data?.list || []
-  const sensitiveInfos = sensitiveData?.data?.list || []
-  const stats = statsData?.data || {}
+/**
+ * 把任务结果映射成与项目级资产星图相同的层级：
+ * 任务 → 根域名 → 子域名 → IP → 服务 → 入口 / 路由。
+ * 节点 key 与后端 BuildAssetGraph 保持同样的前缀习惯，方便对照。
+ */
+function buildTaskGraph(
+  taskId: string,
+  taskName: string,
+  subdomains: ResultItem[],
+  ports: ResultItem[],
+  services: ResultItem[],
+  urls: ResultItem[],
+): AssetGraphData {
+  const nodes = new Map<string, AssetGraphNode>()
+  const edges: AssetGraphEdge[] = []
+  const edgeSeen = new Set<string>()
 
-  // 调试日志
-  useEffect(() => {
-    console.log('[Topology] Data loaded:', {
-      subdomains: subdomains.length,
-      ports: ports.length,
-      services: services.length,
-      vulns: vulns.length,
-      urls: urls.length,
-      sensitiveInfos: sensitiveInfos.length,
-      stats,
-      isDataLoading
+  const addNode = (node: AssetGraphNode): AssetGraphNode => {
+    const existing = nodes.get(node.key)
+    if (!existing) {
+      nodes.set(node.key, node)
+      return node
+    }
+    // 同一个服务可能先由端口结果创建、后被 Web 结果补全，空字段按需合并。
+    for (const field of Object.keys(node) as (keyof AssetGraphNode)[]) {
+      const value = node[field]
+      const incomingEmpty =
+        value === undefined ||
+        value === '' ||
+        value === 0 ||
+        (Array.isArray(value) && value.length === 0)
+      if (incomingEmpty) continue
+      const current = existing[field]
+      const currentEmpty =
+        current === undefined ||
+        current === '' ||
+        current === 0 ||
+        (Array.isArray(current) && current.length === 0)
+      if (currentEmpty) {
+        ;(existing as unknown as Record<string, unknown>)[field] = value
+      }
+    }
+    return existing
+  }
+
+  const addEdge = (src: string, dst: string, rel: AssetGraphRel) => {
+    if (!src || !dst || src === dst) return
+    const key = `${src}\u0000${rel}\u0000${dst}`
+    if (edgeSeen.has(key)) return
+    edgeSeen.add(key)
+    edges.push({ src, dst, rel })
+  }
+
+  const projectKey = `p:task:${taskId}`
+  addNode({ key: projectKey, kind: 'project', label: taskName || '本次任务' })
+
+  const resolveIP = (parent: string, rawIP: string) => {
+    const ip = normalizeHost(rawIP)
+    if (!ip || !isIP(ip)) return
+    const ipKey = `i:${ip}`
+    addNode({ key: ipKey, kind: 'ip', label: ip, host: ip, ip })
+    addEdge(parent, ipKey, 'resolves')
+  }
+
+  // 为 host 补齐根域名 / 子域名 / IP 层，返回挂服务的父节点。
+  const provisionHost = (rawHost: string, rawIP = ''): { host: string; parent: string } => {
+    const host = normalizeHost(rawHost)
+    if (!host) return { host: '', parent: projectKey }
+
+    if (isIP(host)) {
+      const ipKey = `i:${host}`
+      addNode({ key: ipKey, kind: 'ip', label: host, host, ip: host })
+      addEdge(projectKey, ipKey, 'owns')
+      return { host, parent: ipKey }
+    }
+
+    const root = rootDomain(host)
+    const rootKey = `d:${root}`
+    addNode({ key: rootKey, kind: 'root_domain', label: root, host: root })
+    addEdge(projectKey, rootKey, 'owns')
+
+    let parent = rootKey
+    if (host !== root) {
+      const subKey = `h:${host}`
+      addNode({ key: subKey, kind: 'subdomain', label: host, host })
+      addEdge(rootKey, subKey, 'contains')
+      parent = subKey
+    }
+
+    const ip = rawIP ? normalizeHost(rawIP) : ''
+    if (ip && isIP(ip)) resolveIP(parent, ip)
+    return { host, parent }
+  }
+
+  const addService = (host: string, port: number) => {
+    const key = `s:${host}:${port}`
+    addNode({ key, kind: 'service', label: `${host}:${port}`, host, port })
+    return key
+  }
+
+  const addEndpointAndRoute = (
+    serviceKey: string,
+    host: string,
+    port: number,
+    scheme: string,
+    path: string,
+    method: string,
+    status: number,
+  ) => {
+    const state = status > 0 ? 'reachable' : undefined
+    const endpointKey = `e:${scheme}:${host}:${port}`
+    addNode({
+      key: endpointKey,
+      kind: 'endpoint',
+      label: `${scheme}://${host}:${port}`,
+      host,
+      port,
+      protocol: scheme,
+      status_code: status || undefined,
+      state,
     })
-  }, [subdomains, ports, services, vulns, urls, sensitiveInfos, stats, isDataLoading])
-  
-  // Three.js refs
-  const sceneRef = useRef<THREE.Scene | null>(null)
-  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
-  const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
-  const animationFrameRef = useRef<number>()
-  const nodesRef = useRef<GraphNode[]>([])
-  const linksRef = useRef<GraphLink[]>([])
-  const raycasterRef = useRef(new THREE.Raycaster())
-  const mouseRef = useRef(new THREE.Vector2())
-  const simulationRef = useRef<d3.Simulation<GraphNode, GraphLink> | null>(null)
+    addEdge(serviceKey, endpointKey, 'routes')
 
-  // Initialize Three.js
-  useEffect(() => {
-    if (!containerRef.current) return
+    const routePath = path || '/'
+    if (routePath === '/') return
+    const verb = (method || 'GET').toUpperCase()
+    const routeKey = `rt:${host}:${port}:${verb}:${routePath}`
+    addNode({
+      key: routeKey,
+      kind: 'route',
+      label: `${verb} ${routePath}`,
+      host,
+      port,
+      method: verb,
+      path: routePath,
+      status_code: status || undefined,
+      state,
+    })
+    addEdge(serviceKey, routeKey, 'routes')
+  }
 
-    const scene = new THREE.Scene()
-    scene.fog = new THREE.FogExp2(0x000000, 0.0015)
-    sceneRef.current = scene
-
-    const camera = new THREE.PerspectiveCamera(
-      60,
-      containerRef.current.clientWidth / containerRef.current.clientHeight,
-      0.1,
-      2000
+  // 1. 子域名：domain/subdomain + 解析到的 IP
+  for (const item of subdomains) {
+    const host = normalizeHost(
+      text(item.subdomain) || text(item.fullDomain) || text(item.domain) || text(item.host),
     )
-    camera.position.z = 400
-    cameraRef.current = camera
-
-    const renderer = new THREE.WebGLRenderer({ 
-      antialias: true, 
-      alpha: true,
-      powerPreference: "high-performance"
-    })
-    renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight)
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-    containerRef.current.appendChild(renderer.domElement)
-    rendererRef.current = renderer
-
-    // Starfield background
-    const starGeometry = new THREE.BufferGeometry()
-    const starMaterial = new THREE.PointsMaterial({
-      color: 0xffffff,
-      size: 0.5,
-      transparent: true,
-      opacity: 0.8,
-      sizeAttenuation: true
-    })
-    
-    const starVertices = []
-    for(let i = 0; i < 2000; i++) {
-      const x = (Math.random() - 0.5) * 2000
-      const y = (Math.random() - 0.5) * 2000
-      const z = (Math.random() - 0.5) * 2000
-      starVertices.push(x, y, z)
-    }
-    starGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starVertices, 3))
-    const stars = new THREE.Points(starGeometry, starMaterial)
-    scene.add(stars)
-
-    // Mouse controls
-    let isDragging = false
-    let isRightDragging = false
-    let previousMousePosition = { x: 0, y: 0 }
-    let targetRotationX = 0
-    let targetRotationY = 0
-    let autoRotate = true
-
-    const onMouseDown = (e: MouseEvent) => {
-      if (e.button === 0) {
-        isDragging = true
-      } else if (e.button === 2) {
-        isRightDragging = true
-      }
-      autoRotate = false
-      previousMousePosition = { x: e.clientX, y: e.clientY }
-      e.preventDefault()
-    }
-
-    const onContextMenu = (e: MouseEvent) => {
-      e.preventDefault()
-    }
-
-    const onMouseMove = (e: MouseEvent) => {
-      const rect = renderer.domElement.getBoundingClientRect()
-      mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
-      mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
-
-      if (isDragging) {
-        const deltaMove = {
-          x: e.clientX - previousMousePosition.x,
-          y: e.clientY - previousMousePosition.y
-        }
-        targetRotationY += deltaMove.x * 0.005
-        targetRotationX += deltaMove.y * 0.005
-        
-        // Rotate camera around center
-        const radius = camera.position.length()
-        const theta = Math.atan2(camera.position.x, camera.position.z) - deltaMove.x * 0.005
-        const phi = Math.acos(camera.position.y / radius)
-        const targetPhi = Math.max(0.1, Math.min(Math.PI - 0.1, phi - deltaMove.y * 0.005))
-        
-        camera.position.x = radius * Math.sin(targetPhi) * Math.sin(theta)
-        camera.position.y = radius * Math.cos(targetPhi)
-        camera.position.z = radius * Math.sin(targetPhi) * Math.cos(theta)
-        
-        previousMousePosition = { x: e.clientX, y: e.clientY }
-      } else if (isRightDragging) {
-        // Right drag for panning
-        const deltaMove = {
-          x: e.clientX - previousMousePosition.x,
-          y: e.clientY - previousMousePosition.y
-        }
-        camera.position.x -= deltaMove.x * 0.5
-        camera.position.y += deltaMove.y * 0.5
-        previousMousePosition = { x: e.clientX, y: e.clientY }
-      }
-    }
-
-    const onMouseUp = () => {
-      isDragging = false
-      isRightDragging = false
-      setTimeout(() => { autoRotate = true }, 3000)
-    }
-
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault()
-      camera.position.z = Math.max(100, Math.min(800, camera.position.z + e.deltaY * 0.5))
-    }
-
-    const onClick = () => {
-      if (isDragging) return
-      raycasterRef.current.setFromCamera(mouseRef.current, camera)
-      const intersects = raycasterRef.current.intersectObjects(scene.children, true)
-      
-      for (const intersect of intersects) {
-        const node = nodesRef.current.find(n => n.threeObject === intersect.object || n.threeObject?.children.includes(intersect.object as THREE.Object3D))
-        if (node) {
-          setSelectedNode(node)
-          flyToNode(node)
-          return
-        }
-      }
-    }
-
-    renderer.domElement.addEventListener('mousedown', onMouseDown)
-    renderer.domElement.addEventListener('mousemove', onMouseMove)
-    renderer.domElement.addEventListener('mouseup', onMouseUp)
-    renderer.domElement.addEventListener('mouseleave', onMouseUp)
-    renderer.domElement.addEventListener('wheel', onWheel, { passive: false })
-    renderer.domElement.addEventListener('click', onClick)
-    renderer.domElement.addEventListener('contextmenu', onContextMenu)
-
-    // Animation loop
-    let rotationAngle = 0
-    const animate = () => {
-      animationFrameRef.current = requestAnimationFrame(animate)
-      
-      if (autoRotate && !isDragging) {
-        rotationAngle += 0.001
-        camera.position.x = Math.sin(rotationAngle) * camera.position.z * 0.3
-        camera.position.y = Math.cos(rotationAngle * 0.5) * 50
-      }
-      
-      camera.lookAt(0, 0, 0)
-      renderer.render(scene, camera)
-    }
-    animate()
-
-    // Resize handler with ResizeObserver
-    const handleResize = () => {
-      if (!containerRef.current) return
-      const width = containerRef.current.clientWidth
-      const height = containerRef.current.clientHeight
-      if (width === 0 || height === 0) return
-      
-      camera.aspect = width / height
-      camera.updateProjectionMatrix()
-      renderer.setSize(width, height)
-    }
-    
-    // Use ResizeObserver for better resize detection
-    const resizeObserver = new ResizeObserver(handleResize)
-    if (containerRef.current) {
-      resizeObserver.observe(containerRef.current)
-    }
-    window.addEventListener('resize', handleResize)
-    
-    // Initial resize after a short delay to ensure container has size
-    setTimeout(handleResize, 100)
-
-    return () => {
-      resizeObserver.disconnect()
-      window.removeEventListener('resize', handleResize)
-      renderer.domElement.removeEventListener('mousedown', onMouseDown)
-      renderer.domElement.removeEventListener('mousemove', onMouseMove)
-      renderer.domElement.removeEventListener('mouseup', onMouseUp)
-      renderer.domElement.removeEventListener('mouseleave', onMouseUp)
-      renderer.domElement.removeEventListener('wheel', onWheel)
-      renderer.domElement.removeEventListener('click', onClick)
-      renderer.domElement.removeEventListener('contextmenu', onContextMenu)
-      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current)
-      renderer.dispose()
-      if (containerRef.current?.contains(renderer.domElement)) {
-        containerRef.current.removeChild(renderer.domElement)
-      }
-      if (simulationRef.current) simulationRef.current.stop()
-    }
-  }, [])
-
-  // Build graph from scan results
-  useEffect(() => {
-    if (!sceneRef.current) return
-    
-    // 等待数据加载完成
-    if (isDataLoading) {
-      console.log('[Topology] Still loading data, skipping graph build')
-      return
-    }
-
-    // 检查是否有数据
-    const hasData = subdomains.length > 0 || ports.length > 0 || services.length > 0 || 
-      vulns.length > 0 || urls.length > 0 || sensitiveInfos.length > 0
-    
-    console.log('[Topology] Building graph, hasData:', hasData)
-
-    const dataList: any[] = []
-    
-    // 1. Create Core Node (Task Center)
-    const coreId = `task-${taskId}`
-    const totalSubdomains = stats.subdomain || subdomains.length
-    const totalPorts = stats.port || ports.length
-    const totalVulns = stats.vuln || vulns.length
-    const totalUrls = stats.url || urls.length
-    
-    dataList.push({
-      id: coreId,
-      target: taskName,
-      type: 'core',
-      status: 'active',
-      tags: ['Task'],
-      val: 20,
-      color: '#22d3ee',
-      description: `扫描任务核心。子域名: ${totalSubdomains}，端口: ${totalPorts}，漏洞: ${totalVulns}，URL: ${totalUrls}`
-    })
-
-    // 2. Create Cluster Nodes for each result type
-    const clusters = [
-      { id: 'cluster-subdomain', name: '子域名', count: totalSubdomains, color: '#a78bfa', items: subdomains },
-      { id: 'cluster-port', name: '端口', count: totalPorts, color: '#60a5fa', items: ports },
-      { id: 'cluster-service', name: 'Web服务', count: stats.service || services.length, color: '#34d399', items: services },
-      { id: 'cluster-vuln', name: '漏洞', count: totalVulns, color: '#ef4444', items: vulns },
-      { id: 'cluster-url', name: 'URL', count: totalUrls, color: '#f97316', items: urls },
-      { id: 'cluster-sensitive', name: '敏感信息', count: stats.sensitive || sensitiveInfos.length, color: '#eab308', items: sensitiveInfos },
-    ]
-
-    clusters.forEach(cluster => {
-      if (cluster.count > 0) {
-        dataList.push({
-          id: cluster.id,
-          target: `${cluster.name} (${cluster.count})`,
-          type: 'cluster',
-          val: 12,
-          color: cluster.color,
-          parentId: coreId,
-          description: `共发现 ${cluster.count} 个${cluster.name}`
-        })
-
-        // Add leaf nodes (limit to first 50 for performance)
-        const items = cluster.items.slice(0, 50)
-        items.forEach((item: any, index: number) => {
-          const leafId = `${cluster.id}-${index}`
-          let name = ''
-          let desc = ''
-          let leafColor = cluster.color
-
-          switch (cluster.id) {
-            case 'cluster-subdomain':
-              name = item.data?.domain || item.domain || `子域名 ${index + 1}`
-              desc = `IP: ${item.data?.ips?.join(', ') || item.ips?.join(', ') || '-'}`
-              break
-            case 'cluster-port':
-              name = `${item.data?.ip || item.ip}:${item.data?.port || item.port}`
-              desc = `服务: ${item.data?.service || item.service || '-'}`
-              break
-            case 'cluster-service':
-              name = item.data?.url || item.url || `服务 ${index + 1}`
-              desc = `标题: ${item.data?.title || item.title || '-'}`
-              break
-            case 'cluster-vuln':
-              name = item.data?.name || item.name || `漏洞 ${index + 1}`
-              desc = `等级: ${item.data?.severity || item.severity || '-'}`
-              // Color by severity
-              const severity = (item.data?.severity || item.severity || '').toLowerCase()
-              if (severity === 'critical') leafColor = '#ef4444'
-              else if (severity === 'high') leafColor = '#f97316'
-              else if (severity === 'medium') leafColor = '#eab308'
-              else if (severity === 'low') leafColor = '#3b82f6'
-              break
-            case 'cluster-url':
-              name = item.data?.url || item.url || `URL ${index + 1}`
-              desc = `方法: ${item.data?.method || item.method || 'GET'}`
-              break
-            case 'cluster-sensitive':
-              name = item.data?.type || item.type || `敏感信息 ${index + 1}`
-              desc = item.data?.match || item.match || '-'
-              break
-          }
-
-          dataList.push({
-            id: leafId,
-            target: name,
-            type: 'leaf',
-            val: 4,
-            color: leafColor,
-            parentId: cluster.id,
-            description: desc
-          })
-        })
-      }
-    })
-
-    if (dataList.length === 0) {
-      setIsLoadingGraph(false)
-      return
-    }
-
-    // Clear existing graph
-    nodesRef.current.forEach(n => {
-      if (n.threeObject) sceneRef.current?.remove(n.threeObject)
-    })
-    linksRef.current.forEach(l => {
-      if (l.threeObject) sceneRef.current?.remove(l.threeObject)
-    })
-
-    // Build nodes and links
-    const nodes: GraphNode[] = []
-    const links: GraphLink[] = []
-    const nodeMap = new Map<string, GraphNode>()
-
-    const addNode = (id: string, name: string, type: string, data?: any) => {
-      if (!nodeMap.has(id)) {
-        let color = data?.color || '#ffffff'
-        let val = data?.val || 5
-
-        const node: GraphNode = {
-          id, name, type, val, color,
-          data: data || { name, type },
-          x: (Math.random() - 0.5) * 100,
-          y: (Math.random() - 0.5) * 100,
-          z: (Math.random() - 0.5) * 50
-        }
-        nodes.push(node)
-        nodeMap.set(id, node)
-      }
-      return nodeMap.get(id)!
-    }
-
-    dataList.forEach((item: any) => {
-      addNode(item.id, item.target, item.type, item)
-      
-      if (item.parentId) {
-        links.push({
-          source: item.parentId,
-          target: item.id,
-          color: 'rgba(255, 255, 255, 0.15)'
-        })
-      }
-    })
-
-    nodesRef.current = nodes
-    linksRef.current = links
-
-    // Create Glow Textures
-    const createGlowTexture = () => {
-      const canvas = document.createElement('canvas')
-      canvas.width = 128
-      canvas.height = 128
-      const context = canvas.getContext('2d')
-      if (context) {
-        const gradient = context.createRadialGradient(64, 64, 0, 64, 64, 64)
-        gradient.addColorStop(0, 'rgba(255,255,255,1)')
-        gradient.addColorStop(0.2, 'rgba(255,255,255,0.8)')
-        gradient.addColorStop(0.5, 'rgba(255,255,255,0.2)')
-        gradient.addColorStop(1, 'rgba(0,0,0,0)')
-        context.fillStyle = gradient
-        context.fillRect(0, 0, 128, 128)
-      }
-      return new THREE.CanvasTexture(canvas)
-    }
-
-    const glowTexture = createGlowTexture()
-
-    // Create 3D Objects for nodes
-    nodes.forEach(node => {
-      const group = new THREE.Group()
-      
-      const material = new THREE.SpriteMaterial({
-        map: glowTexture,
-        color: new THREE.Color(node.color),
-        transparent: true,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      })
-      
-      const sprite = new THREE.Sprite(material)
-      sprite.scale.setScalar(node.val * 2)
-      group.add(sprite)
-
-      // Add label
-      const canvas = document.createElement('canvas')
-      const ctx = canvas.getContext('2d')
-      if (ctx) {
-        ctx.font = '20px Arial'
-        const text = node.name.length > 20 ? node.name.slice(0, 20) + '...' : node.name
-        const textWidth = ctx.measureText(text).width + 16
-        canvas.width = textWidth
-        canvas.height = 28
-        ctx.font = '20px Arial'
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'
-        ctx.fillRect(0, 0, canvas.width, canvas.height)
-        ctx.fillStyle = '#ffffff'
-        ctx.fillText(text, 8, 20)
-        
-        const labelTexture = new THREE.CanvasTexture(canvas)
-        const labelMaterial = new THREE.SpriteMaterial({ map: labelTexture, transparent: true })
-        const labelSprite = new THREE.Sprite(labelMaterial)
-        labelSprite.scale.set(textWidth / 5, 28 / 5, 1)
-        labelSprite.position.y = node.val * 1.5 + 5
-        group.add(labelSprite)
-      }
-
-      group.position.set(node.x || 0, node.y || 0, node.z || 0)
-      node.threeObject = group
-      sceneRef.current?.add(group)
-    })
-
-    // Create 3D Objects for links
-    links.forEach(link => {
-      const sourceNode = typeof link.source === 'string' ? nodeMap.get(link.source) : link.source as GraphNode
-      const targetNode = typeof link.target === 'string' ? nodeMap.get(link.target) : link.target as GraphNode
-      
-      if (sourceNode && targetNode) {
-        const geometry = new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(sourceNode.x || 0, sourceNode.y || 0, sourceNode.z || 0),
-          new THREE.Vector3(targetNode.x || 0, targetNode.y || 0, targetNode.z || 0)
-        ])
-        const material = new THREE.LineBasicMaterial({ 
-          color: 0xffffff, 
-          transparent: true, 
-          opacity: 0.15 
-        })
-        const line = new THREE.Line(geometry, material)
-        link.threeObject = line
-        sceneRef.current?.add(line)
-      }
-    })
-
-    // D3 Force Simulation
-    const simulation = d3.forceSimulation<GraphNode>(nodes)
-      .force('link', d3.forceLink<GraphNode, GraphLink>(links)
-        .id(d => d.id)
-        .distance(d => {
-          const source = d.source as GraphNode
-          const target = d.target as GraphNode
-          if (source.type === 'core' || target.type === 'core') return 120
-          if (source.type === 'cluster' || target.type === 'cluster') return 80
-          return 40
-        }))
-      .force('charge', d3.forceManyBody().strength(-100))
-      .force('center', d3.forceCenter(0, 0))
-      .force('z', () => {
-        nodes.forEach(n => {
-          n.z = (n.z || 0) * 0.95
-        })
-      })
-      .on('tick', () => {
-        nodes.forEach(node => {
-          if (node.threeObject) {
-            node.threeObject.position.set(node.x || 0, node.y || 0, node.z || 0)
-          }
-        })
-        links.forEach(link => {
-          const sourceNode = link.source as GraphNode
-          const targetNode = link.target as GraphNode
-          if (link.threeObject && sourceNode && targetNode) {
-            const positions = (link.threeObject as THREE.Line).geometry.attributes.position
-            positions.setXYZ(0, sourceNode.x || 0, sourceNode.y || 0, sourceNode.z || 0)
-            positions.setXYZ(1, targetNode.x || 0, targetNode.y || 0, targetNode.z || 0)
-            positions.needsUpdate = true
-          }
-        })
-      })
-      .on('end', () => {
-        setIsLoadingGraph(false)
-      })
-    
-    simulationRef.current = simulation
-    
-    const timer = setTimeout(() => setIsLoadingGraph(false), 2000)
-    return () => clearTimeout(timer)
-
-  }, [taskId, taskName, subdomains, ports, services, vulns, urls, sensitiveInfos, stats, isDataLoading])
-
-  // Camera Animation
-  const flyToNode = (node: GraphNode) => {
-    if (!cameraRef.current || !node.x) return
-
-    const targetPos = { x: node.x || 0, y: node.y || 0, z: (node.z || 0) + 150 }
-
-    anime({
-      targets: cameraRef.current.position,
-      x: targetPos.x,
-      y: targetPos.y,
-      z: targetPos.z,
-      duration: 1000,
-      easing: 'easeOutQuad'
-    })
+    if (!host) continue
+    const ips = strings(item.ips)
+    const singleIP = text(item.ip)
+    if (singleIP && !ips.includes(singleIP)) ips.push(singleIP)
+    const { parent } = provisionHost(host, ips[0] ?? '')
+    if (!isIP(host)) ips.forEach((ip) => resolveIP(parent, ip))
   }
 
-  const resetCamera = () => {
-    if (!cameraRef.current) return
-    anime({
-      targets: cameraRef.current.position,
-      x: 0,
-      y: 0,
-      z: 400,
-      duration: 1000,
-      easing: 'easeOutQuad'
+  // 2. 端口：IP/host → 服务
+  for (const item of ports) {
+    const host = normalizeHost(text(item.host) || text(item.ip))
+    const port = num(item.port)
+    if (!host || port <= 0) continue
+    const ip = text(item.ip)
+    const { parent } = provisionHost(host, ip)
+    const serviceKey = addService(host, port)
+    const serviceName = [text(item.service), text(item.version)].filter(Boolean).join(' ')
+    addNode({
+      key: serviceKey,
+      kind: 'service',
+      label: `${host}:${port}`,
+      host,
+      port,
+      protocol: text(item.protocol),
+      ip: ip && isIP(normalizeHost(ip)) ? normalizeHost(ip) : undefined,
+      title: serviceName || undefined,
+      state: text(item.state).toLowerCase() === 'closed' ? 'lost' : 'reachable',
     })
-    setSelectedNode(null)
+    addEdge(parent, serviceKey, 'exposes')
   }
+
+  // 3. Web 服务：host:port → 服务，URL 里的入口单独建节点
+  for (const item of services) {
+    const rawURL = text(item.url)
+    const parsed = rawURL ? parseURL(rawURL) : null
+    const host = normalizeHost(text(item.host)) || parsed?.host || ''
+    if (!host) continue
+    const scheme = parsed?.scheme || ''
+    const port = num(item.port) || parsed?.port || (scheme === 'https' ? 443 : 80)
+    const ip = normalizeHost(text(item.ip))
+    const { parent } = provisionHost(host, ip)
+    const status = num(item.status_code) || num(item.statusCode)
+    const serviceKey = addService(host, port)
+    addNode({
+      key: serviceKey,
+      kind: 'service',
+      label: `${host}:${port}`,
+      host,
+      port,
+      protocol: scheme,
+      ip: ip && isIP(ip) ? ip : undefined,
+      title: text(item.title) || undefined,
+      status_code: status || undefined,
+      tech: techList(item),
+      state: status > 0 ? 'reachable' : undefined,
+    })
+    addEdge(parent, serviceKey, 'exposes')
+    if (parsed) {
+      addEndpointAndRoute(serviceKey, host, port, parsed.scheme, parsed.path, 'GET', status)
+    }
+  }
+
+  // 4. URL 结果：服务 → 入口 → 路由
+  for (const item of urls) {
+    const parsed = parseURL(text(item.url))
+    if (!parsed) continue
+    const { host, scheme, port, path } = parsed
+    const ip = normalizeHost(text(item.ip))
+    const { parent } = provisionHost(host, ip)
+    const status = num(item.status_code) || num(item.statusCode)
+    const serviceKey = addService(host, port)
+    addNode({
+      key: serviceKey,
+      kind: 'service',
+      label: `${host}:${port}`,
+      host,
+      port,
+      protocol: scheme,
+      ip: ip && isIP(ip) ? ip : undefined,
+      status_code: status || undefined,
+      state: status > 0 ? 'reachable' : undefined,
+    })
+    addEdge(parent, serviceKey, 'exposes')
+    addEndpointAndRoute(serviceKey, host, port, scheme, path, text(item.method) || 'GET', status)
+  }
+
+  return { nodes: [...nodes.values()], edges, truncated: false, limit: PAGE_SIZE }
+}
+
+export default function TaskTopologyView({ taskId, taskName }: TaskTopologyViewProps) {
+  const queryClient = useQueryClient()
+
+  const queryKey = (type: ResultType) => ['task-topology', taskId, type]
+
+  // 结果页签在扫描过程中会持续增长，和项目级星图一样每 30 秒刷新。
+  const subdomainsQuery = useQuery({
+    queryKey: queryKey('subdomain'),
+    queryFn: () => resultApi.getTaskResults(taskId, { type: 'subdomain', pageSize: PAGE_SIZE }),
+    enabled: !!taskId,
+    refetchInterval: 30000,
+  })
+  const portsQuery = useQuery({
+    queryKey: queryKey('port'),
+    queryFn: () => resultApi.getTaskResults(taskId, { type: 'port', pageSize: PAGE_SIZE }),
+    enabled: !!taskId,
+    refetchInterval: 30000,
+  })
+  const servicesQuery = useQuery({
+    queryKey: queryKey('service'),
+    queryFn: () => resultApi.getTaskResults(taskId, { type: 'service', pageSize: PAGE_SIZE }),
+    enabled: !!taskId,
+    refetchInterval: 30000,
+  })
+  const urlsQuery = useQuery({
+    queryKey: queryKey('url'),
+    queryFn: () => resultApi.getTaskResults(taskId, { type: 'url', pageSize: PAGE_SIZE }),
+    enabled: !!taskId,
+    refetchInterval: 30000,
+  })
+
+  const subdomains = subdomainsQuery.data?.data.list ?? EMPTY
+  const ports = portsQuery.data?.data.list ?? EMPTY
+  const services = servicesQuery.data?.data.list ?? EMPTY
+  const urls = urlsQuery.data?.data.list ?? EMPTY
+
+  const totals = [
+    subdomainsQuery.data?.data.total ?? 0,
+    portsQuery.data?.data.total ?? 0,
+    servicesQuery.data?.data.total ?? 0,
+    urlsQuery.data?.data.total ?? 0,
+  ]
+  const truncated = totals.some((n) => n > PAGE_SIZE)
+
+  const graph = useMemo(
+    () => buildTaskGraph(taskId, taskName, subdomains, ports, services, urls),
+    [taskId, taskName, subdomains, ports, services, urls],
+  )
+
+  const isLoading =
+    subdomainsQuery.isLoading ||
+    portsQuery.isLoading ||
+    servicesQuery.isLoading ||
+    urlsQuery.isLoading
+  const isFetching =
+    subdomainsQuery.isFetching ||
+    portsQuery.isFetching ||
+    servicesQuery.isFetching ||
+    urlsQuery.isFetching
+
+  const hasAny = subdomains.length + ports.length + services.length + urls.length > 0
+
+  const graphData = useMemo<AssetGraphData>(
+    () =>
+      hasAny
+        ? { ...graph, truncated }
+        : { ...graph, nodes: [], edges: [], truncated: false },
+    [graph, hasAny, truncated],
+  )
 
   return (
-    <div className="relative w-full h-full min-h-[calc(100vh-220px)] bg-black overflow-hidden">
-      {/* 3D Canvas Container */}
-      <div ref={containerRef} className="absolute inset-0 cursor-grab active:cursor-grabbing" />
-
-      {/* Loading Overlay */}
-      {isLoadingGraph && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/50 backdrop-blur-sm z-10">
-          <div className="flex flex-col items-center gap-3">
-            <Loader2 className="h-8 w-8 animate-spin text-cyan-400" />
-            <span className="text-sm text-slate-300">正在构建资产星图...</span>
-          </div>
-        </div>
-      )}
-
-      {/* Title Overlay */}
-      <div className="absolute top-4 left-4 z-20">
-        <div className="bg-black/60 backdrop-blur-sm rounded-lg px-4 py-2 border border-slate-700/50">
-          <span className="text-sm font-bold tracking-wider text-slate-100">任务资产星图</span>
-        </div>
-      </div>
-
-      {/* Reset Button */}
-      <div className="absolute top-4 right-4 z-20">
+    <div className="flex h-full flex-col gap-3 overflow-hidden p-6">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-muted-foreground text-sm">
+          任务 → 根域名 → 子域名 → IP → 服务 → 入口，左到右分层。
+        </p>
         <Button
           variant="outline"
           size="sm"
-          onClick={resetCamera}
-          className="bg-black/60 border-slate-700 text-slate-300 hover:bg-slate-800"
+          onClick={() => queryClient.invalidateQueries({ queryKey: ['task-topology', taskId] })}
+          disabled={isFetching}
         >
-          <RotateCcw className="h-4 w-4 mr-1" />
-          重置视图
+          <RefreshCw className={cn('mr-2 h-4 w-4', isFetching && 'animate-spin')} />
+          刷新
         </Button>
       </div>
 
-      {/* Selected Node Detail Panel */}
-      {selectedNode && (
-        <div className="absolute bottom-4 left-4 right-4 z-20">
-          <div className="bg-slate-900/95 backdrop-blur-md rounded-xl border border-slate-700/50 p-4 max-w-md">
-            <div className="flex items-start justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <div 
-                  className="w-3 h-3 rounded-full" 
-                  style={{ backgroundColor: selectedNode.color, boxShadow: `0 0 10px ${selectedNode.color}` }}
-                />
-                <span className="font-semibold text-white truncate max-w-[200px]">{selectedNode.name}</span>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6 text-slate-400 hover:text-white"
-                onClick={() => setSelectedNode(null)}
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-            
-            <div className="space-y-2 text-sm">
-              <div className="flex items-center gap-2">
-                <Badge variant="outline" className="text-xs">{selectedNode.type}</Badge>
-              </div>
-              {selectedNode.data?.description && (
-                <p className="text-slate-400 text-xs">{selectedNode.data.description}</p>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Empty State */}
-      {!isLoadingGraph && nodesRef.current.length === 0 && (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div className="text-center text-slate-400">
-            <p className="text-lg mb-2">暂无扫描数据</p>
-            <p className="text-sm">扫描完成后将自动构建资产星图</p>
-          </div>
-        </div>
-      )}
-
-      {/* Instructions */}
-      <div className="absolute bottom-4 left-4 z-10 text-xs text-slate-500 space-y-1 font-mono pointer-events-none select-none bg-slate-900/60 backdrop-blur-sm p-3 rounded-lg border border-slate-800">
-        <p className="flex items-center gap-2"><span className="text-cyan-400">●</span> [左键拖拽] 旋转视图</p>
-        <p className="flex items-center gap-2"><span className="text-green-400">●</span> [右键拖拽] 平移视图</p>
-        <p className="flex items-center gap-2"><span className="text-yellow-400">●</span> [滚轮] 缩放视图</p>
-        <p className="flex items-center gap-2"><span className="text-purple-400">●</span> [点击节点] 查看详情</p>
-      </div>
+      <AssetGraphCanvas
+        className="min-h-[30rem] flex-1"
+        data={isLoading ? null : graphData}
+        loading={isLoading}
+        rootLabel="任务"
+        emptyTitle="暂无资产"
+        emptyHint="本次任务还没有子域名、端口、服务或 URL 结果"
+        truncatedText={`结果超过 ${PAGE_SIZE} 条，仅展示前 ${PAGE_SIZE} 条`}
+        note="星图展示本次任务发现的资产层级关系，不包含漏洞信息。要看漏洞，去「漏洞」标签页。"
+      />
     </div>
   )
 }

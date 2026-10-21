@@ -97,6 +97,7 @@ CREATE INDEX IF NOT EXISTS operation_logs_user_idx    ON operation_logs (user_id
 CREATE TABLE IF NOT EXISTS tasks (
     id               char(24)    PRIMARY KEY,
     workspace_id     char(24)    NOT NULL DEFAULT '000000000000000000000000',
+    project_id       bigint      NOT NULL DEFAULT 0,
     name             text        NOT NULL,
     description      text        NOT NULL DEFAULT '',
     type             text        NOT NULL,
@@ -132,6 +133,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE INDEX IF NOT EXISTS tasks_list_idx    ON tasks (status, type, updated_at DESC);
 CREATE INDEX IF NOT EXISTS tasks_ws_idx      ON tasks (workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS tasks_project_idx ON tasks (project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS tasks_created_idx ON tasks (created_at DESC);
 CREATE INDEX IF NOT EXISTS tasks_tags_gin    ON tasks USING gin (tags);
 CREATE INDEX IF NOT EXISTS tasks_name_trgm   ON tasks USING gin (name gin_trgm_ops);
@@ -343,12 +345,16 @@ CREATE TABLE IF NOT EXISTS scanner_nodes (
     system_info        jsonb       NOT NULL DEFAULT '{}'::jsonb,
     last_heartbeat     timestamptz,
     heartbeat_interval integer     NOT NULL DEFAULT 30,
+    -- 节点密钥：只存 SHA-256；原文签发时返回一次。清空并写 revoked_at 即吊销。
+    token_hash         char(64)    NOT NULL DEFAULT '',
+    revoked_at         timestamptz,
     tags               text[]      NOT NULL DEFAULT '{}',
     created_at         timestamptz NOT NULL DEFAULT now(),
     updated_at         timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS nodes_status_idx ON scanner_nodes (status, last_heartbeat DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS nodes_token_uq ON scanner_nodes (token_hash) WHERE token_hash <> '';
 
 CREATE TABLE IF NOT EXISTS plugins (
     id           char(24)    PRIMARY KEY,
@@ -405,11 +411,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS dict_type_name_uq ON dictionaries (type, name)
 CREATE TABLE IF NOT EXISTS cruise_tasks (
     id                 char(24)    PRIMARY KEY,
     workspace_id       char(24)    NOT NULL DEFAULT '000000000000000000000000',
+    -- 巡航任务必须归属项目：执行结果要并入项目资产
+    project_id         bigint      NOT NULL DEFAULT 0,
     name               text        NOT NULL,
     description        text        NOT NULL DEFAULT '',
     status             text        NOT NULL DEFAULT 'enabled',
     cron_expr          text        NOT NULL DEFAULT '',
     timezone           text        NOT NULL DEFAULT 'Asia/Shanghai',
+    -- static: 使用下面固定的 targets；project: 每次执行按 target_type 从项目整体资产派生
+    target_source      text        NOT NULL DEFAULT 'static',
     targets            text[]      NOT NULL DEFAULT '{}',
     target_type        text        NOT NULL DEFAULT '',
     task_type          text        NOT NULL DEFAULT '',
@@ -427,10 +437,12 @@ CREATE TABLE IF NOT EXISTS cruise_tasks (
     created_by         char(24),
     tags               text[]      NOT NULL DEFAULT '{}',
     created_at         timestamptz NOT NULL DEFAULT now(),
-    updated_at         timestamptz NOT NULL DEFAULT now()
+    updated_at         timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT cruise_target_source_chk CHECK (target_source IN ('static','project'))
 );
 
 CREATE INDEX IF NOT EXISTS cruise_next_run_idx ON cruise_tasks (status, next_run_at);
+CREATE INDEX IF NOT EXISTS cruise_project_idx ON cruise_tasks (project_id);
 
 CREATE TABLE IF NOT EXISTS cruise_logs (
     id           bigserial   PRIMARY KEY,

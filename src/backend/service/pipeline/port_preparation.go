@@ -88,6 +88,29 @@ func (m *PortScanPreparationModule) ModuleRun() error {
 				return nil
 			}
 
+			// 子域扫描结果：原样下沉（结果收集器要子域记录），同时转成端口扫描输入。
+			// HTTP 探测阶段已经判过 CDN，这里直接用，不再重复探测。
+			if sr, ok := data.(SubdomainResult); ok {
+				m.resultChan <- sr
+
+				domainSkip := DomainSkip{
+					Domain: sr.Host,
+					IP:     sr.IPs,
+					Skip:   sr.CDN,
+					IsCDN:  sr.CDN,
+					CDN:    sr.CDNName,
+				}
+				if domainSkip.Skip {
+					log.Printf("[%s] CDN target, skip port scan: %s (%s)", m.name, sr.Host, sr.CDNName)
+				}
+				select {
+				case <-m.ctx.Done():
+					return nil
+				case m.resultChan <- domainSkip:
+				}
+				continue
+			}
+
 			// 处理 DomainResolve 类型的数据
 			domainResolve, ok := data.(DomainResolve)
 			if !ok {
@@ -101,30 +124,20 @@ func (m *PortScanPreparationModule) ModuleRun() error {
 			go func(dr DomainResolve) {
 				defer allWg.Done()
 
-				// 创建 DomainSkip 结果
-				domainSkip := DomainSkip{
-					Domain: dr.Domain,
-					IP:     dr.IP,
-					Skip:   false,
-					IsCDN:  false,
-				}
-
-				// 执行CDN检测 - 使用域名检测
+				domainSkip := DomainSkip{Domain: dr.Domain, IP: dr.IP}
 				cdnResult := m.cdnDetector.DetectCDN(m.ctx, dr.Domain)
 				if cdnResult != nil && cdnResult.IsCDN {
 					domainSkip.IsCDN = true
 					domainSkip.CDN = cdnResult.CDNProvider
-					domainSkip.Skip = true // CDN目标跳过端口扫描
+					domainSkip.Skip = true
 					log.Printf("[%s] Detected CDN for %s: %s", m.name, dr.Domain, cdnResult.CDNProvider)
 				}
 
-				// 发送结果
 				select {
 				case <-m.ctx.Done():
 					return
 				case m.resultChan <- domainSkip:
 				}
-
 			}(domainResolve)
 		}
 	}

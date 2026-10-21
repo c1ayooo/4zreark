@@ -31,6 +31,7 @@ type PipelineManager struct {
 	modules    []ModuleRunner
 	stats      *PipelineStats
 	statsMu    sync.Mutex
+	stopOnce   sync.Once
 }
 
 // NewPipelineManager 创建流水线管理器
@@ -83,14 +84,16 @@ func (pm *PipelineManager) Wait() {
 	log.Printf("[PipelineManager] All modules completed")
 }
 
-// Stop 停止流水线
+// Stop 停止流水线（幂等：重复调用不会重复关闭通道）。
 func (pm *PipelineManager) Stop() {
-	pm.cancel()
-	// 关闭所有输入通道
-	for name, ch := range pm.inputChans {
-		log.Printf("[PipelineManager] Closing input channel for %s", name)
-		close(ch)
-	}
+	pm.stopOnce.Do(func() {
+		pm.cancel()
+		// 关闭所有输入通道
+		for name, ch := range pm.inputChans {
+			log.Printf("[PipelineManager] Closing input channel for %s", name)
+			close(ch)
+		}
+	})
 }
 
 // Context 获取上下文
@@ -190,6 +193,55 @@ func (m *BaseModule) SetProgressTracker(tracker *ProgressTracker) {
 // GetProgressTracker 获取进度追踪器
 func (m *BaseModule) GetProgressTracker() *ProgressTracker {
 	return m.progressTracker
+}
+
+// RunPassThrough 在模块不可用（缺少外部二进制等）时把输入原样转给下一个模块。
+//
+// 直接 CloseInput 会切断整条链：下游模块永远收不到数据，结果收集器也就拿不到
+// 任何结果（子域扫描明明命中，任务统计却是 0）。模块级「跳过」必须是透传而不是终止。
+func (m *BaseModule) RunPassThrough() error {
+	if m.nextModule == nil {
+		return nil
+	}
+	m.ReportModuleStart(0)
+	defer m.ReportModuleComplete()
+
+	nextRun := make(chan struct{})
+	go func() {
+		defer close(nextRun)
+		if err := m.nextModule.ModuleRun(); err != nil {
+			log.Printf("[%s] Next module error: %v", m.name, err)
+		}
+	}()
+
+	forward := func(data interface{}) bool {
+		select {
+		case <-m.ctx.Done():
+			return false
+		case m.nextModule.GetInput() <- data:
+			return true
+		}
+	}
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			m.nextModule.CloseInput()
+			<-nextRun
+			return nil
+		case data, ok := <-m.input:
+			if !ok {
+				m.nextModule.CloseInput()
+				<-nextRun
+				return nil
+			}
+			if !forward(data) {
+				m.nextModule.CloseInput()
+				<-nextRun
+				return nil
+			}
+		}
+	}
 }
 
 // ReportProgress 报告模块进度

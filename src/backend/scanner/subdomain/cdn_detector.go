@@ -2,6 +2,7 @@ package subdomain
 
 import (
 	"context"
+	"github.com/c1ayooo/4zreark/internal/useragent"
 	"net"
 	"net/http"
 	"regexp"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/c1ayooo/4zreark/config"
+	"github.com/c1ayooo/4zreark/internal/recon/cdnmatch"
 )
 
 // CDNResult represents CDN detection result
@@ -216,14 +218,8 @@ func (d *CDNDetector) checkCNAME(domain string) ([]string, string) {
 	if err == nil && cname != "" {
 		cname = strings.TrimSuffix(cname, ".")
 		cnames = append(cnames, cname)
-
-		// Check against known CDN patterns
-		lowerCname := strings.ToLower(cname)
-		for pattern, name := range d.CNAMEMap {
-			if strings.Contains(lowerCname, pattern) {
-				cdnName = name
-				break
-			}
+		if r := cdnmatch.Classify(cname, nil); r.EdgeType != "" {
+			cdnName = r.EdgeName
 		}
 	}
 
@@ -245,7 +241,7 @@ func (d *CDNDetector) checkHeaders(ctx context.Context, domain string) ([]string
 		if err != nil {
 			continue
 		}
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+		req.Header.Set("User-Agent", useragent.Pick())
 
 		resp, err := d.HTTPClient.Do(req)
 		if err != nil {
@@ -316,20 +312,10 @@ func (d *CDNDetector) checkIPRange(domain string) ([]string, string) {
 	for _, addr := range addrs {
 		if ipv4 := addr.To4(); ipv4 != nil {
 			ips = append(ips, ipv4.String())
-
-			// Check against known CDN IP ranges
-			for cdn, ranges := range d.IPRanges {
-				for _, ipnet := range ranges {
-					if ipnet.Contains(ipv4) {
-						cdnName = cdn
-						break
-					}
-				}
-				if cdnName != "" {
-					break
-				}
-			}
 		}
+	}
+	if r := cdnmatch.Classify("", ips); r.EdgeType != "" {
+		cdnName = r.EdgeName
 	}
 
 	return ips, cdnName
@@ -477,28 +463,19 @@ func (d *CDNDetector) BatchDetectCDN(ctx context.Context, domains []string, conc
 
 // IsCDNIP checks if a single IP is a known CDN IP
 func (d *CDNDetector) IsCDNIP(ip string) (bool, string) {
-	parsedIP := net.ParseIP(ip)
-	if parsedIP == nil {
+	if net.ParseIP(ip) == nil {
 		return false, ""
 	}
-
-	for cdn, ranges := range d.IPRanges {
-		for _, ipnet := range ranges {
-			if ipnet.Contains(parsedIP) {
-				return true, cdn
-			}
-		}
+	if r := cdnmatch.Classify("", []string{ip}); r.EdgeType != "" {
+		return true, r.EdgeName
 	}
 
-	// Check if IP has CDN-like reverse DNS
+	// Check if IP has CDN-like reverse DNS（headers/CNAME 之外的弱信号保留）
 	names, err := net.LookupAddr(ip)
 	if err == nil {
 		for _, name := range names {
-			lowerName := strings.ToLower(name)
-			for pattern, cdn := range d.CNAMEMap {
-				if strings.Contains(lowerName, pattern) {
-					return true, cdn
-				}
+			if r := cdnmatch.Classify(name, nil); r.EdgeType != "" {
+				return true, r.EdgeName
 			}
 		}
 	}

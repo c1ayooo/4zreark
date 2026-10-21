@@ -5,11 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/c1ayooo/4zreark/scanner/core"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/c1ayooo/4zreark/scanner/core"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 // RadScanner 使用 rad 进行浏览器爬虫（基于 Chrome）
@@ -95,7 +100,8 @@ func (r *RadScanner) Crawl(ctx context.Context, target string) (*RadResult, erro
 	defer os.Remove(outputPath)
 
 	// 构建命令
-	// rad -t target -o output --timeout timeout
+	// rad 的 CLI 在不同构建里参数不一致，没有经过验证的“限制注册域”开关；
+	// 这里不硬加未知 flag，站外链接由结果层的 scanner/scope 过滤兜底。
 	args := []string{
 		"-t", target,
 		"-o", outputPath,
@@ -121,7 +127,7 @@ func (r *RadScanner) Crawl(ctx context.Context, target string) (*RadResult, erro
 	file, err := os.Open(outputPath)
 	if err != nil {
 		// 如果没有输出文件，尝试从 stdout 解析
-		return r.parseOutput(string(output), result), nil
+		return r.parseOutput(target, string(output), result), nil
 	}
 	defer file.Close()
 
@@ -137,7 +143,7 @@ func (r *RadScanner) Crawl(ctx context.Context, target string) (*RadResult, erro
 		// 尝试解析 JSON
 		var jsonOutput RadJSONOutput
 		if err := json.Unmarshal([]byte(line), &jsonOutput); err == nil {
-			if jsonOutput.URL != "" && !seen[jsonOutput.URL] {
+			if jsonOutput.URL != "" && !seen[jsonOutput.URL] && radInScope(target, jsonOutput.URL) {
 				seen[jsonOutput.URL] = true
 				result.URLs = append(result.URLs, RadURL{
 					URL:       jsonOutput.URL,
@@ -148,7 +154,7 @@ func (r *RadScanner) Crawl(ctx context.Context, target string) (*RadResult, erro
 			}
 		} else {
 			// 纯文本，每行一个 URL
-			if strings.HasPrefix(line, "http") && !seen[line] {
+			if strings.HasPrefix(line, "http") && !seen[line] && radInScope(target, line) {
 				seen[line] = true
 				result.URLs = append(result.URLs, RadURL{
 					URL: line,
@@ -165,7 +171,7 @@ func (r *RadScanner) Crawl(ctx context.Context, target string) (*RadResult, erro
 }
 
 // parseOutput 从输出文本解析 URL
-func (r *RadScanner) parseOutput(output string, result *RadResult) *RadResult {
+func (r *RadScanner) parseOutput(target, output string, result *RadResult) *RadResult {
 	seen := make(map[string]bool)
 	lines := strings.Split(output, "\n")
 
@@ -178,7 +184,7 @@ func (r *RadScanner) parseOutput(output string, result *RadResult) *RadResult {
 		// 尝试解析 JSON
 		var jsonOutput RadJSONOutput
 		if err := json.Unmarshal([]byte(line), &jsonOutput); err == nil {
-			if jsonOutput.URL != "" && !seen[jsonOutput.URL] {
+			if jsonOutput.URL != "" && !seen[jsonOutput.URL] && radInScope(target, jsonOutput.URL) {
 				seen[jsonOutput.URL] = true
 				result.URLs = append(result.URLs, RadURL{
 					URL:       jsonOutput.URL,
@@ -187,7 +193,7 @@ func (r *RadScanner) parseOutput(output string, result *RadResult) *RadResult {
 					ParentURL: jsonOutput.ParentURL,
 				})
 			}
-		} else if strings.HasPrefix(line, "http") && !seen[line] {
+		} else if strings.HasPrefix(line, "http") && !seen[line] && radInScope(target, line) {
 			seen[line] = true
 			result.URLs = append(result.URLs, RadURL{
 				URL: line,
@@ -200,6 +206,34 @@ func (r *RadScanner) parseOutput(output string, result *RadResult) *RadResult {
 	result.Total = len(result.URLs)
 
 	return result
+}
+
+// radInScope 把 rad 的输出限制在目标的注册域内（裸 IP 只允许同一 IP）。
+// rad 本身没有稳定的作用域 CLI 参数，这一层是工具链里的兜底；结果落库前
+// 仍会再过一次 scanner/scope。
+func radInScope(target, candidate string) bool {
+	tu, err := url.Parse(target)
+	if err != nil || tu.Hostname() == "" {
+		return false
+	}
+	cu, err := url.Parse(candidate)
+	if err != nil || cu.Hostname() == "" {
+		return false
+	}
+	th := strings.ToLower(tu.Hostname())
+	ch := strings.ToLower(cu.Hostname())
+	if net.ParseIP(th) != nil {
+		return ch == th
+	}
+	if ch == th {
+		return true
+	}
+	tr, err1 := publicsuffix.EffectiveTLDPlusOne(th)
+	cr, err2 := publicsuffix.EffectiveTLDPlusOne(ch)
+	if err1 == nil && err2 == nil {
+		return tr == cr
+	}
+	return strings.HasSuffix(ch, "."+th)
 }
 
 // QuickCrawl 快速爬取

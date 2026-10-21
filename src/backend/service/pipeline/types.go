@@ -80,6 +80,11 @@ type AssetHttp struct {
 	ContentType  string   `json:"content_type"` // 内容类型
 	Technologies []string `json:"technologies"` // 识别的技术栈
 	Fingerprints []string `json:"fingerprints"` // 指纹信息
+	// 图标：扫描阶段顺手抓到就随资产一起入库，前端按 sha256 取图。
+	IconSHA256      string `json:"icon_sha256,omitempty"`
+	IconMMH3        int64  `json:"icon_mmh3,omitempty"`
+	IconContentType string `json:"icon_content_type,omitempty"`
+	IconData        []byte `json:"-"`
 }
 
 // UrlResult URL扫描结果

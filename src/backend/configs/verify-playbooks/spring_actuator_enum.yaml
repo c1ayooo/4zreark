@@ -1,0 +1,18 @@
+# 剧本：Spring Boot Actuator 端点枚举（证明可达）
+# 服务模板：spring_actuator / actuator_mappings / chain_mappings_to_hidden
+# 判据：/actuator 返 _links → env/mappings 可读即证实（mappings 的路由表是未授权面直接来源）
+id: spring_actuator_enum
+name: Spring Boot Actuator 端点枚举
+refuted_status_in: [401, 403, 404]
+steps:
+  - name: actuator_root
+    request: { method: GET, url: "https://{{host}}/actuator" }
+    expect: { status: 200, contains: ["_links"] }
+  - name: actuator_env
+    request: { method: GET, url: "https://{{host}}/actuator/env" }
+    expect: { status: 200, contains_any: ["propertySources", "property"] }
+  - name: actuator_mappings
+    request: { method: GET, url: "https://{{host}}/actuator/mappings" }
+    expect: { status: 200, contains_any: ["contexts", "handler"] }
+limits: { max_requests: 4, per_step_timeout_ms: 8000 }
+note: 全部只读；mappings 提取的路由应逐个登记为 fp/ 功能点（未授权面）。

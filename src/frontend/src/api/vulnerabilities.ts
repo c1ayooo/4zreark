@@ -34,6 +34,10 @@ const transformVuln = (v: Record<string, unknown>): Vulnerability => ({
   verifiedAt: v.verified_at as string,
   verifiedBy: v.verified_by as string,
   fixedAt: v.fixed_at as string,
+  reviewer: v.reviewer as string,
+  reviewNote: v.review_note as string,
+  reviewedAt: v.reviewed_at as string,
+  reviewCount: v.review_count as number,
   createdAt: v.created_at as string,
   updatedAt: v.updated_at as string,
 })
@@ -55,11 +59,46 @@ const transformPOC = (p: Record<string, unknown>): POC => ({
   updatedAt: p.updated_at as string,
 })
 
+export type VulnStatus = 'new' | 'confirmed' | 'fixed' | 'ignored' | 'false_positive'
+
+// 后端真实状态（DB CHECK 与 models.VulnStatus 一致）。'open' 是历史遗留写法，
+// 现在统一按 'new' 处理；兼容时用 vulnStatusLabel 出中文标签。
+export const VULN_STATUSES: VulnStatus[] = ['new', 'confirmed', 'fixed', 'ignored', 'false_positive']
+
+export const vulnStatusLabel: Record<VulnStatus, string> = {
+  new: '待复核',
+  confirmed: '已确认',
+  fixed: '已修复',
+  ignored: '已忽略',
+  false_positive: '误报',
+}
+
+// 复核状态机：目标状态是否可从当前状态流转（与后端 models.VulnTransitionAllowed 一致）。
+export const vulnTransitions: Record<VulnStatus, VulnStatus[]> = {
+  new: ['confirmed', 'fixed', 'false_positive', 'ignored'],
+  confirmed: ['new', 'fixed', 'false_positive', 'ignored'],
+  fixed: ['new'],
+  false_positive: ['new'],
+  ignored: ['new'],
+}
+
+// 一次复核记录：谁在什么时候把状态从什么改成了什么、为什么。
+export interface VulnReview {
+  id: number
+  vuln_id: string
+  from_status: VulnStatus
+  to_status: VulnStatus
+  reviewer: string
+  note: string
+  auto: boolean
+  created_at: string
+}
+
 export interface Vulnerability {
   id: string
   name: string
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info'
-  status: 'open' | 'confirmed' | 'fixed' | 'ignored' | 'false_positive'
+  status: VulnStatus
   type: string
   cve?: string
   cwe?: string
@@ -78,6 +117,10 @@ export interface Vulnerability {
   verifiedAt?: string
   verifiedBy?: string
   fixedAt?: string
+  reviewer?: string
+  reviewNote?: string
+  reviewedAt?: string
+  reviewCount?: number
   createdAt: string
   updatedAt: string
 }
@@ -191,8 +234,20 @@ export const vulnApi = {
   deleteVulnerability: (id: string): Promise<ApiResponse<null>> =>
     api.delete(`/vulnerabilities/${id}`),
 
-  batchUpdateStatus: (ids: string[], status: string): Promise<ApiResponse<null>> =>
-    api.post('/vulnerabilities/batch-update', { vuln_ids: ids, status }),
+  batchUpdateStatus: (ids: string[], status: string, note?: string): Promise<ApiResponse<{ updated: number; skipped: number }>> =>
+    api.post('/vulnerabilities/batch-update', { vuln_ids: ids, status, note }),
+
+  // 复核：流转状态 + 记录复核人/意见。note 必填（后端要求）。
+  reviewVulnerability: (id: string, toStatus: VulnStatus, note: string): Promise<ApiResponse<{ vulnerability: Record<string, unknown>; review: VulnReview }>> =>
+    api.post(`/vulnerabilities/${id}/review`, { to_status: toStatus, note }),
+
+  getReviews: async (id: string): Promise<VulnReview[]> => {
+    const response: ApiResponse<{ items: VulnReview[]; total: number }> = await api.get(`/vulnerabilities/${id}/reviews`)
+    return response.data?.items ?? []
+  },
+
+  getReviewStats: (workspaceId?: string): Promise<ApiResponse<Record<string, unknown>>> =>
+    api.get('/vulnerabilities/review-stats', { params: workspaceId ? { workspace_id: workspaceId } : {} }),
 
   verifyVulnerability: async (id: string): Promise<ApiResponse<VulnVerifyResult>> => {
     const response: ApiResponse<{ vulnerability: Record<string, unknown>; verified: boolean }> = 

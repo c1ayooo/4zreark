@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/c1ayooo/4zreark/scanner/core"
+	"github.com/c1ayooo/4zreark/scanner/scope"
 	"github.com/c1ayooo/4zreark/scanner/subdomain"
-	"github.com/c1ayooo/4zreark/scanner/subdomain/thirdparty"
 	"github.com/c1ayooo/4zreark/scanner/webscan"
 )
 
@@ -21,10 +21,17 @@ type SubdomainScanModule struct {
 	httpxScanner    *webscan.HttpxScanner // HTTP 探测器
 	resultChan      chan interface{}
 	config          *subdomain.ActiveScannerConfig
-	apiConfig       *thirdparty.APIConfig
 	resolveIP       bool
 	enableHTTPProbe bool // 是否进行 HTTP 探测
 	dnsResolvers    []string
+	scope           *scope.Scope
+}
+
+// SetScope 设置任务授权边界。
+func (m *SubdomainScanModule) SetScope(s *scope.Scope) { m.scope = s }
+
+func (m *SubdomainScanModule) allowsHost(host string) bool {
+	return m.scope == nil || m.scope.AllowsHost(host)
 }
 
 // SubdomainScanConfig 子域名扫描配置
@@ -34,6 +41,8 @@ type SubdomainScanConfig struct {
 	EnableBrute      bool // 是否启用字典爆破 (默认 true)
 	EnableRecursive  bool // 是否启用递归爆破 (默认 false)
 	RecursiveDepth   int  // 递归深度 (默认 2)
+	// Wordlist 任务级子域字典；为空时用全局内置词表。
+	Wordlist []string
 
 	// API 配置
 	EnableAPI     bool     // 是否启用第三方API (默认 true)
@@ -56,7 +65,7 @@ type SubdomainScanConfig struct {
 // DefaultSubdomainScanConfig 默认配置
 func DefaultSubdomainScanConfig() *SubdomainScanConfig {
 	return &SubdomainScanConfig{
-		BruteConcurrency: 500,
+		BruteConcurrency: 20,
 		EnableBrute:      true,
 		EnableRecursive:  false,
 		RecursiveDepth:   2,
@@ -103,21 +112,24 @@ func NewSubdomainScanModuleWithConfig(ctx context.Context, nextModule ModuleRunn
 		APIMaxResults:     scanConfig.APIMaxResults,
 		VerifySubdomains:  scanConfig.VerifySubdomains,
 		EnableHTTPProbe:   false,
-	}
-
-	// 构建 API 配置
-	apiCfg := &thirdparty.APIConfig{
-		FofaEmail:         scanConfig.FofaEmail,
-		FofaKey:           scanConfig.FofaKey,
-		HunterKey:         scanConfig.HunterKey,
-		QuakeKey:          scanConfig.QuakeKey,
-		SecurityTrailsKey: scanConfig.SecurityTrailsKey,
+		Wordlist:          scanConfig.Wordlist,
+		EngineKeys: map[string]string{
+			"fofa":           scanConfig.FofaKey,
+			"hunter":         scanConfig.HunterKey,
+			"quake":          scanConfig.QuakeKey,
+			"securitytrails": scanConfig.SecurityTrailsKey,
+		},
 	}
 
 	// 创建 httpx 扫描器（如果启用 HTTP 探测）
+	// 并发跟随爆破并发（由任务级 rate 推导），不再硬编码 30。
 	var httpxScanner *webscan.HttpxScanner
 	if scanConfig.EnableHTTPProbe {
-		httpxScanner = webscan.NewHttpxScanner(30) // 30 并发
+		probeConcurrency := scanConfig.BruteConcurrency
+		if probeConcurrency <= 0 {
+			probeConcurrency = 10
+		}
+		httpxScanner = webscan.NewHttpxScanner(probeConcurrency)
 	}
 
 	m := &SubdomainScanModule{
@@ -127,11 +139,10 @@ func NewSubdomainScanModuleWithConfig(ctx context.Context, nextModule ModuleRunn
 			nextModule: nextModule,
 			dupChecker: NewDuplicateChecker(),
 		},
-		activeScanner:   subdomain.NewActiveScanner(activeCfg, apiCfg),
+		activeScanner:   subdomain.NewActiveScanner(activeCfg),
 		httpxScanner:    httpxScanner,
 		resultChan:      make(chan interface{}, 2000), // 增大缓冲区
 		config:          activeCfg,
-		apiConfig:       apiCfg,
 		resolveIP:       scanConfig.ResolveIP,
 		enableHTTPProbe: scanConfig.EnableHTTPProbe,
 		dnsResolvers: []string{
@@ -248,6 +259,9 @@ func (m *SubdomainScanModule) scanSubdomains(domain string) {
 
 	// 使用回调函数实时处理结果
 	err := m.activeScanner.ScanWithCallback(m.ctx, domain, func(subResult subdomain.SubdomainResult) {
+		if !m.allowsHost(subResult.FullDomain) {
+			return
+		}
 		// 去重检查
 		if m.dupChecker.IsSubdomainDuplicate(subResult.FullDomain) {
 			return
@@ -269,11 +283,17 @@ func (m *SubdomainScanModule) scanSubdomains(domain string) {
 		log.Printf("[%s] Found subdomain: %s (IPs: %v)", m.name, subResult.FullDomain, result.IPs)
 
 		if m.enableHTTPProbe && m.httpxScanner != nil {
-			// 如果启用了 HTTP 探测，先收集起来
+			// 小批探测：每攒够一批就探测并立即下发，页面不用等整轮枚举结束。
+			// 结果按子域逐条发送，扫描阶段不做去重，去重留给任务结束后的归一步骤。
 			collectedSubdomains = append(collectedSubdomains, subResult.FullDomain)
 			collectedResults = append(collectedResults, result)
+			if len(collectedSubdomains) >= subdomainProbeBatchSize {
+				m.enrichAndSend(collectedSubdomains, collectedResults)
+				collectedSubdomains = nil
+				collectedResults = nil
+			}
 		} else {
-			// 否则直接发送结果
+			// 未启用 HTTP 探测时直接发送结果
 			select {
 			case <-m.ctx.Done():
 				return
@@ -286,78 +306,90 @@ func (m *SubdomainScanModule) scanSubdomains(domain string) {
 		log.Printf("[%s] Scan error for %s: %v", m.name, domain, err)
 	}
 
-	// 如果启用了 HTTP 探测，批量进行探测
+	// 处理最后不足一批的子域
 	if m.enableHTTPProbe && m.httpxScanner != nil && len(collectedSubdomains) > 0 {
-		log.Printf("[%s] Starting HTTP probe for %d subdomains", m.name, len(collectedSubdomains))
-
-		ctx2, cancel2 := context.WithTimeout(m.ctx, 15*time.Minute)
-		httpxResults := m.httpxScanner.EnrichSubdomains(ctx2, collectedSubdomains)
-		cancel2()
-
-		log.Printf("[%s] HTTP probe completed, got %d results", m.name, len(httpxResults))
-
-		// 创建 httpx 结果映射
-		httpxMap := make(map[string]*webscan.HttpxResult)
-		for _, hr := range httpxResults {
-			httpxMap[hr.Host] = hr
-		}
-
-		// 丰富子域名结果并发送
-		for _, result := range collectedResults {
-			if hr, ok := httpxMap[result.Host]; ok {
-				// 丰富结果数据
-				result.IPs = hr.IPs
-				result.Title = hr.Title
-				result.StatusCode = hr.StatusCode
-				result.WebServer = hr.WebServer
-				result.Technologies = hr.Technologies
-				result.CDN = hr.CDN
-				result.CDNName = hr.CDNName
-				result.URL = hr.URL
-				result.Source = "httpx"
-			}
-
-			select {
-			case <-m.ctx.Done():
-				return
-			case m.resultChan <- result:
-			}
-		}
+		m.enrichAndSend(collectedSubdomains, collectedResults)
 	}
 
 	log.Printf("[%s] Subdomain scan completed for %s", m.name, domain)
 }
 
+// subdomainProbeBatchSize 是单次 HTTP 探测的子域数量。
+// 太大等得久，太小会频繁启动 httpx；20 条约等于几秒的枚举量。
+const subdomainProbeBatchSize = 20
+
+// enrichAndSend 对一小批子域做 HTTP 探测，然后逐条发送增强后的结果。
+func (m *SubdomainScanModule) enrichAndSend(subdomains []string, results []SubdomainResult) {
+	if len(results) == 0 {
+		return
+	}
+
+	ctx2, cancel2 := context.WithTimeout(m.ctx, 5*time.Minute)
+	httpxResults := m.httpxScanner.EnrichSubdomains(ctx2, subdomains)
+	cancel2()
+
+	httpxMap := make(map[string]*webscan.HttpxResult, len(httpxResults))
+	for _, hr := range httpxResults {
+		httpxMap[hr.Host] = hr
+	}
+
+	for _, result := range results {
+		if hr, ok := httpxMap[result.Host]; ok {
+			result.IPs = hr.IPs
+			result.Title = hr.Title
+			result.StatusCode = hr.StatusCode
+			result.WebServer = hr.WebServer
+			result.Technologies = hr.Technologies
+			result.CDN = hr.CDN
+			result.CDNName = hr.CDNName
+			result.URL = hr.URL
+			result.Source = "httpx"
+		}
+
+		select {
+		case <-m.ctx.Done():
+			return
+		case m.resultChan <- result:
+		}
+	}
+}
+
 // resolveIPs 解析域名的 IP 地址
 func (m *SubdomainScanModule) resolveIPs(domain string) []string {
-	var ips []string
-
-	// 使用自定义 resolver
-	resolver := &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			d := net.Dialer{
-				Timeout: 5 * time.Second,
-			}
-			// 随机选择一个 DNS 服务器
-			dnsServer := m.dnsResolvers[0]
-			return d.DialContext(ctx, "udp", dnsServer)
-		},
+	resolvers := m.dnsResolvers
+	if len(resolvers) == 0 {
+		resolvers = []string{"223.5.5.5:53", "114.114.114.114:53"}
 	}
 
-	ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
-	defer cancel()
+	// 依次尝试所有 resolver。只固定用第一个时，一旦那台 DNS 不可达
+	// （被墙、限流、超时），解析结果为空，端口扫描拿不到 IP，下游全断。
+	for _, dnsServer := range resolvers {
+		server := dnsServer
+		resolver := &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+				d := net.Dialer{Timeout: 3 * time.Second}
+				return d.DialContext(ctx, "udp", server)
+			},
+		}
 
-	addrs, err := resolver.LookupIPAddr(ctx, domain)
-	if err != nil {
-		return ips
+		ctx, cancel := context.WithTimeout(m.ctx, 5*time.Second)
+		addrs, err := resolver.LookupIPAddr(ctx, domain)
+		cancel()
+		if err != nil || len(addrs) == 0 {
+			continue
+		}
+
+		var ips []string
+		for _, addr := range addrs {
+			ips = append(ips, addr.IP.String())
+		}
+		if len(ips) > 0 {
+			return ips
+		}
 	}
 
-	for _, addr := range addrs {
-		ips = append(ips, addr.IP.String())
-	}
-
-	return ips
+	return nil
 }
 
 // DomainVerifyModule 子域名安全检测模块
@@ -368,12 +400,16 @@ type DomainVerifyModule struct {
 	takeoverScanner *subdomain.TakeoverScanner
 	resultChan      chan interface{}
 	concurrency     int
+	targetDelay     time.Duration
 }
+
+// SetTargetDelay 设置单目标之间的间隔，用于控制请求节奏、避免被封 IP。
+func (m *DomainVerifyModule) SetTargetDelay(d time.Duration) { m.targetDelay = d }
 
 // NewDomainVerifyModule 创建域名验证模块
 func NewDomainVerifyModule(ctx context.Context, nextModule ModuleRunner, concurrency int) *DomainVerifyModule {
 	if concurrency <= 0 {
-		concurrency = 50
+		concurrency = 10
 	}
 
 	m := &DomainVerifyModule{
@@ -384,7 +420,7 @@ func NewDomainVerifyModule(ctx context.Context, nextModule ModuleRunner, concurr
 			dupChecker: NewDuplicateChecker(),
 		},
 		domainScanner:   subdomain.NewDomainScanner(10),
-		takeoverScanner: subdomain.NewTakeoverScanner(20),
+		takeoverScanner: subdomain.NewTakeoverScanner(10),
 		resultChan:      make(chan interface{}, 500),
 		concurrency:     concurrency,
 	}
@@ -457,6 +493,13 @@ func (m *DomainVerifyModule) ModuleRun() error {
 			allWg.Add(1)
 			go func(sr SubdomainResult) {
 				defer allWg.Done()
+				if m.targetDelay > 0 {
+					select {
+					case <-m.ctx.Done():
+						return
+					case <-time.After(m.targetDelay):
+					}
+				}
 				m.checkSubdomain(sr)
 			}(subResult)
 		}

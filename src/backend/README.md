@@ -1,6 +1,6 @@
-# Moon-Gazing-Tower (望月塔)
+# 4zreark
 
-一款现代化的自动化安全扫描平台，集成资产管理、漏洞扫描、任务调度等功能。
+资产侦察与漏洞管理平台，集成资产治理、漏洞扫描、任务调度、情报富化与企业信息收集等功能。
 
 ## 功能特性
 
@@ -48,10 +48,9 @@
 ## 技术栈
 
 **后端**
-- Go 1.24
+- Go 1.26.3
 - Gin Web Framework
-- MongoDB
-- Redis（可选）
+- PostgreSQL 16
 
 **前端**
 - React 18
@@ -69,9 +68,9 @@
 ### 手动部署
 
 #### 环境要求
-- Go 1.21+
-- MongoDB 5.0+
-- Redis 6.0+（可选，用于任务队列）
+- Go 1.26.3+（`internal/recon` 能力包声明 `go 1.26.3`，低于此版本在 `GOTOOLCHAIN=local` 下会直接拒编）
+- libpcap-dev（ksubdomain / naabu 依赖）
+- PostgreSQL 16（不再需要 MongoDB 与 Redis）
 
 #### 配置
 
@@ -133,11 +132,11 @@ redis:
 
 ```
 
-2、按需将下方扫描工具放置在`Moon-Gazing-Tower/tools/linux/`目录
+2、按需将下方扫描工具放置在`4zreark/tools/linux/`目录
 
 ```shell
 $ wget https://github.com/projectdiscovery/subfinder/releases/download/v2.10.1/subfinder_2.10.1_linux_amd64.zip
-$ mv subfinder /<path>/Moon-Gazing-Tower/tools/linux/
+$ mv subfinder /<path>/4zreark/tools/linux/
 
 ```
 
@@ -198,4 +197,3 @@ MIT License
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=SantaVp3/Moon-Gazing-Tower&type=date&legend=top-left)](https://www.star-history.com/#SantaVp3/Moon-Gazing-Tower&type=date&legend=top-left)

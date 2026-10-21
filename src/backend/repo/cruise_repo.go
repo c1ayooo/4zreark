@@ -41,12 +41,14 @@ type CruiseRepo interface {
 
 type cruiseRepo struct{ r *Repo }
 
-const cruiseColumns = `id, workspace_id, name, description, status, cron_expr, timezone,
-	targets, target_type, task_type, config, notify_on_complete, notify_on_vuln,
+const cruiseColumns = `id, workspace_id, project_id, target_source, name, description, status,
+	cron_expr, timezone, targets, target_type, task_type, config, notify_on_complete, notify_on_vuln,
 	notify_channels, last_run_at, next_run_at, run_count, success_count, fail_count,
 	last_task_id, last_status, created_by, tags, created_at, updated_at`
 
 var cruiseUpdatable = map[string]string{
+	"project_id":         "project_id",
+	"target_source":      "target_source",
 	"name":               "name",
 	"description":        "description",
 	"status":             "status",
@@ -81,19 +83,20 @@ var cruiseColumnConv = map[string]func(any) (any, error){
 
 func scanCruise(row pgx.Row) (*models.CruiseTask, error) {
 	var (
-		c        models.CruiseTask
-		hexID    string
-		wsID     string
-		status   string
-		taskType string
-		cfgB     []byte
-		lastRun  *time.Time
-		nextRun  *time.Time
-		createdB *string
-		created  time.Time
-		updated  time.Time
+		c            models.CruiseTask
+		hexID        string
+		wsID         string
+		targetSource string
+		status       string
+		taskType     string
+		cfgB         []byte
+		lastRun      *time.Time
+		nextRun      *time.Time
+		createdB     *string
+		created      time.Time
+		updated      time.Time
 	)
-	err := row.Scan(&hexID, &wsID, &c.Name, &c.Description, &status, &c.CronExpr, &c.Timezone,
+	err := row.Scan(&hexID, &wsID, &c.ProjectID, &targetSource, &c.Name, &c.Description, &status, &c.CronExpr, &c.Timezone,
 		&c.Targets, &c.TargetType, &taskType, &cfgB, &c.NotifyOnComplete, &c.NotifyOnVuln,
 		&c.NotifyChannels, &lastRun, &nextRun, &c.RunCount, &c.SuccessCount, &c.FailCount,
 		&c.LastTaskID, &c.LastStatus, &createdB, &c.Tags, &created, &updated)
@@ -108,6 +111,10 @@ func scanCruise(row pgx.Row) (*models.CruiseTask, error) {
 	}
 	if c.WorkspaceID, err = objectIDFromHex(wsID); err != nil {
 		return nil, err
+	}
+	c.TargetSource = targetSource
+	if c.TargetSource == "" {
+		c.TargetSource = models.CruiseTargetSourceStatic
 	}
 	if createdB != nil {
 		if c.CreatedBy, err = objectIDFromHex(*createdB); err != nil {
@@ -139,6 +146,9 @@ func (r *cruiseRepo) Create(ctx context.Context, c *models.CruiseTask) error {
 	if c.Timezone == "" {
 		c.Timezone = "Asia/Shanghai"
 	}
+	if c.TargetSource == "" {
+		c.TargetSource = models.CruiseTargetSourceStatic
+	}
 	cfg, err := jsonb(c.Config)
 	if err != nil {
 		return err
@@ -147,8 +157,9 @@ func (r *cruiseRepo) Create(ctx context.Context, c *models.CruiseTask) error {
 	_, err = r.r.pool.Exec(ctx,
 		`insert into cruise_tasks (`+cruiseColumns+`)
 		 values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
-		         $19,$20,$21,$22,$23,$24,$25)`,
-		c.ID.Hex(), workspaceIDHex(c.WorkspaceID), c.Name, c.Description, string(c.Status),
+		         $19,$20,$21,$22,$23,$24,$25,$26,$27)`,
+		c.ID.Hex(), workspaceIDHex(c.WorkspaceID), c.ProjectID, c.TargetSource,
+		c.Name, c.Description, string(c.Status),
 		c.CronExpr, c.Timezone, textArray(c.Targets), c.TargetType, string(c.TaskType), cfg,
 		c.NotifyOnComplete, c.NotifyOnVuln, textArray(c.NotifyChannels),
 		timeToPG(c.LastRunAt), timeToPG(c.NextRunAt), c.RunCount, c.SuccessCount, c.FailCount,

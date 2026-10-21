@@ -472,6 +472,11 @@ func (s *SprayScanner) parseOutput(outputPath string) ([]SprayEntry, error) {
 			continue
 		}
 
+		// spray 自己标记为 fuzzy 的条目是软 404/WAF 挑战页，直接丢弃
+		if jsonOutput.Fuzzy {
+			continue
+		}
+
 		// 去重 - 使用 URL 或 URL+Path 作为唯一键
 		uniqueKey := jsonOutput.URL
 		if jsonOutput.Path != "" {

@@ -3,6 +3,7 @@ package middleware
 import (
 	"strings"
 
+	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/service"
 	"github.com/c1ayooo/4zreark/utils"
 
@@ -60,6 +61,37 @@ func AdminMiddleware() gin.HandlerFunc {
 		role, exists := c.Get("role")
 		if !exists || role != "admin" {
 			utils.Forbidden(c, "需要管理员权限")
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+// RequirePermission 按动作权限码校验；admin 始终放行。
+// 权限点来自 roles.permissions（v4 §18.2），不在前端隐藏按钮代替。
+func RequirePermission(code string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		role, exists := c.Get("role")
+		if !exists {
+			utils.Forbidden(c, "权限不足")
+			c.Abort()
+			return
+		}
+		roleName, _ := role.(string)
+		if roleName == "admin" {
+			c.Next()
+			return
+		}
+		r := repo.Default()
+		if r == nil {
+			utils.Error(c, utils.ErrCodeDatabaseError, "数据层未初始化")
+			c.Abort()
+			return
+		}
+		ok, err := r.Roles().HasPermission(c.Request.Context(), roleName, code)
+		if err != nil || !ok {
+			utils.Forbidden(c, "缺少权限："+code)
 			c.Abort()
 			return
 		}

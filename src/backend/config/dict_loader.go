@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,8 +145,8 @@ func LoadDictConfig() *DictConfig {
 		// Load directories
 		dictConfig.Directories = loadTextList(filepath.Join(txtPath, "directories.txt"))
 
-		// Load fingerprints
-		dictConfig.Fingerprints = loadFingerprintConfig(filepath.Join(yamlPath, "fingerprints.yaml"))
+		// T13：旧指纹规则文件引用已删除（文件本就不存在）。
+		// 指纹规则由 reconkit 内置快照 + sensitive.yaml 提供。
 
 		// Load CDN config
 		dictConfig.CDN = loadCDNConfig(filepath.Join(yamlPath, "cdn.yaml"))
@@ -175,14 +176,13 @@ func GetDictConfig() *DictConfig {
 func loadTextList(filePath string) []string {
 	var result []string
 
-	file, err := os.Open(filePath)
+	data, err := ReadDictFile(filePath)
 	if err != nil {
 		// Return empty list if file not found
 		return result
 	}
-	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		// Skip empty lines and comments
@@ -198,7 +198,7 @@ func loadTextList(filePath string) []string {
 func loadFingerprintConfig(filePath string) *FingerprintConfig {
 	config := &FingerprintConfig{}
 
-	data, err := os.ReadFile(filePath)
+	data, err := ReadDictFile(filePath)
 	if err != nil {
 		return config
 	}
@@ -211,7 +211,7 @@ func loadFingerprintConfig(filePath string) *FingerprintConfig {
 func loadCDNConfig(filePath string) *CDNConfig {
 	config := &CDNConfig{}
 
-	data, err := os.ReadFile(filePath)
+	data, err := ReadDictFile(filePath)
 	if err != nil {
 		return config
 	}
@@ -224,7 +224,7 @@ func loadCDNConfig(filePath string) *CDNConfig {
 func loadVulnConfig(filePath string) *VulnConfig {
 	config := &VulnConfig{}
 
-	data, err := os.ReadFile(filePath)
+	data, err := ReadDictFile(filePath)
 	if err != nil {
 		return config
 	}
@@ -239,7 +239,7 @@ func loadPortsConfig(filePath string) *PortsConfig {
 		PortServiceMap: make(map[int]string),
 	}
 
-	data, err := os.ReadFile(filePath)
+	data, err := ReadDictFile(filePath)
 	if err != nil {
 		return config
 	}
@@ -255,7 +255,7 @@ func loadFaviconHashConfig(filePath string) *FaviconHashConfig {
 		FaviconMD5:    make(map[string]string),
 	}
 
-	data, err := os.ReadFile(filePath)
+	data, err := ReadDictFile(filePath)
 	if err != nil {
 		return config
 	}

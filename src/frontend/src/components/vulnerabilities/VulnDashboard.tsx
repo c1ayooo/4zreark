@@ -41,41 +41,31 @@ export default function VulnDashboard({ workspaceId }: VulnDashboardProps) {
       key: 'critical',
       label: '严重',
       icon: ShieldX,
-      color: 'text-red-600',
-      bgColor: 'bg-red-50 dark:bg-red-950',
-      borderColor: 'border-red-200 dark:border-red-800',
+      color: 'text-red-500',
     },
     {
       key: 'high',
       label: '高危',
       icon: ShieldAlert,
-      color: 'text-orange-600',
-      bgColor: 'bg-orange-50 dark:bg-orange-950',
-      borderColor: 'border-orange-200 dark:border-orange-800',
+      color: 'text-orange-500',
     },
     {
       key: 'medium',
       label: '中危',
       icon: AlertTriangle,
-      color: 'text-yellow-600',
-      bgColor: 'bg-yellow-50 dark:bg-yellow-950',
-      borderColor: 'border-yellow-200 dark:border-yellow-800',
+      color: 'text-yellow-500',
     },
     {
       key: 'low',
       label: '低危',
       icon: Shield,
-      color: 'text-blue-600',
-      bgColor: 'bg-blue-50 dark:bg-blue-950',
-      borderColor: 'border-blue-200 dark:border-blue-800',
+      color: 'text-blue-500',
     },
     {
       key: 'info',
       label: '信息',
       icon: ShieldCheck,
-      color: 'text-gray-600',
-      bgColor: 'bg-gray-50 dark:bg-gray-950',
-      borderColor: 'border-gray-200 dark:border-gray-800',
+      color: 'text-muted-foreground',
     },
   ]
 
@@ -118,21 +108,17 @@ export default function VulnDashboard({ workspaceId }: VulnDashboardProps) {
           severityCards.map((item) => {
             const Icon = item.icon
             const count = stats?.severityCounts?.[item.key as keyof typeof stats.severityCounts] || 0
+            const total = stats?.total || 0
+            const ratio = total ? Math.round((count / total) * 100) : 0
             return (
-              <Card
-                key={item.key}
-                className={cn('border-l-4', item.borderColor, item.bgColor)}
-              >
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className={cn('text-3xl font-bold', item.color)}>
-                        {count}
-                      </p>
-                      <p className="text-sm text-muted-foreground">{item.label}漏洞</p>
-                    </div>
-                    <Icon className={cn('h-8 w-8', item.color, 'opacity-80')} />
-                  </div>
+              <Card key={item.key}>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">{item.label}漏洞</CardTitle>
+                  <Icon className={cn('h-4 w-4', item.color)} />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{count}</div>
+                  <p className="text-xs text-muted-foreground">占比 {ratio}%</p>
                 </CardContent>
               </Card>
             )

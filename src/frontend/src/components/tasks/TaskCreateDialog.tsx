@@ -1,6 +1,9 @@
 import { useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { taskApi, TaskConfig } from '@/api/tasks'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { taskApi, templateApi, TaskConfig, TaskTemplate } from '@/api/tasks'
+import TaskTemplatesDialog from '@/components/tasks/TaskTemplatesDialog'
+import { assetApi } from '@/api/assets'
+import { dictionaryApi } from '@/api/sources'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -61,12 +64,45 @@ export default function TaskCreateDialog({ open, onOpenChange }: TaskCreateDialo
       portRange: '1-65535',
       timeout: 30,
       concurrent: 10,
+      rate_per_sec: 20,
+      target_delay_ms: 200,
     } as TaskConfig,
   })
 
   // 直接输入的目标
   const [directTargets, setDirectTargets] = useState<string[]>([])
   const [targetInput, setTargetInput] = useState('')
+  // 归属项目：扫描结果自动并入该项目的资产
+  const [projectId, setProjectId] = useState(0)
+  // 任务模板：套用模块组合与节奏
+  const [templateId, setTemplateId] = useState('')
+  const [templatesOpen, setTemplatesOpen] = useState(false)
+
+  const templatesRes = useQuery({
+    queryKey: ['task-templates'],
+    queryFn: () => templateApi.list(),
+    enabled: open,
+  })
+  const templates: TaskTemplate[] = templatesRes.data?.data ?? []
+
+  const { data: projectsRes } = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => assetApi.projects(),
+  })
+  const projects = projectsRes?.data ?? []
+
+  const subDicts = useQuery({
+    queryKey: ['task-dicts', 'subdomain'],
+    queryFn: () => dictionaryApi.list({ type: 'subdomain', page: 1, page_size: 100 }),
+    enabled: open,
+  })
+  const dirDicts = useQuery({
+    queryKey: ['task-dicts', 'directory'],
+    queryFn: () => dictionaryApi.list({ type: 'directory', page: 1, page_size: 100 }),
+    enabled: open,
+  })
+  const subDictList = subDicts.data?.data ?? []
+  const dirDictList = dirDicts.data?.data ?? []
 
   // 创建任务
   const createMutation = useMutation({
@@ -92,10 +128,14 @@ export default function TaskCreateDialog({ open, onOpenChange }: TaskCreateDialo
         portRange: '1-65535',
         timeout: 30,
         concurrent: 10,
+        rate_per_sec: 20,
+        target_delay_ms: 200,
       },
     })
     setDirectTargets([])
+    setTemplateId('')
     setTargetInput('')
+    setProjectId(0)
   }
 
   // 添加直接输入的目标
@@ -128,6 +168,14 @@ export default function TaskCreateDialog({ open, onOpenChange }: TaskCreateDialo
   const handleSubmit = (_startImmediately = false) => {
     if (!formData.name.trim()) {
       toast({ title: '请输入任务名称', variant: 'destructive' })
+      return
+    }
+    if (!projectId) {
+      toast({
+        title: '请选择归属项目',
+        description: '扫描结果会并入该项目的资产',
+        variant: 'destructive',
+      })
       return
     }
     
@@ -169,12 +217,29 @@ export default function TaskCreateDialog({ open, onOpenChange }: TaskCreateDialo
 
     createMutation.mutate({
       name: formData.name,
+      projectId,
       type: taskType,
       targets: targets,
       targetType: targetType,
       description: formData.description,
       config: configForBackend,
     })
+  }
+
+  // 套用模板：只覆盖「扫什么 + 扫多快」，名称/目标/项目保持用户已填的内容
+  const applyTemplate = (t: TaskTemplate) => {
+    const cfg = t.config || {}
+    setTemplateId(t.id)
+    setFormData((prev) => ({
+      ...prev,
+      config: {
+        ...prev.config,
+        scanTypes: cfg.scan_types || cfg.scanTypes || prev.config.scanTypes,
+        rate_per_sec: cfg.rate_per_sec ?? prev.config.rate_per_sec,
+        target_delay_ms: cfg.target_delay_ms ?? prev.config.target_delay_ms,
+        port_scan_mode: cfg.port_scan_mode ?? prev.config.port_scan_mode,
+      } as TaskConfig,
+    }))
   }
 
   const toggleScanType = (scanTypeId: string) => {
@@ -206,6 +271,45 @@ export default function TaskCreateDialog({ open, onOpenChange }: TaskCreateDialo
         </DialogHeader>
 
         <div className="px-5 pb-5 space-y-4">
+          {/* 模板：一键套用模块组合与节奏 */}
+          <div className="flex items-end gap-2">
+            <div className="flex-1 space-y-1.5">
+              <Label className="text-sm">从模板创建</Label>
+              <Select
+                value={templateId || 'none'}
+                onValueChange={(v) => {
+                  if (v === 'none') {
+                    setTemplateId('')
+                    return
+                  }
+                  const t = templates.find((item) => item.id === v)
+                  if (t) applyTemplate(t)
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="不使用模板" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">不使用模板</SelectItem>
+                  {templates.map((t) => (
+                    <SelectItem key={t.id} value={t.id}>
+                      {t.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9"
+              onClick={() => setTemplatesOpen(true)}
+            >
+              管理模板
+            </Button>
+          </div>
+
           {/* 任务名称 */}
           <div className="space-y-1.5">
             <Label className="text-sm">任务名称 <span className="text-destructive">*</span></Label>
@@ -214,6 +318,26 @@ export default function TaskCreateDialog({ open, onOpenChange }: TaskCreateDialo
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
             />
+          </div>
+
+          {/* 归属项目 */}
+          <div className="space-y-1.5">
+            <Label className="text-sm">归属项目 <span className="text-destructive">*</span></Label>
+            <Select
+              value={projectId ? String(projectId) : ''}
+              onValueChange={(v) => setProjectId(Number(v))}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="选择项目" />
+              </SelectTrigger>
+              <SelectContent>
+                {projects.map((p) => (
+                  <SelectItem key={p.id} value={String(p.id)}>
+                    {p.name}（{p.code}）
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           {/* 扫描目标 */}
@@ -262,6 +386,142 @@ export default function TaskCreateDialog({ open, onOpenChange }: TaskCreateDialo
             </div>
           </div>
 
+          {/* 扫描节奏：除漏洞扫描外全模块生效，默认值刻意保守 */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label className="text-sm">扫描节奏</Label>
+              <div className="flex gap-1">
+                {[
+                  { label: '保守', rate: 5, delay: 1000 },
+                  { label: '标准', rate: 20, delay: 200 },
+                  { label: '快速', rate: 50, delay: 50 },
+                ].map((preset) => (
+                  <Button
+                    key={preset.label}
+                    type="button"
+                    size="sm"
+                    variant={
+                      (formData.config.rate_per_sec ?? 20) === preset.rate ? 'default' : 'outline'
+                    }
+                    className="h-7 px-2.5 text-xs"
+                    onClick={() =>
+                      setFormData({
+                        ...formData,
+                        config: {
+                          ...formData.config,
+                          rate_per_sec: preset.rate,
+                          target_delay_ms: preset.delay,
+                        },
+                      })
+                    }
+                  >
+                    {preset.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">每秒请求上限</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={formData.config.rate_per_sec ?? 20}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      config: {
+                        ...formData.config,
+                        rate_per_sec: Number(e.target.value) || 20,
+                      },
+                    })
+                  }
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">单目标间隔（毫秒）</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={5000}
+                  step={50}
+                  value={formData.config.target_delay_ms ?? 200}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      config: {
+                        ...formData.config,
+                        target_delay_ms: Number(e.target.value),
+                      },
+                    })
+                  }
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              漏洞扫描不受限制；数值越小越快，越容易被目标封 IP。
+            </p>
+          </div>
+
+          <p className="text-muted-foreground text-xs">
+            资产入库跟随勾选：端口扫描→端口入口；爬虫/目录→URL；指纹/服务识别→技术栈与图标。
+          </p>
+
+          {/* 任务级字典：子域 / 目录分别选，空 = 内置词表 */}
+          {formData.config.scanTypes?.includes('subdomain') && (
+            <div className="flex items-center gap-3">
+              <Label className="text-sm shrink-0">子域字典</Label>
+              <Select
+                value={formData.config.subdomain_dict_id || 'builtin'}
+                onValueChange={(v) =>
+                  setFormData({
+                    ...formData,
+                    config: { ...formData.config, subdomain_dict_id: v === 'builtin' ? '' : v },
+                  })
+                }
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="builtin">内置词表</SelectItem>
+                  {subDictList.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>
+                      {d.name}（{d.line_count} 条）
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          {formData.config.scanTypes?.includes('dir_scan') && (
+            <div className="flex items-center gap-3">
+              <Label className="text-sm shrink-0">目录字典</Label>
+              <Select
+                value={formData.config.dir_dict_id || 'builtin'}
+                onValueChange={(v) =>
+                  setFormData({
+                    ...formData,
+                    config: { ...formData.config, dir_dict_id: v === 'builtin' ? '' : v },
+                  })
+                }
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="builtin">spray 默认字典</SelectItem>
+                  {dirDictList.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>
+                      {d.name}（{d.line_count} 条）
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
           {/* 端口模式 - 仅当选择了端口扫描时显示 */}
           {formData.config.scanTypes?.includes('port_scan') && (
             <div className="flex items-center gap-3">
@@ -299,6 +559,7 @@ export default function TaskCreateDialog({ open, onOpenChange }: TaskCreateDialo
           </Button>
         </div>
       </DialogContent>
+      <TaskTemplatesDialog open={templatesOpen} onOpenChange={setTemplatesOpen} />
     </Dialog>
   )
 }

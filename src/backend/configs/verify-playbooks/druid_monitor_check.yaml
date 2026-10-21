@@ -1,0 +1,15 @@
+# 剧本：Druid 监控台未授权（证明可达 + SQL 监控页）
+# 服务模板：druid_monitor / chain_druid_to_db
+# 判据：/druid/index.html 未授权可达 → /druid/sql.html 可读 SQL 监控 → L4 面提示直连数据源
+id: druid_monitor_check
+name: Druid 监控台未授权检查
+refuted_status_in: [401, 403, 404]
+steps:
+  - name: druid_index
+    request: { method: GET, url: "https://{{host}}/druid/index.html" }
+    expect: { status: 200, contains_any: ["druid", "Druid"] }
+  - name: druid_sql
+    request: { method: GET, url: "https://{{host}}/druid/sql.html" }
+    expect: { status: 200, contains_any: ["sql", "SQL", "Druid"] }
+limits: { max_requests: 3, per_step_timeout_ms: 8000 }
+note: sql.html 命中后按模板 chain_druid_to_db 提取 JDBC URL 走 save_db_credential + db_query 只读验证。

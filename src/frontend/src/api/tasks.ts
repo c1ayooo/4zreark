@@ -18,19 +18,31 @@ const transformTask = (task: Record<string, unknown>): Task => {
   
   return {
     id: task.id as string,
+    projectId: task.project_id as number | undefined,
     name: task.name as string,
     type: task.type as string,
     status: (task.status as Task['status']) || 'pending',
     progress: (task.progress as number) || 0,
     progressDetails: progressDetails as ProgressDetails | undefined,
     config: {
+      ...(config as TaskConfig),
       scanTypes: (config.scan_types as string[]) || [],
+      scan_types: (config.scan_types as string[]) || [],
+      port_scan_mode: config.port_scan_mode as string,
       portRange: config.port_range as string,
       timeout: config.timeout as number,
       concurrent: config.concurrent as number,
       enabledPlugins: config.enabled_plugins as string[],
       pocIds: config.poc_ids as string[],
       customParams: config.custom_params as Record<string, unknown>,
+      rate_per_sec: config.rate_per_sec as number,
+      target_delay_ms: config.target_delay_ms as number,
+      subdomain_dict_id: config.subdomain_dict_id as string,
+      dir_dict_id: config.dir_dict_id as string,
+      subdomain_wordlist: config.subdomain_wordlist as string[],
+      dir_wordlist: config.dir_wordlist as string[],
+      subdomain_permute: config.subdomain_permute as boolean | undefined,
+      subdomain_artifacts: config.subdomain_artifacts as boolean | undefined,
     },
     targets: (task.targets as string[]) || [],
     targetType: task.target_type as string,
@@ -53,6 +65,8 @@ const transformTask = (task: Record<string, unknown>): Task => {
 
 export interface Task {
   id: string
+  /** 资产归属项目（projects.id）；0/undefined = 未归属，扫描结果不入资产域 */
+  projectId?: number
   name: string
   type: string
   status: 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'
@@ -107,6 +121,18 @@ export interface TaskConfig {
   fofa_key?: string
   hunter_key?: string
   quake_key?: string
+  // 任务级字典（dictionaries.id）；空 = 使用内置词表
+  subdomain_dict_id?: string
+  dir_dict_id?: string
+  // master 派单前物化的词表（节点侧直接消费）
+  subdomain_wordlist?: string[]
+  dir_wordlist?: string[]
+  // 子域增强开关（nil = 默认开启）
+  subdomain_permute?: boolean
+  subdomain_artifacts?: boolean
+  // 扫描节奏（除漏洞扫描外全模块生效）
+  rate_per_sec?: number
+  target_delay_ms?: number
 }
 
 export interface TaskResult {
@@ -128,8 +154,19 @@ export interface TaskTemplate {
   id: string
   name: string
   description?: string
+  type: string
   config: TaskConfig
-  createdAt: string
+  is_public?: boolean
+  created_at?: string
+  updated_at?: string
+}
+
+export interface TaskTemplateInput {
+  name: string
+  description?: string
+  type: string
+  config: TaskConfig
+  is_public?: boolean
 }
 
 export const taskApi = {
@@ -137,12 +174,14 @@ export const taskApi = {
   getTasks: async (params?: PaginationParams & {
     status?: string
     type?: string
+    projectId?: number
   }): Promise<PaginatedResponse<Task>> => {
     const backendParams = {
       page: params?.page,
       page_size: params?.pageSize,
       status: params?.status,
       type: params?.type,
+      project_id: params?.projectId,
     }
     const response: BackendPaginatedResponse<Record<string, unknown>> = await api.get('/tasks', { params: backendParams })
     return {
@@ -168,6 +207,7 @@ export const taskApi = {
 
   createTask: (data: {
     name: string
+    projectId?: number
     type: string
     targets: string[]      // 目标列表 (IP, domain, URL等)
     targetType: string     // 目标类型: ip, domain, url, mixed
@@ -175,6 +215,7 @@ export const taskApi = {
     description?: string
     scheduledAt?: string
     tags?: string[]
+    nodeId?: string
   }): Promise<ApiResponse<Task>> => {
     // Map frontend fields to backend expected fields (snake_case for backend)
     const backendConfig: Record<string, unknown> = {
@@ -197,12 +238,14 @@ export const taskApi = {
     
     const payload = {
       name: data.name,
+      project_id: data.projectId,
       type: data.type,
       targets: data.targets,
       target_type: data.targetType,
       config: backendConfig,
       description: data.description,
       tags: data.tags,
+      node_id: data.nodeId,
     }
     return api.post('/tasks', payload)
   },
@@ -258,37 +301,56 @@ export const taskApi = {
     }
   },
 
-  // Task Templates
-  getTemplates: async (params?: PaginationParams): Promise<PaginatedResponse<TaskTemplate>> => {
-    const backendParams = {
-      page: params?.page,
-      page_size: params?.pageSize,
-    }
-    const response: BackendPaginatedResponse<Record<string, unknown>> = await api.get('/task-templates', { params: backendParams })
-    return {
-      code: response.code,
-      message: response.message,
-      data: {
-        list: (response.data || []).map((t): TaskTemplate => ({
-          id: t.id as string,
-          name: t.name as string,
-          description: t.description as string,
-          config: t.config as TaskConfig,
-          createdAt: t.created_at as string,
-        })),
-        total: response.total || 0,
-        page: response.page || 1,
-        pageSize: response.size || 10,
-      }
-    }
-  },
+}
 
-  createTemplate: (data: { name: string; description?: string; config: TaskConfig }): Promise<ApiResponse<TaskTemplate>> =>
-    api.post('/task-templates', data),
+// 任务贡献的资产（按 raw_records.task_id 反查归并站点）——任务详情「本任务资产」页签。
+export interface TaskAsset {
+  id: number
+  host: string
+  port: number
+  protocol: string
+  http_status: number
+  title: string
+  technology_stack: string[]
+  state: string
+  first_seen: string
+  last_seen: string
+  endpoints: number
+  task_hits: number
+}
 
-  updateTemplate: (id: string, data: Partial<TaskTemplate>): Promise<ApiResponse<TaskTemplate>> =>
-    api.put(`/task-templates/${id}`, data),
+export const taskAssetApi = {
+  list: (
+    taskId: string,
+    params?: { page?: number; pageSize?: number; q?: string }
+  ): Promise<ApiResponse<{ list: TaskAsset[]; total: number; page: number; pageSize: number }>> =>
+    api.get(`/tasks/${taskId}/assets`, {
+      params: {
+        page: params?.page || 1,
+        page_size: params?.pageSize || 20,
+        q: params?.q || undefined,
+      },
+    }),
+}
 
-  deleteTemplate: (id: string): Promise<ApiResponse<null>> =>
-    api.delete(`/task-templates/${id}`),
+// 任务模板：预设「扫什么 + 扫多快」，创建任务时可直接套用。
+export const templateApi = {
+  list: (): Promise<ApiResponse<TaskTemplate[]>> => api.get('/tasks/templates'),
+
+  create: (data: TaskTemplateInput): Promise<ApiResponse<{ id: string }>> =>
+    api.post('/tasks/templates', data),
+
+  update: (id: string, data: TaskTemplateInput): Promise<ApiResponse<null>> =>
+    api.put(`/tasks/templates/${id}`, data),
+
+  remove: (id: string): Promise<ApiResponse<null>> =>
+    api.delete(`/tasks/templates/${id}`),
+
+  createTask: (data: {
+    template_id: string
+    project_id: number
+    name: string
+    targets: string[]
+    target_type: string
+  }): Promise<ApiResponse<{ id: string }>> => api.post('/tasks/from-template', data),
 }

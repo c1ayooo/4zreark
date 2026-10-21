@@ -3,6 +3,7 @@ package api
 import (
 	"strings"
 
+	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/service"
 	"github.com/c1ayooo/4zreark/utils"
 
@@ -26,6 +27,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		Username string `json:"username" binding:"required,min=3,max=32"`
 		Password string `json:"password" binding:"required,min=6,max=32"`
 		Email    string `json:"email" binding:"required,email"`
+		Code     string `json:"code"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -33,10 +35,20 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	user, err := h.userService.Register(req.Username, req.Password, req.Email)
-	if err != nil {
-		utils.Error(c, utils.ErrCodeDuplicate, err.Error())
-		return
+	var user *models.User
+	var err error
+	if strings.TrimSpace(req.Code) != "" {
+		user, err = h.userService.RegisterWithCode(req.Username, req.Password, req.Email, strings.TrimSpace(req.Code))
+		if err != nil {
+			utils.BadRequest(c, err.Error())
+			return
+		}
+	} else {
+		user, err = h.userService.Register(req.Username, req.Password, req.Email)
+		if err != nil {
+			utils.Error(c, utils.ErrCodeDuplicate, err.Error())
+			return
+		}
 	}
 
 	utils.SuccessWithMessage(c, "注册成功", gin.H{

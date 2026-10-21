@@ -1,6 +1,6 @@
 # 数据库设计
 
-Moon-Gazing-Tower 使用 MongoDB 作为主要的数据存储。以下是核心数据模型的设计文档。
+4zreark 使用 MongoDB 作为主要的数据存储。以下是核心数据模型的设计文档。
 
 ## 1. 资产 (Asset)
 

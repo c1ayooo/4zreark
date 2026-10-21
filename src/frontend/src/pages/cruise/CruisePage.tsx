@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { cruiseApi, CruiseTask, CruiseCreateRequest } from '@/api/cruise'
+import { cruiseApi, CruiseTask, CruiseCreateRequest, CruiseTargetPreview } from '@/api/cruise'
+import { projectApi } from '@/api/projects'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -86,11 +87,15 @@ export default function CruisePage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [editingCruise, setEditingCruise] = useState<CruiseTask | null>(null)
   const [logsDialogCruise, setLogsDialogCruise] = useState<CruiseTask | null>(null)
+  const [preview, setPreview] = useState<CruiseTargetPreview | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
 
   // 表单状态
   const [formData, setFormData] = useState<Partial<CruiseCreateRequest>>({
     name: '',
     description: '',
+    project_id: 0,
+    target_source: 'static',
     cron_expr: '0 0 * * *',
     targets: [],
     target_type: 'domain',
@@ -106,6 +111,10 @@ export default function CruisePage() {
   })
   const [targetsText, setTargetsText] = useState('')
 
+  const isProjectSource = formData.target_source === 'project'
+  const targetTypeLabel =
+    TARGET_TYPES.find((t) => t.value === formData.target_type)?.label || formData.target_type
+
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['cruises', page, search],
     queryFn: () => cruiseApi.getCruises({ page, pageSize: 10, search }),
@@ -117,6 +126,14 @@ export default function CruisePage() {
     queryFn: () => cruiseApi.getCruiseStats(),
     refetchInterval: 10000,
   })
+
+  const { data: projects } = useQuery({
+    queryKey: ['asset-projects'],
+    queryFn: () => projectApi.list(),
+  })
+  const projectList = projects?.data ?? []
+  const projectName = (id?: number) =>
+    projectList.find((p) => p.id === id)?.name || (id ? `项目 #${id}` : '-')
 
   const createMutation = useMutation({
     mutationFn: cruiseApi.createCruise,
@@ -194,9 +211,12 @@ export default function CruisePage() {
   const closeDialog = () => {
     setCreateDialogOpen(false)
     setEditingCruise(null)
+    setPreview(null)
     setFormData({
       name: '',
       description: '',
+      project_id: 0,
+      target_source: 'static',
       cron_expr: '0 0 * * *',
       targets: [],
       target_type: 'domain',
@@ -215,9 +235,12 @@ export default function CruisePage() {
 
   const openEditDialog = (cruise: CruiseTask) => {
     setEditingCruise(cruise)
+    setPreview(null)
     setFormData({
       name: cruise.name,
       description: cruise.description,
+      project_id: cruise.project_id,
+      target_source: cruise.target_source || 'static',
       cron_expr: cruise.cron_expr,
       targets: cruise.targets,
       target_type: cruise.target_type,
@@ -230,6 +253,29 @@ export default function CruisePage() {
     setCreateDialogOpen(true)
   }
 
+  const handlePreview = async () => {
+    if (!formData.project_id) {
+      toast({ title: '请先选择归属项目', variant: 'destructive' })
+      return
+    }
+    setPreviewLoading(true)
+    try {
+      const result = await cruiseApi.previewTargets(
+        formData.project_id,
+        formData.target_type || 'domain'
+      )
+      setPreview(result)
+    } catch (error: any) {
+      toast({
+        title: '预览失败',
+        description: error?.message || '无法读取项目资产',
+        variant: 'destructive',
+      })
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
   const handleSubmit = () => {
     const targets = targetsText
       .split('\n')
@@ -240,18 +286,22 @@ export default function CruisePage() {
       toast({ title: '请输入名称', variant: 'destructive' })
       return
     }
+    if (!formData.project_id) {
+      toast({ title: '请选择归属项目', variant: 'destructive' })
+      return
+    }
     if (!formData.cron_expr) {
       toast({ title: '请设置执行周期', variant: 'destructive' })
       return
     }
-    if (targets.length === 0) {
+    if (!isProjectSource && targets.length === 0) {
       toast({ title: '请输入扫描目标', variant: 'destructive' })
       return
     }
 
     const submitData = {
       ...formData,
-      targets,
+      targets: isProjectSource ? [] : targets,
     } as CruiseCreateRequest
 
     if (editingCruise) {
@@ -348,6 +398,7 @@ export default function CruisePage() {
           <TableHeader>
             <TableRow>
               <TableHead>名称</TableHead>
+              <TableHead>归属项目</TableHead>
               <TableHead>状态</TableHead>
               <TableHead>执行周期</TableHead>
               <TableHead>目标数量</TableHead>
@@ -362,13 +413,13 @@ export default function CruisePage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={10} className="text-center py-8">
+                <TableCell colSpan={11} className="text-center py-8">
                   <Loader2 className="h-6 w-6 animate-spin mx-auto" />
                 </TableCell>
               </TableRow>
             ) : data?.items?.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
                   暂无巡航任务
                 </TableCell>
               </TableRow>
@@ -385,13 +436,25 @@ export default function CruisePage() {
                       )}
                     </div>
                   </TableCell>
+                  <TableCell>
+                    <div className="text-sm font-medium">{projectName(cruise.project_id)}</div>
+                    <Badge variant="outline" className="mt-1 text-xs">
+                      {cruise.target_source === 'project' ? '项目派生' : '固定目标'}
+                    </Badge>
+                  </TableCell>
                   <TableCell>{getStatusBadge(cruise.status)}</TableCell>
                   <TableCell>
                     <code className="text-xs bg-muted px-1.5 py-0.5 rounded">
                       {cruise.cron_expr}
                     </code>
                   </TableCell>
-                  <TableCell>{cruise.targets?.length || 0}</TableCell>
+                  <TableCell>
+                    {cruise.target_source === 'project' ? (
+                      <span className="text-sm text-muted-foreground">执行时自动派生</span>
+                    ) : (
+                      cruise.targets?.length || 0
+                    )}
+                  </TableCell>
                   <TableCell>
                     {TASK_TYPES.find((t) => t.value === cruise.task_type)?.label ||
                       cruise.task_type}
@@ -535,6 +598,56 @@ export default function CruisePage() {
               </div>
             </div>
 
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>归属项目 *</Label>
+                <Select
+                  value={formData.project_id ? String(formData.project_id) : ''}
+                  onValueChange={(value) => {
+                    setFormData({ ...formData, project_id: Number(value) })
+                    setPreview(null)
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="选择资产项目" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {projectList.map((project) => (
+                      <SelectItem key={project.id} value={String(project.id)}>
+                        {project.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {projectList.length === 0 && (
+                  <div className="text-xs text-amber-600">
+                    还没有资产项目，请先到「资产项目」创建
+                  </div>
+                )}
+              </div>
+              <div className="space-y-2">
+                <Label>目标来源</Label>
+                <Select
+                  value={formData.target_source || 'static'}
+                  onValueChange={(value) => {
+                    setFormData({
+                      ...formData,
+                      target_source: value as 'static' | 'project',
+                    })
+                    setPreview(null)
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="选择目标来源" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="static">固定目标列表</SelectItem>
+                    <SelectItem value="project">项目整体资产（自动派生）</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
             <div className="space-y-2">
               <Label>描述</Label>
               <Input
@@ -570,7 +683,10 @@ export default function CruisePage() {
                 <Label>目标类型</Label>
                 <Select
                   value={formData.target_type}
-                  onValueChange={(value) => setFormData({ ...formData, target_type: value })}
+                  onValueChange={(value) => {
+                    setFormData({ ...formData, target_type: value })
+                    setPreview(null)
+                  }}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="选择目标类型" />
@@ -583,21 +699,80 @@ export default function CruisePage() {
                     ))}
                   </SelectContent>
                 </Select>
+                {isProjectSource && (
+                  <div className="text-xs text-muted-foreground">
+                    派生维度：域名会归并到根域，IP / URL / CIDR 会去重
+                  </div>
+                )}
               </div>
             </div>
 
-            <div className="space-y-2">
-              <Label>扫描目标 *</Label>
-              <Textarea
-                placeholder="每行一个目标，例如：&#10;example.com&#10;192.168.1.1&#10;10.0.0.0/24"
-                rows={6}
-                value={targetsText}
-                onChange={(e) => setTargetsText(e.target.value)}
-              />
-              <div className="text-xs text-muted-foreground">
-                已输入 {targetsText.split('\n').filter((t) => t.trim()).length} 个目标
+            {isProjectSource ? (
+              <div className="space-y-3 rounded-md border bg-muted/30 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium">执行时自动派生</div>
+                    <div className="text-xs text-muted-foreground">
+                      每次执行都会重新读取该项目的种子、站点、原始记录和任务结果，按「
+                      {targetTypeLabel}」归并去重后生成扫描目标。
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handlePreview}
+                    disabled={previewLoading}
+                  >
+                    {previewLoading ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="mr-2 h-4 w-4" />
+                    )}
+                    预览
+                  </Button>
+                </div>
+                {preview && (
+                  <div className="space-y-2">
+                    <div className="text-xs text-muted-foreground">
+                      共派生 {preview.total} 个{targetTypeLabel}
+                      {preview.truncated && `，执行时取前 ${preview.targets.length} 个`}
+                    </div>
+                    {preview.targets.length === 0 ? (
+                      <div className="rounded bg-background p-2 text-xs text-muted-foreground">
+                        项目里还没有可用的{targetTypeLabel}资产
+                      </div>
+                    ) : (
+                      <div className="max-h-40 overflow-y-auto rounded bg-background p-2 font-mono text-xs">
+                        {preview.targets.slice(0, 50).map((target) => (
+                          <div key={target} className="truncate">
+                            {target}
+                          </div>
+                        ))}
+                        {preview.targets.length > 50 && (
+                          <div className="pt-1 text-muted-foreground">
+                            ... 还有 {preview.targets.length - 50} 个
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-            </div>
+            ) : (
+              <div className="space-y-2">
+                <Label>扫描目标 *</Label>
+                <Textarea
+                  placeholder="每行一个目标，例如：&#10;example.com&#10;192.168.1.1&#10;10.0.0.0/24"
+                  rows={6}
+                  value={targetsText}
+                  onChange={(e) => setTargetsText(e.target.value)}
+                />
+                <div className="text-xs text-muted-foreground">
+                  已输入 {targetsText.split('\n').filter((t) => t.trim()).length} 个目标
+                </div>
+              </div>
+            )}
 
             <div className="space-y-3">
               <Label>通知设置</Label>

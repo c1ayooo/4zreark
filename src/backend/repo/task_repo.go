@@ -18,7 +18,7 @@ import (
 type TaskRepo interface {
 	Create(ctx context.Context, t *models.Task) error
 	GetByID(ctx context.Context, id string) (*models.Task, error)
-	List(ctx context.Context, workspaceID, taskType, status string, page, pageSize int) ([]*models.Task, int64, error)
+	List(ctx context.Context, workspaceID, taskType, status string, projectID int64, page, pageSize int) ([]*models.Task, int64, error)
 	UpdateFields(ctx context.Context, id string, fields map[string]any) error
 	Delete(ctx context.Context, id string) error
 	StatusCounts(ctx context.Context, workspaceID string) (map[string]int, error)
@@ -26,6 +26,7 @@ type TaskRepo interface {
 	CreateTemplate(ctx context.Context, t *models.TaskTemplate) error
 	ListTemplates(ctx context.Context, workspaceID string, isPublic *bool) ([]*models.TaskTemplate, error)
 	GetTemplate(ctx context.Context, id string) (*models.TaskTemplate, error)
+	UpdateTemplate(ctx context.Context, t *models.TaskTemplate) error
 	DeleteTemplate(ctx context.Context, id string) error
 
 	AddLog(ctx context.Context, taskID, level, message, detail string) error
@@ -34,7 +35,7 @@ type TaskRepo interface {
 
 type taskRepo struct{ r *Repo }
 
-const taskColumns = `id, workspace_id, name, description, type, status, targets, target_type,
+const taskColumns = `id, workspace_id, project_id, name, description, type, status, targets, target_type,
 	config, is_scheduled, cron_expr, progress, node_id, started_at, completed_at,
 	total_targets, scanned_targets, discovered_assets, discovered_vulns, discovered_ports,
 	last_scanned_index, completed_stages, retry_count, last_error, created_by, tags,
@@ -43,6 +44,7 @@ const taskColumns = `id, workspace_id, name, description, type, status, targets,
 // taskUpdatable 是 UpdateTask 允许落库的列白名单。
 // 键来自 HTTP 请求体或内部调用，必须映射到固定列名，绝不拼原始键。
 var taskUpdatable = map[string]string{
+	"project_id":         "project_id",
 	"name":               "name",
 	"description":        "description",
 	"type":               "type",
@@ -185,7 +187,7 @@ func scanTask(row pgx.Row) (*models.Task, error) {
 		updatedAt   time.Time
 		detailsB    []byte
 	)
-	err := row.Scan(&hexID, &wsID, &t.Name, &t.Description, &typeStr, &statusStr, &t.Targets,
+	err := row.Scan(&hexID, &wsID, &t.ProjectID, &t.Name, &t.Description, &typeStr, &statusStr, &t.Targets,
 		&t.TargetType, &configB, &t.IsScheduled, &t.CronExpr, &t.Progress, &t.NodeID,
 		&startedAt, &completedAt,
 		&stats.TotalTargets, &stats.ScannedTargets, &stats.DiscoveredAssets,
@@ -254,13 +256,13 @@ func (r *taskRepo) Create(ctx context.Context, t *models.Task) error {
 	}
 
 	_, err = r.r.pool.Exec(ctx,
-		`insert into tasks (id, workspace_id, name, description, type, status, targets, target_type,
+		`insert into tasks (id, workspace_id, project_id, name, description, type, status, targets, target_type,
 		                    config, is_scheduled, cron_expr, progress, node_id, started_at, completed_at,
 		                    total_targets, scanned_targets, discovered_assets, discovered_vulns,
 		                    discovered_ports, last_scanned_index, completed_stages, retry_count,
 		                    last_error, created_by, tags, created_at, updated_at, progress_details)
-		 values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)`,
-		t.ID.Hex(), workspaceIDHex(t.WorkspaceID), t.Name, t.Description, string(t.Type), string(t.Status),
+		 values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)`,
+		t.ID.Hex(), workspaceIDHex(t.WorkspaceID), t.ProjectID, t.Name, t.Description, string(t.Type), string(t.Status),
 		textArray(t.Targets), t.TargetType, configB, t.IsScheduled, t.CronExpr, t.Progress, t.NodeID,
 		timeToPG(t.StartedAt), timeToPG(t.CompletedAt),
 		t.ResultStats.TotalTargets, t.ResultStats.ScannedTargets, t.ResultStats.DiscoveredAssets,
@@ -296,7 +298,7 @@ func (r *taskRepo) GetByID(ctx context.Context, id string) (*models.Task, error)
 	return scanTask(r.r.pool.QueryRow(ctx, `select `+taskColumns+` from tasks where id = $1`, id))
 }
 
-func (r *taskRepo) List(ctx context.Context, workspaceID, taskType, status string, page, pageSize int) ([]*models.Task, int64, error) {
+func (r *taskRepo) List(ctx context.Context, workspaceID, taskType, status string, projectID int64, page, pageSize int) ([]*models.Task, int64, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -305,19 +307,20 @@ func (r *taskRepo) List(ctx context.Context, workspaceID, taskType, status strin
 	}
 	const where = `where ($1 = '' or workspace_id = $1)
 	                 and ($2 = '' or type = $2)
-	                 and ($3 = '' or status = $3)`
+	                 and ($3 = '' or status = $3)
+	                 and ($4 = 0 or project_id = $4)`
 
 	var total int64
 	if err := r.r.pool.QueryRow(ctx, `select count(*) from tasks `+where,
-		workspaceID, taskType, status).Scan(&total); err != nil {
+		workspaceID, taskType, status, projectID).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
 	rows, err := r.r.pool.Query(ctx,
 		`select `+taskColumns+` from tasks `+where+`
 		  order by created_at desc
-		  limit $4 offset $5`,
-		workspaceID, taskType, status, pageSize, (page-1)*pageSize)
+		  limit $5 offset $6`,
+		workspaceID, taskType, status, projectID, pageSize, (page-1)*pageSize)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -517,6 +520,28 @@ func (r *taskRepo) GetTemplate(ctx context.Context, id string) (*models.TaskTemp
 	}
 	return scanTemplate(r.r.pool.QueryRow(ctx,
 		`select `+templateColumns+` from task_templates where id = $1`, id))
+}
+
+func (r *taskRepo) UpdateTemplate(ctx context.Context, t *models.TaskTemplate) error {
+	if _, err := idFromString(t.ID.Hex()); err != nil {
+		return ErrNotFound
+	}
+	configB, err := jsonb(t.Config)
+	if err != nil {
+		return fmt.Errorf("序列化模板配置失败: %w", err)
+	}
+	tag, err := r.r.pool.Exec(ctx,
+		`update task_templates
+		    set name = $2, description = $3, type = $4, config = $5, is_public = $6, updated_at = $7
+		  where id = $1`,
+		t.ID.Hex(), t.Name, t.Description, string(t.Type), configB, t.IsPublic, timeToPG(t.UpdatedAt))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (r *taskRepo) DeleteTemplate(ctx context.Context, id string) error {

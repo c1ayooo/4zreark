@@ -6,6 +6,7 @@ import (
 	"github.com/c1ayooo/4zreark/scanner/core"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -148,7 +149,7 @@ func (s *CSegmentScanner) IsHostAlive(ctx context.Context, ip string) bool {
 		default:
 		}
 
-		address := fmt.Sprintf("%s:%d", ip, port)
+		address := net.JoinHostPort(ip, strconv.Itoa(port))
 		conn, err := net.DialTimeout("tcp", address, s.PingTimeout)
 		if err == nil {
 			conn.Close()

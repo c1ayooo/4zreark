@@ -115,6 +115,7 @@ const (
 	ErrCodeTokenInvalid    = 1009
 	ErrCodeUserDisabled    = 1010
 	ErrCodePasswordWrong   = 1011
+	ErrCodeTooManyRequests = 1012
 	ErrCodeTaskRunning     = 2001
 	ErrCodeNodeOffline     = 2002
 	ErrCodeScanFailed      = 2003
@@ -124,19 +125,20 @@ const (
 
 // Error messages
 var ErrMessages = map[int]string{
-	ErrCodeSuccess:       "操作成功",
-	ErrCodeInvalidParams: "参数错误",
-	ErrCodeUnauthorized:  "未授权访问",
-	ErrCodeForbidden:     "权限不足",
-	ErrCodeNotFound:      "资源不存在",
-	ErrCodeDuplicate:     "数据已存在",
-	ErrCodeInternalError: "服务器内部错误",
-	ErrCodeDatabaseError: "数据库操作失败",
-	ErrCodeTokenExpired:  "Token已过期",
-	ErrCodeTokenInvalid:  "Token无效",
-	ErrCodeUserDisabled:  "用户已禁用",
-	ErrCodePasswordWrong: "密码错误",
-	ErrCodeTaskRunning:   "任务正在运行",
-	ErrCodeNodeOffline:   "节点离线",
-	ErrCodeScanFailed:    "扫描失败",
+	ErrCodeSuccess:         "操作成功",
+	ErrCodeInvalidParams:   "参数错误",
+	ErrCodeUnauthorized:    "未授权访问",
+	ErrCodeForbidden:       "权限不足",
+	ErrCodeNotFound:        "资源不存在",
+	ErrCodeDuplicate:       "数据已存在",
+	ErrCodeInternalError:   "服务器内部错误",
+	ErrCodeDatabaseError:   "数据库操作失败",
+	ErrCodeTokenExpired:    "Token已过期",
+	ErrCodeTokenInvalid:    "Token无效",
+	ErrCodeUserDisabled:    "用户已禁用",
+	ErrCodePasswordWrong:   "密码错误",
+	ErrCodeTooManyRequests: "请求过于频繁",
+	ErrCodeTaskRunning:     "任务正在运行",
+	ErrCodeNodeOffline:     "节点离线",
+	ErrCodeScanFailed:      "扫描失败",
 }

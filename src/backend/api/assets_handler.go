@@ -43,10 +43,120 @@ func (h *AssetHandler) ListProjects(c *gin.Context) {
 	utils.Success(c, ps)
 }
 
+// GetProject 项目详情。GET /api/projects/:id
+func (h *AssetHandler) GetProject(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "非法项目 ID")
+		return
+	}
+	p, err := h.assets.GetProject(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			utils.NotFound(c, "项目不存在")
+			return
+		}
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.Success(c, p)
+}
+
+type projectBody struct {
+	Code        string `json:"code"`
+	Name        string `json:"name"`
+	Region      string `json:"region"`
+	Description string `json:"description"`
+	HomepageURL string `json:"homepage_url"`
+	Color       string `json:"color"`
+	CycleDays   int    `json:"cycle_interval_days"`
+}
+
+func (b projectBody) input() repo.ProjectInput {
+	return repo.ProjectInput{
+		Code:        b.Code,
+		Name:        b.Name,
+		Region:      b.Region,
+		Description: b.Description,
+		HomepageURL: b.HomepageURL,
+		Color:       b.Color,
+		CycleDays:   b.CycleDays,
+	}
+}
+
+// CreateProject 新建项目。POST /api/projects
+func (h *AssetHandler) CreateProject(c *gin.Context) {
+	var body projectBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	p, err := h.assets.CreateProject(c.Request.Context(), body.input())
+	if err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "项目已创建", p)
+}
+
+// UpdateProject 编辑项目资料。PUT /api/projects/:id
+func (h *AssetHandler) UpdateProject(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "非法项目 ID")
+		return
+	}
+	var body projectBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	p, err := h.assets.UpdateProject(c.Request.Context(), id, body.input())
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			utils.NotFound(c, "项目不存在")
+			return
+		}
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "项目已更新", p)
+}
+
+// SetProjectPaused 暂停/恢复采集。POST /api/projects/:id/pause|resume
+func (h *AssetHandler) SetProjectPaused(c *gin.Context, paused bool) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "非法项目 ID")
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	_ = c.ShouldBindJSON(&body)
+	p, err := h.assets.SetProjectPaused(c.Request.Context(), id, paused, body.Reason)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			utils.NotFound(c, "项目不存在")
+			return
+		}
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	msg := "已恢复采集"
+	if paused {
+		msg = "已暂停采集"
+	}
+	utils.SuccessWithMessage(c, msg, p)
+}
+
+func (h *AssetHandler) PauseProject(c *gin.Context)  { h.SetProjectPaused(c, true) }
+func (h *AssetHandler) ResumeProject(c *gin.Context) { h.SetProjectPaused(c, false) }
+
 // ListAssets 资产列表：view × kind × catalog 三层维度 + DSL。
-// GET /api/assets?kind=site&catalog=verified&view=lost&site_group=1&page=1&page_size=20&q=...
+// GET /api/assets?kind=site&catalog=verified&view=lost&site_group=1&sort=risk&page=1&page_size=20&q=...
 //
-// 容错口径（v4 §11.4）：q 语法错误明确报错；kind/catalog/view 非法值静默回落缺省。
+// 容错口径（v4 §11.4）：q 语法错误明确报错；kind/catalog/view/sort 非法值静默回落缺省。
 func (h *AssetHandler) ListAssets(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
@@ -60,6 +170,7 @@ func (h *AssetHandler) ListAssets(c *gin.Context) {
 		Catalog:   c.Query("catalog"),
 		View:      c.Query("view"),
 		SiteGroup: siteGroup,
+		Sort:      c.Query("sort"),
 		Page:      page,
 		PageSize:  pageSize,
 	})
@@ -74,6 +185,21 @@ func (h *AssetHandler) ListAssets(c *gin.Context) {
 	utils.Success(c, res)
 }
 
+// ListTaskAssets 任务详情「本任务资产」：该任务贡献过证据的归并站点。
+// GET /api/tasks/:id/assets?page=1&page_size=20&q=
+func (h *AssetHandler) ListTaskAssets(c *gin.Context) {
+	taskID := c.Param("id")
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+
+	items, total, err := h.assets.ListTaskSites(c.Request.Context(), taskID, page, pageSize, c.Query("q"))
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"list": items, "total": total, "page": page, "pageSize": pageSize})
+}
+
 // CheckQuery 只校验查询串，不查库，供前端语法框实时反馈。
 // GET /api/assets/query-check?q=...
 func (h *AssetHandler) CheckQuery(c *gin.Context) {
@@ -83,6 +209,26 @@ func (h *AssetHandler) CheckQuery(c *gin.Context) {
 		return
 	}
 	utils.Success(c, gin.H{"valid": true, "compiled": compiled})
+}
+
+// GetAsset 资产详情：站点、入口、验证历史、指纹命中、原始记录、事件与关系证据。
+// GET /api/assets/:id
+func (h *AssetHandler) GetAsset(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "非法资产 ID")
+		return
+	}
+	detail, err := h.assets.GetAssetDetail(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			utils.NotFound(c, "资产不存在")
+			return
+		}
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.Success(c, detail)
 }
 
 // ListEvents 变更时间线。
@@ -110,7 +256,7 @@ func (h *AssetHandler) ImportAssets(c *gin.Context) {
 		return
 	}
 
-	res, err := h.assets.ImportRecords(c.Request.Context(), body.ProjectID, body.Source, body.Records)
+	res, err := h.assets.Ingest(c.Request.Context(), body.ProjectID, body.Source, body.Records)
 	if err != nil {
 		utils.Error(c, utils.ErrCodeInvalidParams, err.Error())
 		return
@@ -121,6 +267,48 @@ func (h *AssetHandler) ImportAssets(c *gin.Context) {
 func importMessage(res *repo.ImportResult) string {
 	return "导入 " + strconv.Itoa(res.Records) + " 条，新增站点 " + strconv.Itoa(res.NewSites) +
 		" 个、入口 " + strconv.Itoa(res.NewEndpoints) + " 个，重复 " + strconv.Itoa(res.DupRecords) + " 条"
+}
+
+// PreviewImport 两段式导入第一步：只校验/去重/抽样，不写库。
+// POST /api/assets/import/preview
+func (h *AssetHandler) PreviewImport(c *gin.Context) {
+	var body struct {
+		ProjectID int64            `json:"project_id" binding:"required"`
+		Source    string           `json:"source"`
+		Records   []repo.RawRecord `json:"records" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		utils.Error(c, utils.ErrCodeInvalidParams, err.Error())
+		return
+	}
+	preview, err := h.assets.PreviewImport(c.Request.Context(), body.ProjectID, body.Source, body.Records)
+	if err != nil {
+		utils.Error(c, utils.ErrCodeInvalidParams, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "预览已生成，15 分钟内有效", preview)
+}
+
+// CommitImport 两段式导入第二步：消费预览 token 并真正入库。
+// POST /api/assets/import/commit
+func (h *AssetHandler) CommitImport(c *gin.Context) {
+	var body struct {
+		Token string `json:"token" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		utils.Error(c, utils.ErrCodeInvalidParams, "缺少预览 token")
+		return
+	}
+	res, err := h.assets.CommitImport(c.Request.Context(), body.Token)
+	if err != nil {
+		if errors.Is(err, service.ErrImportPreviewExpired) {
+			utils.Error(c, utils.ErrCodeInvalidParams, err.Error())
+			return
+		}
+		utils.Error(c, utils.ErrCodeInvalidParams, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, importMessage(res), res)
 }
 
 // VerifyAsset 人工判定一次可达性（不发网络请求，仅供人工修正）。
@@ -194,4 +382,42 @@ func (h *AssetHandler) IconImage(c *gin.Context) {
 	// 内容按 sha256 寻址，永不变化，可以长缓存
 	c.Header("Cache-Control", "public, max-age=31536000, immutable")
 	c.Data(200, ctype, data)
+}
+
+// AssetGraph 资产星图（分层图数据）。
+// GET /api/assets/graph?project_id=&q=
+//
+// 与 /api/assets 的区别：不分页、保留父子关系，供前端做分层布局。
+func (h *AssetHandler) AssetGraph(c *gin.Context) {
+	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
+	g, err := h.assets.AssetGraph(c.Request.Context(), repo.AssetQuery{
+		ProjectID: projectID,
+		Q:         c.Query("q"),
+	})
+	if err != nil {
+		if errors.Is(err, repo.ErrDSLSyntax) {
+			utils.Error(c, utils.ErrCodeInvalidParams, err.Error())
+			return
+		}
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.Success(c, g)
+}
+
+// ListSiteRoutes 某站点已采集的路由（path 粒度）。
+// GET /api/assets/routes?site_id=123&limit=200
+func (h *AssetHandler) ListSiteRoutes(c *gin.Context) {
+	siteID, _ := strconv.ParseInt(c.Query("site_id"), 10, 64)
+	if siteID <= 0 {
+		utils.BadRequest(c, "需要 site_id")
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "200"))
+	routes, err := h.assets.ListSiteRoutes(siteID, limit)
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.Success(c, routes)
 }

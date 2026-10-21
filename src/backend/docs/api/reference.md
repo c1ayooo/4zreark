@@ -1,6 +1,6 @@
 # API 参考
 
-Moon-Gazing-Tower 提供了一套 RESTful API 用于与前端交互和第三方集成。
+4zreark 提供了一套 RESTful API 用于与前端交互和第三方集成。
 
 ## 基础信息
 

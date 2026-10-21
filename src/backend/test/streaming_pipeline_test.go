@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/c1ayooo/4zreark/models"
+	"github.com/c1ayooo/4zreark/scanner/webscan"
 	"github.com/c1ayooo/4zreark/service/pipeline"
 
 	"github.com/c1ayooo/4zreark/oid"
@@ -19,6 +20,7 @@ import (
 // 测试: 子域名 → CDN检测 → 端口扫描 → 指纹识别 → URL爬虫
 // 注意：子域名爆破需要 sudo 权限（ksubdomain需要raw socket）
 func TestStreamingPipelineFullFlow(t *testing.T) {
+	requireLiveNetwork(t)
 	printSeparator("StreamingPipeline 完整流程测试")
 	fmt.Println("流程: 子域名 → 端口扫描 → 指纹识别 → URL爬虫")
 
@@ -111,6 +113,7 @@ func TestStreamingPipelineFullFlow(t *testing.T) {
 
 // TestStreamingPipelineSubdomainOnly 仅子域名扫描测试
 func TestStreamingPipelineSubdomainOnly(t *testing.T) {
+	requireLiveNetwork(t)
 	printSeparator("StreamingPipeline 子域名扫描测试")
 	fmt.Println("仅测试子域名发现，不进行后续端口/指纹扫描")
 
@@ -173,6 +176,7 @@ func TestStreamingPipelineSubdomainOnly(t *testing.T) {
 
 // TestStreamingPipelinePortScanOnly 仅端口扫描测试
 func TestStreamingPipelinePortScanOnly(t *testing.T) {
+	requireLiveNetwork(t)
 	printSeparator("StreamingPipeline 端口扫描测试")
 
 	task := &models.Task{
@@ -238,6 +242,10 @@ func TestStreamingPipelinePortScanOnly(t *testing.T) {
 
 // TestStreamingPipelineCrawlerBatch 测试爬虫批量模式
 func TestStreamingPipelineCrawlerBatch(t *testing.T) {
+	requireLiveNetwork(t)
+	if !webscan.NewKatanaScanner().IsAvailable() && !webscan.NewRadScanner().IsAvailable() {
+		t.Skip("katana/rad 均不可用，跳过爬虫集成测试")
+	}
 	printSeparator("StreamingPipeline 爬虫批量模式测试")
 
 	task := &models.Task{
@@ -302,6 +310,7 @@ func TestStreamingPipelineCrawlerBatch(t *testing.T) {
 
 // TestStreamingPipelineIPTarget IP目标测试
 func TestStreamingPipelineIPTarget(t *testing.T) {
+	requireLiveNetwork(t)
 	printSeparator("StreamingPipeline IP目标测试")
 
 	task := &models.Task{
@@ -363,6 +372,7 @@ func TestStreamingPipelineIPTarget(t *testing.T) {
 
 // TestStreamingPipelineMultipleTargets 多目标测试
 func TestStreamingPipelineMultipleTargets(t *testing.T) {
+	requireLiveNetwork(t)
 	printSeparator("StreamingPipeline 多目标测试")
 
 	task := &models.Task{

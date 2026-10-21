@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/c1ayooo/4zreark/repo"
@@ -16,6 +17,8 @@ import (
 type CycleService struct {
 	stop chan struct{}
 	done chan struct{}
+	// expandDomainHook 仅供测试替换域名展开；nil 时走真实仓储。
+	expandDomainHook func(ctx context.Context, projectID int64, domain string, max int) ([]repo.TargetInput, []string, error)
 }
 
 func NewCycleService() *CycleService {
@@ -25,12 +28,14 @@ func NewCycleService() *CycleService {
 // TickResult 汇总一次推进的结果，接口与日志都用它。
 type TickResult struct {
 	DuePlans      int   `json:"due_plans"`
+	ChangePlans   int   `json:"change_plans"`
 	RunsCreated   int   `json:"runs_created"`
 	RunsExisting  int   `json:"runs_existing"`
 	TargetsAdded  int64 `json:"targets_added"`
 	PlansAdvanced int   `json:"plans_advanced"`
 	EmptySeeds    int   `json:"empty_seeds"`
 	Reaped        int64 `json:"reaped"`
+	BudgetLimited int   `json:"budget_limited"`
 }
 
 func (s *CycleService) stores() (repo.SeedRepo, repo.RunRepo, error) {
@@ -70,47 +75,12 @@ func (s *CycleService) Tick(ctx context.Context, limit int) (*TickResult, error)
 			cycleStart = *plan.NextRunAt
 		}
 
-		run, created, err := runs.CreateRun(ctx, repo.CreateRunInput{
-			PlanID:     plan.ID,
-			ProjectID:  plan.ProjectID,
-			CycleStart: cycleStart,
-			Budget:     plan.Budget,
-		})
+		rr, err := s.runPlan(ctx, runs, plan, cycleStart)
 		if err != nil {
-			log.Printf("[Cycle] 计划 %d 建批次失败: %v", plan.ID, err)
+			log.Printf("[Cycle] 计划 %d 执行失败: %v", plan.ID, err)
 			continue
 		}
-		if created {
-			res.RunsCreated++
-		} else {
-			res.RunsExisting++
-		}
-
-		// 已存在的批次只有在「一条目标都没有」时才补展开：
-		// 上一轮可能在建完批次、展开前失败，这里负责补上，不留空批次。
-		needExpand := created
-		if !needExpand {
-			stats, err := runs.TargetStats(ctx, run.ID)
-			if err == nil && len(stats) == 0 {
-				needExpand = true
-			}
-		}
-		if needExpand {
-			targets, err := s.expand(ctx, plan)
-			if err != nil {
-				log.Printf("[Cycle] 计划 %d 展开失败: %v", plan.ID, err)
-				continue
-			}
-			if len(targets) == 0 {
-				res.EmptySeeds++
-			}
-			n, err := runs.AddTargets(ctx, run.ID, targets)
-			if err != nil {
-				log.Printf("[Cycle] 计划 %d 写执行单元失败: %v", plan.ID, err)
-				continue
-			}
-			res.TargetsAdded += n
-		}
+		res.merge(rr)
 
 		// 游标按「本周期 + 间隔」推进，避免 now()+间隔 造成的节奏漂移
 		next := cycleStart.Add(time.Duration(plan.IntervalHours) * time.Hour)
@@ -123,7 +93,104 @@ func (s *CycleService) Tick(ctx context.Context, limit int) (*TickResult, error)
 		}
 		res.PlansAdvanced++
 	}
+
+	// 资产变化触发的计划：与到期计划共用展开逻辑，只是 cycle_start
+	// 取「当前分钟」做幂等键——同一分钟内多个事件只产生一个批次。
+	changePlans, err := seeds.ChangeTriggeredPlans(ctx, limit)
+	if err != nil {
+		log.Printf("[Cycle] 查询变更触发计划失败: %v", err)
+		return res, nil
+	}
+	res.ChangePlans = len(changePlans)
+	for _, plan := range changePlans {
+		cycleStart := time.Now().Truncate(time.Minute)
+		rr, err := s.runPlan(ctx, runs, plan, cycleStart)
+		if err != nil {
+			log.Printf("[Cycle] 变更触发计划 %d 执行失败: %v", plan.ID, err)
+			continue
+		}
+		res.merge(rr)
+		// 只推进 last_run_at：变更触发是额外跑一次，不打乱固定周期游标。
+		if err := seeds.MarkPlanChangeRan(ctx, plan.ID); err != nil {
+			log.Printf("[Cycle] 计划 %d 更新变更游标失败: %v", plan.ID, err)
+		}
+	}
 	return res, nil
+}
+
+// planRunResult 是一次计划执行对 TickResult 的增量。
+type planRunResult struct {
+	Created       bool
+	Empty         bool
+	BudgetLimited bool
+	TargetsAdded  int64
+}
+
+func (r *TickResult) merge(x planRunResult) {
+	if x.Created {
+		r.RunsCreated++
+	} else {
+		r.RunsExisting++
+	}
+	if x.Empty {
+		r.EmptySeeds++
+	}
+	if x.BudgetLimited {
+		r.BudgetLimited++
+	}
+	r.TargetsAdded += x.TargetsAdded
+}
+
+// runPlan 建批次（幂等）并在需要时展开目标。到期计划与变更触发计划共用。
+func (s *CycleService) runPlan(ctx context.Context, runs repo.RunRepo, plan *repo.Plan, cycleStart time.Time) (planRunResult, error) {
+	var out planRunResult
+	run, created, err := runs.CreateRun(ctx, repo.CreateRunInput{
+		PlanID:     plan.ID,
+		ProjectID:  plan.ProjectID,
+		CycleStart: cycleStart,
+		Budget:     plan.Budget,
+	})
+	if err != nil {
+		return out, err
+	}
+	out.Created = created
+
+	// 已存在的批次只有在「一条目标都没有」时才补展开：
+	// 上一轮可能在建完批次、展开前失败，这里负责补上，不留空批次。
+	needExpand := created
+	if !needExpand {
+		stats, serr := runs.TargetStats(ctx, run.ID)
+		if serr == nil && len(stats) == 0 {
+			needExpand = true
+		}
+	}
+	if !needExpand {
+		return out, nil
+	}
+
+	expanded, err := s.expand(ctx, plan)
+	if err != nil {
+		return out, err
+	}
+	raw := expanded.Targets
+	targets := s.applyDailyBudget(ctx, runs, plan.ProjectID, plan.Budget, raw)
+	if len(raw) == 0 {
+		out.Empty = true
+		if err := runs.MergeRunStats(ctx, run.ID, map[string]any{
+			"empty_reason": expanded.EmptyReason,
+			"targets":      0,
+		}); err != nil {
+			log.Printf("[Cycle] 计划 %d 写空展开原因失败: %v", plan.ID, err)
+		}
+	} else if len(targets) < len(raw) {
+		out.BudgetLimited = true
+	}
+	n, err := runs.AddTargets(ctx, run.ID, targets)
+	if err != nil {
+		return out, err
+	}
+	out.TargetsAdded = n
+	return out, nil
 }
 
 // TriggerPlan 手动触发一个计划，不等它到期。同一分钟内重复触发只会有一个批次。
@@ -148,9 +215,18 @@ func (s *CycleService) TriggerPlan(ctx context.Context, planID int64) (*repo.Run
 		return nil, false, err
 	}
 	if created {
-		targets, err := s.expand(ctx, plan)
+		expanded, err := s.expand(ctx, plan)
 		if err != nil {
 			return run, created, err
+		}
+		targets := s.applyDailyBudget(ctx, runs, plan.ProjectID, plan.Budget, expanded.Targets)
+		if len(expanded.Targets) == 0 {
+			if err := runs.MergeRunStats(ctx, run.ID, map[string]any{
+				"empty_reason": expanded.EmptyReason,
+				"targets":      0,
+			}); err != nil {
+				log.Printf("[Cycle] 计划 %d 写空展开原因失败: %v", plan.ID, err)
+			}
 		}
 		if _, err := runs.AddTargets(ctx, run.ID, targets); err != nil {
 			return run, created, err
@@ -159,26 +235,73 @@ func (s *CycleService) TriggerPlan(ctx context.Context, planID int64) (*repo.Run
 	return run, created, nil
 }
 
-// expand 把一个种子展开成执行单元。
-// domain 类型取该项目下已归并站点的全部入口（每个 scheme+port 一条），
-// 没有任何站点时回落到种子本身 :443 —— 第一次采集靠手工导入，计划负责之后的回归。
-func (s *CycleService) expand(ctx context.Context, plan *repo.Plan) ([]repo.TargetInput, error) {
-	if plan.SeedKind != "domain" {
-		// cidr / company / repo / app / dict 的展开要真实采集器，G3/G4 再接
-		return nil, nil
+// applyDailyBudget 按计划的 budget.daily_targets 截断本轮目标。
+// 预算按项目/自然日统计（所有计划共享），耗尽后本轮不再新增目标。
+func (s *CycleService) applyDailyBudget(ctx context.Context, runs repo.RunRepo, projectID int64, budget map[string]any, targets []repo.TargetInput) []repo.TargetInput {
+	limit := budgetDailyTargets(budget)
+	if limit <= 0 || len(targets) == 0 {
+		return targets
 	}
-	r := repo.Default()
-	if r == nil {
-		return nil, errors.New("数据层未初始化")
+	used, err := runs.TargetsAddedToday(ctx, projectID)
+	if err != nil {
+		log.Printf("[Cycle] 项目 %d 读取当日预算用量失败: %v", projectID, err)
+		return targets
 	}
-	targets, err := r.AssetTargetsForDomain(ctx, plan.ProjectID, plan.SeedValue, 2000)
+	remaining := limit - int(used)
+	if remaining <= 0 {
+		log.Printf("[Cycle] 项目 %d 当日预算已用完（%d/%d），本轮跳过 %d 个目标", projectID, used, limit, len(targets))
+		return nil
+	}
+	if len(targets) > remaining {
+		log.Printf("[Cycle] 项目 %d 当日预算剩余 %d，截断 %d 个目标", projectID, remaining, len(targets)-remaining)
+		return targets[:remaining]
+	}
+	return targets
+}
+
+// budgetDailyTargets 读取 budget JSON 里的每日目标上限。
+// 支持 daily_targets / max_targets_per_day / daily 三种键（数字或数字字符串）。
+func budgetDailyTargets(budget map[string]any) int {
+	for _, key := range []string{"daily_targets", "max_targets_per_day", "daily"} {
+		v, ok := budget[key]
+		if !ok {
+			continue
+		}
+		switch n := v.(type) {
+		case float64:
+			return int(n)
+		case int:
+			return n
+		case int64:
+			return int(n)
+		case string:
+			if x, err := strconv.Atoi(n); err == nil {
+				return x
+			}
+		}
+	}
+	return 0
+}
+
+// expand 加载种子并调用统一展开器，保证 preview 与实际批次走同一套规则。
+func (s *CycleService) expand(ctx context.Context, plan *repo.Plan) (*SeedExpandResult, error) {
+	seeds, _, err := s.stores()
 	if err != nil {
 		return nil, err
 	}
-	if len(targets) > 0 {
-		return targets, nil
+	seed, err := seeds.GetSeed(ctx, plan.SeedID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return &SeedExpandResult{
+				Kind: plan.SeedKind, Source: plan.SeedKind,
+				Targets: []repo.TargetInput{}, Warnings: []string{"种子不存在"},
+				EmptyReason: "seed_missing",
+			}, nil
+		}
+		return nil, err
 	}
-	return []repo.TargetInput{{Host: plan.SeedValue, Port: 443}}, nil
+	live, _ := seed.Capability["live"].(bool)
+	return s.ExpandSeed(ctx, seed, live, SeedMaxTargets, SeedMaxTargets)
 }
 
 // Start 起后台循环：每 60 秒回收一次过期租约、推进一次到期计划。

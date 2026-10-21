@@ -38,20 +38,56 @@ type ImportResult struct {
 	Errors   []string `json:"errors"`
 }
 
+// stringOrSlice 兼容 nuclei 模板里的两种写法：
+//
+//	reference: https://example.com
+//	reference:
+//	  - https://example.com
+//
+// 真实模板库里两种都有，只认数组会丢掉一大批模板。
+type stringOrSlice []string
+
+func (s *stringOrSlice) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		v := strings.TrimSpace(value.Value)
+		if v == "" {
+			*s = nil
+		} else {
+			*s = []string{v}
+		}
+		return nil
+	}
+	var list []string
+	if err := value.Decode(&list); err != nil {
+		return err
+	}
+	*s = list
+	return nil
+}
+
 // NucleiTemplate Nuclei 模板结构（用于解析）
 type NucleiTemplate struct {
 	ID   string `yaml:"id"`
 	Info struct {
-		Name           string   `yaml:"name"`
-		Author         string   `yaml:"author"`
-		Severity       string   `yaml:"severity"`
-		Description    string   `yaml:"description"`
-		Reference      []string `yaml:"reference"`
-		Tags           string   `yaml:"tags"`
+		Name           string        `yaml:"name"`
+		Author         string        `yaml:"author"`
+		Severity       string        `yaml:"severity"`
+		Description    string        `yaml:"description"`
+		Reference      stringOrSlice `yaml:"reference"`
+		Tags           string        `yaml:"tags"`
 		Classification struct {
-			CVEID []string `yaml:"cve-id"`
+			CVEID stringOrSlice `yaml:"cve-id"`
 		} `yaml:"classification"`
 	} `yaml:"info"`
+}
+
+// sanitizePGText 去掉 NUL 字节。PostgreSQL 的 text/varchar 不接受 0x00
+// (SQLSTATE 22021)；nuclei 模板里 `"\u0000"` 这类转义解码后就是真 NUL。
+func sanitizePGText(s string) string {
+	if !strings.ContainsRune(s, 0) {
+		return s
+	}
+	return strings.ReplaceAll(s, "\x00", "")
 }
 
 type parsedPOC struct {
@@ -78,20 +114,29 @@ func parseTemplate(content []byte, label string) (*parsedPOC, error) {
 		}
 	}
 
+	cves := make([]string, 0, len(template.Info.Classification.CVEID))
+	for _, c := range template.Info.Classification.CVEID {
+		cves = append(cves, sanitizePGText(strings.TrimSpace(c)))
+	}
+	refs := make([]string, 0, len(template.Info.Reference))
+	for _, r := range template.Info.Reference {
+		refs = append(refs, sanitizePGText(strings.TrimSpace(r)))
+	}
+
 	return &parsedPOC{
-		templateID: template.ID,
-		name:       template.Info.Name,
+		templateID: sanitizePGText(template.ID),
+		name:       sanitizePGText(template.Info.Name),
 		poc: &models.POC{
-			Name:        template.Info.Name,
-			TemplateID:  template.ID,
-			Description: template.Info.Description,
-			Author:      template.Info.Author,
-			Severity:    models.VulnSeverity(strings.ToLower(template.Info.Severity)),
+			Name:        sanitizePGText(template.Info.Name),
+			TemplateID:  sanitizePGText(template.ID),
+			Description: sanitizePGText(template.Info.Description),
+			Author:      sanitizePGText(template.Info.Author),
+			Severity:    models.VulnSeverity(strings.ToLower(sanitizePGText(template.Info.Severity))),
 			Type:        "nuclei",
 			Tags:        tags,
-			Content:     string(content),
-			CVEID:       template.Info.Classification.CVEID,
-			References:  template.Info.Reference,
+			Content:     sanitizePGText(string(content)),
+			CVEID:       cves,
+			References:  refs,
 			Enabled:     true,
 			Version:     "1.0",
 		},
@@ -441,4 +486,14 @@ func (s *POCService) GetStatistics() (map[string]interface{}, error) {
 		"by_severity": stats.BySeverity,
 		"by_type":     stats.ByType,
 	}, nil
+}
+
+// ParseNucleiTemplateYAML 解析一份 nuclei 模板 YAML，返回可直接入库的 POC。
+// 对外暴露是给 nuclei 模板接口复用同一套解析口径（与 zip/目录导入一致）。
+func ParseNucleiTemplateYAML(content []byte) (*models.POC, error) {
+	parsed, err := parseTemplate(content, "template")
+	if err != nil {
+		return nil, err
+	}
+	return parsed.poc, nil
 }

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/useragent"
 	"github.com/c1ayooo/4zreark/repo"
 )
 
@@ -105,7 +106,7 @@ func fetchBinary(ctx context.Context, rawURL string) ([]byte, string, bool) {
 	if err != nil {
 		return nil, "", false
 	}
-	req.Header.Set("User-Agent", probeUA)
+	req.Header.Set("User-Agent", useragent.Pick())
 	req.Header.Set("Accept", "image/*,*/*;q=0.8")
 
 	resp, err := probeClient.Do(req)

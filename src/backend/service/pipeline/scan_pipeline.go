@@ -6,12 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/c1ayooo/4zreark/config"
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/scanner/fingerprint"
 	"github.com/c1ayooo/4zreark/scanner/portscan"
 	"github.com/c1ayooo/4zreark/scanner/subdomain"
-	"github.com/c1ayooo/4zreark/scanner/subdomain/thirdparty"
 	"github.com/c1ayooo/4zreark/scanner/vulnscan"
 	"github.com/c1ayooo/4zreark/scanner/webscan"
 )
@@ -35,9 +33,6 @@ type ScanPipeline struct {
 	contentScanner     *webscan.ContentScanner
 	vulnScanner        *vulnscan.VulnScanner
 	takeoverScanner    *subdomain.TakeoverScanner
-
-	// 第三方数据源管理器
-	thirdpartyManager *thirdparty.APIManager
 
 	// 结果收集
 	discoveredSubdomains []SubdomainInfo
@@ -98,18 +93,6 @@ type URLInfo struct {
 func NewScanPipeline(task *models.Task, taskService TaskService, resultService ResultService) *ScanPipeline {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// 创建第三方数据源管理器
-	cfg := config.GetConfig()
-	apiConfig := &thirdparty.APIConfig{
-		FofaEmail: cfg.ThirdParty.Fofa.Email,
-		FofaKey:   cfg.ThirdParty.Fofa.Key,
-		HunterKey: cfg.ThirdParty.Hunter.Key,
-		QuakeKey:  cfg.ThirdParty.Quake.Key,
-	}
-	thirdpartyManager := thirdparty.NewAPIManager(apiConfig)
-
-	log.Printf("[Pipeline] Third-party API manager created, configured sources: %v", thirdpartyManager.GetConfiguredSources())
-
 	return &ScanPipeline{
 		task:               task,
 		ctx:                ctx,
@@ -125,7 +108,6 @@ func NewScanPipeline(task *models.Task, taskService TaskService, resultService R
 		contentScanner:     webscan.NewContentScanner(10),
 		vulnScanner:        vulnscan.NewVulnScanner(10),
 		takeoverScanner:    subdomain.NewTakeoverScanner(10),
-		thirdpartyManager:  thirdpartyManager,
 	}
 }
 

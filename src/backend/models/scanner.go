@@ -10,9 +10,11 @@ import (
 type NodeType string
 
 const (
-	NodeTypeGeneral  NodeType = "general"  // 通用扫描节点
-	NodeTypeSpecial  NodeType = "special"  // 专项扫描节点
-	NodeTypeInternal NodeType = "internal" // 内网节点
+	NodeTypeMaster   NodeType = "master"   // 控制面节点
+	NodeTypeWorker   NodeType = "worker"   // 扫描节点
+	NodeTypeGeneral  NodeType = "general"  // 通用扫描节点（历史值）
+	NodeTypeSpecial  NodeType = "special"  // 专项扫描节点（历史值）
+	NodeTypeInternal NodeType = "internal" // 内网节点（历史值）
 )
 
 // NodeStatus represents node status
@@ -51,6 +53,11 @@ type ScannerNode struct {
 	LastHeartbeat     time.Time `json:"last_heartbeat" bson:"last_heartbeat"`
 	HeartbeatInterval int       `json:"heartbeat_interval" bson:"heartbeat_interval"` // seconds
 
+	// TokenHash 是节点密钥的 SHA-256，密钥原文只在下发时出现一次。
+	// 清空 token_hash 并写入 revoked_at 即可让节点无法再连接平台。
+	TokenHash string     `json:"-" bson:"token_hash"`
+	RevokedAt *time.Time `json:"revoked_at,omitempty" bson:"revoked_at"`
+
 	// Metadata
 	Tags      []string  `json:"tags" bson:"tags"`
 	CreatedAt time.Time `json:"created_at" bson:"created_at"`
@@ -65,8 +72,10 @@ type NodeSystemInfo struct {
 	CPUUsage    float64 `json:"cpu_usage" bson:"cpu_usage"`
 	MemoryTotal int64   `json:"memory_total" bson:"memory_total"` // bytes
 	MemoryUsed  int64   `json:"memory_used" bson:"memory_used"`   // bytes
+	MemoryUsage float64 `json:"memory_usage" bson:"memory_usage"` // percent
 	DiskTotal   int64   `json:"disk_total" bson:"disk_total"`     // bytes
 	DiskUsed    int64   `json:"disk_used" bson:"disk_used"`       // bytes
+	DiskUsage   float64 `json:"disk_usage" bson:"disk_usage"`     // percent
 }
 
 // Plugin represents a scanner plugin

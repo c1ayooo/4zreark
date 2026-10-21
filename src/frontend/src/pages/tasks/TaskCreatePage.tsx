@@ -1,7 +1,10 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useMutation } from '@tanstack/react-query'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { taskApi, TaskConfig } from '@/api/tasks'
+import { assetApi } from '@/api/assets'
+import { dictionaryApi } from '@/api/sources'
+import { nodeApi } from '@/api/nodes'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -24,7 +27,9 @@ import {
 
 const scanTypes = [
   { id: 'port_scan', label: '端口扫描', description: '扫描开放端口' },
-  { id: 'service_detect', label: '服务识别', description: '识别服务类型和版本' },
+  { id: 'service_detect', label: '服务识别', description: '真实协议握手识别服务类型和版本' },
+  { id: 'exposure_scan', label: '暴露面探测', description: '无凭据探测 Redis/ES/FTP 等匿名暴露' },
+  { id: 'clue_hunt', label: '存量线索', description: 'Wayback 遗留端点 / CDN 源站 / 云资源 / SaaS' },
   { id: 'vuln_scan', label: '漏洞扫描', description: '检测已知漏洞' },
   { id: 'fingerprint', label: '指纹识别', description: '识别目标指纹' },
   { id: 'subdomain', label: '子域名枚举', description: '发现子域名' },
@@ -45,9 +50,11 @@ function detectTargetType(target: string): string {
 interface TaskCreateDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** 从项目详情进入时预选归属项目 */
+  initialProjectId?: number
 }
 
-export function TaskCreateDialog({ open, onOpenChange }: TaskCreateDialogProps) {
+export function TaskCreateDialog({ open, onOpenChange, initialProjectId }: TaskCreateDialogProps) {
   const navigate = useNavigate()
   const { toast } = useToast()
 
@@ -64,6 +71,36 @@ export function TaskCreateDialog({ open, onOpenChange }: TaskCreateDialogProps) 
 
   const [directTargets, setDirectTargets] = useState<string[]>([])
   const [targetInput, setTargetInput] = useState('')
+  // 归属项目：扫描结果自动并入该项目的资产（sites/raw_records）
+  const [projectId, setProjectId] = useState(initialProjectId ?? 0)
+  // 扫描节点：空 = 跟随默认节点（后端解析），填 node_id = 指定节点
+  const [nodeId, setNodeId] = useState('')
+
+  const { data: projectsRes } = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => assetApi.projects(),
+  })
+  const projects = projectsRes?.data ?? []
+
+  const subDicts = useQuery({
+    queryKey: ['task-dicts', 'subdomain'],
+    queryFn: () => dictionaryApi.list({ type: 'subdomain', page: 1, page_size: 100 }),
+  })
+  const dirDicts = useQuery({
+    queryKey: ['task-dicts', 'directory'],
+    queryFn: () => dictionaryApi.list({ type: 'directory', page: 1, page_size: 100 }),
+  })
+  const subDictList = subDicts.data?.data ?? []
+  const dirDictList = dirDicts.data?.data ?? []
+  const nodes = useQuery({
+    queryKey: ['scan-nodes-options'],
+    queryFn: () => nodeApi.getNodes({ page: 1, pageSize: 100 }),
+  })
+  const defaultNode = useQuery({
+    queryKey: ['default-scan-node'],
+    queryFn: () => nodeApi.getDefaultNode(),
+  })
+  const nodeOptions = nodes.data?.data.list ?? []
 
   const createMutation = useMutation({
     mutationFn: taskApi.createTask,
@@ -96,12 +133,27 @@ export function TaskCreateDialog({ open, onOpenChange }: TaskCreateDialogProps) 
       toast({ title: '请输入任务名称', variant: 'destructive' })
       return
     }
+    if (!projectId) {
+      toast({ title: '请选择归属项目', description: '扫描结果会并入该项目的资产', variant: 'destructive' })
+      return
+    }
     if (directTargets.length === 0) {
       toast({ title: '请输入至少一个扫描目标', variant: 'destructive' })
       return
     }
     if ((formData.config.scanTypes?.length ?? 0) === 0) {
       toast({ title: '请选择至少一种扫描类型', variant: 'destructive' })
+      return
+    }
+    // 服务识别 / 暴露面探测是独立任务类型，暂不支持与其他扫描阶段组合
+    const exclusive = ['service_detect', 'exposure_scan', 'clue_hunt']
+    const selected = formData.config.scanTypes || []
+    if (selected.some((t) => exclusive.includes(t)) && selected.length > 1) {
+      toast({
+        title: '服务识别 / 暴露面探测 / 存量线索需单独创建任务',
+        description: '这些任务不含端口扫描、爬虫等阶段，请只勾选其中一项',
+        variant: 'destructive',
+      })
       return
     }
 
@@ -111,11 +163,13 @@ export function TaskCreateDialog({ open, onOpenChange }: TaskCreateDialogProps) 
 
     createMutation.mutate({
       name: formData.name,
+      projectId,
       type: taskType,
       targets: directTargets,
       targetType: targetType,
       description: formData.description,
       config: formData.config,
+      nodeId: nodeId || undefined,
     })
   }
 
@@ -156,6 +210,64 @@ export function TaskCreateDialog({ open, onOpenChange }: TaskCreateDialogProps) 
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
               />
             </div>
+          </div>
+
+          {/* 归属项目：扫描结果自动并入该项目资产 */}
+          <div className="space-y-2">
+            <Label>归属项目 *</Label>
+            <Select
+              value={projectId ? String(projectId) : ''}
+              onValueChange={(v) => setProjectId(Number(v))}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="选择项目" />
+              </SelectTrigger>
+              <SelectContent>
+                {projects.map((p) => (
+                  <SelectItem key={p.id} value={String(p.id)}>
+                    {p.name}（{p.code}）
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-muted-foreground text-xs">
+              扫描发现的子域、服务会自动归并到该项目的资产里
+            </p>
+          </div>
+
+          {/* 扫描节点：不选 = 使用系统默认节点 */}
+          <div className="space-y-2">
+            <Label>扫描节点</Label>
+            <Select
+              value={nodeId || 'default'}
+              onValueChange={(v) => setNodeId(v === 'default' ? '' : v)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="默认节点" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">
+                  默认节点
+                  {defaultNode.data?.data?.node
+                    ? `（${defaultNode.data.data.node.name}）`
+                    : defaultNode.data?.data?.node_id
+                      ? `（${defaultNode.data.data.node_id}）`
+                      : '（未设置，任意在线节点）'}
+                </SelectItem>
+                {nodeOptions.map((n) => (
+                  <SelectItem
+                    key={n.id}
+                    value={n.nodeId}
+                    disabled={n.status === 'disabled' || n.status === 'offline'}
+                  >
+                    {n.name}（{n.nodeId}，{n.status}）
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-muted-foreground text-xs">
+              默认节点在「节点管理」设置；也可在创建任务时临时指定节点。
+            </p>
           </div>
 
           {/* 扫描目标 */}
@@ -219,6 +331,64 @@ export function TaskCreateDialog({ open, onOpenChange }: TaskCreateDialogProps) 
               ))}
             </div>
           </div>
+
+          <p className="text-muted-foreground text-xs">
+            资产入库跟随勾选：端口扫描→端口入口；爬虫/目录→URL；指纹/服务识别→技术栈与图标。
+          </p>
+
+          {/* 任务级字典：子域 / 目录分别选，空 = 内置词表 */}
+          {formData.config.scanTypes?.includes('subdomain') && (
+            <div className="space-y-2">
+              <Label>子域字典</Label>
+              <Select
+                value={formData.config.subdomain_dict_id || 'builtin'}
+                onValueChange={(v) =>
+                  setFormData({
+                    ...formData,
+                    config: { ...formData.config, subdomain_dict_id: v === 'builtin' ? '' : v },
+                  })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="内置词表" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="builtin">内置词表</SelectItem>
+                  {subDictList.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>
+                      {d.name}（{d.line_count} 条）
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          {formData.config.scanTypes?.includes('dir_scan') && (
+            <div className="space-y-2">
+              <Label>目录字典</Label>
+              <Select
+                value={formData.config.dir_dict_id || 'builtin'}
+                onValueChange={(v) =>
+                  setFormData({
+                    ...formData,
+                    config: { ...formData.config, dir_dict_id: v === 'builtin' ? '' : v },
+                  })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="spray 默认字典" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="builtin">spray 默认字典</SelectItem>
+                  {dirDictList.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>
+                      {d.name}（{d.line_count} 条）
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           {/* 扫描参数 - 简化版 */}
           <div className="space-y-2">
@@ -295,13 +465,16 @@ export function TaskCreateDialog({ open, onOpenChange }: TaskCreateDialogProps) 
 // 保留原来的页面导出，但改用 Dialog
 export default function TaskCreatePage() {
   const navigate = useNavigate()
-  
+  const [searchParams] = useSearchParams()
+  const initialProjectId = Number(searchParams.get('project_id')) || undefined
+
   return (
-    <TaskCreateDialog 
-      open={true} 
+    <TaskCreateDialog
+      open={true}
+      initialProjectId={initialProjectId}
       onOpenChange={(open) => {
         if (!open) navigate('/tasks')
-      }} 
+      }}
     />
   )
 }

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/c1ayooo/4zreark/repo"
 )
@@ -36,6 +38,9 @@ type EndpointProbe struct {
 	Addr       string `json:"addr"`
 	ElapsedMS  int64  `json:"elapsed_ms"`
 	Detail     string `json:"detail"`
+	// 关系层观测值：证书指纹与跳转后的最终 URL（非 HTTPS / 无跳转时为空）。
+	CertSHA256 string `json:"cert_sha256,omitempty"`
+	FinalURL   string `json:"final_url,omitempty"`
 }
 
 // SiteProbeReport 是一个站点的聚合结果。
@@ -89,12 +94,22 @@ func (s *VerifyService) ProbeSite(ctx context.Context, siteID int64) (*SiteProbe
 	var snapshot *ProbeResult
 	var hitScheme string
 	var hitPort int
+	httpEndpoints := 0
 	for _, ep := range endpoints {
+		// 端口扫描会写入 ssh/redis 等非 HTTP 入口；可达性探测只处理 http/https。
+		if ep.Scheme != "http" && ep.Scheme != "https" {
+			report.Endpoints = append(report.Endpoints, EndpointProbe{
+				Scheme: ep.Scheme, Port: ep.Port, Outcome: "skipped", ReasonCode: "non_http",
+			})
+			continue
+		}
+		httpEndpoints++
 		res := ProbeEndpoint(ctx, report.Host, ep.Port, ep.Scheme)
 		report.Endpoints = append(report.Endpoints, EndpointProbe{
 			Scheme: ep.Scheme, Port: ep.Port, Outcome: string(res.Outcome),
 			ReasonCode: res.ReasonCode, StatusCode: res.StatusCode, Addr: res.Addr,
 			ElapsedMS: res.ElapsedMS, Detail: res.Detail,
+			CertSHA256: res.CertSHA256, FinalURL: res.FinalURL,
 		})
 		if res.Reachable() {
 			report.Verdict = "reachable"
@@ -114,10 +129,28 @@ func (s *VerifyService) ProbeSite(ctx context.Context, siteID int64) (*SiteProbe
 		worstReason = res.ReasonCode
 	}
 
+	if httpEndpoints == 0 {
+		// 只有非 HTTP 入口时不能按“失联”处理：探测口径覆盖不到这些协议。
+		report.Verdict = "inconclusive"
+		report.ReasonCode = "non_http_only"
+	}
+
+	// G5：事件需要探测前后的状态/属性 diff。
+	before, beforeErr := assets.SiteSnapshot(ctx, siteID)
+	if beforeErr != nil {
+		log.Printf("[Verify] 站点 %d 读取旧快照失败: %v", siteID, beforeErr)
+		before = nil
+	}
+
 	switch report.Verdict {
 	case "reachable":
 		if err := assets.VerifySite(ctx, siteID, true, report.StatusCode, report.ReasonCode); err != nil {
 			return report, err
+		}
+		// 关系层观测值：证书指纹 + 跳转后的最终 host（同站不记）。
+		if snapshot != nil {
+			_ = assets.UpdateSiteObservations(ctx, siteID, snapshot.CertSHA256,
+				redirectHost(host, snapshot.FinalURL))
 		}
 		// 图标先抓：条件树里的 icon_hash 叶子要用它，技术栈聚类也靠它。
 		// 抓不到不影响探测结论，只记日志。
@@ -157,6 +190,48 @@ func (s *VerifyService) ProbeSite(ctx context.Context, siteID int64) (*SiteProbe
 				report.MatchedRules = ids
 			}
 		}
+
+		// 事件：失联后重新可达 -> reappear；标题/状态码/技术栈/图标变化 -> attribute_change。
+		if before != nil {
+			if before.State == "lost" || before.State == "archived" {
+				if err := assets.InsertEvent(ctx, before.ProjectID, siteID, nil, "reappear", "失联资产重新出现",
+					map[string]any{"state": before.State}, map[string]any{"state": "reachable"}); err != nil {
+					log.Printf("[Verify] 站点 %d 写入 reappear 事件失败: %v", siteID, err)
+				}
+			}
+			afterTitle := before.Title
+			if snapshot != nil && snapshot.Title != "" {
+				afterTitle = snapshot.Title
+			}
+			techChanged := len(report.Tech) > 0 && !sameStringSet(before.Tech, report.Tech)
+			iconChanged := report.IconSHA256 != "" && report.IconSHA256 != before.IconSHA256
+			if afterTitle != before.Title || report.StatusCode != before.HTTPStatus || techChanged || iconChanged {
+				if err := assets.InsertEvent(ctx, before.ProjectID, siteID, nil, "attribute_change", "资产属性发生变化",
+					map[string]any{"title": before.Title, "http_status": before.HTTPStatus, "technology": before.Tech, "icon_sha256": before.IconSHA256},
+					map[string]any{"title": afterTitle, "http_status": report.StatusCode, "technology": report.Tech, "icon_sha256": report.IconSHA256}); err != nil {
+					log.Printf("[Verify] 站点 %d 写入 attribute_change 事件失败: %v", siteID, err)
+				}
+			}
+		}
+		// 指纹命中 -> 自动 nuclei 最小验证（默认关闭；服务内部再判一次配置）。
+		// 这是旁路：入队失败不影响探活结论。
+		if len(report.Tech) > 0 && hitScheme != "" {
+			pid := int64(0)
+			if before != nil {
+				pid = before.ProjectID
+			} else if p, perr := assets.SiteProjectID(ctx, siteID); perr == nil {
+				pid = p
+			}
+			if pid > 0 {
+				target := fmt.Sprintf("%s://%s", hitScheme, net.JoinHostPort(host, strconv.Itoa(hitPort)))
+				for i, tech := range report.Tech {
+					if i >= 8 {
+						break
+					}
+					GetVulnVerifyService().Enqueue(strconv.FormatInt(pid, 10), target, tech)
+				}
+			}
+		}
 	case "inconclusive":
 		if err := assets.RecordInconclusive(ctx, siteID, report.ReasonCode); err != nil {
 			return report, err
@@ -181,4 +256,35 @@ func (s *VerifyService) ProbeHostPort(ctx context.Context, host string, port int
 		scheme = "http"
 	}
 	return ProbeEndpoint(ctx, host, port, scheme)
+}
+
+func sameStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[string]int, len(a))
+	for _, s := range a {
+		counts[s]++
+	}
+	for _, s := range b {
+		counts[s]--
+		if counts[s] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// redirectHost 从最终 URL 里取 host。跳回自身时返回空串：
+// 关系层不需要「a.com -> a.com」这种没有信息量的边。
+func redirectHost(original, finalURL string) string {
+	u, err := url.Parse(finalURL)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" || host == strings.ToLower(original) {
+		return ""
+	}
+	return host
 }

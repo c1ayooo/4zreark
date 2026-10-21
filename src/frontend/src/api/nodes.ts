@@ -12,22 +12,26 @@ interface BackendPaginatedResponse<T> {
 
 // Transform backend node to frontend format
 const transformNode = (n: Record<string, unknown>): ScannerNode => {
-  const systemInfo = n.system_info as Record<string, unknown> || {}
+  const systemInfo = (n.system_info as Record<string, unknown>) || {}
   return {
     id: n.id as string,
+    nodeId: (n.node_id as string) || '',
     name: n.name as string,
-    hostname: n.hostname as string,
-    ipAddress: n.ip_address as string,
+    hostname: (n.name as string) || '',
+    description: (n.description as string) || '',
+    ipAddress: (n.ip as string) || '',
+    port: (n.port as number) || 0,
     status: n.status as ScannerNode['status'],
-    type: n.type as ScannerNode['type'],
+    type: (n.type as ScannerNode['type']) || 'worker',
     capabilities: (n.capabilities as string[]) || [],
-    maxConcurrency: n.max_tasks as number,
-    currentTasks: n.current_tasks as number,
-    cpuUsage: systemInfo.cpu_usage as number || 0,
-    memoryUsage: systemInfo.memory_usage as number || 0,
-    version: n.version as string,
-    lastHeartbeat: n.last_heartbeat as string,
-    registeredAt: n.created_at as string,
+    tags: (n.tags as string[]) || [],
+    maxConcurrency: (n.max_tasks as number) || 0,
+    currentTasks: (n.current_tasks as number) || 0,
+    cpuUsage: Number(systemInfo.cpu_usage) || 0,
+    memoryUsage: Number(systemInfo.memory_usage) || 0,
+    version: (n.version as string) || 'dev',
+    lastHeartbeat: (n.last_heartbeat as string) || '',
+    registeredAt: (n.created_at as string) || '',
   }
 }
 
@@ -48,12 +52,16 @@ const transformPlugin = (p: Record<string, unknown>): Plugin => ({
 
 export interface ScannerNode {
   id: string
+  nodeId: string
   name: string
   hostname: string
+  description: string
   ipAddress: string
-  status: 'online' | 'offline' | 'busy' | 'error'
-  type: 'master' | 'worker'
+  port: number
+  status: 'online' | 'offline' | 'busy' | 'disabled' | 'error'
+  type: 'master' | 'worker' | 'general' | 'special' | 'internal' | 'local'
   capabilities: string[]
+  tags: string[]
   maxConcurrency: number
   currentTasks: number
   cpuUsage: number
@@ -61,6 +69,65 @@ export interface ScannerNode {
   version: string
   lastHeartbeat: string
   registeredAt: string
+}
+
+export interface NodeUpdateInput {
+  name?: string
+  description?: string
+  max_tasks?: number
+  tags?: string[]
+  status?: ScannerNode['status']
+}
+
+export interface EnrollNodeInput {
+  name: string
+  description?: string
+  max_tasks: number
+  capabilities?: string[]
+  tags?: string[]
+}
+
+export interface EnrollNodeResult {
+  node_id: string
+  id: string
+  token: string
+}
+
+export interface DeployNodeInput {
+  host: string
+  port: number
+  os: 'linux' | 'windows'
+  username: string
+  password?: string
+  private_key?: string
+  key_passphrase?: string
+  name: string
+  max_tasks: number
+  capabilities: string[]
+  tags: string[]
+  platform_url: string
+  proxy?: string
+  dir: string
+  gost_reverse?: boolean
+  gost_relay_port?: number
+  gost_tunnel_port?: number
+  gost_user?: string
+  gost_pass?: string
+  platform_port?: number
+}
+
+export interface DeployNodeResult {
+  node_id: string
+  name: string
+  host: string
+  os: string
+  install_dir: string
+  output: string
+}
+
+export interface DefaultNodeResult {
+  node_id: string
+  node: ScannerNode | null
 }
 
 export interface Plugin {
@@ -82,6 +149,7 @@ export interface NodeStats {
   online: number
   offline: number
   busy: number
+  disabled: number
   averageCpu: number
   averageMemory: number
 }
@@ -120,14 +188,56 @@ export const nodeApi = {
     }
   },
 
-  updateNode: (id: string, data: Partial<ScannerNode>): Promise<ApiResponse<ScannerNode>> =>
+  updateNode: (id: string, data: NodeUpdateInput): Promise<ApiResponse<ScannerNode>> =>
     api.put(`/nodes/${id}`, data),
+
+  enrollNode: (data: EnrollNodeInput): Promise<ApiResponse<EnrollNodeResult>> =>
+    api.post('/nodes/enroll', data),
+
+  deployNode: (data: DeployNodeInput): Promise<ApiResponse<DeployNodeResult>> =>
+    api.post('/nodes/deploy', data, { timeout: 180000 }),
+
+  rotateNodeToken: (id: string): Promise<ApiResponse<{ token: string }>> =>
+    api.post(`/nodes/${id}/token`),
+
+  revokeNodeToken: (id: string): Promise<ApiResponse<null>> =>
+    api.delete(`/nodes/${id}/token`),
 
   deleteNode: (id: string): Promise<ApiResponse<null>> =>
     api.delete(`/nodes/${id}`),
 
-  getNodeStats: (): Promise<ApiResponse<NodeStats>> =>
-    api.get('/nodes/stats'),
+  getNodeStats: async (): Promise<ApiResponse<NodeStats>> => {
+    const response: ApiResponse<Record<string, unknown>> = await api.get('/nodes/stats')
+    const d = response.data || {}
+    return {
+      ...response,
+      data: {
+        total: Number(d.total) || 0,
+        online: Number(d.online) || 0,
+        offline: Number(d.offline) || 0,
+        busy: Number(d.busy) || 0,
+        disabled: Number(d.disabled) || 0,
+        averageCpu: Number(d.average_cpu) || 0,
+        averageMemory: Number(d.average_memory) || 0,
+      },
+    }
+  },
+
+  // 默认扫描节点：任务没显式指定节点时走它
+  getDefaultNode: async (): Promise<ApiResponse<DefaultNodeResult>> => {
+    const response: ApiResponse<Record<string, unknown>> = await api.get('/nodes/default')
+    const d = response.data || {}
+    return {
+      ...response,
+      data: {
+        node_id: (d.node_id as string) || '',
+        node: d.node ? transformNode(d.node as Record<string, unknown>) : null,
+      },
+    }
+  },
+
+  setDefaultNode: (nodeId: string): Promise<ApiResponse<{ node_id: string }>> =>
+    api.put('/nodes/default', { node_id: nodeId }),
 
   // Plugins
   getPlugins: async (params?: PaginationParams & {

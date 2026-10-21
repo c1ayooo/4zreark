@@ -35,6 +35,17 @@ export interface Site {
   next_verification_at: string | null
   /** 站点的全部入口。站点按 host 归并，端口视图只能从这里读。 */
   endpoints: AssetEndpoint[]
+  /** 读时按观测证据实时评分（0-100 / p0-p4），不落库 */
+  risk_score: number
+  priority: string
+  /** 评分因子明细：为什么是这个档位 */
+  risk_factors?: RiskFactor[]
+}
+
+export interface RiskFactor {
+  factor: string
+  points: number
+  detail: string
 }
 
 /** kind=domain 的一行 */
@@ -112,6 +123,8 @@ export interface AssetPage {
   view: string
   lifecycle: string
   site_group: boolean
+  /** 实际生效的排序（risk 表示按评分倒序） */
+  sort?: string
   /** false 表示这个视图还没实现，note 里写了替代接口或无数据源 */
   view_supported: boolean
   note?: string
@@ -184,6 +197,8 @@ export interface AssetQueryParams {
   catalog?: AssetCatalog
   view?: AssetView
   site_group?: 0 | 1
+  /** risk=按资产 P0-P4 评分倒序；缺省按首次发现时间 */
+  sort?: 'risk'
 }
 
 export const assetApi = {
@@ -203,6 +218,12 @@ export const assetApi = {
     }),
   /** 图标字节地址（公开路由，可直接放 <img src>） */
   iconURL: (sha256: string) => `/api/asset-icons/${sha256}`,
+  /** 资产星图：不分页、保留父子关系，供分层布局 */
+  graph: (params: { project_id?: number; q?: string } = {}) =>
+    api.get<unknown, { code: number; data: AssetGraphData }>('/assets/graph', { params }),
+  /** 资产详情：站点 + 入口 + 证据链（验证/指纹/原始记录/事件/关系） */
+  detail: (id: number) =>
+    api.get<unknown, { code: number; message: string; data: AssetDetail }>(`/assets/${id}`),
   checkQuery: (q: string) =>
     api.get<unknown, { code: number; data: { valid: boolean; compiled: string } }>('/assets/query-check', {
       params: { q },
@@ -218,3 +239,127 @@ export const assetApi = {
     api.post<unknown, { code: number; message: string }>(`/assets/${id}/protect`, { days }),
   events: (limit = 50) => api.get<unknown, { code: number; data: { items: any[] } }>('/events', { params: { limit } }),
 }
+
+// ---- 资产星图（分层图）----
+
+export type AssetGraphKind =
+  | 'project'
+  | 'root_domain'
+  | 'subdomain'
+  | 'ip'
+  | 'service'
+  | 'endpoint'
+  | 'route'
+
+export type AssetGraphRel = 'owns' | 'contains' | 'resolves' | 'exposes' | 'routes'
+
+export interface AssetGraphNode {
+  key: string
+  kind: AssetGraphKind
+  label: string
+  project_id?: number
+  site_id?: number
+  host?: string
+  port?: number
+  protocol?: string
+  ip?: string
+  title?: string
+  status_code?: number
+  method?: string
+  path?: string
+  state?: string
+  verification_status?: string
+  tech?: string[]
+}
+
+export interface AssetGraphEdge {
+  src: string
+  dst: string
+  rel: AssetGraphRel
+}
+
+export interface AssetGraphData {
+  nodes: AssetGraphNode[]
+  edges: AssetGraphEdge[]
+  /** 站点数超过上限时为 true，图只包含最近发现的那一批 */
+  truncated: boolean
+  limit: number
+}
+
+// ---- 资产详情（证据链）----
+
+export interface AssetVerification {
+  id: number
+  status: string
+  reason_code: string
+  http_status: number
+  attempts: number
+  detail: Record<string, unknown>
+  observed_at: string
+}
+
+export interface AssetFingerprintHit {
+  rule_id: string
+  rule_name: string
+  category: string
+  observed_at: string
+  record_id: number | null
+  evidence: Record<string, unknown>
+}
+
+export interface AssetRawRecord {
+  id: number
+  source: string
+  host: string
+  port: number
+  protocol: string
+  value: string
+  status_code: number
+  title: string
+  ip: string
+  evidence: Record<string, unknown>
+  observed_at: string
+}
+
+export interface AssetEvent {
+  id: number
+  event_type: string
+  title: string
+  before: Record<string, unknown>
+  after: Record<string, unknown>
+  record_id: number | null
+  created_at: string
+}
+
+export interface AssetRelationEvidence {
+  record_id: number
+  source: string
+  value: string
+  note: string
+  observed_at: string
+}
+
+export interface AssetRelation {
+  id: number
+  type: string
+  key: string
+  confidence: number
+  peer: {
+    id: number
+    host: string
+    value: string
+    title: string
+    ip: string
+  }
+  evidence: AssetRelationEvidence[]
+}
+
+export interface AssetDetail {
+  site: Site
+  verifications: AssetVerification[]
+  fingerprints: AssetFingerprintHit[]
+  records: AssetRawRecord[]
+  events: AssetEvent[]
+  relations: AssetRelation[]
+}
+

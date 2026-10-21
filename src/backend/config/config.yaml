@@ -28,6 +28,32 @@ scanner:
   retry_count: 3
   retry_delay: 5
 
+# 分布式扫描节点。
+#   role=all    单机模式（默认）：Web + 本机扫描，本地持有 PostgreSQL
+#   role=master 控制面：持有 PostgreSQL/River，把任务通过 WebSocket 推给 worker
+#   role=worker 扫描节点：不连接数据库，只用 platform_url + token 连平台
+node:
+  id: ""                    # 节点唯一标识，默认取 name（同机多节点时必须显式区分）
+  name: ""                  # 展示名，默认取 hostname
+  role: "master"
+  platform_url: ""          # worker 必填：https://master:9443
+  token: ""                 # worker 必填：平台签发的节点密钥（可吊销）
+  platform_ca: ""           # worker 可选：节点网关自签证书路径；一键部署会自动写入
+  proxy: ""                 # worker 可选：socks5://user:pass@relay:1080 或 http://relay:8080
+  gateway_port: 9443        # 节点专用 TLS 端口，不能和 server.port 相同
+  gateway_host: ""          # 证书 SAN / 默认节点网关地址，留空用本机 hostname/IP
+  tls_cert: ""              # 自定义节点网关证书，留空自动生成自签证书
+  tls_key: ""               # 自定义节点网关私钥
+  tls_ca: ""                # 自定义 CA；留空时用 tls_cert/自签证书作为 worker 信任根
+  tls_dir: "data/node-tls"  # 自签证书存放目录
+  windows_binary: ""        # 一键部署 Windows 时使用的 worker.exe 路径，留空则在 server 同目录找 worker-windows-amd64.exe
+  gost_binary: ""           # 一键部署 gost 反连时使用的本地 gost 路径，留空则找 PATH / ./gost / /tmp/gost
+  tunnel_dir: ""            # gost 隧道记录目录，留空用 /tmp/4zreark-tunnels；主机重启后要恢复请改成持久目录
+  max_tasks: 5              # 单节点同时执行的任务数（River MaxWorkers，启动时生效）
+  heartbeat_interval: 30    # 心跳秒数
+  tags: []                  # 例如 ["overseas", "high-performance"]
+  capabilities: []          # 留空 = 默认全能力
+
 log:
   level: "debug"
   file: "logs/app.log"
@@ -51,3 +77,16 @@ thirdparty:
     key: ""
   quake:
     key: ""
+  zoomeye:
+    key: ""
+  shodan:
+    key: ""
+  crtsh:
+    enabled: true
+
+# 指纹命中后的自动 nuclei 最小验证（默认关闭；开启前确认项目种子即授权边界）
+auto_verify:
+  enabled: false
+  recheck_days: 7
+  concurrency: 1
+  rate_limit: 10

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"log"
 	"time"
@@ -32,7 +33,10 @@ func jobPayload(taskType models.TaskType) map[string]any {
 	return map[string]any{"type": string(taskType)}
 }
 
-// CreateTask creates a new task
+// CreateTask creates a new task.
+//
+// 归属规则：一个任务必须属于且只属于一个项目；项目可以有多个任务。
+// project_id 是扫描结果自动并入资产域（sites/raw_records）的依据，不能为空。
 func (s *TaskService) CreateTask(task *models.Task) error {
 	ctx, cancel := dbCtx()
 	defer cancel()
@@ -40,6 +44,31 @@ func (s *TaskService) CreateTask(task *models.Task) error {
 	tasks, jobs, err := s.stores()
 	if err != nil {
 		return err
+	}
+
+	if task.ProjectID <= 0 {
+		return errors.New("必须选择归属项目（project_id）")
+	}
+	if r := repo.Default(); r != nil {
+		if _, err := repo.NewAssetRepo().GetProject(ctx, task.ProjectID); err != nil {
+			return errors.New("归属项目不存在")
+		}
+	}
+
+	// 字典必须在创建时物化：worker 节点不连数据库，只消费随任务下发的词表。
+	if _, err := materializeTaskConfigDictionaries(ctx, task); err != nil {
+		return errors.New("准备任务字典失败: " + err.Error())
+	}
+
+	// 节点选择：显式指定 > 默认节点 > 空（任意在线节点）。
+	if task.NodeID = NewNodeSelectionService().ResolveTaskNode(ctx, task.NodeID); task.NodeID != "" {
+		node, err := NewNodeService().GetNodeByID(task.NodeID)
+		if err != nil {
+			return errors.New("指定的扫描节点不存在")
+		}
+		if err := CheckNodeUsable(node); err != nil {
+			return errors.New("指定的扫描节点不可用: " + err.Error())
+		}
 	}
 
 	if task.ID.IsZero() {
@@ -55,12 +84,7 @@ func (s *TaskService) CreateTask(task *models.Task) error {
 		return errors.New("创建任务失败: " + err.Error())
 	}
 
-	if _, err := jobs.Enqueue(ctx, repo.EnqueueJobInput{
-		TaskID:   task.ID.Hex(),
-		Kind:     repo.JobKindScan,
-		Priority: 100,
-		Payload:  jobPayload(task.Type),
-	}); err != nil {
+	if err := s.enqueueScan(ctx, task, jobs); err != nil {
 		// 任务已落库但没有作业，worker 不会执行它；这属于必须让调用方知道的状态
 		log.Printf("[TaskService] 任务 %s 入队失败: %v", task.ID.Hex(), err)
 		return errors.New("任务创建成功但入队失败: " + err.Error())
@@ -91,7 +115,7 @@ func (s *TaskService) GetTaskByID(taskID string) (*models.Task, error) {
 }
 
 // ListTasks lists tasks with filtering and pagination
-func (s *TaskService) ListTasks(workspaceID string, taskType string, status string, page, pageSize int) ([]*models.Task, int64, error) {
+func (s *TaskService) ListTasks(workspaceID string, taskType string, status string, projectID int64, page, pageSize int) ([]*models.Task, int64, error) {
 	ctx, cancel := dbCtx()
 	defer cancel()
 
@@ -100,7 +124,7 @@ func (s *TaskService) ListTasks(workspaceID string, taskType string, status stri
 		return nil, 0, err
 	}
 
-	list, total, err := tasks.List(ctx, workspaceID, taskType, status, page, pageSize)
+	list, total, err := tasks.List(ctx, workspaceID, taskType, status, projectID, page, pageSize)
 	if err != nil {
 		return nil, 0, errors.New("查询任务列表失败: " + err.Error())
 	}
@@ -431,7 +455,23 @@ func (s *TaskService) GetTaskStats(workspaceID string) (map[string]interface{}, 
 	return stats, nil
 }
 
-// enqueueTask 把任务丢进 task_jobs。失败只记日志：这里是状态流转的收尾，
+// enqueueScan 把扫描任务放进 River。River 未初始化时退回旧的 task_jobs 实现，
+// 仅用于测试/工具进程；生产启动时 main 会保证 ScanQueue 就绪。
+func (s *TaskService) enqueueScan(ctx context.Context, task *models.Task, jobs repo.JobRepo) error {
+	if q := DefaultScanQueue(); q != nil {
+		return q.Enqueue(ctx, task.ID.Hex(), 100)
+	}
+	log.Printf("[TaskService] 扫描队列未初始化，任务 %s 回退到 task_jobs", task.ID.Hex())
+	_, err := jobs.Enqueue(ctx, repo.EnqueueJobInput{
+		TaskID:   task.ID.Hex(),
+		Kind:     repo.JobKindScan,
+		Priority: 100,
+		Payload:  jobPayload(task.Type),
+	})
+	return err
+}
+
+// enqueueTask 把任务重新放进扫描队列。失败只记日志：这里是状态流转的收尾，
 // 调用方拿到的错误应该反映状态变更本身是否成功。
 func (s *TaskService) enqueueTask(task *models.Task) {
 	ctx, cancel := dbCtx()
@@ -442,12 +482,7 @@ func (s *TaskService) enqueueTask(task *models.Task) {
 		log.Printf("[TaskService] 入队失败（数据层未就绪）: %v", err)
 		return
 	}
-	if _, err := jobs.Enqueue(ctx, repo.EnqueueJobInput{
-		TaskID:   task.ID.Hex(),
-		Kind:     repo.JobKindScan,
-		Priority: 100,
-		Payload:  jobPayload(task.Type),
-	}); err != nil {
+	if err := s.enqueueScan(ctx, task, jobs); err != nil {
 		log.Printf("[TaskService] 任务 %s 入队失败: %v", task.ID.Hex(), err)
 		return
 	}
@@ -459,14 +494,23 @@ func (s *TaskService) discardQueued(taskID string) {
 	ctx, cancel := dbCtx()
 	defer cancel()
 
+	// River 是扫描作业的主队列；旧 task_jobs 记录一并清理，兼容升级前遗留数据。
+	if q := DefaultScanQueue(); q != nil {
+		if n, err := q.CancelQueued(ctx, taskID); err != nil {
+			log.Printf("[TaskService] 取消任务 %s 的 River 排队作业失败: %v", taskID, err)
+		} else if n > 0 {
+			log.Printf("[TaskService] 任务 %s 已取消 %d 个 River 排队作业", taskID, n)
+		}
+	}
+
 	_, jobs, err := s.stores()
 	if err != nil {
 		return
 	}
 	if n, err := jobs.DiscardQueuedForTask(ctx, taskID); err != nil {
-		log.Printf("[TaskService] 清理任务 %s 的排队作业失败: %v", taskID, err)
+		log.Printf("[TaskService] 清理任务 %s 的旧排队作业失败: %v", taskID, err)
 	} else if n > 0 {
-		log.Printf("[TaskService] 任务 %s 已丢弃 %d 个排队作业", taskID, n)
+		log.Printf("[TaskService] 任务 %s 已丢弃 %d 个旧排队作业", taskID, n)
 	}
 }
 
@@ -527,6 +571,40 @@ func (s *TaskService) GetTaskTemplate(templateID string) (*models.TaskTemplate, 
 		return nil, errors.New("查询模板失败: " + err.Error())
 	}
 	return t, nil
+}
+
+// UpdateTaskTemplate updates an existing task template
+func (s *TaskService) UpdateTaskTemplate(templateID string, patch *models.TaskTemplate) error {
+	ctx, cancel := dbCtx()
+	defer cancel()
+
+	tasks, _, err := s.stores()
+	if err != nil {
+		return err
+	}
+
+	existing, err := tasks.GetTemplate(ctx, templateID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return errors.New("模板不存在")
+	}
+	if err != nil {
+		return errors.New("查询模板失败: " + err.Error())
+	}
+
+	existing.Name = patch.Name
+	existing.Description = patch.Description
+	existing.Type = patch.Type
+	existing.Config = patch.Config
+	existing.IsPublic = patch.IsPublic
+	existing.UpdatedAt = time.Now()
+
+	if err := tasks.UpdateTemplate(ctx, existing); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return errors.New("模板不存在")
+		}
+		return errors.New("更新任务模板失败: " + err.Error())
+	}
+	return nil
 }
 
 // DeleteTaskTemplate deletes a task template

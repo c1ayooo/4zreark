@@ -22,6 +22,15 @@ const (
 	TaskTypeMonitor        TaskType = "monitor"
 	TaskTypeFull           TaskType = "full"
 	TaskTypeCustom         TaskType = "custom" // 用户自定义多种扫描类型组合
+
+	// 协议识别与无凭据暴露面（reconkit T5）。
+	// service_detect 是前端历史值，语义与 service_identify 相同。
+	TaskTypeServiceID     TaskType = "service_identify"
+	TaskTypeServiceDetect TaskType = "service_detect"
+	TaskTypeExposure      TaskType = "exposure_scan"
+
+	// 存量线索（reconkit T7）：Wayback 遗留端点 / CDN 源站 / 云资源 / SaaS。
+	TaskTypeClueHunt TaskType = "clue_hunt"
 )
 
 // TaskStatus represents task execution status
@@ -40,10 +49,13 @@ const (
 type Task struct {
 	ID          oid.ObjectID `json:"id" bson:"_id,omitempty"`
 	WorkspaceID oid.ObjectID `json:"workspace_id" bson:"workspace_id"`
-	Name        string       `json:"name" bson:"name"`
-	Description string       `json:"description" bson:"description"`
-	Type        TaskType     `json:"type" bson:"type"`
-	Status      TaskStatus   `json:"status" bson:"status"`
+	// ProjectID 是资产归属项目（projects.id）。0 = 未归属：历史任务兼容，
+	// 这类任务的扫描结果不会自动并入资产域。
+	ProjectID   int64      `json:"project_id" bson:"project_id"`
+	Name        string     `json:"name" bson:"name"`
+	Description string     `json:"description" bson:"description"`
+	Type        TaskType   `json:"type" bson:"type"`
+	Status      TaskStatus `json:"status" bson:"status"`
 
 	// Target Configuration
 	Targets    []string `json:"targets" bson:"targets"`         // IPs, domains, URLs
@@ -88,7 +100,12 @@ type TaskConfig struct {
 
 	// Subdomain Config
 	SubdomainDict string `json:"subdomain_dict,omitempty" bson:"subdomain_dict,omitempty"`
-	UsePassive    bool   `json:"use_passive,omitempty" bson:"use_passive,omitempty"`
+	// SubdomainDictID 指向前端配置的子域字典（dictionaries.id）；设置后覆盖内置词表。
+	SubdomainDictID string `json:"subdomain_dict_id,omitempty" bson:"subdomain_dict_id,omitempty"`
+	UsePassive      bool   `json:"use_passive,omitempty" bson:"use_passive,omitempty"`
+	// 指针类型：nil 表示「未显式配置」→ 默认开启；显式 false 才关闭。
+	SubdomainPermute   *bool `json:"subdomain_permute,omitempty" bson:"subdomain_permute,omitempty"`
+	SubdomainArtifacts *bool `json:"subdomain_artifacts,omitempty" bson:"subdomain_artifacts,omitempty"`
 
 	// Third-party API Config (for subdomain enumeration)
 	UseThirdParty     bool     `json:"use_thirdparty,omitempty" bson:"use_thirdparty,omitempty"`         // 是否使用第三方 API
@@ -107,8 +124,15 @@ type TaskConfig struct {
 	SeverityFilter []string `json:"severity_filter,omitempty" bson:"severity_filter,omitempty"`
 
 	// Dir Scan Config
-	DirDict    string `json:"dir_dict,omitempty" bson:"dir_dict,omitempty"`
+	DirDict string `json:"dir_dict,omitempty" bson:"dir_dict,omitempty"`
+	// DirDictID 指向前端配置的目录字典（dictionaries.id）；设置后覆盖 spray 默认词表。
+	DirDictID  string `json:"dir_dict_id,omitempty" bson:"dir_dict_id,omitempty"`
 	Extensions string `json:"extensions,omitempty" bson:"extensions,omitempty"`
+
+	// Wordlists 是 master 派单前物化好的词表内容。
+	// 节点不连数据库，只有把条目随任务下发，任务级字典才能在分布式下生效。
+	SubdomainWordlist []string `json:"subdomain_wordlist,omitempty" bson:"subdomain_wordlist,omitempty"`
+	DirWordlist       []string `json:"dir_wordlist,omitempty" bson:"dir_wordlist,omitempty"`
 
 	// Bruteforce Config
 	ServiceType string `json:"service_type,omitempty" bson:"service_type,omitempty"`
@@ -120,12 +144,87 @@ type TaskConfig struct {
 	MaxPages       int  `json:"max_pages,omitempty" bson:"max_pages,omitempty"`
 	FollowRedirect bool `json:"follow_redirect,omitempty" bson:"follow_redirect,omitempty"`
 
+	// Rate Control 节奏控制（除漏洞扫描外全模块生效；0 表示用默认值）
+	RatePerSec    int `json:"rate_per_sec,omitempty" bson:"rate_per_sec,omitempty"`       // 每秒请求上限
+	TargetDelayMs int `json:"target_delay_ms,omitempty" bson:"target_delay_ms,omitempty"` // 单目标间隔（毫秒）
+
 	// General Config
 	Threads     int      `json:"threads,omitempty" bson:"threads,omitempty"`
 	Timeout     int      `json:"timeout,omitempty" bson:"timeout,omitempty"`
 	Proxy       string   `json:"proxy,omitempty" bson:"proxy,omitempty"`
 	VerifySSL   bool     `json:"verify_ssl,omitempty" bson:"verify_ssl,omitempty"`
 	ExcludeList []string `json:"exclude_list,omitempty" bson:"exclude_list,omitempty"`
+
+	// 资产入库开关。nil = 按 scanTypes 推导：
+	//   端口扫描 -> 端口；爬虫/目录 -> URL；指纹/服务识别 -> 技术栈与图标。
+	IngestPorts        *bool `json:"ingest_ports,omitempty" bson:"ingest_ports,omitempty"`
+	IngestURLs         *bool `json:"ingest_urls,omitempty" bson:"ingest_urls,omitempty"`
+	IngestFingerprints *bool `json:"ingest_fingerprints,omitempty" bson:"ingest_fingerprints,omitempty"`
+	IngestIcons        *bool `json:"ingest_icons,omitempty" bson:"ingest_icons,omitempty"`
+}
+
+func (c TaskConfig) hasScanType(name string) bool {
+	for _, t := range c.ScanTypes {
+		if t == name {
+			return true
+		}
+	}
+	return false
+}
+
+// WantsPorts 决定端口结果是否进资产域。
+func (c TaskConfig) WantsPorts(taskType TaskType) bool {
+	if c.IngestPorts != nil {
+		return *c.IngestPorts
+	}
+	if c.hasScanType("port_scan") {
+		return true
+	}
+	switch taskType {
+	case TaskTypePortScan, TaskTypeFull, TaskTypeAssetDiscovery:
+		return true
+	}
+	return false
+}
+
+// WantsURLs 决定爬虫/目录扫描发现的 URL 是否进资产域。
+func (c TaskConfig) WantsURLs(taskType TaskType) bool {
+	if c.IngestURLs != nil {
+		return *c.IngestURLs
+	}
+	if c.hasScanType("crawler") || c.hasScanType("dir_scan") {
+		return true
+	}
+	switch taskType {
+	case TaskTypeCrawler, TaskTypeDirScan, TaskTypeFull:
+		return true
+	}
+	return false
+}
+
+// WantsFingerprints 决定技术栈/指纹是否随资产回写。爬虫和目录扫描会自动开指纹阶段。
+func (c TaskConfig) WantsFingerprints(taskType TaskType) bool {
+	if c.IngestFingerprints != nil {
+		return *c.IngestFingerprints
+	}
+	if c.hasScanType("fingerprint") || c.hasScanType("service_detect") ||
+		c.hasScanType("crawler") || c.hasScanType("dir_scan") {
+		return true
+	}
+	switch taskType {
+	case TaskTypeFingerprint, TaskTypeServiceID, TaskTypeServiceDetect,
+		TaskTypeCrawler, TaskTypeDirScan, TaskTypeFull:
+		return true
+	}
+	return false
+}
+
+// WantsIcons 默认跟随指纹阶段；也可以单独关闭图标入库。
+func (c TaskConfig) WantsIcons(taskType TaskType) bool {
+	if c.IngestIcons != nil {
+		return *c.IngestIcons
+	}
+	return c.WantsFingerprints(taskType)
 }
 
 // TaskResultStats represents task result statistics

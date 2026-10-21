@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +13,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/c1ayooo/4zreark/internal/useragent"
 )
 
 // 探测结果分类。分类决定「算不算失联」：
@@ -36,6 +40,12 @@ type ProbeResult struct {
 	ElapsedMS  int64        `json:"elapsed_ms"`
 	Detail     string       `json:"detail"`
 
+	// 关系层用的三个观测值（都来自同一次探测，不额外发包）：
+	//   FinalURL   跟随跳转后的最终 URL（redirect 关系）
+	//   CertSHA256 服务端证书 DER 的 SHA-256（same_cert 关系）
+	FinalURL    string `json:"final_url,omitempty"`
+	CertSHA256  string `json:"cert_sha256,omitempty"`
+
 	// 指纹匹配用的快照，不进 API 响应（正文可能几百 KB）
 	Title   string            `json:"title,omitempty"`
 	Server  string            `json:"server,omitempty"`
@@ -52,7 +62,6 @@ func (r ProbeResult) Inconclusive() bool { return r.Outcome == ProbeInconclusive
 // 探测使用的默认参数。超时给 8 秒：国内站点首次 TLS 握手常见 3–5 秒。
 const (
 	probeTimeout = 8 * time.Second
-	probeUA      = "Mozilla/5.0 (compatible; 4zreark-probe/1.0)"
 	// 指纹只看头部特征，正文读 256KB 足够，避免被大文件拖住
 	probeBodyLimit = 256 << 10
 )
@@ -166,17 +175,7 @@ func ProbeEndpoint(ctx context.Context, host string, port int, scheme string) Pr
 
 	// 3) HTTP：拿到任意状态码都算连通（403/404/500 也算，这是 v2 §8 的明确口径）
 	url := fmt.Sprintf("%s://%s", scheme, net.JoinHostPort(host, fmt.Sprint(port)))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		res.ElapsedMS = time.Since(start).Milliseconds()
-		res.Outcome, res.ReasonCode = ProbeConnFail, "bad_url"
-		res.Detail = err.Error()
-		return res
-	}
-	req.Header.Set("User-Agent", probeUA)
-	req.Header.Set("Accept", "*/*")
-
-	resp, err := probeClient.Do(req)
+	resp, body, err := fetchProbeHTTP(ctx, url, useragent.Pick())
 	res.ElapsedMS = time.Since(start).Milliseconds()
 	if err != nil {
 		res.Outcome, res.ReasonCode = ProbeConnFail, "http_error"
@@ -188,15 +187,27 @@ func ProbeEndpoint(ctx context.Context, host string, port int, scheme string) Pr
 		res.Detail = err.Error()
 		return res
 	}
-	defer resp.Body.Close()
+
+	// 桌面 UA 被 WAF 挡掉时，用手机 UA 再试一次；手机站通常是另一套规则。
+	if shouldRetryWithMobile(resp.StatusCode) {
+		resp2, body2, err2 := fetchProbeHTTP(ctx, url, useragent.PickMobile())
+		res.ElapsedMS = time.Since(start).Milliseconds()
+		if err2 == nil && (resp2.StatusCode < 400 || resp2.StatusCode < resp.StatusCode) {
+			resp, body = resp2, body2
+			res.Detail = "mobile_ua"
+		}
+	}
 
 	// 采集指纹快照：标题、Server、响应头、正文前 256KB
-	if body, rerr := io.ReadAll(io.LimitReader(resp.Body, probeBodyLimit)); rerr == nil {
-		res.Body = string(body)
-		res.Title = extractTitle(res.Body)
-	}
+	res.Body = string(body)
+	res.Title = extractTitle(res.Body)
 	res.Server = resp.Header.Get("Server")
 	res.Headers = flattenHeaders(resp.Header)
+	// 关系层观测值：最终 URL 与证书指纹。都取自本次响应，不额外发包。
+	if resp.Request != nil && resp.Request.URL != nil {
+		res.FinalURL = resp.Request.URL.String()
+	}
+	res.CertSHA256 = certFingerprint(resp)
 
 	res.Outcome = ProbeReachable
 	res.StatusCode = resp.StatusCode
@@ -206,6 +217,48 @@ func ProbeEndpoint(ctx context.Context, host string, port int, scheme string) Pr
 		res.ReasonCode = "http_error"
 	}
 	return res
+}
+
+func shouldRetryWithMobile(status int) bool {
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotAcceptable,
+		http.StatusTooManyRequests, http.StatusServiceUnavailable:
+		return true
+	}
+	return false
+}
+
+// certFingerprint 取响应 TLS 握手里的叶子证书，返回 DER 的 SHA-256 十六进制。
+// 非 HTTPS 或拿不到连接状态时返回空串。
+//
+// 为什么用证书 DER 而不是序列号：同一张证书的序列号在不同 CSR/重签后会变，
+// 而「同一张证书」正是 same_cert 关系要表达的意思。
+func certFingerprint(resp *http.Response) string {
+	if resp == nil || resp.TLS == nil || len(resp.TLS.PeerCertificates) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(resp.TLS.PeerCertificates[0].Raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func fetchProbeHTTP(ctx context.Context, url, ua string) (*http.Response, []byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	resp, err := probeClient.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, probeBodyLimit))
+	if err != nil {
+		return nil, nil, err
+	}
+	return resp, body, nil
 }
 
 // extractTitle 从 HTML 里取 <title>，压平空白并截断到 200 字符。

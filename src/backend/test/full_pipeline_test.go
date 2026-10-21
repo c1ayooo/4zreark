@@ -75,6 +75,7 @@ func printSubSeparator(title string) {
 // TestFullScanPipeline 完整扫描流程测试
 // 子域名扫描 → CDN检测 → 端口扫描 → HTTP探测 → 指纹识别 → URL爬虫
 func TestFullScanPipeline(t *testing.T) {
+	requireLiveNetwork(t)
 	printSeparator("完整扫描流程测试")
 	fmt.Println("流程: 子域名 → CDN检测 → 端口扫描 → HTTP探测 → 指纹识别 → URL爬虫")
 
@@ -343,6 +344,7 @@ func TestFullScanPipeline(t *testing.T) {
 
 // TestFullScanWithHackerTarget 使用实际目标测试完整流程
 func TestFullScanWithHackerTarget(t *testing.T) {
+	requireLiveNetwork(t)
 	printSeparator("实际目标完整扫描测试")
 
 	// 初始化扫描器

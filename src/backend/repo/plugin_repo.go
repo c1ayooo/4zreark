@@ -40,6 +40,13 @@ type DictRepo interface {
 	GetByID(ctx context.Context, id string) (*models.Dictionary, error)
 	List(ctx context.Context, dictType string, page, pageSize int) ([]*models.Dictionary, int64, error)
 	Delete(ctx context.Context, id string) error
+
+	// G4：词表条目 + 引用保护
+	CreateWithEntries(ctx context.Context, d *models.Dictionary, segmentSize int, values []string) (int64, error)
+	ListEntries(ctx context.Context, dictID string, segment, page, pageSize int) ([]string, int64, error)
+	// ListEntriesForExpand 供种子展开一次取前 limit 条，不分页。
+	ListEntriesForExpand(ctx context.Context, dictID string, limit int) ([]string, error)
+	CountSeedRefs(ctx context.Context, id, name string) (int64, error)
 }
 
 type pluginRepo struct{ r *Repo }
@@ -347,12 +354,137 @@ func (r *dictRepo) Delete(ctx context.Context, id string) error {
 	if _, err := idFromString(id); err != nil {
 		return ErrNotFound
 	}
-	tag, err := r.r.pool.Exec(ctx, `delete from dictionaries where id = $1`, id)
+	tx, err := r.r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	// dict_entries 没有外键，删字典时一并清条目
+	if _, err := tx.Exec(ctx, `delete from dict_entries where dict_id = $1`, id); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `delete from dictionaries where id = $1`, id)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return tx.Commit(ctx)
+}
+
+// CreateWithEntries 在一个事务里创建字典并物化词表条目。
+// values 按 segmentSize 分段，segment 从 1 开始。
+func (r *dictRepo) CreateWithEntries(ctx context.Context, d *models.Dictionary, segmentSize int, values []string) (int64, error) {
+	if segmentSize <= 0 {
+		segmentSize = 50000
+	}
+	if d.ID.IsZero() {
+		d.ID = oid.NewObjectID()
+	}
+	if d.CreatedAt.IsZero() {
+		d.CreatedAt = time.Now()
+	}
+	if d.UpdatedAt.IsZero() {
+		d.UpdatedAt = d.CreatedAt
+	}
+
+	tx, err := r.r.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx,
+		`insert into dictionaries (`+dictColumns+`) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		d.ID.Hex(), d.Name, d.Type, d.Description, d.FilePath, d.LineCount, d.IsBuiltin,
+		objectIDOrNil(d.CreatedBy), d.CreatedAt.UTC(), d.UpdatedAt.UTC()); err != nil {
+		if isUniqueViolation(err) {
+			return 0, ErrDuplicate
+		}
+		return 0, err
+	}
+
+	var inserted int64
+	for seg := 0; seg*segmentSize < len(values); seg++ {
+		end := (seg + 1) * segmentSize
+		if end > len(values) {
+			end = len(values)
+		}
+		tag, err := tx.Exec(ctx, `
+insert into dict_entries (dict_id, segment, value)
+select $1, $2, v from unnest($3::text[]) as v
+on conflict do nothing`, d.ID.Hex(), seg+1, values[seg*segmentSize:end])
+		if err != nil {
+			return 0, err
+		}
+		inserted += tag.RowsAffected()
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return inserted, nil
+}
+
+func (r *dictRepo) ListEntries(ctx context.Context, dictID string, segment, page, pageSize int) ([]string, int64, error) {
+	page, pageSize = vulnPage(page, pageSize)
+	var total int64
+	if err := r.r.pool.QueryRow(ctx,
+		`select count(*) from dict_entries where dict_id = $1 and ($2 = 0 or segment = $2)`,
+		dictID, segment).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := r.r.pool.Query(ctx, `
+select value from dict_entries
+ where dict_id = $1 and ($2 = 0 or segment = $2)
+ order by segment, value limit $3 offset $4`,
+		dictID, segment, pageSize, (page-1)*pageSize)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	out := make([]string, 0, pageSize)
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, v)
+	}
+	return out, total, rows.Err()
+}
+
+func (r *dictRepo) ListEntriesForExpand(ctx context.Context, dictID string, limit int) ([]string, error) {
+	if limit <= 0 || limit > 5000 {
+		limit = 5000
+	}
+	rows, err := r.r.pool.Query(ctx, `
+select value from dict_entries
+ where dict_id = $1
+ order by segment, value
+ limit $2`, dictID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]string, 0, limit)
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// CountSeedRefs 统计引用该字典的种子（种子的 value 可能存字典 id 或名字）。
+func (r *dictRepo) CountSeedRefs(ctx context.Context, id, name string) (int64, error) {
+	var n int64
+	err := r.r.pool.QueryRow(ctx,
+		`select count(*) from seeds where kind = 'dict' and value in ($1, $2)`, id, name).Scan(&n)
+	return n, err
 }

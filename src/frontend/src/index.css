@@ -4,52 +4,60 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* 冷灰底 + 深绿强调：去掉偏黄的 cream 底，颜色只留给数据和操作。 */
+    --background: 210 16% 97%;
+    --foreground: 210 18% 12%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 210 18% 12%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 221.2 83.2% 53.3%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 221.2 83.2% 53.3%;
-    --radius: 0.5rem;
+    --popover-foreground: 210 18% 12%;
+    --primary: 154 42% 28%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 10% 94%;
+    --secondary-foreground: 210 15% 15%;
+    --muted: 210 10% 95%;
+    --muted-foreground: 210 8% 40%;
+    --accent: 154 18% 93%;
+    --accent-foreground: 154 30% 18%;
+    --destructive: 0 64% 42%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 210 10% 87%;
+    --input: 210 10% 87%;
+    --ring: 154 42% 28%;
+    --radius: 0.25rem;
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 224.3 76.3% 48%;
+    --background: 210 20% 8%;
+    --foreground: 210 15% 94%;
+    --card: 210 18% 10%;
+    --card-foreground: 210 15% 94%;
+    --popover: 210 18% 10%;
+    --popover-foreground: 210 15% 94%;
+    --primary: 154 40% 52%;
+    --primary-foreground: 210 20% 8%;
+    --secondary: 210 12% 16%;
+    --secondary-foreground: 210 15% 94%;
+    --muted: 210 12% 16%;
+    --muted-foreground: 210 8% 65%;
+    --accent: 210 12% 18%;
+    --accent-foreground: 210 15% 94%;
+    --destructive: 0 58% 48%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 210 10% 22%;
+    --input: 210 10% 22%;
+    --ring: 154 40% 52%;
   }
 }
 
 @layer base {
+  /* 全局界面密度：Tailwind 的间距/字号/宽度都基于 rem，根字号设 100% 即浏览器默认 16px。
+     之前是 90%，一级/二级字号挤在一起显得小，回调到 100% 让层级拉开。
+     不用 zoom/transform，避免 fixed 定位和画布内拖拽坐标跟着缩放。 */
+  html {
+    font-size: 100%;
+  }
+
   * {
     @apply border-border;
   }

@@ -1,7 +1,7 @@
 {
   "name": "moon-gazing-tower-docs",
   "version": "1.0.0",
-  "description": "Documentation for Moon Gazing Tower",
+  "description": "Documentation for 4zreark",
   "main": "index.js",
   "scripts": {
     "docs:dev": "vitepress dev",

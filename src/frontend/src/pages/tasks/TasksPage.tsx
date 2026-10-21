@@ -189,10 +189,10 @@ export default function TasksPage() {
           <TableHeader>
             <TableRow>
               <TableHead>任务名称</TableHead>
-              <TableHead>类型</TableHead>
+              <TableHead className="hidden md:table-cell">类型</TableHead>
               <TableHead>状态</TableHead>
-              <TableHead>进度</TableHead>
-              <TableHead>创建时间</TableHead>
+              <TableHead className="hidden text-right sm:table-cell">进度</TableHead>
+              <TableHead className="hidden text-right md:table-cell">创建时间</TableHead>
               <TableHead>操作</TableHead>
             </TableRow>
           </TableHeader>
@@ -212,15 +212,20 @@ export default function TasksPage() {
             ) : (
               tasks.map((task) => (
                 <TableRow key={task.id}>
-                  <TableCell className="font-medium">{task.name}</TableCell>
-                  <TableCell>{task.type}</TableCell>
+                  <TableCell className="font-medium">
+                    {task.name}
+                    <div className="mt-1 text-[13px] tabular-nums text-muted-foreground sm:hidden">
+                      {task.progress}%
+                    </div>
+                  </TableCell>
+                  <TableCell className="hidden md:table-cell">{task.type}</TableCell>
                   <TableCell>
                     <Badge className={cn(getStatusColor(task.status))}>
                       {getStatusLabel(task.status)}
                     </Badge>
                   </TableCell>
-                  <TableCell>
-                    <div className="w-40">
+                  <TableCell className="hidden text-right sm:table-cell">
+                    <div className="w-28 text-left md:w-40">
                       <Progress value={task.progress} className="h-2" />
                       <div className="flex justify-between text-xs text-muted-foreground mt-1">
                         <span>{task.progress}%</span>
@@ -237,55 +242,60 @@ export default function TasksPage() {
                       )}
                     </div>
                   </TableCell>
-                  <TableCell>{formatDate(task.createdAt)}</TableCell>
+                  <TableCell className="hidden text-right tabular-nums md:table-cell">{formatDate(task.createdAt)}</TableCell>
                   <TableCell>
                     <div className="flex gap-1">
                       {task.status === 'pending' && (
                         <Button
                           variant="ghost"
                           size="icon"
+                          aria-label="启动任务"
                           onClick={() => startMutation.mutate(task.id)}
                         >
-                          <Play className="h-4 w-4 text-green-500" />
+                          <Play className="h-4 w-4 text-primary" />
                         </Button>
                       )}
                       {task.status === 'running' && (
                         <Button
                           variant="ghost"
                           size="icon"
+                          aria-label="暂停任务"
                           onClick={() => pauseMutation.mutate(task.id)}
                         >
-                          <Pause className="h-4 w-4 text-yellow-500" />
+                          <Pause className="h-4 w-4 text-amber-600" />
                         </Button>
                       )}
                       {task.status === 'paused' && (
                         <Button
                           variant="ghost"
                           size="icon"
+                          aria-label="继续任务"
                           onClick={() => resumeMutation.mutate(task.id)}
                         >
-                          <Play className="h-4 w-4 text-green-500" />
+                          <Play className="h-4 w-4 text-primary" />
                         </Button>
                       )}
                       {['running', 'paused'].includes(task.status) && (
                         <Button
                           variant="ghost"
                           size="icon"
+                          aria-label="停止任务"
                           onClick={() => cancelMutation.mutate(task.id)}
                         >
-                          <Square className="h-4 w-4 text-red-500" />
+                          <Square className="h-4 w-4 text-destructive" />
                         </Button>
                       )}
                       {(task.status === 'failed' || task.status === 'cancelled') && (
                         <Button
                           variant="ghost"
                           size="icon"
+                          aria-label="重试任务"
                           onClick={() => retryMutation.mutate(task.id)}
                         >
-                          <RotateCw className="h-4 w-4 text-blue-500" />
+                          <RotateCw className="h-4 w-4 text-muted-foreground" />
                         </Button>
                       )}
-                      <Button variant="ghost" size="icon" asChild>
+                      <Button variant="ghost" size="icon" asChild aria-label="查看任务">
                         <Link to={`/tasks/${task.id}`}>
                           <Eye className="h-4 w-4" />
                         </Link>
@@ -293,6 +303,7 @@ export default function TasksPage() {
                       <Button
                         variant="ghost"
                         size="icon"
+                        aria-label="删除任务"
                         onClick={() => deleteMutation.mutate(task.id)}
                         disabled={task.status === 'running'}
                       >

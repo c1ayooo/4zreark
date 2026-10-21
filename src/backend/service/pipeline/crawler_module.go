@@ -2,11 +2,11 @@ package pipeline
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"sync"
 	"time"
 
+	"github.com/c1ayooo/4zreark/scanner/scope"
 	"github.com/c1ayooo/4zreark/scanner/webscan"
 )
 
@@ -25,6 +25,28 @@ type CrawlerModule struct {
 	batchMode     bool          // 是否使用批量模式
 	batchSize     int           // 批量大小
 	batchTimeout  time.Duration // 批量收集超时
+	scope         *scope.Scope
+}
+
+// SetScope 设置任务授权边界。
+// SetRate 收紧 katana 的并发与速率，跟随任务级节奏。
+func (m *CrawlerModule) SetRate(ratePerSec, concurrency int) {
+	if m.katanaScanner == nil {
+		return
+	}
+	if concurrency > 0 {
+		m.concurrency = concurrency
+		m.katanaScanner.Concurrency = concurrency
+	}
+	if ratePerSec > 0 {
+		m.katanaScanner.RateLimit = ratePerSec
+	}
+}
+
+func (m *CrawlerModule) SetScope(s *scope.Scope) { m.scope = s }
+
+func (m *CrawlerModule) allowsURL(raw string) bool {
+	return m.scope == nil || m.scope.AllowsURL(raw)
 }
 
 // NewCrawlerModule 创建爬虫模块
@@ -87,11 +109,8 @@ func (m *CrawlerModule) ModuleRun() error {
 	radAvailable := m.useRad && m.radScanner.IsAvailable()
 
 	if !katanaAvailable && !radAvailable {
-		log.Printf("[%s] No crawler available, skipping", m.name)
-		if m.nextModule != nil {
-			m.nextModule.CloseInput()
-		}
-		return nil
+		log.Printf("[%s] No crawler available, passing through", m.name)
+		return m.RunPassThrough()
 	}
 
 	log.Printf("[%s] Starting with Katana=%v, Rad=%v, BatchMode=%v", m.name, katanaAvailable, radAvailable, m.batchMode)
@@ -145,6 +164,21 @@ func (m *CrawlerModule) runBatchMode(useKatana, useRad bool) error {
 				goto processBatch
 			}
 
+			// 子域扫描的 HTTP 探测结果本身就是可爬入口
+			if sub, ok := data.(SubdomainResult); ok {
+				if m.nextModule != nil {
+					select {
+					case <-m.ctx.Done():
+					case m.nextModule.GetInput() <- sub:
+					}
+				}
+				if sub.URL != "" && m.allowsURL(sub.URL) && !urlSet[sub.URL] {
+					urlSet[sub.URL] = true
+					urlsToScan = append(urlsToScan, sub.URL)
+				}
+				continue
+			}
+
 			// 处理 AssetHttp 类型
 			asset, ok := data.(AssetHttp)
 			if !ok {
@@ -167,7 +201,7 @@ func (m *CrawlerModule) runBatchMode(useKatana, useRad bool) error {
 			}
 
 			// 收集有效的HTTP URL
-			if asset.URL != "" && !urlSet[asset.URL] {
+			if asset.URL != "" && m.allowsURL(asset.URL) && !urlSet[asset.URL] {
 				urlSet[asset.URL] = true
 				urlsToScan = append(urlsToScan, asset.URL)
 				pendingAssets = append(pendingAssets, asset)
@@ -359,6 +393,9 @@ func (m *CrawlerModule) runStreamMode(useKatana, useRad bool) error {
 
 // crawlTarget 爬取目标
 func (m *CrawlerModule) crawlTarget(asset AssetHttp, useKatana, useRad bool) {
+	if !m.allowsURL(asset.URL) {
+		return
+	}
 	target := asset.URL
 
 	log.Printf("[%s] Crawling %s", m.name, target)
@@ -454,6 +491,29 @@ type DirScanModule struct {
 	batchTimeout time.Duration // 批量收集超时
 	enableBackup bool          // 扫描备份文件
 	enableCommon bool          // 扫描通用文件
+	scope        *scope.Scope
+}
+
+// SetRate 收紧 spray 的并发与速率，让它跟随任务级节奏。
+// spray 自带 50 并发且默认不限速，不跟着任务走就等于绕过整条限速链。
+func (m *DirScanModule) SetRate(ratePerSec, concurrency int) {
+	if m.sprayScanner == nil {
+		return
+	}
+	if concurrency > 0 {
+		m.concurrency = concurrency
+		m.sprayScanner.Concurrency = concurrency
+	}
+	if ratePerSec > 0 {
+		m.sprayScanner.RateLimit = ratePerSec
+	}
+}
+
+// SetScope 设置任务授权边界。
+func (m *DirScanModule) SetScope(s *scope.Scope) { m.scope = s }
+
+func (m *DirScanModule) allowsURL(raw string) bool {
+	return m.scope == nil || m.scope.AllowsURL(raw)
 }
 
 // NewDirScanModule 创建目录扫描模块
@@ -476,8 +536,8 @@ func NewDirScanModule(ctx context.Context, nextModule ModuleRunner, concurrency 
 		batchMode:    true,             // 默认启用批量模式
 		batchSize:    50,               // 每批50个URL
 		batchTimeout: 30 * time.Second, // 批量收集等待30秒
-		enableBackup: true,             // 默认扫描备份文件
-		enableCommon: true,             // 默认扫描通用文件
+		enableBackup: false,            // --bak 会把每个路径放大成多种备份变体，信息收集阶段默认关掉
+		enableCommon: false,            // --common 同理，先拿到主路径再谈扩展探测
 	}
 
 	// 配置 Spray 扫描器
@@ -485,6 +545,8 @@ func NewDirScanModule(ctx context.Context, nextModule ModuleRunner, concurrency 
 		m.sprayScanner.Concurrency = concurrency
 		m.sprayScanner.EnableBackup = m.enableBackup
 		m.sprayScanner.EnableCommon = m.enableCommon
+		// 设计口径：单目标字典扫描不超过 200 req/s；spray 的 --rate-limit 落地
+		m.sprayScanner.RateLimit = 200
 	}
 
 	return m
@@ -510,15 +572,15 @@ func (m *DirScanModule) SetScanOptions(enableBackup, enableCommon bool) {
 
 // ModuleRun 运行模块
 func (m *DirScanModule) ModuleRun() error {
+	// 检查 Spray 是否可用；不可用则透传，否则下游（结果收集器）永远收不到数据
+	if m.sprayScanner == nil || !m.sprayScanner.IsAvailable() {
+		log.Printf("[%s] Spray not available, passing through", m.name)
+		return m.RunPassThrough()
+	}
+
 	// 报告模块开始
 	m.ReportModuleStart(0)
 	defer m.ReportModuleComplete()
-
-	// 检查 Spray 是否可用
-	if m.sprayScanner == nil || !m.sprayScanner.IsAvailable() {
-		log.Printf("[%s] Spray not available, skipping directory scan", m.name)
-		return fmt.Errorf("spray scanner not available")
-	}
 
 	log.Printf("[%s] Using Spray for directory scanning (batch=%v)", m.name, m.batchMode)
 
@@ -594,7 +656,7 @@ func (m *DirScanModule) runBatchMode() error {
 			}
 
 			// 收集有效的HTTP URL
-			if asset.URL != "" && !urlSet[asset.URL] {
+			if asset.URL != "" && m.allowsURL(asset.URL) && !urlSet[asset.URL] {
 				urlSet[asset.URL] = true
 				urlsToScan = append(urlsToScan, asset.URL)
 			}
@@ -623,9 +685,10 @@ processBatch:
 	}
 
 	if result != nil {
-		log.Printf("[%s] Spray found %d results", m.name, len(result.Results))
+		entries := webscan.FilterSoft404Entries(ctx, result.Results, nil)
+		log.Printf("[%s] Spray found %d results (%d after soft-404 filter)", m.name, len(result.Results), len(entries))
 
-		for _, entry := range result.Results {
+		for _, entry := range entries {
 			// 输出有效的结果（排除根路径和无效状态码）
 			// 保留: 2xx(成功), 3xx(重定向), 401(未授权), 403(禁止)
 			validStatus := (entry.StatusCode >= 200 && entry.StatusCode < 400) ||
@@ -758,6 +821,9 @@ func (m *DirScanModule) runStreamMode() error {
 
 // scanWithSpray 使用 Spray 扫描单个目标
 func (m *DirScanModule) scanWithSpray(asset AssetHttp) {
+	if !m.allowsURL(asset.URL) {
+		return
+	}
 	target := asset.URL
 
 	log.Printf("[%s] Scanning with Spray: %s", m.name, target)
@@ -775,9 +841,10 @@ func (m *DirScanModule) scanWithSpray(asset AssetHttp) {
 		return
 	}
 
-	log.Printf("[%s] Spray found %d paths for %s", m.name, len(result.Results), target)
+	entries := webscan.FilterSoft404(m.ctx, target, result.Results, nil)
+	log.Printf("[%s] Spray found %d paths for %s (%d after soft-404 filter)", m.name, len(result.Results), target, len(entries))
 
-	for _, entry := range result.Results {
+	for _, entry := range entries {
 		// 输出有效的结果（排除根路径和无效状态码）
 		validStatus := (entry.StatusCode >= 200 && entry.StatusCode < 400) ||
 			entry.StatusCode == 401 || entry.StatusCode == 403

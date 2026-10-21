@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { notifyApi, NotifyConfig, NotifyHistory } from '@/api/notify'
+import { notifyApi, NotifyConfig, NotifyHistory, InAppNotification } from '@/api/notify'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -43,6 +44,7 @@ import {
   Webhook,
   CheckCircle,
   XCircle,
+  CheckCheck,
 } from 'lucide-react'
 
 const channelTypeIcons: Record<string, React.ReactNode> = {
@@ -64,16 +66,47 @@ const channelTypeLabels: Record<string, string> = {
 export default function NotifyPage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
-  const [activeTab, setActiveTab] = useState('channels')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [activeTab, setActiveTab] = useState(() =>
+    searchParams.get('tab') === 'inbox' ? 'inbox' : 'channels',
+  )
+
+  // 铃铛里的「查看全部」会带 ?tab=inbox，已经停留在本页时也要切过去。
+  useEffect(() => {
+    if (searchParams.get('tab') === 'inbox') setActiveTab('inbox')
+  }, [searchParams])
+
+  const changeTab = (tab: string) => {
+    setActiveTab(tab)
+    setSearchParams(tab === 'inbox' ? { tab: 'inbox' } : {}, { replace: true })
+  }
   const [showAddDialog, setShowAddDialog] = useState(false)
   
   // 新建渠道表单
   const [newChannel, setNewChannel] = useState({
     name: '',
     type: 'dingtalk' as NotifyConfig['type'],
+    mode: 'webhook' as 'webhook' | 'app',
     webhook: '',
     secret: '',
+    appId: '',
+    appSecret: '',
+    receiveIdType: 'open_id',
+    receiveId: '',
   })
+
+  const resetNewChannel = () =>
+    setNewChannel({
+      name: '',
+      type: 'dingtalk',
+      mode: 'webhook',
+      webhook: '',
+      secret: '',
+      appId: '',
+      appSecret: '',
+      receiveIdType: 'open_id',
+      receiveId: '',
+    })
 
   // 获取配置列表
   const { data: configsData, isLoading: configsLoading, refetch: refetchConfigs } = useQuery({
@@ -88,6 +121,30 @@ export default function NotifyPage() {
     enabled: activeTab === 'history',
   })
 
+  // 站内通知
+  const { data: inboxData, isLoading: inboxLoading, refetch: refetchInbox } = useQuery({
+    queryKey: ['notify-inbox'],
+    queryFn: () => notifyApi.listNotifications({ page: 1, page_size: 50 }),
+    enabled: activeTab === 'inbox',
+    refetchInterval: activeTab === 'inbox' ? 30_000 : false,
+  })
+
+  const markAllMutation = useMutation({
+    mutationFn: notifyApi.markAllRead,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notify'] })
+      refetchInbox()
+    },
+  })
+
+  const markOneMutation = useMutation({
+    mutationFn: notifyApi.markRead,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notify'] })
+      refetchInbox()
+    },
+  })
+
   // 创建配置
   const createMutation = useMutation({
     mutationFn: notifyApi.addConfig,
@@ -95,10 +152,10 @@ export default function NotifyPage() {
       toast({ title: '创建成功' })
       queryClient.invalidateQueries({ queryKey: ['notify-configs'] })
       setShowAddDialog(false)
-      setNewChannel({ name: '', type: 'dingtalk', webhook: '', secret: '' })
+      resetNewChannel()
     },
-    onError: () => {
-      toast({ title: '创建失败', variant: 'destructive' })
+    onError: (e: any) => {
+      toast({ title: '创建失败', description: e?.message, variant: 'destructive' })
     },
   })
 
@@ -131,52 +188,67 @@ export default function NotifyPage() {
   const testMutation = useMutation({
     mutationFn: notifyApi.testConfig,
     onSuccess: (res) => {
-      if (res.data?.success) {
+      if (res.code === 0) {
         toast({ title: '测试成功', description: '通知已发送' })
       } else {
-        toast({ title: '测试失败', description: res.data?.message, variant: 'destructive' })
+        toast({ title: '测试失败', description: res.message, variant: 'destructive' })
       }
     },
-    onError: () => {
-      toast({ title: '测试失败', variant: 'destructive' })
+    onError: (e: any) => {
+      toast({ title: '测试失败', description: e?.message, variant: 'destructive' })
     },
   })
 
   const configs = configsData?.data || []
   const history = historyData?.data || []
+  const inbox: InAppNotification[] = inboxData?.data?.items || []
+  const unread = inboxData?.data?.unread || 0
 
   const handleCreate = () => {
-    if (!newChannel.name || !newChannel.webhook) {
-      toast({ title: '请填写完整信息', variant: 'destructive' })
+    if (!newChannel.name) {
+      toast({ title: '请填写渠道名称', variant: 'destructive' })
       return
     }
-    
-    // 根据类型构建配置
+
     const config: NotifyConfig = {
       name: newChannel.name,
       type: newChannel.type,
       enabled: true,
     }
 
-    // 根据类型设置对应的 webhook 字段
-    switch (newChannel.type) {
-      case 'dingtalk':
-        config.dingtalk_webhook = newChannel.webhook
-        if (newChannel.secret) config.dingtalk_secret = newChannel.secret
-        break
-      case 'feishu':
-        config.feishu_webhook = newChannel.webhook
-        if (newChannel.secret) config.feishu_secret = newChannel.secret
-        break
-      case 'wechat':
-        config.wechat_webhook = newChannel.webhook
-        break
-      case 'webhook':
-        config.webhook_url = newChannel.webhook
-        config.webhook_method = 'POST'
-        break
+    if (newChannel.type === 'feishu' && newChannel.mode === 'app') {
+      if (!newChannel.appId || !newChannel.appSecret || !newChannel.receiveId) {
+        toast({ title: '请填写 App ID、App Secret 和接收者 ID', variant: 'destructive' })
+        return
+      }
+      config.feishu_app_id = newChannel.appId
+      config.feishu_app_secret = newChannel.appSecret
+      config.feishu_receive_id_type = newChannel.receiveIdType
+      config.feishu_receive_id = newChannel.receiveId
+    } else {
+      if (!newChannel.webhook) {
+        toast({ title: '请填写 Webhook 地址', variant: 'destructive' })
+        return
+      }
+      switch (newChannel.type) {
+        case 'dingtalk':
+          config.dingtalk_webhook = newChannel.webhook
+          if (newChannel.secret) config.dingtalk_secret = newChannel.secret
+          break
+        case 'feishu':
+          config.feishu_webhook = newChannel.webhook
+          if (newChannel.secret) config.feishu_secret = newChannel.secret
+          break
+        case 'wechat':
+          config.wechat_webhook = newChannel.webhook
+          break
+        case 'webhook':
+          config.webhook_url = newChannel.webhook
+          config.webhook_method = 'POST'
+          break
+      }
     }
-    
+
     createMutation.mutate(config)
   }
 
@@ -191,12 +263,15 @@ export default function NotifyPage() {
     }
   }
 
-  // 获取配置的webhook地址（用于显示）
-  const getWebhook = (config: NotifyConfig): string => {
+  // 获取配置的投递目标（用于展示）
+  const getTargetSummary = (config: NotifyConfig): string => {
     switch (config.type) {
       case 'dingtalk':
         return config.dingtalk_webhook || ''
       case 'feishu':
+        if (config.feishu_app_id) {
+          return `企业应用 · ${config.feishu_receive_id_type || 'chat_id'} · ${config.feishu_receive_id || ''}`
+        }
         return config.feishu_webhook || ''
       case 'wechat':
         return config.wechat_webhook || ''
@@ -228,9 +303,17 @@ export default function NotifyPage() {
       </div>
 
       {/* 标签页 */}
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
+      <Tabs value={activeTab} onValueChange={changeTab}>
         <TabsList>
           <TabsTrigger value="channels">通知渠道</TabsTrigger>
+          <TabsTrigger value="inbox">
+            站内通知
+            {unread > 0 && (
+              <span className="ml-1 rounded-full bg-destructive px-1.5 text-[10px] leading-4 text-destructive-foreground">
+                {unread > 99 ? '99+' : unread}
+              </span>
+            )}
+          </TabsTrigger>
           <TabsTrigger value="history">发送历史</TabsTrigger>
         </TabsList>
 
@@ -266,8 +349,8 @@ export default function NotifyPage() {
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <div className="text-xs text-muted-foreground mb-2 truncate">
-                      {getWebhook(config).substring(0, 50)}...
+                    <div className="mb-2 truncate text-xs text-muted-foreground" title={getTargetSummary(config)}>
+                      {getTargetSummary(config) || '未配置投递目标'}
                     </div>
                     <div className="flex items-center justify-end">
                       <div className="flex gap-1">
@@ -294,6 +377,91 @@ export default function NotifyPage() {
                 </Card>
               ))
             )}
+          </div>
+        </TabsContent>
+
+        {/* 站内通知 */}
+        <TabsContent value="inbox" className="space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">
+              所有任务完成、漏洞、资产变更等消息都会在这里留一条；飞书渠道同时外发。
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={markAllMutation.isPending || unread === 0}
+              onClick={() => markAllMutation.mutate()}
+            >
+              <CheckCheck className="mr-2 h-4 w-4" />
+              全部已读
+            </Button>
+          </div>
+          <div className="rounded-lg border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[80px]">级别</TableHead>
+                  <TableHead>标题 / 内容</TableHead>
+                  <TableHead className="w-[140px]">来源</TableHead>
+                  <TableHead className="w-[90px]">状态</TableHead>
+                  <TableHead className="w-[160px]">时间</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {inboxLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="py-8 text-center">
+                      加载中...
+                    </TableCell>
+                  </TableRow>
+                ) : inbox.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
+                      暂无站内通知
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  inbox.map((n) => (
+                    <TableRow
+                      key={n.id}
+                      className={n.read ? undefined : 'cursor-pointer bg-muted/30'}
+                      onClick={() => {
+                        if (!n.read) markOneMutation.mutate(n.id)
+                      }}
+                    >
+                      <TableCell>
+                        <Badge
+                          variant={
+                            n.level === 'critical'
+                              ? 'destructive'
+                              : n.level === 'warning'
+                                ? 'warning'
+                                : 'outline'
+                          }
+                        >
+                          {n.level}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <div className={n.read ? 'text-sm' : 'text-sm font-medium'}>{n.title}</div>
+                        {n.content && (
+                          <div className="mt-0.5 line-clamp-2 whitespace-pre-wrap text-xs text-muted-foreground">
+                            {n.content}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{n.source || '—'}</TableCell>
+                      <TableCell>
+                        <Badge variant={n.read ? 'outline' : 'default'}>{n.read ? '已读' : '未读'}</Badge>
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {formatDate(n.created_at)}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
           </div>
         </TabsContent>
 
@@ -347,7 +515,13 @@ export default function NotifyPage() {
       </Tabs>
 
       {/* 添加渠道对话框 */}
-      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+      <Dialog
+        open={showAddDialog}
+        onOpenChange={(open) => {
+          setShowAddDialog(open)
+          if (!open) resetNewChannel()
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>添加通知渠道</DialogTitle>
@@ -378,23 +552,98 @@ export default function NotifyPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
-              <Label>Webhook 地址</Label>
-              <Input
-                placeholder="输入 Webhook URL"
-                value={newChannel.webhook}
-                onChange={(e) => setNewChannel({ ...newChannel, webhook: e.target.value })}
-              />
-            </div>
-            {(newChannel.type === 'dingtalk' || newChannel.type === 'feishu') && (
+            {newChannel.type === 'feishu' && (
               <div className="space-y-2">
-                <Label>签名密钥 (可选)</Label>
-                <Input
-                  placeholder="输入签名密钥"
-                  value={newChannel.secret}
-                  onChange={(e) => setNewChannel({ ...newChannel, secret: e.target.value })}
-                />
+                <Label>飞书接入方式</Label>
+                <Select
+                  value={newChannel.mode}
+                  onValueChange={(value) =>
+                    setNewChannel({ ...newChannel, mode: value as 'webhook' | 'app' })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="webhook">群机器人 Webhook</SelectItem>
+                    <SelectItem value="app">企业应用机器人</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
+            )}
+
+            {newChannel.type === 'feishu' && newChannel.mode === 'app' ? (
+              <>
+                <div className="space-y-2">
+                  <Label>App ID</Label>
+                  <Input
+                    placeholder="cli_xxxxxxxxxxxxxxxx"
+                    value={newChannel.appId}
+                    onChange={(e) => setNewChannel({ ...newChannel, appId: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>App Secret</Label>
+                  <Input
+                    type="password"
+                    placeholder="企业应用 App Secret"
+                    value={newChannel.appSecret}
+                    onChange={(e) => setNewChannel({ ...newChannel, appSecret: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>接收者类型</Label>
+                  <Select
+                    value={newChannel.receiveIdType}
+                    onValueChange={(value) =>
+                      setNewChannel({ ...newChannel, receiveIdType: value })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="open_id">open_id（个人）</SelectItem>
+                      <SelectItem value="chat_id">chat_id（群）</SelectItem>
+                      <SelectItem value="user_id">user_id</SelectItem>
+                      <SelectItem value="union_id">union_id</SelectItem>
+                      <SelectItem value="email">email</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>接收者 ID</Label>
+                  <Input
+                    placeholder="ou_xxx / oc_xxx / 邮箱"
+                    value={newChannel.receiveId}
+                    onChange={(e) => setNewChannel({ ...newChannel, receiveId: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    企业应用需要把机器人加入目标群，或使用 open_id/邮箱发给个人。
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label>Webhook 地址</Label>
+                  <Input
+                    placeholder="输入 Webhook URL"
+                    value={newChannel.webhook}
+                    onChange={(e) => setNewChannel({ ...newChannel, webhook: e.target.value })}
+                  />
+                </div>
+                {(newChannel.type === 'dingtalk' || newChannel.type === 'feishu') && (
+                  <div className="space-y-2">
+                    <Label>签名密钥 (可选)</Label>
+                    <Input
+                      placeholder="输入签名密钥"
+                      value={newChannel.secret}
+                      onChange={(e) => setNewChannel({ ...newChannel, secret: e.target.value })}
+                    />
+                  </div>
+                )}
+              </>
             )}
           </div>
           <DialogFooter>

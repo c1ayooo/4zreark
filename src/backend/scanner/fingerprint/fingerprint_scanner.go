@@ -3,19 +3,24 @@ package fingerprint
 import (
 	"context"
 	"crypto/md5"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"github.com/c1ayooo/4zreark/config"
+	"github.com/c1ayooo/4zreark/internal/useragent"
 	"github.com/c1ayooo/4zreark/scanner/core"
 	"hash"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +40,10 @@ type FingerprintResult struct {
 	Headers      map[string]string `json:"headers,omitempty"`
 	IconHash     string            `json:"icon_hash,omitempty"`
 	IconMD5      string            `json:"icon_md5,omitempty"`
+	IconSHA256   string            `json:"icon_sha256,omitempty"`
+	IconMMH3     int64             `json:"icon_mmh3,omitempty"`
+	IconType     string            `json:"icon_content_type,omitempty"`
+	IconData     []byte            `json:"-"`
 	BodyHash     string            `json:"body_hash,omitempty"`
 	BodyLength   int               `json:"body_length,omitempty"`
 	Fingerprints []Fingerprint     `json:"fingerprints"`
@@ -87,13 +96,6 @@ type FingerprintScanner struct {
 	DSLEngine     *DSLEngine                // DSL fingerprint engine
 	JSLibPatterns map[string]*regexp.Regexp // JS library detection patterns
 	PortServices  map[int]string            // Port to service mapping
-	FaviconHashes map[string]FaviconInfo    // Favicon hash to technology mapping
-}
-
-// FaviconInfo represents favicon hash mapping info
-type FaviconInfo struct {
-	Name     string `yaml:"name"`
-	Category string `yaml:"category"`
 }
 
 // NewFingerprintScanner creates a new fingerprint scanner
@@ -130,7 +132,6 @@ func NewFingerprintScanner(concurrency int) *FingerprintScanner {
 	scanner.DSLEngine = NewDSLEngine()
 	scanner.JSLibPatterns = make(map[string]*regexp.Regexp)
 	scanner.PortServices = make(map[int]string)
-	scanner.FaviconHashes = make(map[string]FaviconInfo)
 	scanner.loadFingerprintRules()
 
 	return scanner
@@ -160,7 +161,7 @@ func (s *FingerprintScanner) ScanFingerprint(ctx context.Context, target string)
 		result.ScanTime = time.Since(start) / time.Millisecond
 		return result
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("User-Agent", useragent.Pick())
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 
@@ -171,7 +172,7 @@ func (s *FingerprintScanner) ScanFingerprint(ctx context.Context, target string)
 			url = strings.Replace(url, "http://", "https://", 1)
 			result.URL = url
 			req, _ = http.NewRequestWithContext(ctx, "GET", url, nil)
-			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+			req.Header.Set("User-Agent", useragent.Pick())
 			resp, err = s.HTTPClient.Do(req)
 			if err != nil {
 				result.ScanTime = time.Since(start) / time.Millisecond
@@ -215,9 +216,13 @@ func (s *FingerprintScanner) ScanFingerprint(ctx context.Context, target string)
 	result.JSLibraries = s.extractJSLibraries(bodyStr)
 
 	// Try to get favicon hash
-	iconHash, iconMD5 := s.getFaviconHash(ctx, url)
+	iconHash, iconMD5, iconSHA, iconMMH3, iconData, iconType := s.getFaviconHash(ctx, url)
 	result.IconHash = iconHash
 	result.IconMD5 = iconMD5
+	result.IconSHA256 = iconSHA
+	result.IconMMH3 = iconMMH3
+	result.IconData = iconData
+	result.IconType = iconType
 
 	// Use DSL engine for fingerprint detection
 	s.detectFingerprintsWithDSL(result, bodyStr, iconHash, iconMD5)
@@ -233,6 +238,10 @@ func (s *FingerprintScanner) ScanFingerprint(ctx context.Context, target string)
 
 // loadFingerprintRules loads fingerprint rules from YAML files
 func (s *FingerprintScanner) loadFingerprintRules() {
+	// 内置规则集（dddd 快照 + 种子）不依赖工作目录，先加载。
+	builtin := s.DSLEngine.LoadBuiltinRules()
+	fmt.Printf("Loaded %d builtin fingerprint rules (dddd snapshot + seeds)\n", builtin)
+
 	// Try to find the config/dicts/yaml directory
 	paths := []string{
 		"config/dicts/yaml",
@@ -250,17 +259,12 @@ func (s *FingerprintScanner) loadFingerprintRules() {
 	}
 
 	if rulesDir == "" {
-		fmt.Println("Warning: fingerprint rules directory not found")
-		return
+		// 二进制内置字典兜底：ReadDictFile 会回落到 go:embed。
+		rulesDir = "config/dicts/yaml"
 	}
 
-	// Load finger.yaml
-	fingerPath := filepath.Join(rulesDir, "finger.yaml")
-	if err := s.DSLEngine.LoadRulesFromFile(fingerPath); err != nil {
-		fmt.Printf("Warning: failed to load finger.yaml: %v\n", err)
-	}
-
-	// Load sensitive.yaml
+	// T13：finger.yaml 已退役（T10 用 reconkit 的 dddd 快照 + 种子替代）。
+	// sensitive.yaml 仍保留：它是内容敏感信息特征，dddd 快照不覆盖。
 	sensitivePath := filepath.Join(rulesDir, "sensitive.yaml")
 	if err := s.DSLEngine.LoadRulesFromFile(sensitivePath); err != nil {
 		fmt.Printf("Warning: failed to load sensitive.yaml: %v\n", err)
@@ -278,14 +282,8 @@ func (s *FingerprintScanner) loadFingerprintRules() {
 		fmt.Printf("Warning: failed to load ports.yaml: %v\n", err)
 	}
 
-	// Load favicon.yaml for favicon hash mapping
-	faviconPath := filepath.Join(rulesDir, "favicon.yaml")
-	if err := s.loadFaviconHashes(faviconPath); err != nil {
-		fmt.Printf("Warning: failed to load favicon.yaml: %v\n", err)
-	}
-
-	fmt.Printf("Loaded %d fingerprint rules, %d JS libs, %d port services, %d favicon hashes\n",
-		s.DSLEngine.RulesCount(), len(s.JSLibPatterns), len(s.PortServices), len(s.FaviconHashes))
+	fmt.Printf("Loaded %d fingerprint rules, %d JS libs, %d port services\n",
+		s.DSLEngine.RulesCount(), len(s.JSLibPatterns), len(s.PortServices))
 }
 
 // detectFingerprintsWithDSL performs fingerprint detection using DSL engine
@@ -423,7 +421,7 @@ func extractPageTitle(html string) string {
 
 // loadJSLibPatterns loads JavaScript library patterns from YAML file
 func (s *FingerprintScanner) loadJSLibPatterns(path string) error {
-	data, err := os.ReadFile(path)
+	data, err := config.ReadDictFile(path)
 	if err != nil {
 		return err
 	}
@@ -454,7 +452,7 @@ func (s *FingerprintScanner) loadJSLibPatterns(path string) error {
 
 // loadPortServices loads port to service mapping from YAML file
 func (s *FingerprintScanner) loadPortServices(path string) error {
-	data, err := os.ReadFile(path)
+	data, err := config.ReadDictFile(path)
 	if err != nil {
 		return err
 	}
@@ -471,21 +469,6 @@ func (s *FingerprintScanner) loadPortServices(path string) error {
 		if item.Service != "" {
 			s.PortServices[port] = item.Service
 		}
-	}
-
-	return nil
-}
-
-// loadFaviconHashes loads favicon hash to technology mapping from YAML file
-func (s *FingerprintScanner) loadFaviconHashes(path string) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-
-	// Parse YAML structure: "hash": {name: "name", category: "category"}
-	if err := yaml.Unmarshal(data, &s.FaviconHashes); err != nil {
-		return err
 	}
 
 	return nil
@@ -508,8 +491,13 @@ func (s *FingerprintScanner) extractJSLibraries(html string) []string {
 	return libraries
 }
 
-// getFaviconHash gets favicon hash (Shodan compatible mmh3)
-func (s *FingerprintScanner) getFaviconHash(ctx context.Context, baseURL string) (string, string) {
+// getFaviconHash 抓 favicon 并返回 mmh3（Shodan/FOFA 口径，76 列折行）、
+// MD5、sha256、mmh3 数值与原始字节；原始字节供资产域直接入库。
+func (s *FingerprintScanner) getFaviconHash(ctx context.Context, baseURL string) (string, string, string, int64, []byte, string) {
+	// 只取 origin：result.URL 可能带路径，直接拼 /favicon.ico 会变成 /path/favicon.ico。
+	if u, err := url.Parse(baseURL); err == nil && u.Host != "" {
+		baseURL = u.Scheme + "://" + u.Host
+	}
 	// Parse base URL
 	faviconURLs := []string{
 		baseURL + "/favicon.ico",
@@ -524,7 +512,7 @@ func (s *FingerprintScanner) getFaviconHash(ctx context.Context, baseURL string)
 		if err != nil {
 			continue
 		}
-		req.Header.Set("User-Agent", "Mozilla/5.0")
+		req.Header.Set("User-Agent", useragent.Pick())
 
 		resp, err := s.HTTPClient.Do(req)
 		if err != nil {
@@ -541,18 +529,33 @@ func (s *FingerprintScanner) getFaviconHash(ctx context.Context, baseURL string)
 			continue
 		}
 
-		// Calculate MD5
+		// Calculate MD5 / SHA256
 		md5Hash := md5.Sum(favicon)
 		md5Str := hex.EncodeToString(md5Hash[:])
+		sha := sha256.Sum256(favicon)
+		shaStr := hex.EncodeToString(sha[:])
 
-		// Calculate MMH3 hash (Shodan style)
+		// Shodan/FOFA 口径：base64 每 76 列折行后再算 mmh3。
 		b64 := base64.StdEncoding.EncodeToString(favicon)
-		mmh3Hash := mmh3Hash32([]byte(b64))
+		var folded strings.Builder
+		for i := 0; i < len(b64); i += 76 {
+			end := i + 76
+			if end > len(b64) {
+				end = len(b64)
+			}
+			folded.WriteString(b64[i:end])
+			folded.WriteByte('\n')
+		}
+		mmh3Hash := mmh3Hash32([]byte(folded.String()))
+		ctype := strings.TrimSpace(resp.Header.Get("Content-Type"))
+		if ctype == "" {
+			ctype = http.DetectContentType(favicon)
+		}
 
-		return fmt.Sprintf("%d", mmh3Hash), md5Str
+		return fmt.Sprintf("%d", mmh3Hash), md5Str, shaStr, int64(mmh3Hash), favicon, ctype
 	}
 
-	return "", ""
+	return "", "", "", 0, nil, ""
 }
 
 // mmh3Hash32 calculates MurmurHash3 32-bit hash
@@ -569,7 +572,7 @@ func (s *FingerprintScanner) ScanPortFingerprint(ctx context.Context, host strin
 		Service: "unknown",
 	}
 
-	address := fmt.Sprintf("%s:%d", host, port)
+	address := net.JoinHostPort(host, strconv.Itoa(port))
 
 	// Try TCP connection
 	conn, err := net.DialTimeout("tcp", address, s.Timeout)
@@ -699,7 +702,7 @@ func (s *FingerprintScanner) getCertInfo(ctx context.Context, host string, port 
 		InsecureSkipVerify: true,
 	}
 
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: s.Timeout}, "tcp", fmt.Sprintf("%s:%d", host, port), conf)
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: s.Timeout}, "tcp", net.JoinHostPort(host, strconv.Itoa(port)), conf)
 	if err != nil {
 		return nil
 	}

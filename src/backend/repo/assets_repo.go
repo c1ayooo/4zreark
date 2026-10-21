@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -41,10 +42,27 @@ type Site struct {
 	LastSeen            time.Time  `json:"last_seen"`
 	VerifiedAt          *time.Time `json:"verified_at"`
 	NextVerificationAt  *time.Time `json:"next_verification_at"`
+	// ResourceType 固定为 site，方便前端统一渲染 29 字段里的类型列。
+	ResourceType string `json:"resource_type"`
+	// LastHTTPVerifiedAt 是「最近一次 HTTP 探测确认」的时间，语义比 verified_at 更窄。
+	LastHTTPVerifiedAt *time.Time `json:"last_http_verified_at"`
 	// Endpoints 是站点的全部入口（协议 + 端口）。
 	// 站点按 host 归并，所以 http:80 / https:443 / http:8080 都挂在这一个站点下，
 	// 端口视图只能从这里读，sites.port 只是 https 优先的展示值。
 	Endpoints []Endpoint `json:"endpoints"`
+	// RiskScore / Priority 是读时按观测证据实时算出的优先级（0-100 / p0-p4），
+	// 不落库：评分输入里有漏洞等级这类会独立变化的字段，落库就必须做失效重算。
+	RiskScore int    `json:"risk_score"`
+	Priority  string `json:"priority"`
+	// RiskFactors 是评分因子明细（为什么是 P2），与 RiskScore 同时计算。
+	RiskFactors []RiskFactor `json:"risk_factors,omitempty"`
+}
+
+// RiskFactor 是一条评分因子：加分/减分的来源与原因。
+type RiskFactor struct {
+	Factor string `json:"factor"`
+	Points int    `json:"points"`
+	Detail string `json:"detail"`
 }
 
 // Endpoint 是站点的入口（协议 + 端口）。
@@ -55,16 +73,24 @@ type Endpoint struct {
 }
 
 // RawRecord 是一次采集得到的证据，只追加不覆盖业务状态。
+// Tech/Server/Icon 是扫描阶段顺手拿到的富化字段：指纹写 sites.tech，
+// 图标按 sha256 去重进 asset_icons，站点只存引用。
 type RawRecord struct {
-	Source     string
-	Host       string
-	Port       int
-	Protocol   string
-	Value      string
-	StatusCode int
-	Title      string
-	IP         string
-	Evidence   map[string]any
+	Source          string         `json:"source"`
+	Host            string         `json:"host"`
+	Port            int            `json:"port"`
+	Protocol        string         `json:"protocol"`
+	Value           string         `json:"value"`
+	StatusCode      int            `json:"status_code"`
+	Title           string         `json:"title"`
+	IP              string         `json:"ip"`
+	Tech            []string       `json:"tech,omitempty"`
+	Server          string         `json:"server,omitempty"`
+	IconSHA256      string         `json:"icon_sha256,omitempty"`
+	IconMMH3        int64          `json:"icon_mmh3,omitempty"`
+	IconContentType string         `json:"icon_content_type,omitempty"`
+	IconData        []byte         `json:"-"`
+	Evidence        map[string]any `json:"evidence,omitempty"`
 }
 
 // ImportResult 汇总一次导入。
@@ -84,7 +110,7 @@ const siteColumns = `s.id, s.project_id, p.code, p.name, s.host, s.port, s.proto
 	coalesce(s.ip::text,''), s.http_status, coalesce(s.title,''), coalesce(s.icon_sha256,''),
 	s.tech, s.discovery_type, s.state, s.consecutive_failures, s.retry_step, s.cleanup_eligible,
 	s.verification_status, coalesce(s.verification_reason,''), s.attempts, s.max_attempts,
-	s.first_seen, s.last_seen, s.verified_at, s.next_verification_at,
+	s.first_seen, s.last_seen, s.verified_at, s.next_verification_at, s.last_http_verified_at,
 	coalesce((SELECT jsonb_agg(jsonb_build_object('scheme', e.scheme, 'port', e.port,
 	                                             'status_code', e.status_code) ORDER BY e.port, e.scheme)
 	            FROM site_endpoints e WHERE e.site_id = s.id), '[]'::jsonb)`
@@ -96,10 +122,11 @@ func scanSite(scan func(...any) error) (*Site, error) {
 		&s.Protocol, &s.Value, &s.IP, &s.HTTPStatus, &s.Title, &s.IconSHA256, &tech,
 		&s.DiscoveryType, &s.State, &s.ConsecutiveFailures, &s.RetryStep, &s.CleanupEligible,
 		&s.VerificationStatus, &s.VerificationReason, &s.Attempts, &s.MaxAttempts,
-		&s.FirstSeen, &s.LastSeen, &s.VerifiedAt, &s.NextVerificationAt, &eps)
+		&s.FirstSeen, &s.LastSeen, &s.VerifiedAt, &s.NextVerificationAt, &s.LastHTTPVerifiedAt, &eps)
 	if err != nil {
 		return nil, err
 	}
+	s.ResourceType = "site"
 	if len(tech) > 0 {
 		_ = json.Unmarshal(tech, &s.Tech)
 	}
@@ -124,6 +151,7 @@ type Project struct {
 	Description string    `json:"description"`
 	HomepageURL string    `json:"homepage_url"`
 	Color       string    `json:"color"`
+	IconSHA256  string    `json:"icon_sha256"`
 	Paused      bool      `json:"collection_paused"`
 	PauseReason string    `json:"collection_pause_reason"`
 	CycleDays   int       `json:"cycle_interval_days"`
@@ -134,33 +162,119 @@ type Project struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+// ProjectInput 是新建/编辑项目时可写的字段；code 只在新建时生效。
+type ProjectInput struct {
+	Code        string
+	Name        string
+	Region      string
+	Description string
+	HomepageURL string
+	Color       string
+	CycleDays   int
+}
+
+const projectColumns = `p.id, p.code, p.name, p.region, coalesce(p.description,''), coalesce(p.homepage_url,''),
+	coalesce(p.color,''), coalesce(p.icon_sha256,''), p.collection_paused, coalesce(p.collection_pause_reason,''),
+	p.cycle_interval_days, p.updated_at,
+	(SELECT count(*) FROM sites s WHERE s.project_id = p.id),
+	(SELECT count(*) FROM raw_records r WHERE r.project_id = p.id),
+	(SELECT count(*) FROM sites s WHERE s.project_id = p.id AND s.state = 'lost'),
+	(SELECT count(*) FROM seeds se WHERE se.project_id = p.id)`
+
+func scanProject(row pgx.Row) (*Project, error) {
+	var p Project
+	if err := row.Scan(&p.ID, &p.Code, &p.Name, &p.Region, &p.Description, &p.HomepageURL,
+		&p.Color, &p.IconSHA256, &p.Paused, &p.PauseReason, &p.CycleDays, &p.UpdatedAt,
+		&p.AssetCount, &p.RecordCount, &p.LostCount, &p.SeedCount); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &p, nil
+}
+
 func (a *AssetRepo) ListProjects(ctx context.Context) ([]*Project, error) {
 	if a == nil || a.r == nil {
 		return nil, fmt.Errorf("资产仓储未初始化")
 	}
-	rows, err := a.r.pool.Query(ctx, `
-		SELECT p.id, p.code, p.name, p.region, coalesce(p.description,''), coalesce(p.homepage_url,''),
-		       coalesce(p.color,''), p.collection_paused, coalesce(p.collection_pause_reason,''),
-		       p.cycle_interval_days, p.updated_at,
-		       (SELECT count(*) FROM sites s WHERE s.project_id = p.id),
-		       (SELECT count(*) FROM raw_records r WHERE r.project_id = p.id),
-		       (SELECT count(*) FROM sites s WHERE s.project_id = p.id AND s.state = 'lost')
-		FROM projects p ORDER BY p.id`)
+	rows, err := a.r.pool.Query(ctx, `SELECT `+projectColumns+` FROM projects p ORDER BY p.id`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []*Project{}
 	for rows.Next() {
-		var p Project
-		if err := rows.Scan(&p.ID, &p.Code, &p.Name, &p.Region, &p.Description, &p.HomepageURL,
-			&p.Color, &p.Paused, &p.PauseReason, &p.CycleDays, &p.UpdatedAt,
-			&p.AssetCount, &p.RecordCount, &p.LostCount); err != nil {
+		p, err := scanProject(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, &p)
+		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+func (a *AssetRepo) GetProject(ctx context.Context, id int64) (*Project, error) {
+	if a == nil || a.r == nil {
+		return nil, fmt.Errorf("资产仓储未初始化")
+	}
+	return scanProject(a.r.pool.QueryRow(ctx, `SELECT `+projectColumns+` FROM projects p WHERE p.id = $1`, id))
+}
+
+func (a *AssetRepo) CreateProject(ctx context.Context, in ProjectInput) (*Project, error) {
+	if a == nil || a.r == nil {
+		return nil, fmt.Errorf("资产仓储未初始化")
+	}
+	var id int64
+	err := a.r.pool.QueryRow(ctx, `
+		INSERT INTO projects (code, name, region, description, homepage_url, color, cycle_interval_days)
+		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+		in.Code, in.Name, in.Region, in.Description, in.HomepageURL, in.Color, in.CycleDays).Scan(&id)
+	if isUniqueViolation(err) {
+		return nil, fmt.Errorf("项目编码 %q 已存在", in.Code)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return a.GetProject(ctx, id)
+}
+
+func (a *AssetRepo) UpdateProject(ctx context.Context, id int64, in ProjectInput) (*Project, error) {
+	if a == nil || a.r == nil {
+		return nil, fmt.Errorf("资产仓储未初始化")
+	}
+	tag, err := a.r.pool.Exec(ctx, `
+		UPDATE projects
+		   SET name = $2, region = $3, description = $4, homepage_url = $5,
+		       color = $6, cycle_interval_days = $7, updated_at = now()
+		 WHERE id = $1`,
+		id, in.Name, in.Region, in.Description, in.HomepageURL, in.Color, in.CycleDays)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, ErrNotFound
+	}
+	return a.GetProject(ctx, id)
+}
+
+// SetProjectPaused 只改采集开关。到期的监控计划会在 DuePlans 里被项目开关拦住，
+// 不级联改 monitoring_plans.enabled，恢复时能保留用户单独停用的计划。
+func (a *AssetRepo) SetProjectPaused(ctx context.Context, id int64, paused bool, reason string) (*Project, error) {
+	if a == nil || a.r == nil {
+		return nil, fmt.Errorf("资产仓储未初始化")
+	}
+	tag, err := a.r.pool.Exec(ctx, `
+		UPDATE projects
+		   SET collection_paused = $2, collection_pause_reason = $3, updated_at = now()
+		 WHERE id = $1`, id, paused, reason)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, ErrNotFound
+	}
+	return a.GetProject(ctx, id)
 }
 
 // Overview 是对外统计口径：原始记录与归并站点分开计。
@@ -200,8 +314,15 @@ func (a *AssetRepo) Overview(ctx context.Context) (*Overview, error) {
 	o.Assets = o.Sites
 
 	rows, err := a.r.pool.Query(ctx, `
-		SELECT t.key, count(*) FROM sites s, jsonb_array_elements_text(s.tech) AS t(key)
-		WHERE s.tech <> '[]'::jsonb GROUP BY t.key ORDER BY count(*) DESC LIMIT 8`)
+		-- 只统计能在指纹库里对上号的名称：sites.tech 里混着敏感信息抽取器写的
+		-- 「电话号」「内网IP」这类非技术项，直接聚合会把它们排进技术栈 Top8。
+		-- 同一产品被 dddd 与 wappalyzergo 各记一条（OpenResty / OpenResty-product），
+		-- 去掉 -product 后缀并按站点去重，避免一个产品占两行。
+		SELECT base, count(*) FROM (
+			SELECT DISTINCT s.id, regexp_replace(t.key, '-product$', '', 'i') AS base
+			FROM sites s, jsonb_array_elements_text(s.tech) AS t(key)
+			JOIN fingerprint_rules r ON r.name = t.key AND r.enabled
+		) x GROUP BY base ORDER BY count(*) DESC LIMIT 8`)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -222,24 +343,48 @@ func (a *AssetRepo) Overview(ctx context.Context) (*Overview, error) {
 }
 
 func (a *AssetRepo) RecentEvents(ctx context.Context, limit int) ([]map[string]any, error) {
+	return a.RecentEventsByProject(ctx, 0, limit)
+}
+
+// RecentEventsByProject 是事件时间线的项目收口版本；projectID=0 表示全部项目。
+func (a *AssetRepo) RecentEventsByProject(ctx context.Context, projectID int64, limit int) ([]map[string]any, error) {
 	rows, err := a.r.pool.Query(ctx, `
-		SELECT e.id, e.event_type, e.title, s.value, p.name, e.created_at
-		FROM asset_events e JOIN sites s ON s.id = e.site_id JOIN projects p ON p.id = e.project_id
-		ORDER BY e.created_at DESC LIMIT $1`, limit)
+		SELECT e.id, e.project_id, e.site_id, e.record_id, e.event_type, e.title,
+		       e.before, e.after, e.created_at, s.value, p.name
+		FROM asset_events e
+		JOIN sites s ON s.id = e.site_id
+		JOIN projects p ON p.id = e.project_id
+		WHERE ($2 = 0 OR e.project_id = $2)
+		ORDER BY e.created_at DESC, e.id DESC LIMIT $1`, limit, projectID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []map[string]any{}
 	for rows.Next() {
-		var id int64
+		var id, projectID, siteID int64
+		var recordID *int64
 		var et, title, value, pname string
+		var before, after []byte
 		var at time.Time
-		if err := rows.Scan(&id, &et, &title, &value, &pname, &at); err != nil {
+		if err := rows.Scan(&id, &projectID, &siteID, &recordID, &et, &title,
+			&before, &after, &at, &value, &pname); err != nil {
 			return nil, err
 		}
-		out = append(out, map[string]any{"id": id, "event_type": et, "title": title,
-			"asset_value": value, "project_name": pname, "created_at": at})
+		var beforeMap, afterMap map[string]any
+		_ = json.Unmarshal(before, &beforeMap)
+		_ = json.Unmarshal(after, &afterMap)
+		if beforeMap == nil {
+			beforeMap = map[string]any{}
+		}
+		if afterMap == nil {
+			afterMap = map[string]any{}
+		}
+		out = append(out, map[string]any{
+			"id": id, "project_id": projectID, "site_id": siteID, "record_id": recordID,
+			"event_type": et, "title": title, "before": beforeMap, "after": afterMap,
+			"asset_value": value, "project_name": pname, "created_at": at,
+		})
 	}
 	return out, rows.Err()
 }
@@ -286,20 +431,23 @@ func (a *AssetRepo) ImportRecords(ctx context.Context, projectID int64, source s
 		key := siteKey(projectID, host)
 		dedup := dedupKey(projectID, source, host, port, proto, value)
 
+		var recordID int64
 		var inserted bool
 		err = tx.QueryRow(ctx, `
 			INSERT INTO raw_records (project_id, source, host, port, protocol, value, status_code,
-				title, ip, evidence, dedup_key, observed_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,nullif($8,''),nullif($9,'')::inet,$10,$11,now())
+				title, ip, server, evidence, dedup_key, observed_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,nullif($8,''),nullif($9,'')::inet,
+			        $10,$11,$12,now())
 			ON CONFLICT (dedup_key) DO UPDATE SET
 				status_code = EXCLUDED.status_code,
 				title = coalesce(EXCLUDED.title, raw_records.title),
 				ip = coalesce(EXCLUDED.ip, raw_records.ip),
+				server = CASE WHEN EXCLUDED.server <> '' THEN EXCLUDED.server ELSE raw_records.server END,
 				evidence = EXCLUDED.evidence,
 				observed_at = now()
-			RETURNING (xmax = 0)`,
+			RETURNING id, (xmax = 0)`,
 			projectID, source, host, port, proto, value, rec.StatusCode, rec.Title, rec.IP,
-			toJSONB(rec.Evidence), dedup).Scan(&inserted)
+			rec.Server, toJSONB(rec.Evidence), dedup).Scan(&recordID, &inserted)
 		if err != nil {
 			return nil, fmt.Errorf("写入原始记录失败: %w", err)
 		}
@@ -307,6 +455,21 @@ func (a *AssetRepo) ImportRecords(ctx context.Context, projectID int64, source s
 			res.Records++
 		} else {
 			res.DupRecords++
+		}
+
+		// 事件用的旧站点快照（G5）：新建时无旧值，更新时做字段 diff。
+		var oldTitle, oldIP string
+		var oldStatus int
+		oldFound := true
+		err = tx.QueryRow(ctx,
+			`SELECT coalesce(title, ''), http_status, coalesce(ip::text, '') FROM sites WHERE site_key = $1`,
+			key).Scan(&oldTitle, &oldStatus, &oldIP)
+		if errors.Is(err, pgx.ErrNoRows) {
+			oldFound = false
+			err = nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("读取站点旧值失败: %w", err)
 		}
 
 		// 站点创建/更新：RETURNING (xmax = 0) 判定是否新建，RowsAffected 在 upsert 下恒为 1
@@ -353,10 +516,66 @@ func (a *AssetRepo) ImportRecords(ctx context.Context, projectID int64, source s
 			res.NewEndpoints++
 		}
 
+		// 指纹/图标随扫描结果自动落到站点画像：技术栈进 sites.tech，
+		// 图标字节按 sha256 去重进 asset_icons，站点只存引用。
+		if len(rec.Tech) > 0 {
+			if _, err := tx.Exec(ctx,
+				`UPDATE sites SET tech = $2, tech_status = 'done' WHERE id = $1`,
+				siteID, anyToJSONB(rec.Tech)); err != nil {
+				return nil, fmt.Errorf("回写站点技术栈失败: %w", err)
+			}
+		}
+		if rec.IconSHA256 != "" && len(rec.IconData) > 0 {
+			ctype := rec.IconContentType
+			if ctype == "" {
+				ctype = "image/x-icon"
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO asset_icons (sha256, mmh3, content_type, size_bytes, data)
+				VALUES ($1,$2,$3,$4,$5)
+				ON CONFLICT (sha256) DO NOTHING`,
+				rec.IconSHA256, rec.IconMMH3, ctype, len(rec.IconData), rec.IconData); err != nil {
+				return nil, fmt.Errorf("写入图标失败: %w", err)
+			}
+			if _, err := tx.Exec(ctx,
+				`UPDATE sites SET icon_sha256 = $2, icon_mmh3 = $3 WHERE id = $1`,
+				siteID, rec.IconSHA256, rec.IconMMH3); err != nil {
+				return nil, fmt.Errorf("回写站点图标失败: %w", err)
+			}
+		}
+
 		// 回填 raw_records.site_id，P4 的事件需要从证据反查站点
 		if _, err := tx.Exec(ctx, `UPDATE raw_records SET site_id = $1 WHERE dedup_key = $2 AND site_id IS NULL`,
 			siteID, dedup); err != nil {
 			return nil, fmt.Errorf("回填站点关联失败: %w", err)
+		}
+
+		// 事件（G5）：新站点 first_seen；已有站点做字段 diff。
+		newTitle := rec.Title
+		if newTitle == "" {
+			newTitle = oldTitle
+		}
+		newStatus := rec.StatusCode
+		if newStatus == 0 {
+			newStatus = oldStatus
+		}
+		newIP := rec.IP
+		if newIP == "" {
+			newIP = oldIP
+		}
+		if siteInserted {
+			if err := insertEventTx(ctx, tx, projectID, siteID, &recordID, "first_seen", "首次发现资产",
+				map[string]any{}, map[string]any{
+					"host": host, "ip": newIP, "title": newTitle, "http_status": newStatus,
+				}); err != nil {
+				return nil, fmt.Errorf("写入首次发现事件失败: %w", err)
+			}
+		} else if oldFound && (newTitle != oldTitle || newStatus != oldStatus || newIP != oldIP) {
+			if err := insertEventTx(ctx, tx, projectID, siteID, &recordID, "attribute_change", "资产属性发生变化",
+				map[string]any{"title": oldTitle, "http_status": oldStatus, "ip": oldIP},
+				map[string]any{"title": newTitle, "http_status": newStatus, "ip": newIP}); err != nil {
+				return nil, fmt.Errorf("写入属性变化事件失败: %w", err)
+			}
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -385,7 +604,7 @@ func (a *AssetRepo) VerifySite(ctx context.Context, siteID int64, reachable bool
 	if reachable {
 		_, err = tx.Exec(ctx, `
 			UPDATE sites SET state='reachable', http_status=$2, consecutive_failures=0, retry_step=0,
-				lost_since_ms=0, verified_at=now(), last_seen=now(),
+				lost_since_ms=0, verified_at=now(), last_http_verified_at=now(), last_seen=now(),
 				next_verification_at=now() + make_interval(hours => $3::int),
 				verification_status='verified', verification_reason='http_ok', attempts=attempts+1
 			WHERE id=$1`, siteID, code, policy.repeat)
@@ -429,7 +648,7 @@ func (r *Repo) AssetTargetsForDomain(ctx context.Context, projectID int64, domai
 		SELECT DISTINCT s.host,
 		       coalesce(e.port, CASE WHEN s.protocol = 'http' THEN 80 ELSE 443 END) AS port
 		  FROM sites s
-		  LEFT JOIN site_endpoints e ON e.site_id = s.id
+		  LEFT JOIN site_endpoints e ON e.site_id = s.id AND e.scheme IN ('http','https')
 		 WHERE s.project_id = $1
 		   AND (s.host = $2 OR s.host LIKE '%.' || $2)
 		 ORDER BY s.host, port
@@ -441,7 +660,7 @@ func (r *Repo) AssetTargetsForDomain(ctx context.Context, projectID int64, domai
 
 	out := []TargetInput{}
 	for rows.Next() {
-		var t TargetInput
+		t := TargetInput{Capability: map[string]any{"probe": true, "source": "site"}}
 		if err := rows.Scan(&t.Host, &t.Port); err != nil {
 			return nil, err
 		}
@@ -475,6 +694,16 @@ func (a *AssetRepo) AssetEndpoints(ctx context.Context, siteID int64) ([]Endpoin
 }
 
 // SiteHost 取站点的主机名，探测时要用。
+// SiteProjectID 返回站点所属项目；自动验证用它做 scope 校验。
+func (a *AssetRepo) SiteProjectID(ctx context.Context, siteID int64) (int64, error) {
+	var projectID int64
+	err := a.r.pool.QueryRow(ctx, `SELECT project_id FROM sites WHERE id = $1`, siteID).Scan(&projectID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return projectID, err
+}
+
 func (a *AssetRepo) SiteHost(ctx context.Context, siteID int64) (string, error) {
 	if a == nil || a.r == nil {
 		return "", fmt.Errorf("资产仓储未初始化")
@@ -532,6 +761,61 @@ func (a *AssetRepo) RecordInconclusive(ctx context.Context, siteID int64, reason
 	return tx.Commit(ctx)
 }
 
+// TargetAllowedForProject 判断主机是否落在项目的站点或种子范围内。
+// 绑定项目的 MCP key 用它限制直接扫描的目标；全项目 key 不走这里。
+func (a *AssetRepo) TargetAllowedForProject(ctx context.Context, projectID int64, host string) (bool, error) {
+	if a == nil || a.r == nil {
+		return false, errUninitialized()
+	}
+	rawHost := strings.TrimSpace(host)
+	if _, _, parseErr := net.ParseCIDR(rawHost); parseErr == nil {
+		host = strings.ToLower(rawHost)
+	} else {
+		host = normalizeHost(host)
+	}
+	if host == "" {
+		return false, nil
+	}
+	var ok bool
+	err := a.r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM sites s
+			 WHERE s.project_id = $1
+			   AND (lower(s.host) = $2 OR lower(coalesce(s.ip::text, '')) = $2)
+			UNION ALL
+			SELECT 1 FROM seeds se
+			 WHERE se.project_id = $1 AND se.enabled
+			   AND (
+			       (se.kind = 'domain' AND (lower(se.value) = $2 OR $2 LIKE '%.' || lower(se.value)))
+			       OR (se.kind IN ('app','company','repo','dict') AND lower(se.value) = $2)
+			   )
+		)`, projectID, host).Scan(&ok)
+	if err != nil || ok {
+		return ok, err
+	}
+	// CIDR 目标：允许落在任一 CIDR 种子内（含相等）。
+	if _, _, parseErr := net.ParseCIDR(host); parseErr == nil {
+		err = a.r.pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM seeds
+				 WHERE project_id = $1 AND enabled AND kind = 'cidr'
+				   AND value::cidr >>= $2::cidr
+			)`, projectID, host).Scan(&ok)
+		return ok, err
+	}
+	// IP 目标再查一次 CIDR 种子；单独查询避免非 IP 字符串做 inet 转换时报错。
+	if net.ParseIP(host) == nil {
+		return false, nil
+	}
+	err = a.r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM seeds
+			 WHERE project_id = $1 AND enabled AND kind = 'cidr'
+			   AND $2::inet <<= value::cidr
+		)`, projectID, host).Scan(&ok)
+	return ok, err
+}
+
 func normalizeHost(h string) string {
 	h = strings.TrimSpace(strings.ToLower(h))
 	h = strings.TrimSuffix(h, ".")
@@ -560,6 +844,15 @@ func toJSONB(m map[string]any) []byte {
 		return []byte("{}")
 	}
 	b, err := json.Marshal(m)
+	if err != nil {
+		return []byte("{}")
+	}
+	return b
+}
+
+// anyToJSONB 序列化任意值（含 []string），失败回落 "{}"。
+func anyToJSONB(v any) []byte {
+	b, err := json.Marshal(v)
 	if err != nil {
 		return []byte("{}")
 	}

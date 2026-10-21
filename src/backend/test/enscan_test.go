@@ -44,6 +44,7 @@ func TestENScanScanner(t *testing.T) {
 
 // TestENScanQueryCompany 测试公司信息查询
 func TestENScanQueryCompany(t *testing.T) {
+	requireLiveNetwork(t)
 	es := enscan.NewENScanScanner()
 	if !es.IsAvailable() {
 		t.Skip("ENScan not available")
@@ -87,6 +88,7 @@ func TestENScanQueryCompany(t *testing.T) {
 
 // TestENScanQueryApps 测试 APP 查询
 func TestENScanQueryApps(t *testing.T) {
+	requireLiveNetwork(t)
 	es := enscan.NewENScanScanner()
 	if !es.IsAvailable() {
 		t.Skip("ENScan not available")
@@ -112,6 +114,7 @@ func TestENScanQueryApps(t *testing.T) {
 
 // TestENScanQueryWxApps 测试微信小程序查询
 func TestENScanQueryWxApps(t *testing.T) {
+	requireLiveNetwork(t)
 	es := enscan.NewENScanScanner()
 	if !es.IsAvailable() {
 		t.Skip("ENScan not available")
@@ -137,6 +140,7 @@ func TestENScanQueryWxApps(t *testing.T) {
 
 // TestENScanQueryICPs 测试 ICP 备案查询
 func TestENScanQueryICPs(t *testing.T) {
+	requireLiveNetwork(t)
 	es := enscan.NewENScanScanner()
 	if !es.IsAvailable() {
 		t.Skip("ENScan not available")
@@ -162,6 +166,7 @@ func TestENScanQueryICPs(t *testing.T) {
 
 // TestENScanQueryAll 测试查询所有信息
 func TestENScanQueryAll(t *testing.T) {
+	requireLiveNetwork(t)
 	es := enscan.NewENScanScanner()
 	if !es.IsAvailable() {
 		t.Skip("ENScan not available")
@@ -190,6 +195,7 @@ func TestENScanQueryAll(t *testing.T) {
 
 // TestENScanBatchQuery 测试批量查询
 func TestENScanBatchQuery(t *testing.T) {
+	requireLiveNetwork(t)
 	es := enscan.NewENScanScanner()
 	if !es.IsAvailable() {
 		t.Skip("ENScan not available")

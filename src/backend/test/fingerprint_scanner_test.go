@@ -41,12 +41,7 @@ func TestFingerprintScanner_NewScanner(t *testing.T) {
 		t.Logf("✓ Loaded %d port services", len(scanner.PortServices))
 	}
 
-	// 测试 favicon 哈希加载
-	if len(scanner.FaviconHashes) == 0 {
-		t.Log("⚠ Warning: No favicon hashes loaded (favicon.yaml may not be found)")
-	} else {
-		t.Logf("✓ Loaded %d favicon hashes", len(scanner.FaviconHashes))
-	}
+	// T13：旧的 favicon 规则文件已删除（加载了但从不参与匹配）
 
 	// 验证并发数
 	if scanner.Concurrency != 10 {

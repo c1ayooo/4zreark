@@ -2,6 +2,7 @@ import { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { pocApi, POC, CreatePOCRequest } from '@/api/pocs'
 import { Button } from '@/components/ui/button'
+import { useConfirm } from '@/components/common/confirm-provider'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
@@ -41,6 +42,7 @@ import { Search, Plus, Eye, Upload, RefreshCw, Trash2, FileArchive, FileText, Ch
 import { Checkbox } from '@/components/ui/checkbox'
 
 export default function POCsPage() {
+  const confirm = useConfirm()
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -151,12 +153,12 @@ export default function POCsPage() {
     }
   }
 
-  const handleBatchDelete = () => {
+  const handleBatchDelete = async () => {
     if (selectedIds.length === 0) {
       toast({ title: '请先选择要删除的POC', variant: 'destructive' })
       return
     }
-    if (confirm(`确定要删除选中的 ${selectedIds.length} 个POC吗？`)) {
+    if (await confirm(`确定要删除选中的 ${selectedIds.length} 个POC吗？`)) {
       batchDeleteMutation.mutate(selectedIds)
     }
   }
@@ -178,12 +180,12 @@ export default function POCsPage() {
     },
   })
 
-  const handleClearAll = () => {
+  const handleClearAll = async () => {
     if (total === 0) {
       toast({ title: '没有POC可清除', variant: 'destructive' })
       return
     }
-    if (confirm(`确定要清除所有 ${total} 个POC吗？此操作不可恢复！`)) {
+    if (await confirm(`确定要清除所有 ${total} 个POC吗？此操作不可恢复！`)) {
       clearAllMutation.mutate()
     }
   }

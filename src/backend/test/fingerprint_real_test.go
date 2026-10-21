@@ -11,6 +11,7 @@ import (
 // TestFingerprintScanner_RealWebsites 测试真实网站指纹识别
 // 运行: go test -v ./test/... -run TestFingerprintScanner_RealWebsites -timeout 60s
 func TestFingerprintScanner_RealWebsites(t *testing.T) {
+	requireLiveNetwork(t)
 	scanner := fingerprint.NewFingerprintScanner(10)
 
 	// 测试目标网站列表
@@ -96,6 +97,7 @@ func TestFingerprintScanner_RealWebsites(t *testing.T) {
 
 // TestFingerprintScanner_TechSites 测试技术类网站
 func TestFingerprintScanner_TechSites(t *testing.T) {
+	requireLiveNetwork(t)
 	scanner := fingerprint.NewFingerprintScanner(10)
 
 	targets := []struct {
@@ -178,6 +180,7 @@ func TestFingerprintScanner_TechSites(t *testing.T) {
 
 // TestFingerprintScanner_SingleTarget 单目标深度测试
 func TestFingerprintScanner_SingleTarget(t *testing.T) {
+	requireLiveNetwork(t)
 	scanner := fingerprint.NewFingerprintScanner(10)
 
 	// 可以修改这个 URL 测试任意目标
@@ -245,6 +248,7 @@ func TestFingerprintScanner_SingleTarget(t *testing.T) {
 
 // TestFingerprintScanner_BatchRealSites 批量扫描真实网站
 func TestFingerprintScanner_BatchRealSites(t *testing.T) {
+	requireLiveNetwork(t)
 	scanner := fingerprint.NewFingerprintScanner(5)
 
 	targets := []string{

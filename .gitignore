@@ -12,3 +12,17 @@ src/backend/4zreark
 reference/
 releases/
 *.zip
+
+# 节点网关自签证书/私钥
+src/backend/data/
+
+# 报告测试产物（go test 在包目录下生成的临时报告）
+src/backend/test/data/
+
+# 本地数据库备份（含业务数据，不入库）
+backup_*.sql
+
+# 运行时锁与临时文件
+src/backend/.sock.lock
+src/backend/project:read
+src/backend/cmd/tmptls/

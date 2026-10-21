@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { vulnApi } from '@/api/vulnerabilities'
+import { reportApi, type ReportProfile } from '@/api/reports'
+import { vulnStatusLabel, type VulnStatus } from '@/api/vulnerabilities'
+import { ReportGenerateDialog } from '@/components/reports/ReportGenerateDialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -47,6 +50,14 @@ export default function VulnerabilitiesPage() {
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [page, setPage] = useState(1)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [reportOpen, setReportOpen] = useState(false)
+
+  const reportTemplatesQuery = useQuery({
+    queryKey: ['report-templates'],
+    queryFn: () => reportApi.templates(),
+    staleTime: 10 * 60 * 1000,
+  })
+  const reportTemplates: ReportProfile[] = reportTemplatesQuery.data ?? []
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['vulnerabilities', page, search, severityFilter, statusFilter],
@@ -78,8 +89,8 @@ export default function VulnerabilitiesPage() {
   const batchUpdateMutation = useMutation({
     mutationFn: ({ ids, status }: { ids: string[]; status: string }) =>
       vulnApi.batchUpdateStatus(ids, status),
-    onSuccess: () => {
-      toast({ title: '批量更新成功' })
+    onSuccess: (res) => {
+      toast({ title: res.message || '批量复核完成' })
       setSelectedIds([])
       queryClient.invalidateQueries({ queryKey: ['vulnerabilities'] })
       queryClient.invalidateQueries({ queryKey: ['vulnStatistics'] })
@@ -104,16 +115,8 @@ export default function VulnerabilitiesPage() {
     return labels[severity] || severity
   }
 
-  const getStatusLabel = (status: string) => {
-    const labels: Record<string, string> = {
-      open: '待处理',
-      confirmed: '已确认',
-      fixed: '已修复',
-      ignored: '已忽略',
-      false_positive: '误报',
-    }
-    return labels[status] || status
-  }
+  const getStatusLabel = (status: string) =>
+    vulnStatusLabel[status as VulnStatus] || status
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
@@ -171,7 +174,7 @@ export default function VulnerabilitiesPage() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">全部</SelectItem>
-            <SelectItem value="open">待处理</SelectItem>
+            <SelectItem value="new">待复核</SelectItem>
             <SelectItem value="confirmed">已确认</SelectItem>
             <SelectItem value="fixed">已修复</SelectItem>
             <SelectItem value="ignored">已忽略</SelectItem>
@@ -266,7 +269,7 @@ export default function VulnerabilitiesPage() {
                   <TableCell>{formatDate(vuln.createdAt)}</TableCell>
                   <TableCell>
                     <div className="flex gap-1">
-                      {vuln.status === 'open' && (
+                      {vuln.status === 'new' && (
                         <Button
                           variant="ghost"
                           size="icon"
@@ -334,12 +337,23 @@ export default function VulnerabilitiesPage() {
             <RefreshCw className="h-4 w-4 mr-2" />
             刷新
           </Button>
-          <Button variant="outline" size="sm">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setReportOpen(true)}
+          >
             <Download className="h-4 w-4 mr-2" />
             导出报告
           </Button>
         </div>
       </div>
+
+      <ReportGenerateDialog
+        open={reportOpen}
+        onOpenChange={setReportOpen}
+        defaultKind="vuln"
+        templates={reportTemplates}
+      />
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>

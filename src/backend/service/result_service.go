@@ -218,6 +218,10 @@ func (s *ResultService) GetResultsByTask(taskID string, resultType models.Result
 	}
 	ctx, cancel := dbCtx()
 	defer cancel()
+	// URL 页签读的是 crawler 记录去重后的派生视图，不是 type='url' 的独立记录。
+	if resultType == models.ResultTypeURL {
+		return store.ListURLsByTask(ctx, taskID, page, pageSize, search)
+	}
 	return store.ListByTask(ctx, taskID, string(resultType), page, pageSize, search, statusCode)
 }
 

@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"sync"
 	"time"
 
+	reconportscan "github.com/c1ayooo/4zreark/internal/recon/portscan"
 	"github.com/c1ayooo/4zreark/scanner/core"
 	"github.com/c1ayooo/4zreark/scanner/portscan"
 )
@@ -19,6 +21,26 @@ type PortScanModule struct {
 	resultChan  chan interface{}
 	portRange   string
 	scanMode    string
+	ratePerSec  int
+	concurrency int
+	targetDelay time.Duration
+}
+
+// SetRate 设置端口扫描的速率、并发与单目标间隔。
+// 默认值刻意保守：高频 SYN/connect 扫描最容易触发云厂商和目标的封禁策略。
+func (m *PortScanModule) SetRate(ratePerSec, concurrency int, delay time.Duration) {
+	if ratePerSec > 0 {
+		m.ratePerSec = ratePerSec
+	}
+	if concurrency > 0 {
+		m.concurrency = concurrency
+		// 外挂 gogo 的 -t 线程数必须一起收紧：它不读上面的 RatePerSec，
+		// 默认 1000 并发，不改的话纯 Go fallback 限了速也白限。
+		if m.gogoScanner != nil {
+			m.gogoScanner.Threads = concurrency
+		}
+	}
+	m.targetDelay = delay
 }
 
 // NewPortScanModule 创建端口扫描模块
@@ -51,19 +73,14 @@ func (m *PortScanModule) ModuleRun() error {
 	var resultWg sync.WaitGroup
 	var nextModuleRun sync.WaitGroup
 
+	// GoGo 不可用时不再整体透传：改用纯 Go TCP connect 扫描（见 scanPorts）。
+	if !m.gogoScanner.IsAvailable() {
+		log.Printf("[%s] GoGo not available, fallback to pure-Go TCP connect scan", m.name)
+	}
+
 	// 报告模块开始
 	m.ReportModuleStart(0)
 	defer m.ReportModuleComplete()
-
-	// 检查 GoGo 是否可用
-	if !m.gogoScanner.IsAvailable() {
-		log.Printf("[%s] GoGo not available, skipping port scan", m.name)
-		// 直接关闭下一个模块
-		if m.nextModule != nil {
-			m.nextModule.CloseInput()
-		}
-		return nil
-	}
 
 	// 启动下一个模块
 	if m.nextModule != nil {
@@ -167,6 +184,13 @@ func (m *PortScanModule) ModuleRun() error {
 			allWg.Add(1)
 			go func(ds DomainSkip) {
 				defer allWg.Done()
+				if m.targetDelay > 0 {
+					select {
+					case <-m.ctx.Done():
+						return
+					case <-time.After(m.targetDelay):
+					}
+				}
 				m.scanPorts(ds)
 			}(domainSkip)
 		}
@@ -179,6 +203,11 @@ func (m *PortScanModule) scanPorts(ds DomainSkip) {
 
 	ctx, cancel := context.WithTimeout(m.ctx, 10*time.Minute)
 	defer cancel()
+
+	if !m.gogoScanner.IsAvailable() {
+		m.scanPortsFallback(ctx, ds)
+		return
+	}
 
 	var scanResult *core.ScanResult
 	var err error
@@ -237,4 +266,75 @@ func (m *PortScanModule) scanPorts(ds DomainSkip) {
 // intToString 整数转字符串
 func intToString(n int) string {
 	return fmt.Sprintf("%d", n)
+}
+
+// scanPortsFallback 在 gogo 不可用时用纯 Go TCP connect 扫描。
+// 端口集按 scanMode 选：quick/top1000 → Top100，custom → 解析 portRange，full → 1-65535。
+func (m *PortScanModule) scanPortsFallback(ctx context.Context, ds DomainSkip) {
+	ips := ds.IP
+	if len(ips) == 0 && ds.Domain != "" {
+		resolved, err := net.LookupHost(ds.Domain)
+		if err != nil || len(resolved) == 0 {
+			log.Printf("[%s] Fallback resolve failed for %s: %v", m.name, ds.Domain, err)
+			return
+		}
+		ips = resolved
+	}
+	if len(ips) == 0 {
+		return
+	}
+
+	ports := m.fallbackPorts()
+	if len(ports) == 0 {
+		return
+	}
+
+	concurrency := m.concurrency
+	if concurrency <= 0 {
+		concurrency = 8
+	}
+	ratePerSec := m.ratePerSec
+	if ratePerSec <= 0 {
+		ratePerSec = 20
+	}
+	results := reconportscan.Scan(ctx, ips, reconportscan.Options{
+		Ports:       ports,
+		Concurrency: concurrency,
+		Timeout:     2 * time.Second,
+		RatePerSec:  ratePerSec,
+	})
+	log.Printf("[%s] Fallback scan completed for %s: %d open ports", m.name, ds.Domain, len(results))
+
+	for _, r := range results {
+		service := r.Service
+		if service == "" {
+			service = reconportscan.GuessService(r.Port)
+		}
+		log.Printf("[%s] Found open port: %s:%d (%s)", m.name, ds.Domain, r.Port, service)
+		select {
+		case <-m.ctx.Done():
+			return
+		case m.resultChan <- PortAlive{
+			Host:    ds.Domain,
+			IP:      r.IP,
+			Port:    intToString(r.Port),
+			Service: service,
+		}:
+		}
+	}
+}
+
+func (m *PortScanModule) fallbackPorts() []int {
+	switch m.scanMode {
+	case "full":
+		ports := make([]int, 0, 65535)
+		for p := 1; p <= 65535; p++ {
+			ports = append(ports, p)
+		}
+		return ports
+	case "custom":
+		return reconportscan.ResolvePorts("", m.portRange)
+	default: // quick / top1000
+		return reconportscan.Top100
+	}
 }

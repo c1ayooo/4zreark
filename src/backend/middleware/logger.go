@@ -47,6 +47,13 @@ func OperationLogMiddleware() gin.HandlerFunc {
 		if username != nil {
 			log.Username = username.(string)
 		}
+		// 外部平台 / MCP 走 API key，没有用户上下文；
+		// 把 key 名记进审计，便于区分调用来源。
+		if keyVal, ok := c.Get("api_key"); ok {
+			if key, ok := keyVal.(*repo.APIKey); ok && key != nil {
+				log.Username = "apikey:" + key.Name
+			}
+		}
 
 		// Save log asynchronously
 		go saveOperationLog(log)
@@ -68,14 +75,16 @@ func saveOperationLog(entry models.OperationLog) {
 
 func getModuleFromPath(path string) string {
 	modules := map[string]string{
-		"/api/auth":   "认证",
-		"/api/user":   "用户管理",
-		"/api/asset":  "资产管理",
-		"/api/task":   "任务管理",
-		"/api/vuln":   "漏洞管理",
-		"/api/node":   "节点管理",
-		"/api/plugin": "插件管理",
-		"/api/system": "系统设置",
+		"/api/auth":     "认证",
+		"/api/user":     "用户管理",
+		"/api/asset":    "资产管理",
+		"/api/task":     "任务管理",
+		"/api/vuln":     "漏洞管理",
+		"/api/node":     "节点管理",
+		"/api/plugin":   "插件管理",
+		"/api/system":   "系统设置",
+		"/api/mcp":      "MCP 接入",
+		"/api/api-keys": "MCP 接入",
 	}
 
 	for prefix, module := range modules {

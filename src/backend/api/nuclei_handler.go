@@ -3,39 +3,31 @@ package api
 import (
 	"context"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/c1ayooo/4zreark/repo"
+	"github.com/c1ayooo/4zreark/scanner/vulnscan"
 	"github.com/c1ayooo/4zreark/scanner/vulnscan/nuclei"
+	"github.com/c1ayooo/4zreark/service"
 	"github.com/c1ayooo/4zreark/utils"
 
 	"github.com/gin-gonic/gin"
 )
 
-// NucleiHandler Nuclei 处理器
+// NucleiHandler Nuclei 处理器。
+//
+// 模板库只有一处：PG 的 pocs 表（与「POC 管理」是同一份数据）。
+// 执行器按请求从库里构建 loader，不再扫描 config/nuclei-templates 目录。
 type NucleiHandler struct {
-	loader   *nuclei.TemplateLoader
-	executor *nuclei.Executor
+	svc *service.NucleiService
 }
 
 // NewNucleiHandler 创建 Nuclei 处理器
 func NewNucleiHandler() *NucleiHandler {
-	loader := nuclei.NewTemplateLoader()
-
-	// 添加默认模板目录
-	loader.AddTemplateDir("config/nuclei-templates")
-
-	// 尝试加载模板
-	if err := loader.LoadAll(); err != nil {
-		// 忽略加载错误，可能目录不存在
-	}
-
-	executor := nuclei.NewExecutor(loader, nuclei.DefaultExecutorOptions())
-
-	return &NucleiHandler{
-		loader:   loader,
-		executor: executor,
-	}
+	return &NucleiHandler{svc: service.NewNucleiService()}
 }
 
 // GetTemplates 获取模板列表
@@ -50,54 +42,60 @@ func NewNucleiHandler() *NucleiHandler {
 // @Router /api/nuclei/templates [get]
 func (h *NucleiHandler) GetTemplates(c *gin.Context) {
 	severity := c.Query("severity")
-	tags := c.Query("tags")
+	keyword := c.Query("keyword")
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
-
-	var templates []*nuclei.NucleiTemplate
-
-	if severity != "" {
-		templates = h.loader.GetTemplatesBySeverity(nuclei.Severity(severity))
-	} else if tags != "" {
-		templates = h.loader.GetTemplatesByTags(tags)
-	} else {
-		templates = h.loader.GetTemplates()
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 || size > 500 {
+		size = 20
 	}
 
-	// 分页
-	total := len(templates)
-	start := (page - 1) * size
-	end := start + size
-
-	if start >= total {
-		templates = []*nuclei.NucleiTemplate{}
-	} else {
-		if end > total {
-			end = total
+	var tags []string
+	if raw := c.Query("tags"); raw != "" {
+		for _, t := range strings.Split(raw, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				tags = append(tags, t)
+			}
 		}
-		templates = templates[start:end]
 	}
 
-	// 简化输出
-	items := make([]map[string]interface{}, len(templates))
-	for i, t := range templates {
-		items[i] = map[string]interface{}{
-			"id":          t.ID,
-			"name":        t.Info.Name,
-			"author":      t.Info.Author,
-			"severity":    t.Info.Severity,
-			"description": t.Info.Description,
-			"tags":        t.Info.Tags,
-			"cve_id":      t.Info.Classification.CVEID,
-			"file_path":   t.FilePath,
-		}
+	items, total, err := h.svc.ListTemplates(repo.POCFilter{
+		Type:     "nuclei",
+		Severity: severity,
+		Tags:     tags,
+		Keyword:  keyword,
+		Page:     page,
+		PageSize: size,
+	})
+	if err != nil {
+		utils.InternalError(c, "查询模板失败: "+err.Error())
+		return
+	}
+
+	out := make([]map[string]interface{}, 0, len(items))
+	for _, p := range items {
+		out = append(out, map[string]interface{}{
+			"id":          p.TemplateID,
+			"poc_id":      p.ID.Hex(),
+			"name":        p.Name,
+			"author":      p.Author,
+			"severity":    p.Severity,
+			"description": p.Description,
+			"tags":        strings.Join(p.Tags, ","),
+			"cve_id":      strings.Join(p.CVEID, ","),
+			"enabled":     p.Enabled,
+			"source":      p.Source,
+			"updated_at":  p.UpdatedAt,
+		})
 	}
 
 	c.JSON(http.StatusOK, utils.Response{
 		Code:    0,
 		Message: "success",
 		Data: map[string]interface{}{
-			"items": items,
+			"items": out,
 			"total": total,
 			"page":  page,
 			"size":  size,
@@ -113,15 +111,21 @@ func (h *NucleiHandler) GetTemplates(c *gin.Context) {
 // @Success 200 {object} utils.Response
 // @Router /api/nuclei/templates/{id} [get]
 func (h *NucleiHandler) GetTemplate(c *gin.Context) {
-	id := c.Param("id")
-
-	template, ok := h.loader.GetTemplate(id)
-	if !ok {
+	p, err := h.svc.GetTemplate(c.Param("id"))
+	if err != nil {
 		utils.NotFound(c, "Template not found")
 		return
 	}
 
-	utils.Success(c, template)
+	// 顺带返回解析后的模板结构，前端不必自己再解析 YAML。
+	var tpl *nuclei.NucleiTemplate
+	if t, err := h.svc.LoadTemplateByID(p.TemplateID); err == nil {
+		tpl = t
+	}
+	utils.Success(c, map[string]interface{}{
+		"poc":      p,
+		"template": tpl,
+	})
 }
 
 // GetTags 获取所有模板标签
@@ -131,7 +135,11 @@ func (h *NucleiHandler) GetTemplate(c *gin.Context) {
 // @Success 200 {object} utils.Response
 // @Router /api/nuclei/tags [get]
 func (h *NucleiHandler) GetTags(c *gin.Context) {
-	tags := h.loader.GetAllTags()
+	tags, err := h.svc.Tags()
+	if err != nil {
+		utils.InternalError(c, "查询标签失败: "+err.Error())
+		return
+	}
 	utils.Success(c, tags)
 }
 
@@ -142,8 +150,17 @@ func (h *NucleiHandler) GetTags(c *gin.Context) {
 // @Success 200 {object} utils.Response
 // @Router /api/nuclei/statistics [get]
 func (h *NucleiHandler) GetStatistics(c *gin.Context) {
-	stats := h.loader.GetStatistics()
-	utils.Success(c, stats)
+	st, err := h.svc.Statistics()
+	if err != nil {
+		utils.InternalError(c, "统计失败: "+err.Error())
+		return
+	}
+	utils.Success(c, map[string]interface{}{
+		"total":       st.Total,
+		"enabled":     st.Enabled,
+		"by_severity": st.BySeverity,
+		"by_type":     st.ByType,
+	})
 }
 
 // ScanTarget 扫描目标
@@ -167,7 +184,7 @@ func (h *NucleiHandler) ScanTarget(c *gin.Context) {
 		return
 	}
 
-	timeout := 120 * time.Second
+	timeout := 10 * time.Minute
 	if req.Timeout > 0 {
 		timeout = time.Duration(req.Timeout) * time.Second
 	}
@@ -175,47 +192,54 @@ func (h *NucleiHandler) ScanTarget(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 	defer cancel()
 
-	var results []*nuclei.ScanResult
-	var err error
+	dir, err := os.MkdirTemp("", "zre-nuclei-*")
+	if err != nil {
+		utils.InternalError(c, "创建模板目录失败: "+err.Error())
+		return
+	}
+	defer os.RemoveAll(dir)
 
-	if len(req.TemplateIDs) > 0 {
-		// 指定模板扫描
-		templates := make([]*nuclei.NucleiTemplate, 0)
-		for _, id := range req.TemplateIDs {
-			if t, ok := h.loader.GetTemplate(id); ok {
-				templates = append(templates, t)
+	var severities []string
+	if req.Severity != "" {
+		for _, s := range strings.Split(req.Severity, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				severities = append(severities, s)
 			}
 		}
-		results, err = h.executor.ExecuteTemplates(ctx, templates, req.Target)
-	} else if len(req.Tags) > 0 {
-		// 按标签扫描
-		results, err = h.executor.ExecuteByTags(ctx, req.Target, req.Tags...)
-	} else if req.Severity != "" {
-		// 按严重程度扫描
-		results, err = h.executor.ExecuteBySeverity(ctx, req.Target, nuclei.Severity(req.Severity))
-	} else {
-		// 全部扫描
-		results, err = h.executor.ExecuteAll(ctx, req.Target)
 	}
 
+	count, err := h.svc.MaterializeTemplates(dir, severities, req.TemplateIDs, req.Tags)
+	if err != nil {
+		utils.InternalError(c, "加载模板失败: "+err.Error())
+		return
+	}
+	if count == 0 {
+		utils.BadRequest(c, "没有可用模板：库为空、全部未验证，或筛选条件过窄（可显式指定 template_ids）")
+		return
+	}
+
+	scanner := vulnscan.NewNucleiCLIScanner(dir)
+	if !scanner.IsAvailable() {
+		utils.InternalError(c, "nuclei CLI 不可用")
+		return
+	}
+
+	results, err := scanner.Scan(ctx, []string{req.Target}, &vulnscan.NucleiScanConfig{
+		Concurrency: 25,
+		RateLimit:   150,
+		Timeout:     timeout,
+	})
 	if err != nil {
 		utils.InternalError(c, "扫描失败: "+err.Error())
 		return
 	}
 
-	// 过滤只返回匹配的结果
-	matched := make([]*nuclei.ScanResult, 0)
-	for _, r := range results {
-		if r.Matched {
-			matched = append(matched, r)
-		}
-	}
-
 	utils.Success(c, map[string]interface{}{
 		"target":        req.Target,
-		"total_scanned": len(results),
-		"matched":       len(matched),
-		"results":       matched,
+		"templates":     count,
+		"total_scanned": count,
+		"matched":       len(results),
+		"results":       results,
 	})
 }
 
@@ -236,18 +260,17 @@ func (h *NucleiHandler) UploadTemplate(c *gin.Context) {
 		return
 	}
 
-	template, err := h.loader.Parse([]byte(req.Content), "uploaded")
+	poc, err := h.svc.UpsertTemplate([]byte(req.Content))
 	if err != nil {
-		utils.BadRequest(c, "模板解析失败: "+err.Error())
+		utils.BadRequest(c, "模板解析或保存失败: "+err.Error())
 		return
 	}
 
-	h.loader.AddTemplate(template)
-
-	utils.SuccessWithMessage(c, "模板上传成功", map[string]interface{}{
-		"id":       template.ID,
-		"name":     template.Info.Name,
-		"severity": template.Info.Severity,
+	utils.SuccessWithMessage(c, "模板已保存到 POC 库", map[string]interface{}{
+		"id":       poc.TemplateID,
+		"poc_id":   poc.ID.Hex(),
+		"name":     poc.Name,
+		"severity": poc.Severity,
 	})
 }
 
@@ -259,14 +282,10 @@ func (h *NucleiHandler) UploadTemplate(c *gin.Context) {
 // @Success 200 {object} utils.Response
 // @Router /api/nuclei/templates/{id} [delete]
 func (h *NucleiHandler) DeleteTemplate(c *gin.Context) {
-	id := c.Param("id")
-
-	if _, ok := h.loader.GetTemplate(id); !ok {
+	if err := h.svc.DeleteTemplate(c.Param("id")); err != nil {
 		utils.NotFound(c, "Template not found")
 		return
 	}
-
-	h.loader.RemoveTemplate(id)
 	utils.SuccessWithMessage(c, "删除成功", nil)
 }
 
@@ -277,15 +296,14 @@ func (h *NucleiHandler) DeleteTemplate(c *gin.Context) {
 // @Success 200 {object} utils.Response
 // @Router /api/nuclei/reload [post]
 func (h *NucleiHandler) ReloadTemplates(c *gin.Context) {
-	h.loader.Clear()
-
-	if err := h.loader.LoadAll(); err != nil {
-		utils.InternalError(c, "加载模板失败: "+err.Error())
+	// 数据在 PG 里，不存在「重新扫盘」这一步；返回当前可用条数即可。
+	st, err := h.svc.Statistics()
+	if err != nil {
+		utils.InternalError(c, "读取模板数失败: "+err.Error())
 		return
 	}
-
-	utils.SuccessWithMessage(c, "模板重新加载成功", map[string]interface{}{
-		"count": h.loader.Count(),
+	utils.SuccessWithMessage(c, "模板库已是最新（数据源为 PG）", map[string]interface{}{
+		"count": st.Total,
 	})
 }
 
@@ -306,7 +324,7 @@ func (h *NucleiHandler) ValidateTemplate(c *gin.Context) {
 		return
 	}
 
-	template, err := h.loader.Parse([]byte(req.Content), "validation")
+	poc, tpl, err := h.svc.Validate([]byte(req.Content))
 	if err != nil {
 		c.JSON(http.StatusOK, utils.Response{
 			Code:    0,
@@ -321,9 +339,10 @@ func (h *NucleiHandler) ValidateTemplate(c *gin.Context) {
 
 	utils.Success(c, map[string]interface{}{
 		"valid":    true,
-		"id":       template.ID,
-		"name":     template.Info.Name,
-		"severity": template.Info.Severity,
-		"tags":     template.Info.Tags,
+		"id":       tpl.ID,
+		"name":     tpl.Info.Name,
+		"severity": tpl.Info.Severity,
+		"tags":     tpl.Info.Tags,
+		"poc_id":   poc.ID.Hex(),
 	})
 }

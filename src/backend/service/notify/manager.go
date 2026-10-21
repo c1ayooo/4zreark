@@ -2,10 +2,15 @@ package notify
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/c1ayooo/4zreark/repo"
 )
 
 // 全局通知管理器实例
@@ -18,6 +23,8 @@ var (
 func GetGlobalManager() *NotifyManager {
 	globalManagerOnce.Do(func() {
 		globalManager = NewNotifyManager()
+		globalManager.loadConfigs()
+		globalManager.loadEnvFeishuConfig()
 		globalManager.Start()
 		log.Println("[Notify] Global notify manager initialized")
 	})
@@ -72,36 +79,166 @@ func (m *NotifyManager) Stop() {
 	close(m.stopCh)
 }
 
-// AddConfig 添加通知配置
-func (m *NotifyManager) AddConfig(config NotifyConfig) {
+// loadConfigs 从 PostgreSQL 恢复渠道配置。repo 未初始化（worker 节点）时跳过。
+func (m *NotifyManager) loadConfigs() {
+	r := repo.Default()
+	if r == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	recs, err := r.Notify().ListConfigs(ctx)
+	if err != nil {
+		log.Printf("[Notify] 加载通知配置失败（表可能未创建）: %v", err)
+		return
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	for _, rec := range recs {
+		var c NotifyConfig
+		if err := json.Unmarshal(rec.Config, &c); err != nil {
+			log.Printf("[Notify] 配置 %s/%s 解析失败: %v", rec.Name, rec.Type, err)
+			continue
+		}
+		c.Name = rec.Name
+		c.Type = NotifyType(rec.Type)
+		c.Enabled = rec.Enabled
+		m.configs = append(m.configs, c)
+	}
+	m.rebuildNotifiers()
+	log.Printf("[Notify] 已加载 %d 个通知配置", len(recs))
+}
 
-	// 检查是否已存在
-	for i, c := range m.configs {
-		if c.Name == config.Name && c.Type == config.Type {
-			m.configs[i] = config
-			m.rebuildNotifiers()
+// loadEnvFeishuConfig 支持用环境变量提供飞书企业应用凭据，避免把 secret 写进配置文件。
+// 环境变量优先于同名渠道：库里已有同一个 app_id 时不再重复添加。
+func (m *NotifyManager) loadEnvFeishuConfig() {
+	appID := os.Getenv("ZRE_FEISHU_APP_ID")
+	appSecret := os.Getenv("ZRE_FEISHU_APP_SECRET")
+	receiveID := os.Getenv("ZRE_FEISHU_RECEIVE_ID")
+	if appID == "" || appSecret == "" || receiveID == "" {
+		return
+	}
+	receiveIDType := os.Getenv("ZRE_FEISHU_RECEIVE_ID_TYPE")
+	if receiveIDType == "" {
+		receiveIDType = "open_id"
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, c := range m.configs {
+		if c.Type == NotifyTypeFeishu && c.FeishuAppID == appID {
 			return
 		}
 	}
+	m.configs = append(m.configs, NotifyConfig{
+		Name:                "飞书企业应用",
+		Type:                NotifyTypeFeishu,
+		Enabled:             true,
+		FeishuAppID:         appID,
+		FeishuAppSecret:     appSecret,
+		FeishuReceiveIDType: receiveIDType,
+		FeishuReceiveID:     receiveID,
+	})
+	m.rebuildNotifiers()
+	log.Println("[Notify] 已从环境变量加载飞书企业应用配置")
+}
 
+// persistConfig 把渠道配置写回 PostgreSQL；失败只记日志，不影响当前进程内发送。
+func (m *NotifyManager) persistConfig(c NotifyConfig) {
+	r := repo.Default()
+	if r == nil {
+		return
+	}
+	raw, err := json.Marshal(c)
+	if err != nil {
+		log.Printf("[Notify] 配置序列化失败: %v", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.Notify().UpsertConfig(ctx, &repo.NotifyConfigRecord{
+		Name:    c.Name,
+		Type:    string(c.Type),
+		Enabled: c.Enabled,
+		Config:  raw,
+	}); err != nil {
+		log.Printf("[Notify] 配置 %s/%s 持久化失败: %v", c.Name, c.Type, err)
+	}
+}
+
+func (m *NotifyManager) deleteConfigRecord(name string, t NotifyType) {
+	r := repo.Default()
+	if r == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.Notify().DeleteConfig(ctx, name, string(t)); err != nil {
+		log.Printf("[Notify] 配置 %s/%s 删除失败: %v", name, t, err)
+	}
+}
+
+// mergeMaskedSecrets 保住前端回传的脱敏字段：GET 返回的是 abcd****wxyz，
+// 直接保存会把真实密钥覆盖成星号。
+func mergeMaskedSecrets(in, existing NotifyConfig) NotifyConfig {
+	keep := func(v, old string) string {
+		if strings.Contains(v, "****") {
+			return old
+		}
+		return v
+	}
+	in.DingTalkSecret = keep(in.DingTalkSecret, existing.DingTalkSecret)
+	in.FeishuSecret = keep(in.FeishuSecret, existing.FeishuSecret)
+	in.FeishuAppSecret = keep(in.FeishuAppSecret, existing.FeishuAppSecret)
+	in.SMTPPassword = keep(in.SMTPPassword, existing.SMTPPassword)
+	return in
+}
+
+// MergeConfigSecrets 供测试接口使用：用已保存的真实密钥补齐脱敏字段。
+func (m *NotifyManager) MergeConfigSecrets(config NotifyConfig) NotifyConfig {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, c := range m.configs {
+		if c.Name == config.Name && c.Type == config.Type {
+			return mergeMaskedSecrets(config, c)
+		}
+	}
+	return config
+}
+
+// AddConfig 添加或更新通知配置（按 name + type 唯一）。
+func (m *NotifyManager) AddConfig(config NotifyConfig) {
+	m.mu.Lock()
+	for i, c := range m.configs {
+		if c.Name == config.Name && c.Type == config.Type {
+			config = mergeMaskedSecrets(config, c)
+			m.configs[i] = config
+			m.rebuildNotifiers()
+			m.mu.Unlock()
+			m.persistConfig(config)
+			return
+		}
+	}
 	m.configs = append(m.configs, config)
 	m.rebuildNotifiers()
+	m.mu.Unlock()
+	m.persistConfig(config)
 }
 
 // RemoveConfig 移除通知配置
 func (m *NotifyManager) RemoveConfig(name string, t NotifyType) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	for i, c := range m.configs {
 		if c.Name == name && c.Type == t {
 			m.configs = append(m.configs[:i], m.configs[i+1:]...)
 			m.rebuildNotifiers()
+			m.mu.Unlock()
+			m.deleteConfigRecord(name, t)
 			return
 		}
 	}
+	m.mu.Unlock()
 }
 
 // GetConfigs 获取所有配置
@@ -117,15 +254,17 @@ func (m *NotifyManager) GetConfigs() []NotifyConfig {
 // EnableConfig 启用配置
 func (m *NotifyManager) EnableConfig(name string, t NotifyType, enabled bool) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	for i, c := range m.configs {
 		if c.Name == name && c.Type == t {
 			m.configs[i].Enabled = enabled
+			updated := m.configs[i]
 			m.rebuildNotifiers()
+			m.mu.Unlock()
+			m.persistConfig(updated)
 			return
 		}
 	}
+	m.mu.Unlock()
 }
 
 // rebuildNotifiers 重建通知器列表
@@ -152,6 +291,14 @@ func (m *NotifyManager) createNotifier(config NotifyConfig) Notifier {
 			return NewDingTalkNotifier(config.DingTalkWebhook, config.DingTalkSecret)
 		}
 	case NotifyTypeFeishu:
+		if config.FeishuAppID != "" && config.FeishuAppSecret != "" && config.FeishuReceiveID != "" {
+			return NewFeishuAppNotifier(
+				config.FeishuAppID,
+				config.FeishuAppSecret,
+				config.FeishuReceiveIDType,
+				config.FeishuReceiveID,
+			)
+		}
 		if config.FeishuWebhook != "" {
 			return NewFeishuNotifier(config.FeishuWebhook, config.FeishuSecret)
 		}
@@ -180,6 +327,12 @@ func (m *NotifyManager) createNotifier(config NotifyConfig) Notifier {
 
 // Send 发送通知（同步）
 func (m *NotifyManager) Send(ctx context.Context, msg *NotifyMessage) error {
+	if msg == nil {
+		return nil
+	}
+	if !NotifyLevelAllowed(msg.Level) {
+		return nil
+	}
 	m.mu.RLock()
 	notifiers := m.notifiers
 	m.mu.RUnlock()
@@ -187,13 +340,27 @@ func (m *NotifyManager) Send(ctx context.Context, msg *NotifyMessage) error {
 	if msg.Timestamp.IsZero() {
 		msg.Timestamp = time.Now()
 	}
+	// 脱敏后再发给任何通道，历史记录也保存脱敏后的内容。
+	masked := *msg
+	if msg.Extra != nil {
+		masked.Extra = make(map[string]interface{}, len(msg.Extra))
+		for k, v := range msg.Extra {
+			masked.Extra[k] = v
+		}
+	}
+	MaskMessage(&masked)
+	msg = &masked
+
+	// 站内通知先落库：即使一个外部渠道都没配，页面铃铛也能收到。
+	m.saveNotification(msg)
 
 	var lastErr error
 	for _, notifier := range notifiers {
 		if err := notifier.Send(ctx, msg); err != nil {
 			lastErr = err
-			log.Printf("[Notify] Failed to send via %s: %v", notifier.Type(), err)
-			m.addHistory(msg, notifier.Type(), "failed", err.Error())
+			perr := MaskSensitive(err.Error())
+			log.Printf("[Notify] Failed to send via %s: %s", notifier.Type(), perr)
+			m.addHistory(msg, notifier.Type(), "failed", perr)
 		} else {
 			m.addHistory(msg, notifier.Type(), "success", "")
 		}
@@ -226,6 +393,20 @@ func (m *NotifyManager) processQueue() {
 			m.Send(ctx, msg)
 			cancel()
 		}
+	}
+}
+
+// saveNotification 把消息写入站内通知表。独立超时，调用方取消不影响落库。
+func (m *NotifyManager) saveNotification(msg *NotifyMessage) {
+	r := repo.Default()
+	if r == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := r.Notify().AddNotification(ctx,
+		string(msg.Level), msg.Title, msg.Content, msg.Source, msg.Extra); err != nil {
+		log.Printf("[Notify] 站内通知落库失败: %v", err)
 	}
 }
 
@@ -281,13 +462,13 @@ func (m *NotifyManager) GetHistory(limit int) []*NotifyHistory {
 func (m *NotifyManager) TestNotifier(config NotifyConfig) error {
 	notifier := m.createNotifier(config)
 	if notifier == nil {
-		return nil
+		return fmt.Errorf("通知配置不完整：请检查渠道类型与必填字段")
 	}
 
 	msg := &NotifyMessage{
 		Level:     NotifyLevelInfo,
 		Title:     "测试通知",
-		Content:   "这是一条来自 Moon Gazing Tower 的测试通知消息。\n\n如果您收到此消息，说明通知配置正确。",
+		Content:   "这是一条来自 4zreark 的测试通知消息。\n\n如果您收到此消息，说明通知配置正确。",
 		Source:    "system",
 		Timestamp: time.Now(),
 	}

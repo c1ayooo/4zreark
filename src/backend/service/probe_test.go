@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -134,5 +135,29 @@ func TestProbeTimeoutBounded(t *testing.T) {
 	}
 	if res.Outcome == ProbeReachable {
 		t.Fatalf("保留地址段不该判可达")
+	}
+}
+
+// 桌面 UA 被 WAF 403 时，用手机 UA 回退；拿到 200 就采用手机端结果。
+func TestProbeFallsBackToMobileUA(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ua := r.Header.Get("User-Agent")
+		if strings.Contains(ua, "iPhone") || strings.Contains(ua, "iPad") || strings.Contains(ua, "Android") {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("<html><title>mobile</title></html>"))
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("desktop blocked"))
+	}))
+	defer srv.Close()
+	port := srv.Listener.Addr().(*net.TCPAddr).Port
+
+	res := ProbeEndpoint(context.Background(), "127.0.0.1", port, "http")
+	if !res.Reachable() || res.StatusCode != http.StatusOK {
+		t.Fatalf("手机 UA 回退未生效: %+v", res)
+	}
+	if res.Detail != "mobile_ua" || !strings.Contains(res.Body, "mobile") {
+		t.Fatalf("应使用手机端响应: %+v", res)
 	}
 }

@@ -175,7 +175,8 @@ func (p *ScanPipeline) runDirScan() {
 	}
 
 	if result != nil {
-		for _, entry := range result.Results {
+		entries := webscan.FilterSoft404Entries(ctx, result.Results, nil)
+		for _, entry := range entries {
 			p.saveDirScanResultFromSpray(entry)
 		}
 	}

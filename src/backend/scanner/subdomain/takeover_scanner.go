@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	reconkit_takeover "github.com/c1ayooo/4zreark/internal/recon/takeover"
 )
 
 // TakeoverScanner 子域名接管检测器
@@ -55,7 +57,7 @@ func NewTakeoverScanner(concurrency int) *TakeoverScanner {
 
 // getDefaultFingerprints 获取默认指纹库
 func getDefaultFingerprints() []TakeoverFingerprint {
-	return []TakeoverFingerprint{
+	fps := []TakeoverFingerprint{
 		// AWS S3
 		{
 			Service:     "Amazon S3",
@@ -570,6 +572,26 @@ func getDefaultFingerprints() []TakeoverFingerprint {
 			Vulnerable:  true,
 		},
 	}
+	fps = append(fps, reconkitTakeoverFingerprints()...)
+	return fps
+}
+
+// reconkitTakeoverFingerprints 把 reconkit 的接管指纹并入宿主表（T12）。
+// 宿主表在前，同名服务由宿主条目先命中，行为不回退；reconkit 多出的
+// Gitee Pages / Azure Blob 等在缺口处补齐。
+func reconkitTakeoverFingerprints() []TakeoverFingerprint {
+	out := make([]TakeoverFingerprint, 0, 32)
+	for _, fp := range reconkit_takeover.Fingerprints() {
+		out = append(out, TakeoverFingerprint{
+			Service:     fp.Service,
+			CNames:      []string{"." + fp.Suffix},
+			Fingerprint: fp.Body,
+			NXDomain:    fp.NXDomain,
+			HTTPCheck:   len(fp.Body) > 0,
+			Vulnerable:  true,
+		})
+	}
+	return out
 }
 
 // Scan 扫描单个域名

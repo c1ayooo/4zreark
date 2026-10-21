@@ -2,8 +2,28 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#0f172a" />
+    <meta name="description" content="4zreark 资产侦察与漏洞管理平台" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      // 在首屏样式加载前恢复主题，避免刷新时先闪一下浅色。
+      ;(() => {
+        try {
+          const raw = localStorage.getItem('app-storage')
+          const theme = raw ? JSON.parse(raw)?.state?.theme : 'light'
+          const dark =
+            theme === 'dark' ||
+            (theme === 'system' &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches)
+          document.documentElement.classList.toggle('dark', !!dark)
+        } catch {}
+      })()
+    </script>
     <title>4zreark - 资产侦察与漏洞管理平台</title>
   </head>
   <body>

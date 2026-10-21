@@ -1,0 +1,17 @@
+# 剧本：Elasticsearch 未授权访问（列索引 → 抽样 1 条证明）
+# 服务模板：elasticsearch_unauth / chain_es_to_all_data
+# 变量：es_base 必填（如 http://1.2.3.4:9200）
+# 红线：只抽 1 条文档证明数据可达（size=1），禁止全量拉取
+id: elasticsearch_unauth_check
+name: Elasticsearch 未授权检查
+vars_required: [es_base]
+refuted_status_in: [401, 403]
+steps:
+  - name: list_indices
+    request: { method: GET, url: "{{es_base}}/_cat/indices?v" }
+    expect: { status: 200, contains_any: ["health", "index"] }
+  - name: sample_one_doc
+    request: { method: GET, url: "{{es_base}}/_search?size=1" }
+    expect: { status: 200, contains_any: ["hits"] }
+limits: { max_requests: 3, per_step_timeout_ms: 8000 }
+note: 命中后只抽 1 条证明；业务索引清单与字段面按 chain_es_to_all_data 模板登记假设。

@@ -5,6 +5,9 @@ import (
 	"log"
 	"time"
 
+	"github.com/c1ayooo/4zreark/config"
+	"github.com/c1ayooo/4zreark/internal/recon/spacemap"
+	reconsub "github.com/c1ayooo/4zreark/internal/recon/subdomain"
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/scanner/subdomain"
 )
@@ -28,29 +31,62 @@ func (p *ScanPipeline) runSubdomainScan(targets []string) {
 		// 使用 map 去重
 		subdomainSet := make(map[string]bool)
 
-		// 步骤1.5: 使用第三方 API 收集子域名 (FOFA, Hunter, Quake, CrtSh)
-		if p.thirdpartyManager != nil {
-			log.Printf("[Pipeline] Step 1.5: Third-party API collection for %s", target)
-
-			// 获取配置的数据源
-			sources := p.task.Config.ThirdPartySources
-			if len(sources) == 0 {
-				sources = p.thirdpartyManager.GetConfiguredSources()
+		// 步骤1.5: 被动枚举 + 空间测绘（reconkit，不再调用旧 thirdparty 客户端）
+		passiveCtx, passiveCancel := context.WithTimeout(p.ctx, 5*time.Minute)
+		if res, err := reconsub.Enumerate(passiveCtx, target, reconsub.Options{
+			EnableCT:           config.CrtShEnabled(),
+			EnablePassiveDNS:   true,
+			EnableCNPassiveDNS: true,
+			Timeout:            45 * time.Second,
+			Limit:              500,
+		}); err != nil {
+			log.Printf("[Pipeline] Passive enumeration error for %s: %v", target, err)
+		} else if res != nil {
+			for _, hit := range res.Hits {
+				subdomainSet[hit.Name] = true
 			}
+			log.Printf("[Pipeline] Passive sources found %d subdomains for %s", len(res.Hits), target)
+		}
+		passiveCancel()
 
-			log.Printf("[Pipeline] Using third-party sources: %v", sources)
-
-			ctx2, cancel2 := context.WithTimeout(p.ctx, 5*time.Minute)
-			thirdpartyResult := p.thirdpartyManager.CollectSubdomains(ctx2, target, sources, 500)
-			cancel2()
-
-			if thirdpartyResult != nil {
-				for _, sub := range thirdpartyResult.Subdomains {
-					subdomainSet[sub] = true
+		keys := map[string]string{}
+		if c := config.Loaded(); c != nil {
+			keys = map[string]string{
+				"fofa": c.ThirdParty.Fofa.Key, "hunter": c.ThirdParty.Hunter.Key,
+				"quake": c.ThirdParty.Quake.Key, "zoomeye": c.ThirdParty.ZoomEye.Key,
+				"shodan": c.ThirdParty.Shodan.Key,
+			}
+		}
+		for k, v := range map[string]string{
+			"fofa": p.task.Config.FofaKey, "hunter": p.task.Config.HunterKey, "quake": p.task.Config.QuakeKey,
+		} {
+			if v != "" {
+				keys[k] = v
+			}
+		}
+		client := spacemap.NewClient()
+		client.KeyResolver = func(provider string) string { return keys[provider] }
+		for _, provider := range []string{"fofa", "hunter", "quake", "zoomeye", "shodan"} {
+			if !client.SourceConfigured(provider) {
+				continue
+			}
+			engineCtx, engineCancel := context.WithTimeout(p.ctx, 2*time.Minute)
+			results, _, _, err := client.SearchEngineAssets(engineCtx, provider, spacemap.DomainQuery(provider, target), 500, 1)
+			engineCancel()
+			if err != nil {
+				log.Printf("[Pipeline] Engine %s error: %v", provider, err)
+				continue
+			}
+			for _, r := range results {
+				host := r.Domain
+				if host == "" {
+					host = r.Host
 				}
-				log.Printf("[Pipeline] Third-party APIs found %d subdomains for %s (sources: %v)",
-					thirdpartyResult.TotalFound, target, thirdpartyResult.Sources)
+				if host != "" {
+					subdomainSet[host] = true
+				}
 			}
+			log.Printf("[Pipeline] Engine %s found %d assets for %s", provider, len(results), target)
 		}
 
 		// 添加原始域名到列表

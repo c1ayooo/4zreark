@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/service"
@@ -59,9 +60,21 @@ func (h *CruiseHandler) CreateCruise(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, "Cron expression is required")
 		return
 	}
-	if len(req.Targets) == 0 {
+	if req.ProjectID <= 0 {
+		utils.Error(c, http.StatusBadRequest, "Project is required")
+		return
+	}
+	source := strings.ToLower(strings.TrimSpace(req.TargetSource))
+	if source == "" {
+		source = models.CruiseTargetSourceStatic
+	}
+	if source != models.CruiseTargetSourceStatic && source != models.CruiseTargetSourceProject {
+		utils.Error(c, http.StatusBadRequest, "Invalid target source")
+		return
+	}
+	if source == models.CruiseTargetSourceStatic && len(req.Targets) == 0 {
 		log.Printf("[CruiseHandler] Targets is empty")
-		utils.Error(c, http.StatusBadRequest, "At least one target is required")
+		utils.Error(c, http.StatusBadRequest, "At least one target is required for static mode")
 		return
 	}
 
@@ -308,6 +321,29 @@ func (h *CruiseHandler) GetCruiseLogs(c *gin.Context) {
 		"page":     page,
 		"pageSize": pageSize,
 	})
+}
+
+// PreviewProjectTargets 预览项目整体资产会派生出的巡航目标
+// @Summary 预览项目派生的巡航目标
+// @Tags Cruise
+// @Param project_id query int true "项目ID"
+// @Param target_type query string false "目标类型" default(domain)
+// @Success 200 {object} utils.Response
+// @Router /api/v1/cruises/preview-targets [get]
+func (h *CruiseHandler) PreviewProjectTargets(c *gin.Context) {
+	projectID, err := strconv.ParseInt(c.Query("project_id"), 10, 64)
+	if err != nil || projectID <= 0 {
+		utils.Error(c, http.StatusBadRequest, "Invalid project_id")
+		return
+	}
+	targetType := c.DefaultQuery("target_type", "domain")
+
+	preview, err := h.cruiseService.PreviewProjectTargets(projectID, targetType)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, preview)
 }
 
 // GetCruiseStats 获取巡航统计

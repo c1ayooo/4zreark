@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -127,7 +128,7 @@ func (s *WeakPasswordScanner) BruteForceSSH(ctx context.Context, host string, po
 
 // trySSH attempts SSH authentication (simplified - would need golang.org/x/crypto/ssh)
 func (s *WeakPasswordScanner) trySSH(host string, port int, username, password string) bool {
-	address := fmt.Sprintf("%s:%d", host, port)
+	address := net.JoinHostPort(host, strconv.Itoa(port))
 	conn, err := net.DialTimeout("tcp", address, s.Timeout)
 	if err != nil {
 		return false
@@ -247,7 +248,7 @@ func (s *WeakPasswordScanner) BruteForceFTP(ctx context.Context, host string, po
 
 // tryFTP attempts FTP authentication
 func (s *WeakPasswordScanner) tryFTP(host string, port int, username, password string) bool {
-	address := fmt.Sprintf("%s:%d", host, port)
+	address := net.JoinHostPort(host, strconv.Itoa(port))
 	conn, err := net.DialTimeout("tcp", address, s.Timeout)
 	if err != nil {
 		return false
@@ -342,7 +343,7 @@ func (s *WeakPasswordScanner) BruteForceRedis(ctx context.Context, host string, 
 
 // tryRedis attempts Redis authentication
 func (s *WeakPasswordScanner) tryRedis(host string, port int, password string) bool {
-	address := fmt.Sprintf("%s:%d", host, port)
+	address := net.JoinHostPort(host, strconv.Itoa(port))
 	conn, err := net.DialTimeout("tcp", address, s.Timeout)
 	if err != nil {
 		return false

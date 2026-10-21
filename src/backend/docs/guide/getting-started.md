@@ -1,6 +1,6 @@
 # 快速开始
 
-本指南将帮助你快速部署和运行 Moon-Gazing-Tower。
+本指南将帮助你快速部署和运行 4zreark。
 
 ## 环境要求
 
@@ -17,7 +17,7 @@
 1. **克隆仓库**
    ```bash
    git clone https://github.com/SantaVp3/Moon-Gazing-Tower.git
-   cd Moon-Gazing-Tower
+   cd 4zreark
    ```
 
 2. **启动服务**

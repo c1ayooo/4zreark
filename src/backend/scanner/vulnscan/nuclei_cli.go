@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/c1ayooo/4zreark/scanner/core"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/c1ayooo/4zreark/scanner/core"
 )
 
 // NucleiCLIScanner 基于命令行的 Nuclei 扫描器
@@ -108,6 +110,23 @@ func (s *NucleiCLIScanner) findNucleiBinary() string {
 		return path
 	}
 
+	// 项目内运行时目录（nuclei runtime 自动下载到这里）
+	if st, err := os.Stat(filepath.Join("data", "nuclei", "bin", "nuclei")); err == nil && !st.IsDir() {
+		return filepath.Join("data", "nuclei", "bin", "nuclei")
+	}
+
+	// 常见安装位置（服务进程的 PATH 往往不含用户目录）
+	if home, err := os.UserHomeDir(); err == nil {
+		for _, p := range []string{
+			filepath.Join(home, ".local", "bin", "nuclei"),
+			filepath.Join(home, "go", "bin", "nuclei"),
+		} {
+			if st, err := os.Stat(p); err == nil && !st.IsDir() {
+				return p
+			}
+		}
+	}
+
 	return "nuclei"
 }
 
@@ -138,9 +157,11 @@ func (s *NucleiCLIScanner) SetNucleiBinary(path string) {
 // buildArgs 构建命令行参数
 func (s *NucleiCLIScanner) buildArgs(targets []string, config *NucleiScanConfig) []string {
 	args := []string{
-		"-json",
+		"-jsonl",
 		"-silent",
 		"-no-color",
+		"-duc", // 关闭更新检查，扫描时不能联网拉模板
+		"-ni",  // 关闭 interactsh，避免 OAST 模板挂住整轮
 	}
 
 	// 添加目标

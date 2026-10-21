@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/useragent"
 	"github.com/c1ayooo/4zreark/scanner/core"
 	"os"
 	"os/exec"
@@ -70,6 +71,27 @@ func NewKatanaScanner() *KatanaScanner {
 	}
 }
 
+// commonArgs 是单目标与列表模式共用的参数。
+// -fs rdn 把 katana 的爬取范围显式限制在注册域内，避免工具自身跟随站外链接；
+// 结果层还有一次 scope 过滤，这里是工具层的第一道边界。
+func (k *KatanaScanner) commonArgs(outputPath string) []string {
+	return []string{
+		"-d", fmt.Sprintf("%d", k.Depth),
+		"-c", fmt.Sprintf("%d", k.Concurrency),
+		"-timeout", fmt.Sprintf("%d", k.Timeout),
+		"-rl", fmt.Sprintf("%d", k.RateLimit),
+		"-fs", "rdn",
+		"-H", "User-Agent: " + useragent.Pick(),
+		"-silent",
+		"-jsonl", // 使用 JSON Lines 格式输出，包含状态码等信息
+		"-ob",    // 不带响应体：默认会在每行塞完整 body，单行轻易超 64KB
+		"-or",    // 不带原始请求/响应
+		"-jc",    // 解析 JS 里的接口，路由采集需要
+		"-kf", "all",
+		"-o", outputPath,
+	}
+}
+
 // IsAvailable 检查是否可用
 func (k *KatanaScanner) IsAvailable() bool {
 	return k.BinPath != "" && core.FileExists(k.BinPath)
@@ -102,17 +124,7 @@ func (k *KatanaScanner) Crawl(ctx context.Context, target string) (*KatanaResult
 	defer os.Remove(outputPath)
 
 	// 构建命令
-	// katana -u target -d depth -c concurrency -timeout timeout -rl rate -jsonl -o output
-	args := []string{
-		"-u", target,
-		"-d", fmt.Sprintf("%d", k.Depth),
-		"-c", fmt.Sprintf("%d", k.Concurrency),
-		"-timeout", fmt.Sprintf("%d", k.Timeout),
-		"-rl", fmt.Sprintf("%d", k.RateLimit),
-		"-silent",
-		"-jsonl", // 使用 JSON Lines 格式输出，包含状态码等信息
-		"-o", outputPath,
-	}
+	args := append([]string{"-u", target}, k.commonArgs(outputPath)...)
 
 	cmd := exec.CommandContext(ctx, k.BinPath, args...)
 
@@ -133,35 +145,37 @@ func (k *KatanaScanner) Crawl(ctx context.Context, target string) (*KatanaResult
 	}
 	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
+	// 逐行读而不是 bufio.Scanner：Scanner 单行上限 64KB，katana 的 jsonl 一行
+	// 可能几百 KB（带了 body），一旦超限就读断，后面所有 URL 全部丢失。
+	reader := bufio.NewReaderSize(file, 1<<20)
 	seen := make(map[string]bool)
 
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-
-		// 尝试解析 JSON 格式
-		var jsonOutput KatanaJSONOutput
-		if err := json.Unmarshal([]byte(line), &jsonOutput); err == nil {
-			url := jsonOutput.Request.Endpoint
-			if url != "" && !seen[url] {
-				seen[url] = true
-				result.URLs = append(result.URLs, KatanaCrawledURL{
-					URL:        url,
-					Method:     jsonOutput.Request.Method,
-					StatusCode: jsonOutput.Response.StatusCode,
-				})
-			}
-		} else {
-			// 纯文本格式（每行一个URL）
-			if !seen[line] {
+	for {
+		line, readErr := reader.ReadString('\n')
+		line = strings.TrimSpace(line)
+		if line != "" {
+			// 尝试解析 JSON 格式
+			var jsonOutput KatanaJSONOutput
+			if err := json.Unmarshal([]byte(line), &jsonOutput); err == nil {
+				url := jsonOutput.Request.Endpoint
+				if url != "" && !seen[url] {
+					seen[url] = true
+					result.URLs = append(result.URLs, KatanaCrawledURL{
+						URL:        url,
+						Method:     jsonOutput.Request.Method,
+						StatusCode: jsonOutput.Response.StatusCode,
+					})
+				}
+			} else if !seen[line] {
+				// 纯文本格式（每行一个URL）
 				seen[line] = true
 				result.URLs = append(result.URLs, KatanaCrawledURL{
 					URL: line,
 				})
 			}
+		}
+		if readErr != nil {
+			break
 		}
 	}
 
@@ -231,17 +245,7 @@ func (k *KatanaScanner) CrawlList(ctx context.Context, urls []string) (*KatanaRe
 	defer os.Remove(outputPath)
 
 	// 构建命令
-	// katana -list input.txt -d depth -c concurrency -timeout timeout -rl rate -jsonl -o output
-	args := []string{
-		"-list", inputPath,
-		"-d", fmt.Sprintf("%d", k.Depth),
-		"-c", fmt.Sprintf("%d", k.Concurrency),
-		"-timeout", fmt.Sprintf("%d", k.Timeout),
-		"-rl", fmt.Sprintf("%d", k.RateLimit),
-		"-silent",
-		"-jsonl",
-		"-o", outputPath,
-	}
+	args := append([]string{"-list", inputPath}, k.commonArgs(outputPath)...)
 
 	cmd := exec.CommandContext(ctx, k.BinPath, args...)
 

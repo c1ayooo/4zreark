@@ -22,6 +22,8 @@ const (
 	ResultTypeMonitor   ResultType = "monitor"   // 页面监控
 	ResultTypePort      ResultType = "port"      // 端口
 	ResultTypeService   ResultType = "service"   // 服务
+	ResultTypeExposure  ResultType = "exposure"  // 无凭据暴露面
+	ResultTypeClue      ResultType = "clue"      // 存量线索（Wayback/CDN 源站/云资源/SaaS）
 )
 
 // ScanResult 扫描结果基础结构

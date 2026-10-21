@@ -21,6 +21,12 @@ type NodeRepo interface {
 	Create(ctx context.Context, n *models.ScannerNode) error
 	GetByID(ctx context.Context, id string) (*models.ScannerNode, error)
 	GetByNodeID(ctx context.Context, nodeID string) (*models.ScannerNode, error)
+	// GetByTokenHash 用节点密钥的 SHA-256 查找未吊销节点。
+	GetByTokenHash(ctx context.Context, tokenHash string) (*models.ScannerNode, error)
+	// SetToken 写入新的密钥哈希并解除吊销。
+	SetToken(ctx context.Context, id, tokenHash string) error
+	// RevokeToken 清空密钥并把节点置为离线，之后的连接/请求都会 401。
+	RevokeToken(ctx context.Context, id string) error
 	List(ctx context.Context, nodeType, status string, page, pageSize int) ([]*models.ScannerNode, int64, error)
 	UpdateFields(ctx context.Context, id string, fields map[string]any) error
 	Delete(ctx context.Context, id string) error
@@ -28,6 +34,8 @@ type NodeRepo interface {
 	Available(ctx context.Context, nodeType string, capabilities []string) (*models.ScannerNode, error)
 	// Stats 返回按状态的数量与总数。
 	Stats(ctx context.Context) (map[string]int64, int64, error)
+	// UsageAverages 返还在线节点的平均 CPU / 内存使用率（百分数）。
+	UsageAverages(ctx context.Context) (cpuUsage, memoryUsage float64, err error)
 	// MarkOffline 把心跳早于 before 的在线节点标成离线，返回受影响行数。
 	MarkOffline(ctx context.Context, before time.Time) (int64, error)
 }
@@ -36,7 +44,7 @@ type nodeRepo struct{ r *Repo }
 
 const nodeColumns = `id, node_id, name, description, type, status, ip, port, version,
 	capabilities, max_tasks, current_tasks, system_info, last_heartbeat,
-	heartbeat_interval, tags, created_at, updated_at`
+	heartbeat_interval, tags, token_hash, revoked_at, created_at, updated_at`
 
 var nodeUpdatable = map[string]string{
 	"node_id":            "node_id",
@@ -84,12 +92,13 @@ func scanNode(row pgx.Row) (*models.ScannerNode, error) {
 		status   string
 		infoB    []byte
 		beat     *time.Time
+		revoked  *time.Time
 		created  time.Time
 		updated  time.Time
 	)
 	err := row.Scan(&hexID, &n.NodeID, &n.Name, &n.Description, &nodeType, &status, &n.IP, &n.Port,
 		&n.Version, &n.Capabilities, &n.MaxTasks, &n.CurrentTasks, &infoB, &beat,
-		&n.HeartbeatInterval, &n.Tags, &created, &updated)
+		&n.HeartbeatInterval, &n.Tags, &n.TokenHash, &revoked, &created, &updated)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -105,6 +114,7 @@ func scanNode(row pgx.Row) (*models.ScannerNode, error) {
 		_ = json.Unmarshal(infoB, &n.SystemInfo)
 	}
 	n.LastHeartbeat = timeFromPG(beat)
+	n.RevokedAt = revoked
 	n.CreatedAt = timeFromPG(&created)
 	n.UpdatedAt = timeFromPG(&updated)
 	return &n, nil
@@ -130,11 +140,11 @@ func (r *nodeRepo) Create(ctx context.Context, n *models.ScannerNode) error {
 
 	_, err = r.r.pool.Exec(ctx,
 		`insert into scanner_nodes (`+nodeColumns+`)
-		 values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+		 values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
 		n.ID.Hex(), n.NodeID, n.Name, n.Description, string(n.Type), string(n.Status), n.IP, n.Port,
 		n.Version, textArray(n.Capabilities), n.MaxTasks, n.CurrentTasks, info,
 		timeToPG(n.LastHeartbeat), n.HeartbeatInterval, textArray(n.Tags),
-		n.CreatedAt.UTC(), n.UpdatedAt.UTC())
+		n.TokenHash, timeToPGPtr(n.RevokedAt), n.CreatedAt.UTC(), n.UpdatedAt.UTC())
 	if isUniqueViolation(err) {
 		return ErrDuplicate
 	}
@@ -150,6 +160,53 @@ func (r *nodeRepo) GetByID(ctx context.Context, id string) (*models.ScannerNode,
 
 func (r *nodeRepo) GetByNodeID(ctx context.Context, nodeID string) (*models.ScannerNode, error) {
 	return scanNode(r.r.pool.QueryRow(ctx, `select `+nodeColumns+` from scanner_nodes where node_id = $1`, nodeID))
+}
+
+func (r *nodeRepo) GetByTokenHash(ctx context.Context, tokenHash string) (*models.ScannerNode, error) {
+	if tokenHash == "" {
+		return nil, ErrNotFound
+	}
+	return scanNode(r.r.pool.QueryRow(ctx,
+		`select `+nodeColumns+` from scanner_nodes
+		  where token_hash = $1 and token_hash <> '' and revoked_at is null`, tokenHash))
+}
+
+func (r *nodeRepo) SetToken(ctx context.Context, id, tokenHash string) error {
+	if _, err := idFromString(id); err != nil {
+		return ErrNotFound
+	}
+	tag, err := r.r.pool.Exec(ctx,
+		`update scanner_nodes
+		    set token_hash = $2, revoked_at = null, updated_at = now()
+		  where id = $1`, id, tokenHash)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return ErrDuplicate
+		}
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *nodeRepo) RevokeToken(ctx context.Context, id string) error {
+	if _, err := idFromString(id); err != nil {
+		return ErrNotFound
+	}
+	tag, err := r.r.pool.Exec(ctx,
+		`update scanner_nodes
+		    set token_hash = '', revoked_at = now(), status = 'offline',
+		        current_tasks = 0, updated_at = now()
+		  where id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (r *nodeRepo) List(ctx context.Context, nodeType, status string, page, pageSize int) ([]*models.ScannerNode, int64, error) {
@@ -287,10 +344,30 @@ func (r *nodeRepo) Stats(ctx context.Context) (map[string]int64, int64, error) {
 	return out, total, rows.Err()
 }
 
+func (r *nodeRepo) UsageAverages(ctx context.Context) (float64, float64, error) {
+	var cpu, mem *float64
+	err := r.r.pool.QueryRow(ctx,
+		`select avg((system_info->>'cpu_usage')::float8),
+		        avg((system_info->>'memory_usage')::float8)
+		   from scanner_nodes
+		  where status in ('online', 'busy')`).Scan(&cpu, &mem)
+	if err != nil {
+		return 0, 0, err
+	}
+	var c, m float64
+	if cpu != nil {
+		c = *cpu
+	}
+	if mem != nil {
+		m = *mem
+	}
+	return c, m, nil
+}
+
 func (r *nodeRepo) MarkOffline(ctx context.Context, before time.Time) (int64, error) {
 	tag, err := r.r.pool.Exec(ctx,
 		`update scanner_nodes set status = 'offline', updated_at = now()
-		  where status = 'online' and (last_heartbeat is null or last_heartbeat < $1)`,
+		  where status in ('online', 'busy') and (last_heartbeat is null or last_heartbeat < $1)`,
 		before.UTC())
 	if err != nil {
 		return 0, err

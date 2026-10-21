@@ -3,8 +3,12 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/vulnfingerprint"
+	"github.com/c1ayooo/4zreark/internal/vulnharvest"
+	"github.com/c1ayooo/4zreark/internal/vulnquality"
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/scanner/vulnscan"
@@ -41,6 +45,12 @@ func (s *VulnService) CreateVulnerability(vuln *models.Vulnerability) error {
 	}
 	vuln.Status = models.VulnStatusNew
 
+	// 低证据噪音降级：证书过期/缺安全头/版本泄露等不再按 high/critical 入库。
+	// confirmed=true 的漏洞不降级（真实证据优先于关键词判断）。
+	if downgraded, sev := vulnquality.ApplyNoiseSeverityCap(vuln.Name, vuln.Type, string(vuln.Severity), false); downgraded {
+		vuln.Severity = models.VulnSeverity(sev)
+	}
+
 	ctx, cancel := dbCtx()
 	defer cancel()
 	if err := store.Create(ctx, vuln); err != nil {
@@ -50,6 +60,33 @@ func (s *VulnService) CreateVulnerability(vuln *models.Vulnerability) error {
 		return errors.New("创建漏洞失败")
 	}
 	return nil
+}
+
+// FindDuplicates 对已有漏洞做指纹查重。只报告候选，不合并、不删除；
+// 是否合并由调用方（人工或 Agent）裁决——防漏报优先于防重复。
+func (s *VulnService) FindDuplicates(ctx context.Context, vuln *models.Vulnerability) ([]vulnfingerprint.Candidate, error) {
+	store, err := s.store()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := store.ListDedupCandidates(ctx, vuln.WorkspaceID.Hex())
+	if err != nil {
+		return nil, err
+	}
+	existing := make([]vulnfingerprint.Existing, 0, len(rows))
+	for _, row := range rows {
+		existing = append(existing, vulnfingerprint.Existing{
+			ID: row.ID, Title: row.Name, Type: row.Type, Target: row.Target,
+			ReproSteps: row.Evidence,
+		})
+	}
+	host := vulnfingerprint.NormalizeHost(vuln.Target)
+	endpoint := vulnfingerprint.Endpoint(vuln.Target, "", vuln.Evidence)
+	method := vuln.Method
+	if method == "" {
+		method = vulnfingerprint.MethodFromRepro(vuln.Evidence)
+	}
+	return vulnfingerprint.Match(existing, host, endpoint, method, vuln.Type, vuln.Name, vuln.Evidence), nil
 }
 
 // GetVulnByID 按 ID 取漏洞
@@ -115,7 +152,67 @@ func (s *VulnService) UpdateVulnerability(vulnID string, updates map[string]inte
 		}
 		return errors.New("更新漏洞失败")
 	}
+	if status, ok := updates["status"]; ok && strings.EqualFold(strings.TrimSpace(toString(status)), "confirmed") {
+		s.harvestPOC(ctx, vulnID)
+	}
 	return nil
+}
+
+// harvestPOC 把已确认漏洞沉淀为 POC 文档并 upsert 进 POC 库（默认不启用）。
+// best-effort：失败不影响漏洞状态更新。
+func (s *VulnService) harvestPOC(ctx context.Context, vulnID string) {
+	store, err := s.store()
+	if err != nil {
+		return
+	}
+	v, err := store.GetByID(ctx, vulnID)
+	if err != nil || v == nil {
+		return
+	}
+	title, content, ok := vulnharvest.Build(v)
+	if !ok {
+		return
+	}
+	pocs, err := s.pocs()
+	if err != nil {
+		return
+	}
+	// 已存在同名 POC 时只更新内容，保留人工设置的启停状态；
+	// 新建时显式 enabled=false（红线：自动沉淀不直接进入扫描链路）。
+	if existing, gerr := pocs.GetByName(ctx, title); gerr == nil && existing != nil {
+		_ = pocs.UpdateFields(ctx, existing.ID.Hex(), map[string]any{
+			"description": "自动沉淀自漏洞 " + vulnID,
+			"severity":    string(v.Severity),
+			"tags":        append([]string{"auto-harvest"}, v.Tags...),
+			"content":     content,
+			"source":      "auto-harvest",
+			"origin":      "import",
+		})
+		return
+	}
+	_ = pocs.Create(ctx, &models.POC{
+		Name:        title,
+		Description: "自动沉淀自漏洞 " + vulnID,
+		Author:      "4zreark",
+		Severity:    v.Severity,
+		Type:        "custom",
+		Tags:        append([]string{"auto-harvest"}, v.Tags...),
+		Content:     content,
+		Enabled:     false,
+		Source:      "auto-harvest",
+		Origin:      "import",
+	})
+}
+
+func toString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case models.VulnStatus:
+		return string(t)
+	default:
+		return ""
+	}
 }
 
 // DeleteVulnerability 删除漏洞
@@ -524,6 +621,11 @@ func (s *VulnService) BatchUpdateStatus(vulnIDs []string, status models.VulnStat
 			return errors.New("无有效的漏洞ID")
 		}
 		return errors.New("批量更新失败")
+	}
+	if status == models.VulnStatusConfirmed {
+		for _, id := range vulnIDs {
+			s.harvestPOC(ctx, id)
+		}
 	}
 	return nil
 }

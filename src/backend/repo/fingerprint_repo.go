@@ -54,9 +54,21 @@ type FpRule struct {
 	DSLVersion int           `json:"dsl_version"`
 	Condition  *Condition    `json:"condition_tree,omitempty"`
 	Legacy     []LegacyMatch `json:"rules,omitempty"`
-	Source     string        `json:"source"`
-	CreatedAt  time.Time     `json:"created_at"`
-	UpdatedAt  time.Time     `json:"updated_at"`
+	// Expression 是 reconkit 引擎使用的表达式（与条件树二选一）。
+	Expression string    `json:"expression,omitempty"`
+	Source     string    `json:"source"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// FpRuleFilter 是指纹库列表条件（名称模糊 + 分类/来源精确 + 启用态）。
+type FpRuleFilter struct {
+	Keyword  string
+	Category string
+	Source   string
+	Enabled  *bool
+	Page     int
+	PageSize int
 }
 
 // FpHit 是一条命中记录。
@@ -74,6 +86,8 @@ type FingerprintRepo interface {
 	ListRules(ctx context.Context, enabledOnly bool) ([]*FpRule, error)
 	// ListRulesFiltered 供旧的扁平规则列表使用（分类精确 + 名称模糊 + 分页）。
 	ListRulesFiltered(ctx context.Context, category, keyword string, page, pageSize int) ([]*FpRule, int64, error)
+	// ListRulesPage 供指纹库页面使用：覆盖 expression 规则，按名称/分类/来源/启用态过滤。
+	ListRulesPage(ctx context.Context, f FpRuleFilter) ([]*FpRule, int64, error)
 	GetRuleByName(ctx context.Context, name string) (*FpRule, error)
 	UpsertRule(ctx context.Context, r *FpRule) error
 	SetRuleEnabled(ctx context.Context, name string, enabled bool) error
@@ -95,7 +109,8 @@ type fingerprintRepo struct{ r *Repo }
 func (r *Repo) Fingerprints() FingerprintRepo { return &fingerprintRepo{r: r} }
 
 const fpRuleColumns = `id, name, category, version, enabled, dsl_version,
-	coalesce(condition_tree, 'null'::jsonb), coalesce(rules, '[]'::jsonb), source, created_at, updated_at`
+	coalesce(condition_tree, 'null'::jsonb), coalesce(rules, '[]'::jsonb),
+	coalesce(expression, ''), source, created_at, updated_at`
 
 func scanFpRule(row pgx.Row) (*FpRule, error) {
 	var (
@@ -104,7 +119,7 @@ func scanFpRule(row pgx.Row) (*FpRule, error) {
 		legacy []byte
 	)
 	if err := row.Scan(&r.ID, &r.Name, &r.Category, &r.Version, &r.Enabled, &r.DSLVersion,
-		&tree, &legacy, &r.Source, &r.CreatedAt, &r.UpdatedAt); err != nil {
+		&tree, &legacy, &r.Expression, &r.Source, &r.CreatedAt, &r.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -124,9 +139,13 @@ func scanFpRule(row pgx.Row) (*FpRule, error) {
 }
 
 func (r *fingerprintRepo) ListRules(ctx context.Context, enabledOnly bool) ([]*FpRule, error) {
-	q := `select ` + fpRuleColumns + ` from fingerprint_rules`
+	// 只取「治理域可执行」的规则：有条件树，或旧版扁平 rules 非空。
+	// T10 同步进来的 dddd/seed 规则只有 expression（供 reconkit 引擎用），
+	// 在这里没有求值器，排除掉可避免治理列表膨胀与每轮扫描空转。
+	q := `select ` + fpRuleColumns + ` from fingerprint_rules
+	      where (condition_tree is not null or rules <> '[]'::jsonb)`
 	if enabledOnly {
-		q += ` where enabled`
+		q += ` and enabled`
 	}
 	q += ` order by name`
 	rows, err := r.r.pool.Query(ctx, q)
@@ -171,9 +190,9 @@ func (r *fingerprintRepo) UpsertRule(ctx context.Context, rule *FpRule) error {
 	}
 	return r.r.pool.QueryRow(ctx, `
 		insert into fingerprint_rules (id, name, category, version, rules, condition_tree,
-		                               dsl_version, enabled, source)
+		                               dsl_version, enabled, expression, source)
 		values (coalesce(nullif($1,''), substr(replace(gen_random_uuid()::text, '-', ''), 1, 24)),
-	        $2, $3, $4, $5, $6, $7, $8, $9)
+	        $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		on conflict (name) do update
 		   set category = excluded.category,
 		       version = excluded.version,
@@ -181,9 +200,10 @@ func (r *fingerprintRepo) UpsertRule(ctx context.Context, rule *FpRule) error {
 		       condition_tree = excluded.condition_tree,
 		       dsl_version = excluded.dsl_version,
 		       enabled = excluded.enabled,
+		       expression = excluded.expression,
 		       updated_at = now()
 		returning id`, rule.ID, rule.Name, rule.Category, rule.Version, legacy, tree,
-		rule.DSLVersion, rule.Enabled, rule.Source).Scan(&rule.ID)
+		rule.DSLVersion, rule.Enabled, rule.Expression, rule.Source).Scan(&rule.ID)
 }
 
 func (r *fingerprintRepo) SetRuleEnabled(ctx context.Context, name string, enabled bool) error {
@@ -219,6 +239,38 @@ func (r *fingerprintRepo) ListRulesFiltered(ctx context.Context, category, keywo
 	}
 	defer rows.Close()
 
+	out := []*FpRule{}
+	for rows.Next() {
+		rule, err := scanFpRule(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, rule)
+	}
+	return out, total, rows.Err()
+}
+
+func (r *fingerprintRepo) ListRulesPage(ctx context.Context, f FpRuleFilter) ([]*FpRule, int64, error) {
+	page, pageSize := vulnPage(f.Page, f.PageSize)
+	kw := strings.TrimSpace(f.Keyword)
+	args := []any{f.Category, f.Source, f.Enabled, kw, likePattern(kw)}
+	const where = `where ($1 = '' or category = $1)
+	                 and ($2 = '' or source = $2)
+	                 and ($3::boolean is null or enabled = $3)
+	                 and ($4 = '' or name ilike $5)`
+
+	var total int64
+	if err := r.r.pool.QueryRow(ctx, `select count(*) from fingerprint_rules `+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := r.r.pool.Query(ctx,
+		`select `+fpRuleColumns+` from fingerprint_rules `+where+`
+		  order by name limit $6 offset $7`,
+		append(args, pageSize, (page-1)*pageSize)...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
 	out := []*FpRule{}
 	for rows.Next() {
 		rule, err := scanFpRule(rows)

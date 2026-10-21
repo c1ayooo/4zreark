@@ -27,6 +27,7 @@ func TestSprayScanner(t *testing.T) {
 
 // TestSprayScan 测试实际扫描
 func TestSprayScan(t *testing.T) {
+	requireLiveNetwork(t)
 	scanner := webscan.NewSprayScanner()
 
 	if !scanner.IsAvailable() {
@@ -64,6 +65,7 @@ func TestSprayScan(t *testing.T) {
 
 // TestSprayCheckOnly 测试仅检查模式
 func TestSprayCheckOnly(t *testing.T) {
+	requireLiveNetwork(t)
 	scanner := webscan.NewSprayScanner()
 
 	if !scanner.IsAvailable() {
@@ -87,6 +89,7 @@ func TestSprayCheckOnly(t *testing.T) {
 
 // TestSprayBatchScan 测试批量扫描
 func TestSprayBatchScan(t *testing.T) {
+	requireLiveNetwork(t)
 	scanner := webscan.NewSprayScanner()
 
 	if !scanner.IsAvailable() {

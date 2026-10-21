@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -121,12 +122,15 @@ func (h *VulnHandler) CreateVulnerability(c *gin.Context) {
 		vuln.TaskID = taskID
 	}
 
+	// 查重只报告不拦截：命中候选随创建结果一起返回，由人工裁决是否合并。
+	duplicates, _ := h.vulnService.FindDuplicates(c.Request.Context(), vuln)
+
 	if err := h.vulnService.CreateVulnerability(vuln); err != nil {
 		utils.Error(c, utils.ErrCodeInternalError, err.Error())
 		return
 	}
 
-	utils.SuccessWithMessage(c, "创建成功", gin.H{"id": vuln.ID.Hex()})
+	utils.SuccessWithMessage(c, "创建成功", gin.H{"id": vuln.ID.Hex(), "duplicates": duplicates})
 }
 
 // UpdateVulnerability updates a vulnerability
@@ -476,6 +480,63 @@ func (h *VulnHandler) GetVulnStatistics(c *gin.Context) {
 	utils.Success(c, stats)
 }
 
+// ReviewVuln 复核漏洞：流转状态 + 记录复核人/意见。
+// POST /api/vulnerabilities/:id/review
+func (h *VulnHandler) ReviewVuln(c *gin.Context) {
+	vulnID := c.Param("id")
+	username, _ := c.Get("username")
+
+	var req struct {
+		ToStatus models.VulnStatus `json:"to_status" binding:"required"`
+		Note     string            `json:"note"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "参数错误")
+		return
+	}
+
+	reviewer := ""
+	if username != nil {
+		reviewer, _ = username.(string)
+	}
+	vuln, review, err := h.vulnService.ReviewVuln(service.ReviewVulnInput{
+		VulnID:   vulnID,
+		ToStatus: req.ToStatus,
+		Note:     req.Note,
+		Reviewer: reviewer,
+	})
+	if err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "复核已记录", gin.H{
+		"vulnerability": vuln,
+		"review":        review,
+	})
+}
+
+// ListVulnReviews 复核历史（最早在前）。
+// GET /api/vulnerabilities/:id/reviews
+func (h *VulnHandler) ListVulnReviews(c *gin.Context) {
+	reviews, err := h.vulnService.ListVulnReviews(c.Param("id"))
+	if err != nil {
+		utils.Error(c, utils.ErrCodeInternalError, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"items": reviews, "total": len(reviews)})
+}
+
+// ReviewStats 复核分布统计。
+// GET /api/vulnerabilities/review-stats
+func (h *VulnHandler) ReviewStats(c *gin.Context) {
+	stats, err := h.vulnService.ReviewStats(c.Query("workspace_id"))
+	if err != nil {
+		utils.Error(c, utils.ErrCodeInternalError, err.Error())
+		return
+	}
+	utils.Success(c, stats)
+}
+
 // VerifyVulnerability 验证漏洞
 // POST /api/vulnerabilities/:id/verify
 func (h *VulnHandler) VerifyVulnerability(c *gin.Context) {
@@ -499,6 +560,7 @@ func (h *VulnHandler) BatchUpdateVulnStatus(c *gin.Context) {
 	var req struct {
 		VulnIDs []string          `json:"vuln_ids" binding:"required"`
 		Status  models.VulnStatus `json:"status" binding:"required"`
+		Note    string            `json:"note"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -506,12 +568,22 @@ func (h *VulnHandler) BatchUpdateVulnStatus(c *gin.Context) {
 		return
 	}
 
-	if err := h.vulnService.BatchUpdateStatus(req.VulnIDs, req.Status); err != nil {
-		utils.Error(c, utils.ErrCodeInternalError, err.Error())
+	// 批量也走复核通道：非法流转跳过、合法流转落复核记录，
+	// 不再是无痕迹的裸 UPDATE。
+	reviewer := ""
+	if username, ok := c.Get("username"); ok {
+		reviewer, _ = username.(string)
+	}
+	updated, skipped, err := h.vulnService.BatchReview(req.VulnIDs, req.Status, req.Note, reviewer)
+	if err != nil {
+		utils.BadRequest(c, err.Error())
 		return
 	}
-
-	utils.SuccessWithMessage(c, "更新成功", nil)
+	msg := fmt.Sprintf("复核成功 %d 条", updated)
+	if skipped > 0 {
+		msg += fmt.Sprintf("，跳过 %d 条（状态不允许流转或不存在）", skipped)
+	}
+	utils.SuccessWithMessage(c, msg, gin.H{"updated": updated, "skipped": skipped})
 }
 
 // GetVulnsByTask 获取任务的漏洞列表

@@ -3,6 +3,7 @@ import api, { ApiResponse } from '@/lib/api'
 export interface DashboardStats {
   assets: {
     total: number
+    active?: number
     byType: Record<string, number>
     recentlyAdded: number
   }
@@ -48,8 +49,25 @@ export const dashboardApi = {
   getStats: (): Promise<ApiResponse<DashboardStats>> =>
     api.get('/dashboard/stats'),
 
-  getRecentActivities: (limit?: number): Promise<ApiResponse<ActivityLog[]>> =>
-    api.get('/dashboard/activities', { params: { limit: limit || 10 } }),
+  getRecentActivities: async (limit?: number): Promise<ApiResponse<ActivityLog[]>> => {
+    const response = (await api.get('/dashboard/activities', {
+      params: { limit: limit || 10 },
+    })) as unknown as ApiResponse<Array<Record<string, unknown>>>
+    return {
+      ...response,
+      data: (response.data || []).map((a) => ({
+        id: String(a.id ?? ''),
+        type: String(a.module ?? 'system'),
+        action: String(a.action ?? ''),
+        target: String(a.target ?? ''),
+        targetId: '',
+        userId: '',
+        username: String(a.username ?? '系统'),
+        details: '',
+        createdAt: String(a.created_at ?? ''),
+      })),
+    }
+  },
 
   getTrends: (days?: number): Promise<ApiResponse<TrendData[]>> =>
     api.get('/dashboard/trends', { params: { days: days || 7 } }),

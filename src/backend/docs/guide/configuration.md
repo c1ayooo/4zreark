@@ -1,6 +1,6 @@
 # 配置指南
 
-Moon-Gazing-Tower 的后端配置主要通过 `config/config.yaml` 文件进行管理。
+4zreark 的后端配置主要通过 `config/config.yaml` 文件进行管理。
 
 ## 配置文件结构
 

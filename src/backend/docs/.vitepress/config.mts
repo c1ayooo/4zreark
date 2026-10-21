@@ -2,8 +2,8 @@ import { defineConfig } from 'vitepress'
 
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
-  title: "Moon Gazing Tower",
-  description: "一款现代化的自动化安全扫描平台",
+  title: "4zreark",
+  description: "资产侦察与漏洞管理平台",
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config
     nav: [
@@ -21,6 +21,7 @@ export default defineConfig({
           { text: '快速开始', link: '/guide/getting-started' },
           { text: '配置指南', link: '/guide/configuration' },
           { text: '扫描引擎', link: '/guide/scanners' },
+          { text: 'recon 能力包', link: '/guide/reconkit' },
           { text: 'Web 安全扫描', link: '/guide/web-security' },
           { text: '移动端与小程序', link: '/guide/mobile-assets' },
           { text: '自动巡航', link: '/guide/cruise' },
@@ -45,7 +46,7 @@ export default defineConfig({
 
     footer: {
       message: 'Released under the MIT License.',
-      copyright: 'Copyright © 2025-present Moon Gazing Tower'
+      copyright: 'Copyright © 2025-present 4zreark'
     }
   }
 })

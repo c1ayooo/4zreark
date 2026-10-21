@@ -99,7 +99,7 @@ func (n *EmailNotifier) buildHTMLBody(msg *NotifyMessage) string {
             </div>
         </div>
         <div class="footer">
-            Moon Gazing Tower 安全扫描平台
+            4zreark 资产侦察与漏洞管理平台
         </div>
     </div>
 </body>

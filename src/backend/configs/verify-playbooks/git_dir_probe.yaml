@@ -1,0 +1,15 @@
+# 剧本：.git 目录泄露探测（HEAD → config 两步确认）
+# 服务模板：vcs_git_dir / chain_git_to_creds
+# 判据：/.git/HEAD 含 refs/ 引用行 + /.git/config 含 [core] → 源码可还原（L3/L4）
+id: git_dir_probe
+name: .git 目录泄露探测
+refuted_status_in: [401, 403, 404]
+steps:
+  - name: git_head
+    request: { method: GET, url: "https://{{host}}/.git/HEAD" }
+    expect: { regex: "ref:\\s+refs/" }
+  - name: git_config
+    request: { method: GET, url: "https://{{host}}/.git/config" }
+    expect: { status: 200, contains: ["[core]"] }
+limits: { max_requests: 3, per_step_timeout_ms: 8000 }
+note: config 的 remote URL 可能带 token；完整还原（packfile）按 chain_git_to_creds 模板走工作区离线流程。

@@ -10,6 +10,7 @@ import (
 )
 
 func TestGoGoScanner(t *testing.T) {
+	requireLiveNetwork(t)
 	fmt.Println("=== GoGo 端口扫描测试 ===")
 
 	// 创建扫描器
@@ -56,6 +57,7 @@ func TestGoGoScanner(t *testing.T) {
 }
 
 func TestGoGoScannerScanOne(t *testing.T) {
+	requireLiveNetwork(t)
 	fmt.Println("=== GoGo ScanOne 测试 ===")
 
 	scanner := portscan.NewGoGoScanner()
@@ -82,6 +84,7 @@ func TestGoGoScannerScanOne(t *testing.T) {
 }
 
 func TestGoGoScannerTop1000(t *testing.T) {
+	requireLiveNetwork(t)
 	fmt.Println("=== GoGo Top1000 端口扫描测试 ===")
 
 	scanner := portscan.NewGoGoScanner()
@@ -115,6 +118,7 @@ func TestGoGoScannerTop1000(t *testing.T) {
 }
 
 func TestGoGoScannerCustomPorts(t *testing.T) {
+	requireLiveNetwork(t)
 	fmt.Println("=== GoGo 自定义端口扫描测试 ===")
 
 	scanner := portscan.NewGoGoScanner()
@@ -157,6 +161,7 @@ func TestGoGoScannerCustomPorts(t *testing.T) {
 }
 
 func TestGoGoScannerPortRange(t *testing.T) {
+	requireLiveNetwork(t)
 	fmt.Println("=== GoGo 端口范围扫描测试 ===")
 
 	scanner := portscan.NewGoGoScanner()
@@ -193,6 +198,7 @@ func TestGoGoScannerPortRange(t *testing.T) {
 }
 
 func TestGoGoScannerFullScan(t *testing.T) {
+	requireLiveNetwork(t)
 	fmt.Println("=== GoGo 全端口扫描测试 (仅扫描小范围模拟) ===")
 
 	scanner := portscan.NewGoGoScanner()
@@ -230,6 +236,7 @@ func TestGoGoScannerFullScan(t *testing.T) {
 }
 
 func TestGoGoScannerRealFullScan(t *testing.T) {
+	requireLiveNetwork(t)
 	fmt.Println("=== GoGo 真实全端口扫描测试 (1-65535) ===")
 
 	scanner := portscan.NewGoGoScanner()

@@ -136,7 +136,7 @@ CREATE TABLE IF NOT EXISTS site_endpoints (
     status_code  integer,
     verified_at  timestamptz,
     last_seen_at timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT endpoints_scheme_chk CHECK (scheme IN ('http','https')),
+    CONSTRAINT endpoints_scheme_chk CHECK (scheme IN ('http','https','tcp')),
     UNIQUE (site_id, scheme, port)
 );
 

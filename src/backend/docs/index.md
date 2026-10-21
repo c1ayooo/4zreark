@@ -2,9 +2,9 @@
 layout: home
 
 hero:
-  name: "Moon Gazing Tower"
-  text: "望月塔安全扫描系统"
-  tagline: 强大、模块化、可扩展的自动化安全扫描平台
+  name: "4zreark"
+  text: "4zreark 资产侦察与漏洞管理平台"
+  tagline: 资产侦察、漏洞管理与攻击面治理
   actions:
     - theme: brand
       text: 快速开始

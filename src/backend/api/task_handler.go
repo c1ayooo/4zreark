@@ -29,6 +29,7 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 	workspaceID := c.Query("workspace_id")
 	taskType := c.Query("type")
 	status := c.Query("status")
+	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
 
 	if page < 1 {
 		page = 1
@@ -37,7 +38,7 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 		pageSize = 10
 	}
 
-	tasks, total, err := h.taskService.ListTasks(workspaceID, taskType, status, page, pageSize)
+	tasks, total, err := h.taskService.ListTasks(workspaceID, taskType, status, projectID, page, pageSize)
 	if err != nil {
 		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
 		return
@@ -67,6 +68,7 @@ func (h *TaskHandler) CreateTask(c *gin.Context) {
 
 	var req struct {
 		WorkspaceID string            `json:"workspace_id"`
+		ProjectID   int64             `json:"project_id"`
 		Name        string            `json:"name" binding:"required"`
 		Description string            `json:"description"`
 		Type        models.TaskType   `json:"type" binding:"required"`
@@ -76,6 +78,7 @@ func (h *TaskHandler) CreateTask(c *gin.Context) {
 		IsScheduled bool              `json:"is_scheduled"`
 		CronExpr    string            `json:"cron_expr"`
 		Tags        []string          `json:"tags"`
+		NodeID      string            `json:"node_id"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -84,6 +87,7 @@ func (h *TaskHandler) CreateTask(c *gin.Context) {
 	}
 
 	task := &models.Task{
+		ProjectID:   req.ProjectID,
 		Name:        req.Name,
 		Description: req.Description,
 		Type:        req.Type,
@@ -93,6 +97,7 @@ func (h *TaskHandler) CreateTask(c *gin.Context) {
 		IsScheduled: req.IsScheduled,
 		CronExpr:    req.CronExpr,
 		Tags:        req.Tags,
+		NodeID:      req.NodeID,
 	}
 
 	if req.WorkspaceID != "" {
@@ -346,6 +351,38 @@ func (h *TaskHandler) CreateTaskTemplate(c *gin.Context) {
 	utils.SuccessWithMessage(c, "创建成功", gin.H{"id": template.ID.Hex()})
 }
 
+// UpdateTaskTemplate updates a task template
+// PUT /api/tasks/templates/:id
+func (h *TaskHandler) UpdateTaskTemplate(c *gin.Context) {
+	templateID := c.Param("id")
+
+	var req struct {
+		Name        string            `json:"name" binding:"required"`
+		Description string            `json:"description"`
+		Type        models.TaskType   `json:"type" binding:"required"`
+		Config      models.TaskConfig `json:"config"`
+		IsPublic    bool              `json:"is_public"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "参数错误")
+		return
+	}
+
+	if err := h.taskService.UpdateTaskTemplate(templateID, &models.TaskTemplate{
+		Name:        req.Name,
+		Description: req.Description,
+		Type:        req.Type,
+		Config:      req.Config,
+		IsPublic:    req.IsPublic,
+	}); err != nil {
+		utils.Error(c, utils.ErrCodeInternalError, err.Error())
+		return
+	}
+
+	utils.SuccessWithMessage(c, "更新成功", nil)
+}
+
 // DeleteTaskTemplate deletes a task template
 // DELETE /api/tasks/templates/:id
 func (h *TaskHandler) DeleteTaskTemplate(c *gin.Context) {
@@ -367,6 +404,7 @@ func (h *TaskHandler) CreateTaskFromTemplate(c *gin.Context) {
 	var req struct {
 		TemplateID  string   `json:"template_id" binding:"required"`
 		WorkspaceID string   `json:"workspace_id"`
+		ProjectID   int64    `json:"project_id" binding:"required"`
 		Name        string   `json:"name" binding:"required"`
 		Targets     []string `json:"targets" binding:"required"`
 		TargetType  string   `json:"target_type" binding:"required"`
@@ -384,6 +422,7 @@ func (h *TaskHandler) CreateTaskFromTemplate(c *gin.Context) {
 	}
 
 	task := &models.Task{
+		ProjectID:  req.ProjectID,
 		Name:       req.Name,
 		Type:       template.Type,
 		Targets:    req.Targets,

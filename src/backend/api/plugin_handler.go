@@ -1,7 +1,9 @@
 package api
 
 import (
+	"encoding/base64"
 	"strconv"
+	"strings"
 
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/service"
@@ -323,6 +325,85 @@ func (h *PluginHandler) CreateDictionary(c *gin.Context) {
 
 // DeleteDictionary deletes a dictionary
 // DELETE /api/dictionaries/:id
+// PreviewDictionary 两段式导入第一步：解析/去重/分段，不落库。
+// 支持 text / csv / tsv（text 字段）与 xlsx（content_base64，取第一列）。
+// POST /api/dictionaries/preview
+func (h *PluginHandler) PreviewDictionary(c *gin.Context) {
+	var body struct {
+		Name          string `json:"name" binding:"required"`
+		Type          string `json:"type" binding:"required"`
+		Text          string `json:"text"`
+		Format        string `json:"format"`
+		ContentBase64 string `json:"content_base64"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		utils.BadRequest(c, "参数错误：需要 name/type，以及 text 或 content_base64")
+		return
+	}
+	format := strings.ToLower(strings.TrimSpace(body.Format))
+	if format == "xlsx" || format == "xls" || body.ContentBase64 != "" {
+		if format == "xls" {
+			utils.BadRequest(c, "旧版 .xls 暂不支持，请另存为 .xlsx 或 CSV")
+			return
+		}
+		data, derr := base64.StdEncoding.DecodeString(body.ContentBase64)
+		if derr != nil {
+			utils.BadRequest(c, "content_base64 解码失败")
+			return
+		}
+		preview, err := h.pluginService.PreviewDictionaryXLSX(body.Name, body.Type, data)
+		if err != nil {
+			utils.BadRequest(c, err.Error())
+			return
+		}
+		utils.SuccessWithMessage(c, "预览已生成，15 分钟内有效", preview)
+		return
+	}
+	if strings.TrimSpace(body.Text) == "" {
+		utils.BadRequest(c, "text 或 content_base64 必填")
+		return
+	}
+	preview, err := h.pluginService.PreviewDictionaryFormatted(body.Name, body.Type, body.Text, body.Format)
+	if err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "预览已生成，15 分钟内有效", preview)
+}
+
+// ImportDictionary 两段式导入第二步：消费 token，创建字典并物化条目。
+// POST /api/dictionaries/import
+func (h *PluginHandler) ImportDictionary(c *gin.Context) {
+	var body struct {
+		Token string `json:"token" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		utils.BadRequest(c, "缺少预览 token")
+		return
+	}
+	dict, inserted, err := h.pluginService.ImportDictionary(c.Request.Context(), body.Token)
+	if err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "字典已导入", gin.H{"dictionary": dict, "entries": inserted})
+}
+
+// ListDictionaryEntries 分页读取词表条目（segment=0 表示全部段）。
+// GET /api/dictionaries/:id/entries?segment=&page=&page_size=
+func (h *PluginHandler) ListDictionaryEntries(c *gin.Context) {
+	segment, _ := strconv.Atoi(c.DefaultQuery("segment", "0"))
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
+
+	values, total, err := h.pluginService.ListDictionaryEntries(c.Request.Context(), c.Param("id"), segment, page, pageSize)
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.SuccessWithPagination(c, values, total, page, pageSize)
+}
+
 func (h *PluginHandler) DeleteDictionary(c *gin.Context) {
 	dictID := c.Param("id")
 

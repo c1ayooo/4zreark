@@ -1,5 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import {
   assetApi,
   AssetCatalog,
@@ -11,6 +13,9 @@ import {
   Site,
 } from '@/api/assets'
 import { Button } from '@/components/ui/button'
+import EmptyState from '@/components/common/EmptyState'
+import CreateTaskFromAssetsDialog from '@/components/tasks/CreateTaskFromAssetsDialog'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -28,7 +33,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useToast } from '@/components/ui/use-toast'
-import { RefreshCw, Search, Radar, MoreHorizontal, ShieldCheck, ShieldAlert, Lock } from 'lucide-react'
+import { RefreshCw, Search, Radar, MoreHorizontal, ShieldCheck, ShieldAlert, Lock, Globe, Rocket, X } from 'lucide-react'
 
 const stateLabel: Record<string, string> = {
   reachable: '可访问',
@@ -42,6 +47,41 @@ const stateVariant = (state: string): 'default' | 'secondary' | 'destructive' | 
   if (state === 'lost') return 'destructive'
   if (state === 'archived') return 'outline'
   return 'secondary'
+}
+
+const priorityLabel = (p: string) => (p ? p.toUpperCase() : '—')
+
+const priorityVariant = (p: string): 'default' | 'secondary' | 'destructive' | 'outline' => {
+  if (p === 'p0' || p === 'p1') return 'destructive'
+  if (p === 'p2') return 'default'
+  if (p === 'p3') return 'secondary'
+  return 'outline'
+}
+
+const riskTitle = (s: Site) => {
+  const base = `风险评分 ${s.risk_score}`
+  if (!s.risk_factors || s.risk_factors.length === 0) return base
+  return [
+    base,
+    ...s.risk_factors.map((f) => `${f.points > 0 ? '+' : ''}${f.points} ${f.detail}`),
+  ].join('\n')
+}
+
+// 站点 favicon。图标只在探测可达后采集，还没探过的站点显示占位。
+function SiteIcon({ sha256, alt }: { sha256: string; alt: string }) {
+  const [failed, setFailed] = useState(false)
+  if (!sha256 || failed) {
+    return <Globe className="text-muted-foreground size-4 shrink-0" />
+  }
+  return (
+    <img
+      src={assetApi.iconURL(sha256)}
+      alt={alt}
+      loading="lazy"
+      className="size-6 shrink-0 rounded-sm object-contain"
+      onError={() => setFailed(true)}
+    />
+  )
 }
 
 const verdictLabel: Record<string, string> = {
@@ -70,6 +110,13 @@ const VIEWS: { value: AssetView; label: string }[] = [
   { value: 'technologies', label: '技术栈' },
 ]
 
+type AssetSort = 'first_seen' | 'risk'
+
+const SORTS: { value: AssetSort; label: string }[] = [
+  { value: 'first_seen', label: '最近发现' },
+  { value: 'risk', label: '风险优先' },
+]
+
 /** 三段切换的小控件 */
 function Segmented<T extends string>({
   value,
@@ -93,7 +140,7 @@ function Segmented<T extends string>({
           className={
             'px-3 py-1.5 text-sm transition-colors ' +
             (value === o.value
-              ? 'bg-primary text-primary-foreground'
+              ? 'bg-foreground text-background'
               : 'bg-background hover:bg-muted disabled:opacity-50')
           }
         >
@@ -106,24 +153,68 @@ function Segmented<T extends string>({
 
 export default function AssetsPage() {
   const { toast } = useToast()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const [q, setQ] = useState('')
-  const [appliedQ, setAppliedQ] = useState('')
-  const [projectId, setProjectId] = useState<string>('0')
-  const [kind, setKind] = useState<AssetKind>('site')
-  const [catalog, setCatalog] = useState<AssetCatalog>('all')
-  const [view, setView] = useState<AssetView>('')
-  const [siteGroup, setSiteGroup] = useState(true)
-  const [page, setPage] = useState(1)
-  const pageSize = 20
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [q, setQ] = useState(() => searchParams.get('q') || '')
+  const [appliedQ, setAppliedQ] = useState(() => searchParams.get('q') || '')
+  const [projectId, setProjectId] = useState<string>(() => searchParams.get('project_id') || '0')
+  const [kind, setKind] = useState<AssetKind>(() => {
+    const v = searchParams.get('kind')
+    return v === 'domain' || v === 'ip' ? v : 'site'
+  })
+  const [catalog, setCatalog] = useState<AssetCatalog>(() => {
+    const v = searchParams.get('catalog')
+    return v === 'verified' || v === 'candidates' ? v : 'all'
+  })
+  const [view, setView] = useState<AssetView>(() => (searchParams.get('view') as AssetView) || '')
+  const [siteGroup, setSiteGroup] = useState(() => searchParams.get('site_group') !== '0')
+  const [sort, setSort] = useState<AssetSort>(() => (searchParams.get('sort') === 'risk' ? 'risk' : 'first_seen'))
+  const [page, setPage] = useState(() => Math.max(1, Number(searchParams.get('page')) || 1))
+  const [pageSize, setPageSize] = useState(() => {
+    const n = Number(searchParams.get('page_size'))
+    return [20, 50, 100, 200, 500].includes(n) ? n : 50
+  })
+
+  // 外部入口（顶部全局搜索、分享链接）改了 q：先同步进列表状态，再让下方回写。
+  const urlQ = searchParams.get('q') || ''
+  useEffect(() => {
+    if (urlQ !== appliedQ) {
+      setQ(urlQ)
+      setAppliedQ(urlQ)
+      setPage(1)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlQ])
+
+  // 所有筛选/分页同步进 URL：刷新、分享链接、浏览器后退都能还原完整视图。
+  useEffect(() => {
+    // URL 上的 q 还没被应用时先跳过回写，否则会把外部传来的查询条件立即冲掉。
+    if (urlQ !== appliedQ) return
+    const next = new URLSearchParams()
+    if (appliedQ) next.set('q', appliedQ)
+    if (projectId !== '0') next.set('project_id', projectId)
+    if (kind !== 'site') next.set('kind', kind)
+    if (catalog !== 'all') next.set('catalog', catalog)
+    if (view) next.set('view', view)
+    if (!siteGroup) next.set('site_group', '0')
+    if (sort === 'risk') next.set('sort', 'risk')
+    if (pageSize !== 50) next.set('page_size', String(pageSize))
+    if (page > 1) next.set('page', String(page))
+    setSearchParams(next, { replace: true })
+  }, [appliedQ, urlQ, projectId, kind, catalog, view, siteGroup, sort, pageSize, page, setSearchParams])
 
   const overview = useQuery({ queryKey: ['asset-overview'], queryFn: () => assetApi.overview() })
   const projects = useQuery({ queryKey: ['asset-projects'], queryFn: () => assetApi.projects() })
 
+  const hasFilters = !!appliedQ || kind !== 'site' || catalog !== 'all' || !!view
+
   const clusterView = view === 'icons' || view === 'technologies'
+  const riskSort = kind === 'site' && siteGroup && sort === 'risk'
   const list = useQuery({
-    queryKey: ['assets', page, appliedQ, projectId, kind, catalog, view, siteGroup],
+    queryKey: ['assets', page, pageSize, appliedQ, projectId, kind, catalog, view, siteGroup, riskSort],
     enabled: !clusterView,
+    staleTime: 30_000,
     queryFn: () =>
       assetApi.list({
         page,
@@ -134,12 +225,14 @@ export default function AssetsPage() {
         catalog,
         view,
         site_group: siteGroup ? 1 : 0,
+        sort: riskSort ? 'risk' : undefined,
       }),
   })
 
   const iconClusters = useQuery({
     queryKey: ['asset-icons', projectId, appliedQ, page],
     enabled: view === 'icons',
+    staleTime: 30_000,
     queryFn: () =>
       assetApi.icons({
         project_id: Number(projectId) || undefined,
@@ -152,6 +245,7 @@ export default function AssetsPage() {
   const techClusters = useQuery({
     queryKey: ['asset-technologies', projectId, appliedQ, page],
     enabled: view === 'technologies',
+    staleTime: 30_000,
     queryFn: () =>
       assetApi.technologies({
         project_id: Number(projectId) || undefined,
@@ -164,6 +258,12 @@ export default function AssetsPage() {
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['assets'] })
     queryClient.invalidateQueries({ queryKey: ['asset-overview'] })
+  }
+
+  // 项目筛选只改状态；URL 同步由上面的 useEffect 统一处理。
+  const changeProject = (v: string) => {
+    setProjectId(v)
+    setPage(1)
   }
 
   const probe = useMutation({
@@ -226,6 +326,7 @@ export default function AssetsPage() {
     setKind(v)
     setView('')
     setCatalog('all')
+    setSort('first_seen')
     setPage(1)
   }
   const changeView = (v: AssetView) => {
@@ -244,7 +345,130 @@ export default function AssetsPage() {
   const busy = probe.isPending || verify.isPending || protect.isPending
   const expanded = kind === 'site' && !siteGroup
 
-  const colCount = expanded ? 7 : kind === 'site' ? 7 : 5
+  const colCount = expanded ? 7 : kind === 'site' ? 10 : 5
+
+  // 资产多选：选中后可直接对这些资产派新任务（选资产 → 选类型 → 起任务）
+  const [selectedHosts, setSelectedHosts] = useState<Set<string>>(new Set())
+  const [createOpen, setCreateOpen] = useState(false)
+  const pageHosts = kind === 'site' && !expanded ? (items as Site[]).map((s) => s.value) : []
+  const allPageSelected = pageHosts.length > 0 && pageHosts.every((h) => selectedHosts.has(h))
+  const toggleHost = (host: string) => {
+    setSelectedHosts((prev) => {
+      const next = new Set(prev)
+      if (next.has(host)) next.delete(host)
+      else next.add(host)
+      return next
+    })
+  }
+  const togglePageHosts = () => {
+    setSelectedHosts((prev) => {
+      const next = new Set(prev)
+      if (allPageSelected) pageHosts.forEach((h) => next.delete(h))
+      else pageHosts.forEach((h) => next.add(h))
+      return next
+    })
+  }
+
+  // 大页（>=100 行）启用虚拟滚动：只渲染视口附近的站点行。
+  const virtualize = kind === 'site' && !expanded && pageSize >= 100 && !clusterView
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const rowVirtualizer = useVirtualizer({
+    count: virtualize ? (items as Site[]).length : 0,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 68,
+    overscan: 8,
+  })
+  const virtualItems = rowVirtualizer.getVirtualItems()
+
+  const renderSiteRow = (s: Site, virtualIndex?: number) => (
+    <TableRow
+      key={s.id}
+      ref={virtualIndex !== undefined ? rowVirtualizer.measureElement : undefined}
+      data-index={virtualIndex}
+      className="hover:bg-muted/40 cursor-pointer"
+      data-state={selectedHosts.has(s.value) ? 'selected' : undefined}
+      onClick={() => navigate(`/assets/${s.id}`)}
+    >
+      <TableCell onClick={(e) => e.stopPropagation()}>
+        <Checkbox
+          checked={selectedHosts.has(s.value)}
+          onCheckedChange={() => toggleHost(s.value)}
+          aria-label={`选择 ${s.value}`}
+        />
+      </TableCell>
+      <TableCell>
+        <div className="break-all text-sm font-medium">{s.value}</div>
+        <div className="mt-1 flex flex-wrap items-center gap-1">
+          {(s.endpoints ?? []).length > 0 ? (
+            (s.endpoints ?? []).map((e) => (
+              <span
+                key={`${e.scheme}-${e.port}`}
+                title={`最近状态码 ${e.status_code || '—'}`}
+                className="rounded-sm bg-muted px-1.5 py-0.5 text-[13px] text-muted-foreground"
+              >
+                {e.scheme}:{e.port}
+              </span>
+            ))
+          ) : (
+            <span className="text-[13px] text-muted-foreground">
+              {s.protocol}:{s.port}
+            </span>
+          )}
+          <span className="ml-1 text-[13px] text-muted-foreground">
+            {s.ip || '—'}
+            {s.technology_stack.length > 0 && ` · ${s.technology_stack.join(', ')}`}
+          </span>
+        </div>
+      </TableCell>
+      <TableCell className="hidden sm:table-cell">
+        <SiteIcon sha256={s.icon_sha256} alt={s.host} />
+      </TableCell>
+      <TableCell className="hidden text-right lg:table-cell">
+        <Badge variant={priorityVariant(s.priority)} title={riskTitle(s)}>
+          {priorityLabel(s.priority)} · {s.risk_score}
+        </Badge>
+      </TableCell>
+      <TableCell className="hidden text-right sm:table-cell">
+        <Badge variant={s.http_status >= 200 && s.http_status < 400 ? 'default' : 'secondary'}>
+          {s.http_status || '—'}
+        </Badge>
+      </TableCell>
+      <TableCell className="hidden max-w-[260px] truncate text-sm md:table-cell">{s.title || '—'}</TableCell>
+      <TableCell className="hidden text-sm lg:table-cell">{s.project_name}</TableCell>
+      <TableCell className="hidden text-right text-[13px] tabular-nums text-muted-foreground xl:table-cell">{s.first_seen?.slice(0, 10)}</TableCell>
+      <TableCell>
+        <Badge variant={stateVariant(s.state)}>{stateLabel[s.state] ?? s.state}</Badge>
+        {s.consecutive_failures > 0 && (
+          <span className="ml-1 text-[13px] text-destructive">×{s.consecutive_failures}</span>
+        )}
+      </TableCell>
+      <TableCell className="hidden sm:table-cell" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-1">
+          <Button size="sm" variant="outline" onClick={() => probe.mutate(s)} disabled={busy}>
+            <Radar className="mr-1 h-3.5 w-3.5" /> 探测
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="ghost" disabled={busy}>
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => verify.mutate({ site: s, reachable: true })}>
+                <ShieldCheck className="mr-2 h-3.5 w-3.5" /> 人工标记可达
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => verify.mutate({ site: s, reachable: false })}>
+                <ShieldAlert className="mr-2 h-3.5 w-3.5" /> 人工标记失败
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => protect.mutate(s)}>
+                <Lock className="mr-2 h-3.5 w-3.5" /> 保护 90 天
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </TableCell>
+    </TableRow>
+  )
 
   return (
     <div className="space-y-5 p-6">
@@ -258,7 +482,7 @@ export default function AssetsPage() {
             {(stats?.lost_count ?? 0).toLocaleString()} 个
           </p>
           {policy && (
-            <p className="mt-1 text-xs text-muted-foreground">
+            <p className="mt-1 text-[13px] text-muted-foreground">
               判定口径：连续失败 {policy.failure_threshold} 次转失联 · 重试间隔 {policy.first_hours}/
               {policy.second_hours}/{policy.repeat_hours} 小时 · 失联 {policy.cleanup_days} 天后可归档
               {policy.auto_cleanup ? '（自动）' : '（手动）'}
@@ -292,7 +516,7 @@ export default function AssetsPage() {
         >
           清空
         </Button>
-        <Select value={projectId} onValueChange={(v) => { setProjectId(v); setPage(1) }}>
+        <Select value={projectId} onValueChange={changeProject}>
           <SelectTrigger className="w-[200px]">
             <SelectValue placeholder="全部项目" />
           </SelectTrigger>
@@ -309,41 +533,62 @@ export default function AssetsPage() {
 
       <div className="flex flex-wrap items-center gap-4">
         <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">粒度</span>
+          <span className="text-[13px] text-muted-foreground">粒度</span>
           <Segmented value={kind} options={KINDS} onChange={changeKind} />
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">口径</span>
+          <span className="text-[13px] text-muted-foreground">口径</span>
           <Segmented value={catalog} options={CATALOGS} onChange={(v) => { setCatalog(v); setPage(1) }} />
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">视图</span>
+          <span className="text-[13px] text-muted-foreground">视图</span>
           <Segmented value={view} options={VIEWS} onChange={changeView} />
         </div>
         {kind === 'site' && (
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
+          <label className="flex items-center gap-2 text-[13px] text-muted-foreground">
+            <Checkbox
               checked={siteGroup}
-              onChange={(e) => { setSiteGroup(e.target.checked); setPage(1) }}
+              onCheckedChange={(v) => { setSiteGroup(v === true); setPage(1) }}
             />
             按站点归并
           </label>
         )}
+        {kind === 'site' && siteGroup && (
+          <div className="flex items-center gap-2">
+            <span className="text-[13px] text-muted-foreground">排序</span>
+            <Segmented value={sort} options={SORTS} onChange={(v) => { setSort(v); setPage(1) }} />
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <span className="text-[13px] text-muted-foreground">每页</span>
+          <Select
+            value={String(pageSize)}
+            onValueChange={(v) => { setPageSize(Number(v)); setPage(1) }}
+          >
+            <SelectTrigger className="h-8 w-[76px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {[20, 50, 100, 200, 500].map((n) => (
+                <SelectItem key={n} value={String(n)}>{n}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         <span className="ml-auto text-sm text-muted-foreground">
           共 {total.toLocaleString()} 条
         </span>
       </div>
 
       {appliedQ && (
-        <div className="rounded border bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground">
+        <div className="rounded border bg-muted/40 px-3 py-2 font-mono text-[13px] text-muted-foreground">
           q = {appliedQ}
         </div>
       )}
 
       {view === 'icons' && (
         <div className="space-y-3">
-          <p className="text-xs text-muted-foreground">
+          <p className="text-[13px] text-muted-foreground">
             共 {iconClusters.data?.data.total ?? 0} 组图标 · 点开站点看详情（图标按内容哈希去重）
           </p>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -355,10 +600,10 @@ export default function AssetsPage() {
                   className="h-10 w-10 rounded"
                   onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden' }}
                 />
-                <div className="w-full truncate text-center text-xs" title={ic.sample_title || ic.sample_host}>
+                <div className="w-full truncate text-center text-[13px]" title={ic.sample_title || ic.sample_host}>
                   {ic.sample_title || ic.sample_host}
                 </div>
-                <div className="text-[11px] text-muted-foreground">{ic.site_count} 个站点</div>
+                <div className="text-[13px] text-muted-foreground">{ic.site_count} 个站点</div>
               </div>
             ))}
             {!iconClusters.isLoading && (iconClusters.data?.data.items ?? []).length === 0 && (
@@ -372,7 +617,7 @@ export default function AssetsPage() {
 
       {view === 'technologies' && (
         <div className="space-y-3">
-          <p className="text-xs text-muted-foreground">
+          <p className="text-[13px] text-muted-foreground">
             共 {techClusters.data?.data.total ?? 0} 种技术 · 数字是命中的站点数
           </p>
           <div className="flex flex-wrap gap-2">
@@ -383,7 +628,7 @@ export default function AssetsPage() {
                 title={`${t.site_count} 个站点`}
               >
                 {t.name}
-                <span className="ml-1 text-xs text-muted-foreground">{t.site_count}</span>
+                <span className="ml-1 text-[13px] text-muted-foreground">{t.site_count}</span>
               </span>
             ))}
             {!techClusters.isLoading && (techClusters.data?.data.items ?? []).length === 0 && (
@@ -401,30 +646,53 @@ export default function AssetsPage() {
         </div>
       )}
 
+      {kind === 'site' && !expanded && selectedHosts.size > 0 && (
+        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+          <span className="text-muted-foreground">
+            已选 <span className="text-foreground font-medium">{selectedHosts.size}</span> 个资产
+          </span>
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Rocket className="mr-1 h-4 w-4" />
+            用选中资产创建任务
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setSelectedHosts(new Set())}>
+            <X className="mr-1 h-4 w-4" />
+            清空选择
+          </Button>
+        </div>
+      )}
+
       {!clusterView && (!data || data.view_supported !== false) && (
-        <div className="rounded-md border">
+        <div ref={scrollRef} className={virtualize ? 'max-h-[70vh] overflow-auto rounded-md border [&>div]:overflow-visible' : 'rounded-md border'}>
           <Table>
-            <TableHeader>
+            <TableHeader className={virtualize ? 'sticky top-0 z-10 bg-background' : undefined}>
               <TableRow>
+                {kind === 'site' && !expanded && (
+                  <TableHead className="w-10">
+                    <Checkbox checked={allPageSelected} onCheckedChange={togglePageHosts} aria-label="选中本页资产" />
+                  </TableHead>
+                )}
                 <TableHead>{expanded ? '入口' : kind === 'site' ? '资产' : kind === 'domain' ? '域名' : 'IP'}</TableHead>
-                {kind === 'site' && !expanded && <TableHead className="w-[90px]">状态码</TableHead>}
-                {kind === 'site' && !expanded && <TableHead>标题</TableHead>}
-                {kind === 'site' && !expanded && <TableHead className="w-[120px]">项目</TableHead>}
-                {kind === 'site' && !expanded && <TableHead className="w-[110px]">发现时间</TableHead>}
+                {kind === 'site' && !expanded && <TableHead className="hidden w-[52px] sm:table-cell">图标</TableHead>}
+                {kind === 'site' && !expanded && <TableHead className="hidden w-[90px] text-right lg:table-cell">风险</TableHead>}
+                {kind === 'site' && !expanded && <TableHead className="hidden w-[90px] text-right sm:table-cell">状态码</TableHead>}
+                {kind === 'site' && !expanded && <TableHead className="hidden md:table-cell">标题</TableHead>}
+                {kind === 'site' && !expanded && <TableHead className="hidden w-[120px] lg:table-cell">项目</TableHead>}
+                {kind === 'site' && !expanded && <TableHead className="hidden w-[110px] text-right xl:table-cell">发现时间</TableHead>}
                 {kind === 'site' && !expanded && <TableHead className="w-[110px]">连通</TableHead>}
                 {expanded && <TableHead className="w-[90px]">协议</TableHead>}
-                {expanded && <TableHead>标题</TableHead>}
-                {expanded && <TableHead className="w-[90px]">记录数</TableHead>}
+                {expanded && <TableHead className="hidden md:table-cell">标题</TableHead>}
+                {expanded && <TableHead className="w-[90px] text-right">记录数</TableHead>}
                 {expanded && <TableHead className="w-[110px]">连通</TableHead>}
-                {expanded && <TableHead className="w-[110px]">最近发现</TableHead>}
-                {expanded && <TableHead className="w-[120px]">项目</TableHead>}
-                {kind === 'domain' && <TableHead className="w-[100px]">站点数</TableHead>}
-                {kind === 'domain' && <TableHead className="w-[100px]">可达</TableHead>}
-                {kind === 'domain' && <TableHead className="w-[120px]">项目</TableHead>}
-                {kind === 'ip' && <TableHead className="w-[100px]">站点数</TableHead>}
-                {kind === 'ip' && <TableHead className="w-[100px]">域名数</TableHead>}
-                {kind === 'ip' && <TableHead className="w-[110px]">最近发现</TableHead>}
-                {kind === 'site' && !expanded && <TableHead className="w-[150px]">操作</TableHead>}
+                {expanded && <TableHead className="w-[110px] text-right">最近发现</TableHead>}
+                {expanded && <TableHead className="hidden w-[120px] lg:table-cell">项目</TableHead>}
+                {kind === 'domain' && <TableHead className="w-[100px] text-right">站点数</TableHead>}
+                {kind === 'domain' && <TableHead className="w-[100px] text-right">可达</TableHead>}
+                {kind === 'domain' && <TableHead className="hidden w-[120px] lg:table-cell">项目</TableHead>}
+                {kind === 'ip' && <TableHead className="w-[100px] text-right">站点数</TableHead>}
+                {kind === 'ip' && <TableHead className="w-[100px] text-right">域名数</TableHead>}
+                {kind === 'ip' && <TableHead className="w-[110px] text-right">最近发现</TableHead>}
+                {kind === 'site' && !expanded && <TableHead className="hidden w-[150px] sm:table-cell">操作</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -437,89 +705,89 @@ export default function AssetsPage() {
               )}
               {!list.isLoading && items.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={colCount} className="py-8 text-center text-muted-foreground">
-                    没有匹配的资产
+                  <TableCell colSpan={colCount} className="p-0">
+                    {hasFilters ? (
+                      <EmptyState
+                        icon={Search}
+                        title="没有匹配的资产"
+                        description="当前筛选条件下没有任何资产，资产本身可能已经存在。"
+                        hints={[
+                          appliedQ ? `关键词：${appliedQ}` : '关键词：无',
+                          `资产类型：${KINDS.find((k) => k.value === kind)?.label ?? '全部'}`,
+                          '清空筛选后能看到项目内的全部资产',
+                        ]}
+                        actions={
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setQ('')
+                              setAppliedQ('')
+                              setPage(1)
+                              setSearchParams({})
+                            }}
+                          >
+                            清空筛选
+                          </Button>
+                        }
+                      />
+                    ) : (
+                      <EmptyState
+                        icon={Radar}
+                        title="这个项目还没有资产"
+                        description="资产是任务跑出来的：子域、端口、URL 结果经入口探测与指纹识别后归并成站点。项目刚建、还没跑任务时为空是正常的。"
+                        hints={[
+                          '第一步：建一个侦察任务，选子域枚举 + 端口指纹，目标填主域名',
+                          '任务开始后，原始结果先落「本次任务资产」之外的明细页签',
+                          '归并成站点后，这里会按 host 列出入口、标题、技术栈与风险',
+                        ]}
+                        actions={
+                          <>
+                            <Button size="sm" onClick={() => navigate('/tasks/new' + (projectId && projectId !== '0' ? `?project_id=${projectId}` : ''))}>
+                              建第一个侦察任务
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={() => navigate('/tasks' + (projectId && projectId !== '0' ? `?project_id=${projectId}` : ''))}>
+                              看任务列表
+                            </Button>
+                          </>
+                        }
+                      />
+                    )}
                   </TableCell>
                 </TableRow>
               )}
 
-              {kind === 'site' && !expanded &&
-                (items as Site[]).map((s) => (
-                  <TableRow key={s.id}>
-                    <TableCell>
-                      <div className="font-mono text-sm">{s.value}</div>
-                      <div className="mt-1 flex flex-wrap items-center gap-1">
-                        {(s.endpoints ?? []).length > 0 ? (
-                          (s.endpoints ?? []).map((e) => (
-                            <span
-                              key={`${e.scheme}-${e.port}`}
-                              title={`最近状态码 ${e.status_code || '—'}`}
-                              className="rounded border px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
-                            >
-                              {e.scheme}:{e.port}
-                            </span>
-                          ))
-                        ) : (
-                          <span className="font-mono text-[11px] text-muted-foreground">
-                            {s.protocol}:{s.port}
-                          </span>
-                        )}
-                        <span className="ml-1 text-[11px] text-muted-foreground">
-                          {s.ip || '—'}
-                          {s.technology_stack.length > 0 && ` · ${s.technology_stack.join(', ')}`}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={s.http_status >= 200 && s.http_status < 400 ? 'default' : 'secondary'}>
-                        {s.http_status || '—'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="max-w-[260px] truncate text-sm">{s.title || '—'}</TableCell>
-                    <TableCell className="text-sm">{s.project_name}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{s.first_seen?.slice(0, 10)}</TableCell>
-                    <TableCell>
-                      <Badge variant={stateVariant(s.state)}>{stateLabel[s.state] ?? s.state}</Badge>
-                      {s.consecutive_failures > 0 && (
-                        <span className="ml-1 text-xs text-destructive">×{s.consecutive_failures}</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1">
-                        <Button size="sm" variant="outline" onClick={() => probe.mutate(s)} disabled={busy}>
-                          <Radar className="mr-1 h-3.5 w-3.5" /> 探测
-                        </Button>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button size="sm" variant="ghost" disabled={busy}>
-                              <MoreHorizontal className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => verify.mutate({ site: s, reachable: true })}>
-                              <ShieldCheck className="mr-2 h-3.5 w-3.5" /> 人工标记可达
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => verify.mutate({ site: s, reachable: false })}>
-                              <ShieldAlert className="mr-2 h-3.5 w-3.5" /> 人工标记失败
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => protect.mutate(s)}>
-                              <Lock className="mr-2 h-3.5 w-3.5" /> 保护 90 天
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
+              {kind === 'site' && !expanded && !virtualize &&
+                (items as Site[]).map((s) => renderSiteRow(s))}
+
+              {virtualize && virtualItems.length > 0 && (
+                <TableRow style={{ height: virtualItems[0].start }}>
+                  <TableCell colSpan={colCount} style={{ padding: 0 }} />
+                </TableRow>
+              )}
+              {virtualize && virtualItems.map((vi) => renderSiteRow((items as Site[])[vi.index], vi.index))}
+              {virtualize && virtualItems.length > 0 && (
+                <TableRow
+                  style={{
+                    height: Math.max(0, rowVirtualizer.getTotalSize() - virtualItems[virtualItems.length - 1].end),
+                  }}
+                >
+                  <TableCell colSpan={colCount} style={{ padding: 0 }} />
+                </TableRow>
+              )}
 
               {expanded &&
                 (items as EndpointRow[]).map((e) => (
-                  <TableRow key={`${e.host}-${e.port}-${e.protocol}`}>
+                  <TableRow
+                    key={`${e.host}-${e.port}-${e.protocol}`}
+                    className="hover:bg-muted/40 cursor-pointer"
+                    onClick={() => navigate(`/assets/${e.site_id}`)}
+                  >
                     <TableCell>
-                      <div className="font-mono text-sm">
+                      <div className="text-sm font-medium">
                         {e.host}:{e.port}
                       </div>
-                      <div className="text-[11px] text-muted-foreground">
+                      <div className="text-[13px] text-muted-foreground">
                         {e.value || '—'} · 站点 #{e.site_id} · 采集 {e.record_count} 次
                       </div>
                     </TableCell>
@@ -527,11 +795,11 @@ export default function AssetsPage() {
                       <Badge variant="outline">{e.protocol || '—'}</Badge>
                     </TableCell>
                     <TableCell className="max-w-[260px] truncate text-sm">{e.title || '—'}</TableCell>
-                    <TableCell className="text-sm">{e.record_count}</TableCell>
+                    <TableCell className="text-right text-sm tabular-nums">{e.record_count}</TableCell>
                     <TableCell>
                       <Badge variant={stateVariant(e.state)}>{stateLabel[e.state] ?? e.state}</Badge>
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{e.last_seen?.slice(0, 10)}</TableCell>
+                    <TableCell className="text-right text-[13px] tabular-nums text-muted-foreground">{e.last_seen?.slice(0, 10)}</TableCell>
                     <TableCell className="text-sm">{e.project_name}</TableCell>
                   </TableRow>
                 ))}
@@ -539,22 +807,22 @@ export default function AssetsPage() {
               {kind === 'domain' &&
                 (items as DomainRow[]).map((d) => (
                   <TableRow key={d.host}>
-                    <TableCell className="font-mono text-sm">{d.host}</TableCell>
-                    <TableCell className="text-sm">{d.site_count}</TableCell>
-                    <TableCell className="text-sm">{d.reachable_count}</TableCell>
+                    <TableCell className="text-sm font-medium">{d.host}</TableCell>
+                    <TableCell className="text-right text-sm tabular-nums">{d.site_count}</TableCell>
+                    <TableCell className="text-right text-sm tabular-nums">{d.reachable_count}</TableCell>
                     <TableCell className="text-sm">{d.project_name}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{d.last_seen?.slice(0, 10)}</TableCell>
+                    <TableCell className="text-right text-[13px] tabular-nums text-muted-foreground">{d.last_seen?.slice(0, 10)}</TableCell>
                   </TableRow>
                 ))}
 
               {kind === 'ip' &&
                 (items as IPRow[]).map((r) => (
                   <TableRow key={r.ip}>
-                    <TableCell className="font-mono text-sm">{r.ip}</TableCell>
-                    <TableCell className="text-sm">{r.site_count}</TableCell>
-                    <TableCell className="text-sm">{r.domain_count}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{r.last_seen?.slice(0, 10)}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">#{r.project_id}</TableCell>
+                    <TableCell className="text-sm font-medium">{r.ip}</TableCell>
+                    <TableCell className="text-right text-sm tabular-nums">{r.site_count}</TableCell>
+                    <TableCell className="text-right text-sm tabular-nums">{r.domain_count}</TableCell>
+                    <TableCell className="text-right text-[13px] tabular-nums text-muted-foreground">{r.last_seen?.slice(0, 10)}</TableCell>
+                    <TableCell className="text-[13px] text-muted-foreground">#{r.project_id}</TableCell>
                   </TableRow>
                 ))}
             </TableBody>
@@ -593,6 +861,13 @@ export default function AssetsPage() {
           </Button>
         </div>
       </div>
+
+      <CreateTaskFromAssetsDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        hosts={[...selectedHosts]}
+        projectId={projectId !== '0' ? projectId : undefined}
+      />
     </div>
   )
 }

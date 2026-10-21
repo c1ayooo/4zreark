@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { useToast } from '@/components/ui/use-toast'
-import { Moon, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 
 export default function LoginPage() {
   const navigate = useNavigate()
@@ -60,13 +60,15 @@ export default function LoginPage() {
   return (
     <Card className="w-full">
       <CardHeader className="space-y-1 text-center">
-        <div className="flex justify-center mb-4">
-          <div className="h-12 w-12 rounded-full bg-primary flex items-center justify-center">
-            <Moon className="h-6 w-6 text-primary-foreground" />
-          </div>
+        <div className="mb-4 flex justify-center">
+          <img
+            src="/icon-192x192.png"
+            alt="4zreark"
+            className="h-16 w-16 rounded-xl dark:invert"
+          />
         </div>
-        <CardTitle className="text-2xl">望月塔</CardTitle>
-        <CardDescription>安全扫描平台</CardDescription>
+        <CardTitle className="text-2xl font-bold tracking-tight">4zreark</CardTitle>
+        <CardDescription>资产侦察与漏洞管理平台</CardDescription>
       </CardHeader>
       <form onSubmit={handleSubmit}>
         <CardContent className="space-y-4">
@@ -105,7 +107,7 @@ export default function LoginPage() {
           </Button>
           <div className="pt-4 border-t text-center">
             <p className="text-xs text-muted-foreground">
-              作者: SantaVp3 · 团队: NoSafe
+              4zreark · c1ayoo
             </p>
           </div>
         </CardFooter>

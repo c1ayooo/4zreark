@@ -1,0 +1,33 @@
+Nginx:
+  dsl:
+    - "header('Server', 'nginx')"
+    - "contains('body', 'nginx')"
+  condition: or
+  category: web-server
+  tags: server, nginx
+
+WordPress:
+  dsl:
+    - "contains('body', 'wp-content')"
+    - "title('后台')"
+  condition: and
+  category: cms
+  tags: cms, php
+
+Spring:
+  dsl:
+    - "contains_all('header', 'spring', 'jsessionid')"
+  condition: or
+  category: framework
+
+LegacyJSP:
+  dsl:
+    - "regex('body', '[.]jsp')"
+    - "status(200)"
+  condition: and
+  category: legacy
+
+IconOnly:
+  dsl:
+    - "icon('/favicon.ico', '-12345')"
+  category: icon

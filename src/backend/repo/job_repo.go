@@ -20,7 +20,8 @@ const (
 
 // task_jobs.kind 区分两类作业：两者共用一张表，但消费方和语义完全不同。
 //
-//	scan：扫描任务作业，由 TaskExecutor 消费，task_id 指向 tasks 表记录；
+//	scan：旧扫描队列（历史兼容）。新扫描作业由 River 的 river_job 承载，
+//	      控制面启动时会把遗留 scan 作业迁移过去；
 //	job ：通用队列作业（/api/queue 那套接口），由 service/queue 消费，不关联 tasks。
 const (
 	JobKindScan = "scan"
@@ -60,7 +61,8 @@ type EnqueueJobInput struct {
 // JobRepo 是 task_jobs 的唯一数据入口。
 type JobRepo interface {
 	Enqueue(ctx context.Context, in EnqueueJobInput) (int64, error)
-	// ClaimScan 领取一条属于「可执行扫描任务」的作业：只要 tasks 状态是 pending/running。
+	// ClaimScan 是旧 task_jobs 扫描队列的领取入口。新扫描作业走 River，
+	// 这里只为历史兼容/测试保留。
 	ClaimScan(ctx context.Context, workerID string, lease time.Duration) (*Job, error)
 	// ClaimGeneric 领取一条通用队列作业。
 	ClaimGeneric(ctx context.Context, workerID string, lease time.Duration) (*Job, error)

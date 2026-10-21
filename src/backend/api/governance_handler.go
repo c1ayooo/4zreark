@@ -3,7 +3,9 @@ package api
 import (
 	"errors"
 	"strconv"
+	"strings"
 
+	reconkitfp "github.com/c1ayooo/4zreark/internal/recon/fingerprint"
 	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/service"
 	"github.com/c1ayooo/4zreark/utils"
@@ -14,20 +16,26 @@ import (
 // GovernanceHandler 是资产治理域「周期」部分的 HTTP 入口：
 // 种子 → 计划 → 批次 → 执行单元。
 type GovernanceHandler struct {
-	cycles  *service.CycleService
-	probes  *service.ProbeExecutor
-	verify  *service.VerifyService
-	cleanup *service.CleanupService
-	fp      *service.FingerprintService
+	cycles    *service.CycleService
+	probes    *service.ProbeExecutor
+	verify    *service.VerifyService
+	cleanup   *service.CleanupService
+	fp        *service.FingerprintService
+	fpSync    *service.FingerprintSyncService
+	relations *service.RelationService
+	replay    *service.ReplayService
 }
 
 func NewGovernanceHandler() *GovernanceHandler {
 	return &GovernanceHandler{
-		cycles:  service.NewCycleService(),
-		probes:  service.NewProbeExecutor(8),
-		verify:  service.NewVerifyService(),
-		cleanup: service.NewCleanupService(),
-		fp:      service.NewFingerprintService(),
+		cycles:    service.NewCycleService(),
+		probes:    service.NewProbeExecutor(8),
+		verify:    service.NewVerifyService(),
+		cleanup:   service.NewCleanupService(),
+		fp:        service.NewFingerprintService(),
+		fpSync:    service.NewFingerprintSyncService(),
+		relations: service.NewRelationService(),
+		replay:    service.NewReplayService(),
 	}
 }
 
@@ -53,6 +61,26 @@ func (h *GovernanceHandler) ListSeeds(c *gin.Context) {
 		return
 	}
 	utils.Success(c, list)
+}
+
+// PreviewSeed 预览种子展开结果：不落库、不向目标发请求。
+// POST /api/seeds/preview
+func (h *GovernanceHandler) PreviewSeed(c *gin.Context) {
+	var body service.SeedPreviewRequest
+	if err := c.ShouldBindJSON(&body); err != nil {
+		utils.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+	res, err := h.cycles.PreviewSeed(c.Request.Context(), body)
+	if err != nil {
+		if errors.Is(err, service.ErrSeedValidation) {
+			utils.BadRequest(c, err.Error())
+			return
+		}
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.Success(c, res)
 }
 
 // CreateSeed 新建种子。POST /api/seeds
@@ -172,8 +200,10 @@ func (h *GovernanceHandler) UpdatePlan(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Enabled       *bool `json:"enabled"`
-		IntervalHours *int  `json:"interval_hours"`
+		Enabled       *bool   `json:"enabled"`
+		IntervalHours *int    `json:"interval_hours"`
+		TriggerMode   *string `json:"trigger_mode"`
+		CooldownMin   *int    `json:"change_cooldown_minutes"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		utils.BadRequest(c, err.Error())
@@ -183,13 +213,26 @@ func (h *GovernanceHandler) UpdatePlan(c *gin.Context) {
 		utils.BadRequest(c, "interval_hours 需在 1..720")
 		return
 	}
+	if body.TriggerMode != nil {
+		switch strings.ToLower(strings.TrimSpace(*body.TriggerMode)) {
+		case repo.PlanTriggerInterval, repo.PlanTriggerOnChange, repo.PlanTriggerBoth:
+			*body.TriggerMode = strings.ToLower(strings.TrimSpace(*body.TriggerMode))
+		default:
+			utils.BadRequest(c, "trigger_mode 只支持 interval / on_change / both")
+			return
+		}
+	}
+	if body.CooldownMin != nil && (*body.CooldownMin < 1 || *body.CooldownMin > 1440) {
+		utils.BadRequest(c, "change_cooldown_minutes 需在 1..1440")
+		return
+	}
 
 	seeds, _, err := h.stores()
 	if err != nil {
 		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
 		return
 	}
-	if err := seeds.UpdatePlan(c.Request.Context(), id, body.Enabled, body.IntervalHours); err != nil {
+	if err := seeds.UpdatePlan(c.Request.Context(), id, body.Enabled, body.IntervalHours, body.TriggerMode, body.CooldownMin); err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			utils.NotFound(c, "计划不存在")
 			return
@@ -404,6 +447,87 @@ func (h *GovernanceHandler) ProtectAsset(c *gin.Context) {
 
 // --- 指纹规则（条件树） ---
 
+// SyncFingerprints 把内置规则集（dddd 快照 + 种子）幂等写入 PG。
+// POST /api/governance/fingerprints/sync
+func (h *GovernanceHandler) SyncFingerprints(c *gin.Context) {
+	stats, err := h.fpSync.SyncEmbedded(c.Request.Context())
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "指纹规则已同步", gin.H{"sources": stats})
+}
+
+// FingerprintSources 各来源最近一次同步状态。
+// GET /api/governance/fingerprints/sources
+func (h *GovernanceHandler) FingerprintSources(c *gin.Context) {
+	r := repo.Default()
+	if r == nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, "数据层未初始化")
+		return
+	}
+	meta, err := r.FingerprintSync().ListSources(c.Request.Context())
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	counts, err := r.FingerprintSync().CountBySource(c.Request.Context())
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"sources": meta, "counts": counts})
+}
+
+// --- 关系图谱（G5） ---
+
+// RebuildRelations 重建关系边与证据。POST /api/governance/relations/rebuild?project_id=
+func (h *GovernanceHandler) RebuildRelations(c *gin.Context) {
+	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
+	stats, err := h.relations.Rebuild(c.Request.Context(), projectID)
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "关系图谱已重建", gin.H{"by_type": stats})
+}
+
+// ListRelations 图谱查询。GET /api/relations?project_id=&type=&limit=
+func (h *GovernanceHandler) ListRelations(c *gin.Context) {
+	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "500"))
+	graph, err := h.relations.Graph(c.Request.Context(), projectID, c.Query("type"), limit)
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.Success(c, graph)
+}
+
+// RelationIndexStatus 索引状态。GET /api/relations/index-status?project_id=
+func (h *GovernanceHandler) RelationIndexStatus(c *gin.Context) {
+	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
+	status, err := h.relations.Status(c.Request.Context(), projectID)
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.Success(c, status)
+}
+
+// ReplayResults 把历史 scan_results 回放成 raw_records/sites。
+// POST /api/governance/replay-results?project_id=&limit=
+func (h *GovernanceHandler) ReplayResults(c *gin.Context) {
+	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "5000"))
+	stats, err := h.replay.Replay(c.Request.Context(), projectID, limit)
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "历史结果回放完成", stats)
+}
+
 func (h *GovernanceHandler) fpRepo() (repo.FingerprintRepo, error) {
 	if repo.Default() == nil {
 		return nil, errors.New("数据层未初始化")
@@ -418,6 +542,35 @@ func (h *GovernanceHandler) ListFingerprints(c *gin.Context) {
 		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
 		return
 	}
+	q := c.Query("q")
+	if q == "" {
+		q = c.Query("keyword")
+	}
+	category, source := c.Query("category"), c.Query("source")
+	var enabled *bool
+	switch c.Query("enabled") {
+	case "1", "true":
+		v := true
+		enabled = &v
+	case "0", "false":
+		v := false
+		enabled = &v
+	}
+	// 带分页/筛选参数走指纹库视图（覆盖 expression 规则）；否则保持旧的治理列表。
+	if c.Query("page") != "" || q != "" || category != "" || source != "" || enabled != nil {
+		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+		pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
+		rules, total, err := fp.ListRulesPage(c.Request.Context(), repo.FpRuleFilter{
+			Keyword: q, Category: category, Source: source, Enabled: enabled,
+			Page: page, PageSize: pageSize,
+		})
+		if err != nil {
+			utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+			return
+		}
+		utils.SuccessWithPagination(c, rules, total, page, pageSize)
+		return
+	}
 	rules, err := fp.ListRules(c.Request.Context(), false)
 	if err != nil {
 		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
@@ -430,19 +583,33 @@ func (h *GovernanceHandler) ListFingerprints(c *gin.Context) {
 // POST /api/governance/fingerprints
 func (h *GovernanceHandler) UpsertFingerprint(c *gin.Context) {
 	var body struct {
-		Name      string          `json:"name" binding:"required"`
-		Category  string          `json:"category"`
-		Version   string          `json:"version"`
-		Enabled   *bool           `json:"enabled"`
-		Condition *repo.Condition `json:"condition_tree"`
+		Name       string          `json:"name" binding:"required"`
+		Category   string          `json:"category"`
+		Version    string          `json:"version"`
+		Enabled    *bool           `json:"enabled"`
+		Condition  *repo.Condition `json:"condition_tree"`
+		Expression string          `json:"expression"`
+		Source     string          `json:"source"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		utils.BadRequest(c, err.Error())
 		return
 	}
-	if err := service.ValidateCondition(body.Condition); err != nil {
-		utils.BadRequest(c, err.Error())
+	if body.Condition == nil && body.Expression == "" {
+		utils.BadRequest(c, "condition_tree 与 expression 至少填一个")
 		return
+	}
+	if body.Condition != nil {
+		if err := service.ValidateCondition(body.Condition); err != nil {
+			utils.BadRequest(c, err.Error())
+			return
+		}
+	}
+	if body.Expression != "" {
+		if _, err := reconkitfp.ParseExpression(body.Expression); err != nil {
+			utils.BadRequest(c, "表达式解析失败: "+err.Error())
+			return
+		}
 	}
 	fp, err := h.fpRepo()
 	if err != nil {
@@ -453,9 +620,14 @@ func (h *GovernanceHandler) UpsertFingerprint(c *gin.Context) {
 	if body.Enabled != nil {
 		enabled = *body.Enabled
 	}
+	dslVersion := 2
+	if body.Condition == nil {
+		dslVersion = 1
+	}
 	rule := &repo.FpRule{
 		Name: body.Name, Category: body.Category, Version: body.Version,
-		Enabled: enabled, DSLVersion: 2, Condition: body.Condition,
+		Enabled: enabled, DSLVersion: dslVersion, Condition: body.Condition,
+		Expression: body.Expression, Source: body.Source,
 	}
 	if err := fp.UpsertRule(c.Request.Context(), rule); err != nil {
 		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
@@ -483,6 +655,33 @@ func (h *GovernanceHandler) DeleteFingerprint(c *gin.Context) {
 	}
 	h.fp.Invalidate()
 	utils.SuccessWithMessage(c, "已删除", nil)
+}
+
+// ToggleFingerprint 启停一条规则。POST /api/governance/fingerprints/:name/toggle
+func (h *GovernanceHandler) ToggleFingerprint(c *gin.Context) {
+	name := c.Param("name")
+	var body struct {
+		Enabled *bool `json:"enabled" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.Enabled == nil {
+		utils.BadRequest(c, "enabled 必填")
+		return
+	}
+	fp, err := h.fpRepo()
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	if err := fp.SetRuleEnabled(c.Request.Context(), name, *body.Enabled); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			utils.NotFound(c, "规则不存在")
+			return
+		}
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	h.fp.Invalidate()
+	utils.SuccessWithMessage(c, "已更新", gin.H{"name": name, "enabled": *body.Enabled})
 }
 
 // PreviewFingerprint 用样例响应试跑规则，不落库。

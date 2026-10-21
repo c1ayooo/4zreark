@@ -11,6 +11,10 @@ export interface NotifyConfig {
   // Feishu
   feishu_webhook?: string
   feishu_secret?: string
+  feishu_app_id?: string
+  feishu_app_secret?: string
+  feishu_receive_id_type?: string
+  feishu_receive_id?: string
   // WeChat
   wechat_webhook?: string
   // Email
@@ -40,6 +44,26 @@ export interface NotifyHistory {
   status: string
   error?: string
   timestamp: string
+}
+
+// 站内通知
+export interface InAppNotification {
+  id: number
+  level: string
+  title: string
+  content: string
+  source: string
+  extra?: Record<string, unknown>
+  read: boolean
+  created_at: string
+}
+
+export interface NotificationPage {
+  items: InAppNotification[]
+  total: number
+  unread: number
+  page: number
+  page_size: number
 }
 
 // 通知类型
@@ -85,6 +109,29 @@ export const notifyApi = {
   // 获取支持的通知类型
   getTypes: (): Promise<ApiResponse<NotifyType[]>> =>
     api.get('/notify/types'),
+
+  // 站内通知（铃铛）
+  listNotifications: (params?: {
+    page?: number
+    page_size?: number
+    unread_only?: boolean
+  }): Promise<ApiResponse<NotificationPage>> =>
+    api.get('/notify/notifications', {
+      params: {
+        page: params?.page,
+        page_size: params?.page_size,
+        unread_only: params?.unread_only ? '1' : undefined,
+      },
+    }),
+
+  unreadCount: (): Promise<ApiResponse<{ count: number }>> =>
+    api.get('/notify/notifications/unread-count'),
+
+  markRead: (id: number): Promise<ApiResponse<null>> =>
+    api.post(`/notify/notifications/${id}/read`),
+
+  markAllRead: (): Promise<ApiResponse<{ marked: number }>> =>
+    api.post('/notify/notifications/read-all'),
 }
 
 // 为了向后兼容，保留旧的类型别名

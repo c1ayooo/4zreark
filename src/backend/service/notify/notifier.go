@@ -11,6 +11,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -57,6 +60,12 @@ type NotifyConfig struct {
 	// Feishu
 	FeishuWebhook string `json:"feishu_webhook,omitempty"`
 	FeishuSecret  string `json:"feishu_secret,omitempty"`
+	// Feishu 企业应用机器人：app_id + app_secret 换 tenant_access_token，
+	// 再按 receive_id_type 发给群/个人。与 webhook 二选一。
+	FeishuAppID         string `json:"feishu_app_id,omitempty"`
+	FeishuAppSecret     string `json:"feishu_app_secret,omitempty"`
+	FeishuReceiveIDType string `json:"feishu_receive_id_type,omitempty"`
+	FeishuReceiveID     string `json:"feishu_receive_id,omitempty"`
 
 	// WeChat Work
 	WechatWebhook string `json:"wechat_webhook,omitempty"`
@@ -178,8 +187,21 @@ func (n *FeishuNotifier) Type() NotifyType {
 func (n *FeishuNotifier) Send(ctx context.Context, msg *NotifyMessage) error {
 	timestamp := time.Now().Unix()
 
-	// 构建消息
-	payload := map[string]interface{}{
+	payload := buildFeishuCard(msg)
+
+	// 如果有签名密钥
+	if n.secret != "" {
+		sign := n.sign(timestamp)
+		payload["timestamp"] = fmt.Sprintf("%d", timestamp)
+		payload["sign"] = sign
+	}
+
+	return n.post(ctx, n.webhook, payload)
+}
+
+// buildFeishuCard 组装飞书交互卡片；webhook 与企业应用机器人共用同一份内容。
+func buildFeishuCard(msg *NotifyMessage) map[string]interface{} {
+	return map[string]interface{}{
 		"msg_type": "interactive",
 		"card": map[string]interface{}{
 			"header": map[string]interface{}{
@@ -187,7 +209,7 @@ func (n *FeishuNotifier) Send(ctx context.Context, msg *NotifyMessage) error {
 					"tag":     "plain_text",
 					"content": msg.Title,
 				},
-				"template": n.getColorByLevel(msg.Level),
+				"template": feishuColorByLevel(msg.Level),
 			},
 			"elements": []map[string]interface{}{
 				{
@@ -228,18 +250,9 @@ func (n *FeishuNotifier) Send(ctx context.Context, msg *NotifyMessage) error {
 			},
 		},
 	}
-
-	// 如果有签名密钥
-	if n.secret != "" {
-		sign := n.sign(timestamp)
-		payload["timestamp"] = fmt.Sprintf("%d", timestamp)
-		payload["sign"] = sign
-	}
-
-	return n.post(ctx, n.webhook, payload)
 }
 
-func (n *FeishuNotifier) getColorByLevel(level NotifyLevel) string {
+func feishuColorByLevel(level NotifyLevel) string {
 	switch level {
 	case NotifyLevelCritical:
 		return "red"
@@ -277,6 +290,154 @@ func (n *FeishuNotifier) post(ctx context.Context, url string, payload interface
 	}
 
 	return nil
+}
+
+// FeishuAppNotifier 飞书企业应用机器人。
+// 先用 app_id/app_secret 换 tenant_access_token，再调用 im/v1/messages 发送；
+// 与群 webhook 的区别是不依赖群机器人地址，可发到群、用户或邮箱。
+type FeishuAppNotifier struct {
+	appID         string
+	appSecret     string
+	receiveIDType string
+	receiveID     string
+	baseURL       string
+	client        *http.Client
+
+	mu       sync.Mutex
+	token    string
+	tokenExp time.Time
+}
+
+var feishuReceiveIDTypes = map[string]bool{
+	"chat_id":  true,
+	"open_id":  true,
+	"user_id":  true,
+	"union_id": true,
+	"email":    true,
+}
+
+// NewFeishuAppNotifier 创建飞书企业应用机器人。
+func NewFeishuAppNotifier(appID, appSecret, receiveIDType, receiveID string) *FeishuAppNotifier {
+	base := strings.TrimRight(os.Getenv("ZRE_FEISHU_BASE_URL"), "/")
+	if base == "" {
+		base = "https://open.feishu.cn"
+	}
+	if receiveIDType == "" {
+		receiveIDType = "chat_id"
+	}
+	return &FeishuAppNotifier{
+		appID:         appID,
+		appSecret:     appSecret,
+		receiveIDType: receiveIDType,
+		receiveID:     receiveID,
+		baseURL:       base,
+		client:        &http.Client{Timeout: 10 * time.Second},
+	}
+}
+
+func (n *FeishuAppNotifier) Type() NotifyType {
+	return NotifyTypeFeishu
+}
+
+func (n *FeishuAppNotifier) Send(ctx context.Context, msg *NotifyMessage) error {
+	if strings.TrimSpace(n.receiveID) == "" {
+		return fmt.Errorf("飞书企业应用未配置接收者（receive_id）")
+	}
+	if !feishuReceiveIDTypes[n.receiveIDType] {
+		return fmt.Errorf("飞书 receive_id_type 不支持: %s", n.receiveIDType)
+	}
+	token, err := n.accessToken(ctx)
+	if err != nil {
+		return err
+	}
+
+	card := buildFeishuCard(msg)
+	content, err := json.Marshal(card["card"])
+	if err != nil {
+		return err
+	}
+	payload := map[string]interface{}{
+		"receive_id": n.receiveID,
+		"msg_type":   "interactive",
+		"content":    string(content),
+	}
+	body, _ := json.Marshal(payload)
+
+	endpoint := n.baseURL + "/open-apis/im/v1/messages?receive_id_type=" + url.QueryEscape(n.receiveIDType)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := n.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+
+	var out struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if err := json.Unmarshal(respBody, &out); err != nil {
+		return fmt.Errorf("飞书消息接口返回异常: status=%d body=%s", resp.StatusCode, string(respBody))
+	}
+	if resp.StatusCode != http.StatusOK || out.Code != 0 {
+		return fmt.Errorf("飞书消息发送失败: code=%d msg=%s", out.Code, out.Msg)
+	}
+	return nil
+}
+
+// accessToken 取 tenant_access_token，按 expire 缓存，提前 60 秒刷新。
+func (n *FeishuAppNotifier) accessToken(ctx context.Context) (string, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	if n.token != "" && time.Now().Before(n.tokenExp) {
+		return n.token, nil
+	}
+
+	payload, _ := json.Marshal(map[string]string{
+		"app_id":     n.appID,
+		"app_secret": n.appSecret,
+	})
+	endpoint := n.baseURL + "/open-apis/auth/v3/tenant_access_token/internal"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	resp, err := n.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+
+	var out struct {
+		Code   int    `json:"code"`
+		Msg    string `json:"msg"`
+		Token  string `json:"tenant_access_token"`
+		Expire int    `json:"expire"`
+	}
+	if err := json.Unmarshal(respBody, &out); err != nil {
+		return "", fmt.Errorf("飞书 token 接口返回异常: status=%d body=%s", resp.StatusCode, string(respBody))
+	}
+	if resp.StatusCode != http.StatusOK || out.Code != 0 || out.Token == "" {
+		return "", fmt.Errorf("飞书 token 获取失败: code=%d msg=%s", out.Code, out.Msg)
+	}
+
+	ttl := time.Duration(out.Expire) * time.Second
+	if ttl <= 0 {
+		ttl = time.Hour
+	}
+	n.token = out.Token
+	n.tokenExp = time.Now().Add(ttl - time.Minute)
+	return n.token, nil
 }
 
 // WechatNotifier 企业微信通知
@@ -362,7 +523,12 @@ func NewWebhookNotifier(webhookURL, method string, headers map[string]string) *W
 		url:     webhookURL,
 		method:  method,
 		headers: headers,
-		client:  &http.Client{Timeout: 10 * time.Second},
+		client: &http.Client{
+			Timeout: 10 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return fmt.Errorf("webhook 不允许重定向")
+			},
+		},
 	}
 }
 
@@ -371,6 +537,9 @@ func (n *WebhookNotifier) Type() NotifyType {
 }
 
 func (n *WebhookNotifier) Send(ctx context.Context, msg *NotifyMessage) error {
+	if err := validateWebhookURL(n.url); err != nil {
+		return err
+	}
 	payload := map[string]interface{}{
 		"level":     msg.Level,
 		"title":     msg.Title,
@@ -398,7 +567,7 @@ func (n *WebhookNotifier) Send(ctx context.Context, msg *NotifyMessage) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		return fmt.Errorf("webhook error: status=%d, body=%s", resp.StatusCode, string(respBody))
 	}
 

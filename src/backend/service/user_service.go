@@ -83,6 +83,54 @@ func (s *UserService) Register(username, password, email string) (*models.User, 
 	return user, nil
 }
 
+// RegisterWithCode 使用注册码注册：消费注册码与建用户在同一个事务里。
+func (s *UserService) RegisterWithCode(username, password, email, code string) (*models.User, error) {
+	ctx, cancel := dbCtx()
+	defer cancel()
+
+	ur, err := s.users()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := ur.GetByUsername(ctx, username); err == nil {
+		return nil, errors.New("用户名已存在")
+	} else if !errors.Is(err, repo.ErrNotFound) {
+		return nil, errors.New("查询用户失败")
+	}
+	exists, err := ur.ExistsByEmail(ctx, email)
+	if err != nil {
+		return nil, errors.New("查询邮箱失败")
+	}
+	if exists {
+		return nil, errors.New("邮箱已被注册")
+	}
+	hashedPassword, err := utils.HashPassword(password)
+	if err != nil {
+		return nil, errors.New("密码加密失败")
+	}
+	now := time.Now()
+	user := &models.User{
+		ID:        oid.NewObjectID(),
+		Username:  username,
+		Password:  hashedPassword,
+		Email:     email,
+		Status:    1,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	r := repo.Default()
+	if r == nil {
+		return nil, errors.New("数据层未初始化")
+	}
+	if err := r.RegistrationCodes().CreateUserWithCode(ctx, user, code); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil, errors.New("注册码无效、已用完或已过期")
+		}
+		return nil, err
+	}
+	return user, nil
+}
+
 // Login authenticates user and returns JWT token
 func (s *UserService) Login(username, password string) (string, *models.User, error) {
 	ctx, cancel := dbCtx()

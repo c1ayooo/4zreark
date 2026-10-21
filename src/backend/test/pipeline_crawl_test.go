@@ -38,6 +38,7 @@ func setupScanners() (*webscan.HttpxScanner, *webscan.KatanaScanner) {
 
 // TestSubdomainToKatanaPipeline 测试完整流程：子域名扫描 → URL收集 → Katana爬虫
 func TestSubdomainToKatanaPipeline(t *testing.T) {
+	requireLiveNetwork(t)
 	fmt.Println("=" + strings.Repeat("=", 59))
 	fmt.Println("  完整流程测试: 子域名扫描 → URL收集 → Katana批量爬虫")
 	fmt.Println("=" + strings.Repeat("=", 59))
@@ -181,6 +182,7 @@ func TestSubdomainToKatanaPipeline(t *testing.T) {
 
 // TestSubdomainToKatanaWithRealDomain 使用真实域名测试
 func TestSubdomainToKatanaWithRealDomain(t *testing.T) {
+	requireLiveNetwork(t)
 	fmt.Println("=" + strings.Repeat("=", 59))
 	fmt.Println("  真实域名测试: httpbin.org")
 	fmt.Println("=" + strings.Repeat("=", 59))

@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { taskApi } from '@/api/tasks'
+import { taskApi, type Task } from '@/api/tasks'
 import { resultApi, type SubdomainResult, type ResultType } from '@/api/results'
 import TaskTopologyView from '@/components/tasks/TaskTopologyView'
+import TaskAssetsView from '@/components/tasks/TaskAssetsView'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Progress } from '@/components/ui/progress'
 import { useToast } from '@/components/ui/use-toast'
@@ -32,6 +34,12 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -42,15 +50,17 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
-import { cn, formatDate, getStatusColor } from '@/lib/utils'
+import { cn, formatDate, getSeverityColor, getStatusColor } from '@/lib/utils'
 import { 
   ArrowLeft, Play, Pause, Square, Trash2, RotateCcw, 
   Search, Download, Settings, ChevronDown,
-  RefreshCw, ExternalLink, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight
+  RefreshCw, ExternalLink, Eye, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Pencil
 } from 'lucide-react'
 
-// Tab 配置 - ID 对应后端 ResultType
-const tabConfig = [
+// Tab 配置 - ID 对应后端 ResultType；assets 是任务级资产视图（非结果类型）
+type TaskTabId = ResultType | 'assets'
+const tabConfig: { id: TaskTabId; label: string }[] = [
+  { id: 'assets', label: '本次任务资产' },
   { id: 'subdomain', label: '子域名' },
   { id: 'takeover', label: '子域名接管' },
   { id: 'app', label: 'APP' },
@@ -71,10 +81,20 @@ export default function TaskDetailPage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
   
-  const [activeTab, setActiveTab] = useState<ResultType | null>(null)
+  const [activeTab, setActiveTab] = useState<TaskTabId | null>(null)
   const [search, setSearch] = useState('')
   const [searchInput, setSearchInput] = useState('')
   const [selectedRows, setSelectedRows] = useState<string[]>([])
+  const [selectedVuln, setSelectedVuln] = useState<Record<string, unknown> | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
+  const [editTargets, setEditTargets] = useState('')
+  const [editScanTypes, setEditScanTypes] = useState<string[]>([])
+  const [editPortMode, setEditPortMode] = useState('quick')
+  const [editRate, setEditRate] = useState('10')
+  const [editDelay, setEditDelay] = useState('500')
+  const [editSubDict, setEditSubDict] = useState('')
+  const [editDirDict, setEditDirDict] = useState('')
   const [projectFilter, setProjectFilter] = useState<string>('all')
   const [statusCodeFilter, setStatusCodeFilter] = useState<string>('all')
   const [page, setPage] = useState(1)
@@ -98,19 +118,12 @@ export default function TaskDetailPage() {
     enabled: !!id,
   })
 
-  // 自动选择第一个有数据的 Tab
+  // 默认落在「本次任务资产」：任务详情的第一诉求是这个任务产出了什么，而不是某个结果类型的原始流水。
+  // 其余页签按需点开，仍保留结果明细。
   const resultStats = statsData?.data || {}
   useEffect(() => {
     if (activeTab === null && statsData?.data) {
-      const stats = statsData.data as Record<string, number>
-      // 按 tabConfig 顺序找第一个有数据的 tab
-      const firstWithData = tabConfig.find(tab => (stats[tab.id] || 0) > 0)
-      if (firstWithData) {
-        setActiveTab(firstWithData.id as ResultType)
-      } else {
-        // 默认选择 domain
-        setActiveTab('domain')
-      }
+      setActiveTab('assets')
     }
   }, [statsData?.data, activeTab])
 
@@ -131,13 +144,13 @@ export default function TaskDetailPage() {
   const { data: resultsData, isLoading: resultsLoading } = useQuery({
     queryKey: ['task-results', id, currentTab, page, search, statusCodeFilter],
     queryFn: () => resultApi.getTaskResults(id!, { 
-      type: currentTab, 
+      type: currentTab as ResultType, 
       page, 
       pageSize,
       search,
       statusCode: currentTab === 'dirscan' ? statusCodeNum : undefined
     }),
-    enabled: !!id && !!activeTab && currentTab !== 'port',
+    enabled: !!id && !!activeTab && currentTab !== 'port' && currentTab !== 'assets' && currentTab !== 'topology',
   })
 
   // 任务操作 mutations
@@ -219,11 +232,82 @@ export default function TaskDetailPage() {
     : (resultsData?.data?.total || 0)
   const isResultsLoading = currentTab === 'port' ? portResultsLoading : resultsLoading
 
+  const updateConfigMutation = useMutation({
+    mutationFn: () => {
+      if (!task) return Promise.reject(new Error('任务不存在'))
+      const targets = editTargets
+        .split(/[\n,\s]+/)
+        .map((t) => t.trim())
+        .filter(Boolean)
+      if (targets.length === 0) return Promise.reject(new Error('至少保留一个目标'))
+      return taskApi.updateTask(id!, {
+        targets,
+        config: {
+          ...task.config,
+          scan_types: editScanTypes,
+          port_scan_mode: editPortMode,
+          rate_per_sec: Number(editRate) || 0,
+          target_delay_ms: Number(editDelay) || 0,
+          subdomain_dict_id: editSubDict.trim(),
+          dir_dict_id: editDirDict.trim(),
+        },
+      } as Partial<Task>)
+    },
+    onSuccess: () => {
+      toast({ title: '任务配置已更新' })
+      setEditOpen(false)
+      queryClient.invalidateQueries({ queryKey: ['task', id] })
+    },
+    onError: (e: unknown) =>
+      toast({
+        title: '保存失败',
+        description: (e as { message?: string })?.message,
+        variant: 'destructive',
+      }),
+  })
+
+  const openEditConfig = () => {
+    if (!task || task.status === 'running') return
+    setEditTargets(task.targets.join('\n'))
+    setEditScanTypes(task.config.scanTypes || [])
+    setEditPortMode(task.config.port_scan_mode || 'quick')
+    setEditRate(String(task.config.rate_per_sec || 10))
+    setEditDelay(String(task.config.target_delay_ms || 500))
+    setEditSubDict(task.config.subdomain_dict_id || '')
+    setEditDirDict(task.config.dir_dict_id || '')
+    setEditOpen(true)
+  }
+
   // 生成带统计数字的tabs
-  const tabs = tabConfig.map(tab => ({
-    ...tab,
-    count: resultStats[tab.id] || 0
-  }))
+  // 页签只保留「这个任务会产生的结果类型」：
+  // 全摆 12 个页签时，爬虫任务的「子域名 / 子域名接管」永远是空的，看着像数据丢了。
+  // 规则：本任务资产 / 资产星图常驻；其余命中实际结果数或任务 config.scan_types 才显示。
+  const tabScanSources: Record<string, string[]> = {
+    subdomain: ['subdomain'],
+    takeover: ['takeover'],
+    app: ['app'],
+    miniapp: ['miniapp'],
+    url: ['crawler', 'dir_scan', 'sensitive'],
+    crawler: ['crawler'],
+    sensitive: ['sensitive'],
+    dirscan: ['dir_scan'],
+    vuln: ['vuln_scan'],
+    port: ['port_scan', 'fingerprint', 'crawler', 'dir_scan', 'vuln_scan', 'sensitive'],
+    service: ['fingerprint', 'port_scan'],
+  }
+  const taskScanTypes: string[] = Array.isArray(task?.config?.scan_types) ? task.config.scan_types : []
+
+  const tabs = tabConfig
+    .filter((tab) => {
+      if (tab.id === 'assets' || tab.id === 'topology') return true
+      if ((resultStats[tab.id] || 0) > 0) return true
+      const sources = tabScanSources[tab.id] || []
+      return sources.some((src) => taskScanTypes.includes(src))
+    })
+    .map((tab) => ({
+      ...tab,
+      count: resultStats[tab.id] || 0,
+    }))
 
   // 条件渲染 - 在所有 hooks 之后
   if (isLoading) {
@@ -286,7 +370,7 @@ export default function TaskDetailPage() {
 
   const handleExport = async () => {
     try {
-      const data = await resultApi.exportResults(id!, currentTab)
+      const data = await resultApi.exportResults(id!, currentTab as ResultType)
       // 转换为CSV并下载
       const results = Array.isArray(data) ? data : (data as Record<string, unknown>)?.data || []
       const csvContent = convertToCSV(results as Record<string, unknown>[])
@@ -332,6 +416,8 @@ export default function TaskDetailPage() {
         return renderDirScanTable()
       case 'crawler':
         return renderCrawlerTable()
+      case 'vuln':
+        return renderVulnTable()
       default:
         return renderGenericTable()
     }
@@ -961,6 +1047,78 @@ export default function TaskDetailPage() {
     </Table>
   )
 
+  const renderVulnTable = () => (
+    <Table>
+      <TableHeader className="sticky top-0 bg-background">
+        <TableRow>
+          <TableHead className="w-12">
+            <Checkbox
+              checked={selectedRows.length === results.length && results.length > 0}
+              onCheckedChange={toggleSelectAll}
+            />
+          </TableHead>
+          <TableHead className="w-20">等级</TableHead>
+          <TableHead>漏洞名称</TableHead>
+          <TableHead>目标</TableHead>
+          <TableHead className="w-36">匹配位置</TableHead>
+          <TableHead className="w-28">来源</TableHead>
+          <TableHead className="w-24">操作</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {results.length === 0 ? (
+          <TableRow>
+            <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+              {resultsLoading ? '加载中...' : '暂无漏洞'}
+            </TableCell>
+          </TableRow>
+        ) : (
+          results.map((item: Record<string, unknown>) => {
+            const data = (item.data || item) as Record<string, unknown>
+            const severity = String(data.severity || '').toLowerCase()
+            return (
+              <TableRow key={item.id as string}>
+                <TableCell>
+                  <Checkbox
+                    checked={selectedRows.includes(item.id as string)}
+                    onCheckedChange={() => toggleSelectRow(item.id as string)}
+                  />
+                </TableCell>
+                <TableCell>
+                  <Badge className={cn(getSeverityColor(severity), 'text-xs')}>
+                    {severity || 'unknown'}
+                  </Badge>
+                </TableCell>
+                <TableCell className="max-w-[320px] truncate font-medium">
+                  {(data.name as string) || (data.vuln_id as string) || '-'}
+                </TableCell>
+                <TableCell className="max-w-[240px] truncate font-mono text-xs">
+                  {(data.target as string) || '-'}
+                </TableCell>
+                <TableCell className="max-w-[260px] truncate font-mono text-xs text-muted-foreground">
+                  {(data.matched_at as string) || '-'}
+                </TableCell>
+                <TableCell className="text-muted-foreground">
+                  {(item.source as string) || (data.source as string) || '-'}
+                </TableCell>
+                <TableCell>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelectedVuln(data)}
+                  >
+                    <Eye className="h-4 w-4 mr-1" />
+                    详情
+                  </Button>
+                </TableCell>
+              </TableRow>
+            )
+          })
+        )}
+      </TableBody>
+    </Table>
+  )
+
   const renderGenericTable = () => (
     <Table>
       <TableHeader className="sticky top-0 bg-background">
@@ -1023,13 +1181,19 @@ export default function TaskDetailPage() {
       <div className="border-b bg-background px-6 py-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" asChild>
+            <Button variant="ghost" size="icon" asChild aria-label="返回任务列表">
               <Link to="/tasks">
                 <ArrowLeft className="h-5 w-5" />
               </Link>
             </Button>
             <div>
               <h1 className="text-xl font-semibold">{task.name}</h1>
+              <div className="text-muted-foreground mt-1 max-w-[720px] truncate text-sm">
+                目标：
+                <span className="text-foreground font-mono">
+                  {task.targets.length > 0 ? task.targets.join(', ') : '—'}
+                </span>
+              </div>
               <div className="flex items-center gap-2 mt-1">
                 <Badge className={cn(getStatusColor(task.status), 'text-xs')}>
                   {getStatusLabel(task.status)}
@@ -1039,7 +1203,7 @@ export default function TaskDetailPage() {
                     {task.progress}%
                     {task.progressDetails?.current_module && (
                       <span className="text-muted-foreground ml-1">
-                        ({task.progressDetails.current_module})
+                        ({moduleLabels[task.progressDetails.current_module] || task.progressDetails.current_module})
                       </span>
                     )}
                   </span>
@@ -1047,6 +1211,12 @@ export default function TaskDetailPage() {
                 <span className="text-muted-foreground text-sm">{task.type}</span>
                 <span className="text-muted-foreground text-sm">•</span>
                 <span className="text-muted-foreground text-sm">{formatDate(task.createdAt)}</span>
+                {task.nodeId && (
+                  <>
+                    <span className="text-muted-foreground text-sm">•</span>
+                    <span className="text-muted-foreground text-sm">执行节点: {task.nodeId}</span>
+                  </>
+                )}
                 {task.status === 'running' && task.progressDetails?.elapsed_time && (
                   <>
                     <span className="text-muted-foreground text-sm">•</span>
@@ -1075,6 +1245,19 @@ export default function TaskDetailPage() {
           
           {/* 操作按钮 */}
           <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setSettingsOpen(true)}>
+              <Settings className="h-4 w-4 mr-2" />
+              任务设置
+            </Button>
+            <Button
+              variant="outline"
+              onClick={openEditConfig}
+              disabled={isOperating || task.status === 'running'}
+              title={task.status === 'running' ? '运行中不能改配置，请先点「停止」' : '修改任务目标与扫描配置'}
+            >
+              <Pencil className="h-4 w-4 mr-2" />
+              编辑配置
+            </Button>
             {task.status === 'pending' && (
               <Button onClick={() => startMutation.mutate()} disabled={isOperating}>
                 <Play className="h-4 w-4 mr-2" />
@@ -1111,7 +1294,7 @@ export default function TaskDetailPage() {
                 重试
               </Button>
             )}
-            {task.status === 'completed' && (
+            {(task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" disabled={isOperating}>
@@ -1124,7 +1307,7 @@ export default function TaskDetailPage() {
                     继续未完成部分
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => rescanMutation.mutate(true)}>
-                    从头开始扫描
+                    从头开始扫描（清空进度）
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -1186,8 +1369,8 @@ export default function TaskDetailPage() {
         </div>
       </div>
 
-      {/* Toolbar - 只在非资产星图tab时显示 */}
-      {currentTab !== 'topology' && (
+      {/* Toolbar - 资产星图与本任务资产自带工具条 */}
+      {currentTab !== 'topology' && currentTab !== 'assets' && (
       <div className="border-b bg-background px-6 py-3">
         <div className="flex items-center gap-3">
           <div className="relative flex-1 max-w-md">
@@ -1270,7 +1453,7 @@ export default function TaskDetailPage() {
               <DropdownMenuItem>批量标记</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button variant="ghost" size="icon">
+          <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title="任务设置">
             <Settings className="h-4 w-4" />
           </Button>
         </div>
@@ -1354,14 +1537,302 @@ export default function TaskDetailPage() {
       </div>
       )}
 
+      {/* 漏洞详情 */}
+      <Dialog open={selectedVuln !== null} onOpenChange={(o) => !o && setSelectedVuln(null)}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="pr-8">
+              {(selectedVuln?.name as string) || '漏洞详情'}
+            </DialogTitle>
+          </DialogHeader>
+          {selectedVuln && (
+            <div className="space-y-4 text-sm">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge className={cn(getSeverityColor(String(selectedVuln.severity || '')), 'text-xs')}>
+                  {String(selectedVuln.severity || 'unknown')}
+                </Badge>
+                {(selectedVuln.vuln_id as string) && (
+                  <Badge variant="outline" className="font-mono">
+                    {selectedVuln.vuln_id as string}
+                  </Badge>
+                )}
+                <span className="text-muted-foreground">
+                  {(selectedVuln.source as string) || 'nuclei'}
+                </span>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <DetailBlock label="目标" value={(selectedVuln.target as string) || '-'} />
+                <DetailBlock label="匹配位置" value={(selectedVuln.matched_at as string) || '-'} />
+              </div>
+
+              {(selectedVuln.description as string) && (
+                <Section title="漏洞描述">
+                  <p className="text-muted-foreground whitespace-pre-wrap">
+                    {selectedVuln.description as string}
+                  </p>
+                </Section>
+              )}
+
+              {(selectedVuln.evidence as string) && (
+                <Section title="证据">
+                  <pre className="bg-muted/50 rounded-md border p-3 font-mono text-xs whitespace-pre-wrap break-all">
+                    {selectedVuln.evidence as string}
+                  </pre>
+                </Section>
+              )}
+
+              {(selectedVuln.remediation as string) && (
+                <Section title="修复建议">
+                  <p className="text-muted-foreground whitespace-pre-wrap">
+                    {selectedVuln.remediation as string}
+                  </p>
+                </Section>
+              )}
+
+              {Array.isArray(selectedVuln.reference) && (selectedVuln.reference as string[]).length > 0 && (
+                <Section title="参考链接">
+                  <ul className="space-y-1">
+                    {(selectedVuln.reference as string[]).map((r) => (
+                      <li key={r}>
+                        <a
+                          href={r}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-primary break-all hover:underline"
+                        >
+                          {r}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </Section>
+              )}
+
+              <Section title="原始数据">
+                <pre className="bg-muted/50 max-h-56 overflow-auto rounded-md border p-3 font-mono text-xs whitespace-pre-wrap break-all">
+                  {JSON.stringify(selectedVuln, null, 2)}
+                </pre>
+              </Section>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* 编辑配置：运行中只读，先停止再改 */}
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>编辑任务配置</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">扫描目标（每行一个）</label>
+              <Textarea
+                rows={3}
+                className="font-mono text-xs"
+                value={editTargets}
+                onChange={(e) => setEditTargets(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">扫描类型</label>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {Object.entries(scanTypeLabels).map(([id, label]) => (
+                  <label key={id} className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-sm">
+                    <Checkbox
+                      checked={editScanTypes.includes(id)}
+                      onCheckedChange={(v) =>
+                        setEditScanTypes((prev) =>
+                          v === true ? [...prev, id] : prev.filter((x) => x !== id)
+                        )
+                      }
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="space-y-1">
+                <label className="text-sm font-medium">端口模式</label>
+                <Select value={editPortMode} onValueChange={setEditPortMode}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="quick">快速</SelectItem>
+                    <SelectItem value="top1000">Top 1000</SelectItem>
+                    <SelectItem value="full">全端口</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-sm font-medium">限速（req/s）</label>
+                <Input value={editRate} onChange={(e) => setEditRate(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <label className="text-sm font-medium">目标间隔（ms）</label>
+                <Input value={editDelay} onChange={(e) => setEditDelay(e.target.value)} />
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1">
+                <label className="text-sm font-medium">子域字典 ID（留空内置）</label>
+                <Input value={editSubDict} onChange={(e) => setEditSubDict(e.target.value)} placeholder="dictionaries.id" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-sm font-medium">目录字典 ID（留空 spray 默认）</label>
+                <Input value={editDirDict} onChange={(e) => setEditDirDict(e.target.value)} placeholder="dictionaries.id" />
+              </div>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setEditOpen(false)}>取消</Button>
+            <Button onClick={() => updateConfigMutation.mutate()} disabled={updateConfigMutation.isPending}>
+              保存配置
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Table Content or Topology View */}
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>任务设置</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2 text-sm">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <DetailBlock label="任务类型" value={task.type} />
+              <DetailBlock label="当前状态" value={getStatusLabel(task.status)} />
+              <DetailBlock label="归属项目" value={`#${task.projectId ?? 0}`} />
+              <DetailBlock label="执行节点" value={task.nodeId || '自动选择'} />
+              <DetailBlock
+                label="扫描节奏"
+                value={
+                  task.config.rate_per_sec
+                    ? `${task.config.rate_per_sec} req/s · 目标间隔 ${task.config.target_delay_ms ?? 0}ms`
+                    : '默认（未显式限速）'
+                }
+              />
+              <DetailBlock label="端口模式" value={task.config.port_scan_mode || 'quick'} />
+              <DetailBlock label="超时 / 并发" value={`${task.config.timeout ?? '默认'}s / ${task.config.concurrent ?? '默认'}`} />
+              <DetailBlock label="创建时间" value={formatDate(task.createdAt)} />
+            </div>
+
+            <div>
+              <div className="text-muted-foreground text-xs">扫描类型</div>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {(task.config.scanTypes || []).length === 0 ? (
+                  <span className="text-muted-foreground text-xs">未显式配置</span>
+                ) : (
+                  (task.config.scanTypes || []).map((t) => (
+                    <Badge key={t} variant="secondary" className="text-xs">
+                      {scanTypeLabels[t] || t}
+                    </Badge>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-muted-foreground text-xs">扫描目标</div>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {task.targets.map((t) => (
+                  <Badge key={t} variant="outline" className="font-mono text-xs">
+                    {t}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <DetailBlock
+                label="子域字典"
+                value={
+                  task.config.subdomain_dict_id
+                    ? `${task.config.subdomain_dict_id} · ${task.config.subdomain_wordlist?.length ?? 0} 条`
+                    : '内置词表'
+                }
+              />
+              <DetailBlock
+                label="目录字典"
+                value={
+                  task.config.dir_dict_id
+                    ? `${task.config.dir_dict_id} · ${task.config.dir_wordlist?.length ?? 0} 条`
+                    : 'spray 默认字典'
+                }
+              />
+            </div>
+
+            <details className="rounded-md border p-3">
+              <summary className="text-muted-foreground cursor-pointer text-xs">原始配置 JSON</summary>
+              <pre className="bg-muted/50 mt-2 max-h-64 overflow-auto rounded p-2 font-mono text-xs">
+                {JSON.stringify(task.config, null, 2)}
+              </pre>
+            </details>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <div className={currentTab === 'topology' ? 'flex-1 overflow-hidden' : 'flex-1 overflow-auto'}>
         {currentTab === 'topology' ? (
           <TaskTopologyView taskId={id!} taskName={task?.name || ''} />
+        ) : currentTab === 'assets' ? (
+          <TaskAssetsView
+            taskId={id!}
+            taskStatus={task?.status}
+            stats={resultStats as Record<string, number>}
+            onOpenTab={(tab) => setActiveTab(tab as TaskTabId)}
+            projectId={(task as any)?.project_id}
+          />
         ) : (
           renderTable()
         )}
       </div>
+    </div>
+  )
+}
+
+const scanTypeLabels: Record<string, string> = {
+  subdomain: '子域名枚举',
+  takeover: '子域名接管',
+  port_scan: '端口扫描',
+  fingerprint: '指纹识别',
+  crawler: 'Web 爬虫',
+  dir_scan: '目录扫描',
+  sensitive: '敏感信息',
+  vuln_scan: '漏洞扫描',
+  service_detect: '服务识别',
+  exposure_scan: '暴露面探测',
+  clue_hunt: '存量线索',
+}
+
+const moduleLabels: Record<string, string> = {
+  SubdomainScan: '子域名枚举',
+  DomainVerify: '域名验证',
+  PortPreparation: '端口预处理',
+  PortScan: '端口扫描',
+  Fingerprint: '指纹识别',
+  VulnScan: '漏洞扫描',
+  Crawler: 'Web 爬虫',
+  DirScan: '目录扫描',
+  Sensitive: '敏感信息',
+}
+
+function DetailBlock({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border px-3 py-2">
+      <div className="text-muted-foreground text-xs">{label}</div>
+      <div className="mt-0.5 break-all font-mono text-xs">{value}</div>
+    </div>
+  )
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <h4 className="text-sm font-semibold">{title}</h4>
+      {children}
     </div>
   )
 }

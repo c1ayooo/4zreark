@@ -1,0 +1,23 @@
+# 剧本：IDOR 越权差分探针（红线：只取 ≤2 条最早 id，禁遍历）
+# 服务模板：id_reference
+# 变量：idor_base（如 https://host/api）、idor_path（如 /orders）、auth_header（本会话登录态）
+# 判据：换 id=0 仍 200 → 可达他人对象面（L3 探针）；证实需结合响应内容差分后 record_vulnerability
+id: id_reference_diff
+name: IDOR 换 id 差分探针
+vars_required: [idor_base, idor_path, auth_header]
+refuted_status_in: [401, 403]
+steps:
+  - name: baseline_own_id
+    request:
+      method: GET
+      url: "{{idor_base}}{{idor_path}}/1"
+      headers: { Authorization: "{{auth_header}}" }
+    expect: { status_in: [200] }
+  - name: swap_to_zero_id
+    request:
+      method: GET
+      url: "{{idor_base}}{{idor_path}}/0"
+      headers: { Authorization: "{{auth_header}}" }
+    expect: { status: 200 }
+limits: { max_requests: 3, per_step_timeout_ms: 8000 }
+note: 只探 1→0 两个 id；confirmed 后必须人工核对响应内容确属他人对象，再按 L4 量化 record_vulnerability。

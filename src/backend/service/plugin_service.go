@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/c1ayooo/4zreark/models"
@@ -325,6 +326,16 @@ func (s *PluginService) DeleteDictionary(dictID string) error {
 	dict, err := store.GetByID(ctx, dictID)
 	if err == nil && dict.IsBuiltin {
 		return errors.New("不能删除内置字典")
+	}
+	// G4：被种子（计划通过种子引用）的字典不可删除
+	if err == nil {
+		refs, rerr := store.CountSeedRefs(ctx, dictID, dict.Name)
+		if rerr != nil {
+			return errors.New("检查字典引用失败")
+		}
+		if refs > 0 {
+			return fmt.Errorf("字典被 %d 个种子引用，不能删除（先删除相关计划/种子）", refs)
+		}
 	}
 	if err := store.Delete(ctx, dictID); err != nil {
 		if errors.Is(err, repo.ErrNotFound) {

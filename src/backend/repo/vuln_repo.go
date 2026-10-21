@@ -26,6 +26,16 @@ type VulnFilter struct {
 }
 
 // VulnTrendRow 是趋势聚合的一行：某天某等级的数量。
+// VulnDedupRow 是漏洞去重指纹用到的轻量投影。
+type VulnDedupRow struct {
+	ID       string
+	Name     string
+	Type     string
+	Target   string
+	Method   string
+	Evidence string
+}
+
 type VulnTrendRow struct {
 	Date     string
 	Severity string
@@ -42,6 +52,14 @@ type VulnRepo interface {
 	Delete(ctx context.Context, id string) error
 	BatchUpdateStatus(ctx context.Context, ids []string, status string) (int64, error)
 	ListByTaskID(ctx context.Context, taskID string, page, pageSize int) ([]*models.Vulnerability, int64, error)
+	// ListDedupCandidates 返回漏洞去重所需的轻量字段（不扫长文本）。
+	ListDedupCandidates(ctx context.Context, workspaceID string) ([]VulnDedupRow, error)
+
+	// 复核工作流（P2）：追加记录并回写漏洞上的复核字段。
+	AddReview(ctx context.Context, review *models.VulnReview, toStatus models.VulnStatus) error
+	AddReviewWithCount(ctx context.Context, review *models.VulnReview, toStatus models.VulnStatus, reviewCount int) error
+	ListReviews(ctx context.Context, vulnID string) ([]*models.VulnReview, error)
+	ReviewStats(ctx context.Context, workspaceID string) (*models.VulnReviewStats, error)
 
 	// SeverityCounts 返回按等级的数量与总数，供报告摘要使用。
 	SeverityCounts(ctx context.Context, workspaceID string) (map[string]int64, int64, error)
@@ -63,6 +81,7 @@ const vulnColumns = `id, workspace_id, asset_id, task_id,
 	method, payload, evidence, request, response,
 	cve_id, cnnvd_id, refs, poc_id, poc_name,
 	solution, fixed_at, fixed_by, last_verified_at,
+	reviewer, review_note, reviewed_at, review_count,
 	scanner, tags, created_at, updated_at`
 
 // vulnUpdatable 是允许落库的列白名单。请求体里的键不可信，只认这张表。
@@ -89,6 +108,10 @@ var vulnUpdatable = map[string]string{
 	"fixed_at":         "fixed_at",
 	"fixed_by":         "fixed_by",
 	"last_verified_at": "last_verified_at",
+	"reviewer":         "reviewer",
+	"review_note":      "review_note",
+	"reviewed_at":      "reviewed_at",
+	"review_count":     "review_count",
 	"scanner":          "scanner",
 	"tags":             "tags",
 }
@@ -128,6 +151,7 @@ func scanVuln(row pgx.Row) (*models.Vulnerability, error) {
 		pocID      *string
 		fixedAt    *time.Time
 		verifiedAt *time.Time
+		reviewedAt *time.Time
 		createdAt  time.Time
 		updatedAt  time.Time
 	)
@@ -137,6 +161,7 @@ func scanVuln(row pgx.Row) (*models.Vulnerability, error) {
 		&v.Method, &v.Payload, &v.Evidence, &v.Request, &v.Response,
 		&v.CVEID, &v.CNNVDID, &v.References, &pocID, &v.POCName,
 		&v.Solution, &fixedAt, &v.FixedBy, &verifiedAt,
+		&v.Reviewer, &v.ReviewNote, &reviewedAt, &v.ReviewCount,
 		&v.Scanner, &v.Tags, &createdAt, &updatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -170,6 +195,10 @@ func scanVuln(row pgx.Row) (*models.Vulnerability, error) {
 	v.Status = models.VulnStatus(status)
 	v.FixedAt = timeFromPG(fixedAt)
 	v.LastVerifiedAt = timeFromPG(verifiedAt)
+	if reviewedAt != nil {
+		at := timeFromPG(reviewedAt)
+		v.ReviewedAt = &at
+	}
 	v.CreatedAt = timeFromPG(&createdAt)
 	v.UpdatedAt = timeFromPG(&updatedAt)
 	return &v, nil
@@ -192,12 +221,13 @@ func (r *vulnRepo) Create(ctx context.Context, v *models.Vulnerability) error {
 	_, err := r.r.pool.Exec(ctx,
 		`insert into vulnerabilities (`+vulnColumns+`)
 		 values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
-		         $17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)`,
+		         $17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)`,
 		v.ID.Hex(), workspaceIDHex(v.WorkspaceID), objectIDOrNil(v.AssetID), objectIDOrNil(v.TaskID),
 		v.Name, v.Description, string(v.Severity), string(v.Status), v.Type, v.TemplateID, v.Target,
 		v.Method, v.Payload, v.Evidence, v.Request, v.Response,
 		textArray(v.CVEID), textArray(v.CNNVDID), textArray(v.References), objectIDOrNil(v.POCID), v.POCName,
 		v.Solution, timeToPG(v.FixedAt), v.FixedBy, timeToPG(v.LastVerifiedAt),
+		v.Reviewer, v.ReviewNote, timeToPGPtr(v.ReviewedAt), v.ReviewCount,
 		v.Scanner, textArray(v.Tags), v.CreatedAt.UTC(), v.UpdatedAt.UTC())
 	if isUniqueViolation(err) {
 		return ErrDuplicate
@@ -329,6 +359,28 @@ func (r *vulnRepo) BatchUpdateStatus(ctx context.Context, ids []string, status s
 		return 0, err
 	}
 	return tag.RowsAffected(), nil
+}
+
+func (r *vulnRepo) ListDedupCandidates(ctx context.Context, workspaceID string) ([]VulnDedupRow, error) {
+	rows, err := r.r.pool.Query(ctx, `
+		select id, name, type, target, method, evidence
+		from vulnerabilities
+		where ($1 = '' or workspace_id = $1)
+		order by created_at desc
+		limit 10000`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]VulnDedupRow, 0, 256)
+	for rows.Next() {
+		var d VulnDedupRow
+		if err := rows.Scan(&d.ID, &d.Name, &d.Type, &d.Target, &d.Method, &d.Evidence); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }
 
 func (r *vulnRepo) ListByTaskID(ctx context.Context, taskID string, page, pageSize int) ([]*models.Vulnerability, int64, error) {
@@ -484,18 +536,22 @@ func (r *vulnRepo) Trend(ctx context.Context, workspaceID string, days int) ([]V
 
 // ---------------------------------------------------------------- 报告
 
-const reportColumns = `id, workspace_id, name, type, summary, file_path, created_by, created_at`
+const reportColumns = `id, workspace_id, name, type, report_kind, template, delivery, summary, file_path, created_by, created_at`
 
 func scanReport(row pgx.Row) (*models.VulnReport, error) {
 	var (
 		rep      models.VulnReport
 		hexID    string
 		wsID     string
+		kindB    *string
+		tmplB    *string
+		delivery []byte
 		summary  []byte
 		createdB *string
 		created  time.Time
 	)
-	if err := row.Scan(&hexID, &wsID, &rep.Name, &rep.Type, &summary, &rep.FilePath, &createdB, &created); err != nil {
+	if err := row.Scan(&hexID, &wsID, &rep.Name, &rep.Type, &kindB, &tmplB, &delivery,
+		&summary, &rep.FilePath, &createdB, &created); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -513,6 +569,15 @@ func scanReport(row pgx.Row) (*models.VulnReport, error) {
 			return nil, err
 		}
 	}
+	if kindB != nil {
+		rep.ReportKind = *kindB
+	}
+	if tmplB != nil {
+		rep.Template = *tmplB
+	}
+	if len(delivery) > 0 && string(delivery) != "{}" {
+		_ = json.Unmarshal(delivery, &rep.Delivery)
+	}
 	if len(summary) > 0 && string(summary) != "{}" {
 		if err := json.Unmarshal(summary, &rep.Summary); err != nil {
 			return nil, err
@@ -529,13 +594,26 @@ func (r *vulnRepo) CreateReport(ctx context.Context, rep *models.VulnReport) err
 	if rep.CreatedAt.IsZero() {
 		rep.CreatedAt = time.Now()
 	}
+	kind := strings.TrimSpace(rep.ReportKind)
+	if kind == "" {
+		kind = "vuln"
+	}
+	tmpl := strings.TrimSpace(rep.Template)
+	if tmpl == "" {
+		tmpl = "standard"
+	}
 	summary, err := jsonb(rep.Summary)
 	if err != nil {
 		return err
 	}
+	delivery, err := jsonb(rep.Delivery)
+	if err != nil {
+		return err
+	}
 	_, err = r.r.pool.Exec(ctx,
-		`insert into vuln_reports (`+reportColumns+`) values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		`insert into vuln_reports (`+reportColumns+`) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
 		rep.ID.Hex(), workspaceIDHex(rep.WorkspaceID), rep.Name, rep.Type,
+		kind, tmpl, delivery,
 		summary, rep.FilePath, objectIDOrNil(rep.CreatedBy), rep.CreatedAt.UTC())
 	return err
 }

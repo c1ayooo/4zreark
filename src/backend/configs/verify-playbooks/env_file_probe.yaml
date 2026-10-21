@@ -1,0 +1,14 @@
+# 剧本：.env 环境变量文件暴露（证明可达）
+# 服务模板：env_file
+# 判据：/.env 200 且含凭据类键名 → L4 面（DB 口令/云 AK/SK 泄露）
+id: env_file_probe
+name: .env 文件暴露探测
+refuted_status_in: [403, 404]
+steps:
+  - name: env_file
+    request: { method: GET, url: "https://{{host}}/.env" }
+    expect:
+      status: 200
+      contains_any: ["PASSWORD", "SECRET", "API_KEY", "TOKEN", "APP_KEY"]
+limits: { max_requests: 2, per_step_timeout_ms: 8000 }
+note: 命中后提取到的云 AK/SK 走 cloud_key_verify（只读）；DB 口令走 save_db_credential + db_query 只读验证。

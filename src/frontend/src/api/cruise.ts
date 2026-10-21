@@ -2,10 +2,13 @@ import api, { PaginationParams } from '@/lib/api'
 import { TaskConfig } from './tasks'
 
 export type CruiseStatus = 'enabled' | 'disabled' | 'running'
+export type CruiseTargetSource = 'static' | 'project'
 
 export interface CruiseTask {
   id: string
   workspace_id?: string
+  project_id: number
+  target_source: CruiseTargetSource
   name: string
   description: string
   status: CruiseStatus
@@ -48,6 +51,8 @@ export interface CruiseLog {
 export interface CruiseCreateRequest {
   name: string
   description?: string
+  project_id: number
+  target_source: CruiseTargetSource
   cron_expr: string
   timezone?: string
   targets: string[]
@@ -63,6 +68,8 @@ export interface CruiseCreateRequest {
 export interface CruiseUpdateRequest {
   name?: string
   description?: string
+  project_id?: number
+  target_source?: CruiseTargetSource
   cron_expr?: string
   timezone?: string
   targets?: string[]
@@ -73,6 +80,13 @@ export interface CruiseUpdateRequest {
   notify_on_vuln?: boolean
   notify_channels?: string[]
   tags?: string[]
+}
+
+export interface CruiseTargetPreview {
+  target_type: string
+  targets: string[]
+  total: number
+  truncated: boolean
 }
 
 export interface CruiseStats {
@@ -120,6 +134,15 @@ export const cruiseApi = {
   getCruiseStats: async (): Promise<CruiseStats> => {
     const response = await api.get<BackendResponse<CruiseStats>>('/cruises/stats')
     const backendResponse = response as unknown as BackendResponse<CruiseStats>
+    return backendResponse.data
+  },
+
+  // 预览项目整体资产会派生出的监控目标
+  previewTargets: async (projectId: number, targetType: string): Promise<CruiseTargetPreview> => {
+    const response = await api.get<BackendResponse<CruiseTargetPreview>>('/cruises/preview-targets', {
+      params: { project_id: projectId, target_type: targetType },
+    })
+    const backendResponse = response as unknown as BackendResponse<CruiseTargetPreview>
     return backendResponse.data
   },
 

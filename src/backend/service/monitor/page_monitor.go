@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/useragent"
 	"io"
 	"net/http"
 	"regexp"
@@ -266,7 +267,7 @@ func (m *PageMonitor) checkPage(page *MonitoredPage) (*PageChange, error) {
 	}
 
 	// 设置默认 User-Agent
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", useragent.Pick())
 
 	// 设置自定义请求头
 	for k, v := range page.Headers {
@@ -544,7 +545,7 @@ func (m *PageMonitor) fetchAndStore(page *MonitoredPage) error {
 		return err
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", useragent.Pick())
 	for k, v := range page.Headers {
 		req.Header.Set(k, v)
 	}

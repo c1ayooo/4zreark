@@ -6,11 +6,14 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/c1ayooo/4zreark/config"
-	"github.com/c1ayooo/4zreark/scanner/subdomain/thirdparty"
+	"github.com/c1ayooo/4zreark/internal/recon/brute"
+	"github.com/c1ayooo/4zreark/internal/recon/spacemap"
+	reconsub "github.com/c1ayooo/4zreark/internal/recon/subdomain"
 )
 
 // DNS 服务器列表
@@ -36,22 +39,23 @@ type ActiveScannerConfig struct {
 	APIMaxResults     int      // API最大结果数
 	VerifySubdomains  bool     // 是否验证存活
 	EnableHTTPProbe   bool     // 是否进行HTTP探测
+	// Wordlist 任务级字典；为空时回落到全局 config.GetSubdomains()。
+	Wordlist []string
+	// EngineKeys 任务级引擎 key（fofa/hunter/quake/zoomeye/shodan/securitytrails）。
+	// 为空时回落到全局配置；数据源表由 service 层解析后注入。
+	EngineKeys map[string]string
 }
 
 // ActiveScanner 综合子域名扫描器
 type ActiveScanner struct {
-	config     *ActiveScannerConfig
-	apiManager *thirdparty.APIManager
-	results    sync.Map              // 存储去重后的结果 map[string]*SubdomainResult
-	callback   func(SubdomainResult) // 结果回调函数
+	config   *ActiveScannerConfig
+	results  sync.Map              // 存储去重后的结果 map[string]*SubdomainResult
+	callback func(SubdomainResult) // 结果回调函数
 }
 
 // NewActiveScanner 创建新的扫描器
-func NewActiveScanner(cfg *ActiveScannerConfig, apiCfg *thirdparty.APIConfig) *ActiveScanner {
-	return &ActiveScanner{
-		config:     cfg,
-		apiManager: thirdparty.NewAPIManager(apiCfg),
-	}
+func NewActiveScanner(cfg *ActiveScannerConfig) *ActiveScanner {
+	return &ActiveScanner{config: cfg}
 }
 
 // Run 执行扫描
@@ -103,181 +107,140 @@ func (s *ActiveScanner) Run(ctx context.Context, domain string) ([]SubdomainResu
 	return results, nil
 }
 
-// runSubfinder 使用 subfinder 进行被动枚举
+// runSubfinder 被动枚举（T11：reconkit 纯 Go 实现，不再调 subfinder 子进程）。
+// 证书透明 + 公开被动 DNS + 国内被动源 + 目标自身工件（robots/sitemap/CSP/SAN）。
 func (s *ActiveScanner) runSubfinder(ctx context.Context, domain string) {
-	subfinder := NewSubfinderScanner()
-	if subfinder == nil {
-		log.Printf("[ActiveScanner] Subfinder not available, skipping passive enumeration")
-		return
+	opts := reconsub.Options{
+		EnableCT:           config.CrtShEnabled(),
+		EnablePassiveDNS:   true,
+		EnableCNPassiveDNS: true,
+		Timeout:            45 * time.Second,
+		Limit:              500,
 	}
-
-	subdomains, err := subfinder.Scan(ctx, domain)
+	res, err := reconsub.Enumerate(ctx, domain, opts)
 	if err != nil {
-		log.Printf("[ActiveScanner] Subfinder error: %v", err)
-		return
+		log.Printf("[ActiveScanner] Passive enumeration error: %v", err)
+	} else if res != nil {
+		for _, hit := range res.Hits {
+			s.addResult(hit.Name, nil, "passive:"+hit.Source)
+		}
+		log.Printf("[ActiveScanner] Passive enumeration found %d subdomains (per_source=%v, errors=%v)",
+			len(res.Hits), res.PerSrc, res.Errors)
 	}
 
-	// 添加结果（暂时不解析IP，后续统一验证）
-	for _, sub := range subdomains {
-		s.addResult(sub, nil, "subfinder")
+	art := reconsub.CollectFromArtifacts(ctx, domain, nil, 500)
+	if art != nil {
+		for _, hit := range art.Hits {
+			s.addResult(hit.Name, nil, "artifact:"+hit.Source)
+		}
+		log.Printf("[ActiveScanner] Artifacts found %d subdomains (per_source=%v)", len(art.Hits), art.PerSrc)
 	}
-
-	log.Printf("[ActiveScanner] Subfinder found %d subdomains", len(subdomains))
 }
 
-// runAPIEnum 执行API枚举（仅支持付费API: fofa, hunter, quake, securitytrails）
-// 注意：crtsh 已移除，因为数据不准确
+// runAPIEnum 空间测绘枚举（T11：reconkit spacemap，5 引擎）。
+// 单源未配置直接跳过；单源报错只记日志，不影响其他源。
 func (s *ActiveScanner) runAPIEnum(ctx context.Context, domain string) {
 	log.Printf("[ActiveScanner] Starting API enumeration for %s", domain)
+	client := spacemap.NewClient()
+	client.KeyResolver = s.engineKey
 
-	var wg sync.WaitGroup
-
-	// 调用各个 API（已移除 crtsh）
 	for _, source := range s.config.APISources {
-		wg.Add(1)
-		go func(src string) {
-			defer wg.Done()
-			switch src {
-			case "fofa":
-				if s.apiManager.Fofa != nil {
-					assets, err := s.apiManager.Fofa.SearchSubdomains(ctx, domain, s.config.APIMaxResults)
-					if err == nil {
-						for _, asset := range assets {
-							var ips []string
-							if asset.IP != "" {
-								ips = []string{asset.IP}
-							}
-							s.addResult(asset.Host, ips, "fofa")
-						}
-						log.Printf("[ActiveScanner] Fofa found %d assets", len(assets))
-					} else {
-						log.Printf("[ActiveScanner] Fofa error: %v", err)
-					}
-				}
-			case "hunter":
-				if s.apiManager.Hunter != nil {
-					assets, err := s.apiManager.Hunter.SearchSubdomains(ctx, domain, s.config.APIMaxResults)
-					if err == nil {
-						for _, asset := range assets {
-							var ips []string
-							if asset.IP != "" {
-								ips = []string{asset.IP}
-							}
-							// Hunter 使用 Domain 或 URL 字段
-							host := asset.Domain
-							if host == "" {
-								host = asset.URL
-							}
-							if host != "" {
-								s.addResult(host, ips, "hunter")
-							}
-						}
-						log.Printf("[ActiveScanner] Hunter found %d assets", len(assets))
-					} else {
-						log.Printf("[ActiveScanner] Hunter error: %v", err)
-					}
-				}
-			case "quake":
-				if s.apiManager.Quake != nil {
-					assets, err := s.apiManager.Quake.SearchSubdomains(ctx, domain, s.config.APIMaxResults)
-					if err == nil {
-						for _, asset := range assets {
-							var ips []string
-							if asset.IP != "" {
-								ips = []string{asset.IP}
-							}
-							// Quake 使用 Domain 或 Hostname 字段
-							host := asset.Domain
-							if host == "" {
-								host = asset.Hostname
-							}
-							if host != "" {
-								s.addResult(host, ips, "quake")
-							}
-						}
-						log.Printf("[ActiveScanner] Quake found %d assets", len(assets))
-					} else {
-						log.Printf("[ActiveScanner] Quake error: %v", err)
-					}
-				}
-			case "securitytrails":
-				if s.apiManager.SecurityTrails != nil {
-					subdomains, err := s.apiManager.SecurityTrails.SearchSubdomains(ctx, domain)
-					if err == nil {
-						for _, sub := range subdomains {
-							s.addResult(sub, nil, "securitytrails")
-						}
-						log.Printf("[ActiveScanner] SecurityTrails found %d subdomains", len(subdomains))
-					} else {
-						log.Printf("[ActiveScanner] SecurityTrails error: %v", err)
-					}
-				}
-			}
-		}(source)
-	}
+		provider := strings.ToLower(strings.TrimSpace(source))
+		if !spacemap.ValidProvider(provider) {
+			log.Printf("[ActiveScanner] Unsupported engine %q, skipped", source)
+			continue
+		}
+		if !client.SourceConfigured(provider) {
+			log.Printf("[ActiveScanner] Engine %s not configured, skipped", provider)
+			continue
+		}
+		if ctx.Err() != nil {
+			return
+		}
 
-	wg.Wait()
+		query := spacemap.DomainQuery(provider, domain)
+		results, _, _, err := client.SearchEngineAssets(ctx, provider, query, s.config.APIMaxResults, 1)
+		if err != nil {
+			// 401/429/网络错误都只影响当前源
+			log.Printf("[ActiveScanner] Engine %s error: %v", provider, err)
+			continue
+		}
+		for _, r := range results {
+			host := r.Domain
+			if host == "" {
+				host = r.Host
+			}
+			if host == "" {
+				continue
+			}
+			var ips []string
+			if r.IP != "" {
+				ips = []string{r.IP}
+			}
+			s.addResult(host, ips, "spacemap:"+provider)
+		}
+		log.Printf("[ActiveScanner] Engine %s found %d assets", provider, len(results))
+	}
+}
+
+// engineKey 解析引擎 key：任务级配置优先，其次全局配置。
+func (s *ActiveScanner) engineKey(provider string) string {
+	if s.config != nil {
+		if v := strings.TrimSpace(s.config.EngineKeys[provider]); v != "" {
+			return v
+		}
+	}
+	if c := config.Loaded(); c != nil {
+		switch provider {
+		case "fofa":
+			return c.ThirdParty.Fofa.Key
+		case "hunter":
+			return c.ThirdParty.Hunter.Key
+		case "quake":
+			return c.ThirdParty.Quake.Key
+		case "zoomeye":
+			return c.ThirdParty.ZoomEye.Key
+		case "shodan":
+			return c.ThirdParty.Shodan.Key
+		}
+	}
+	return ""
 }
 
 // runBruteForce 执行字典爆破
 func (s *ActiveScanner) runBruteForce(ctx context.Context, domain string) {
-	log.Printf("[ActiveScanner] Starting brute force for %s using ksubdomain", domain)
+	log.Printf("[ActiveScanner] Starting brute force for %s (reconkit dnsres + brute)", domain)
 
-	// 获取字典
-	subdomains := config.GetSubdomains()
+	subdomains := s.config.Wordlist
+	if len(subdomains) == 0 {
+		subdomains = config.GetSubdomains()
+	}
 	if len(subdomains) == 0 {
 		log.Printf("[ActiveScanner] No dictionary loaded, skipping brute force")
 		return
 	}
-
 	log.Printf("[ActiveScanner] Loaded %d subdomains from dictionary for %s", len(subdomains), domain)
 
-	// 泛解析检测
-	wildcardIPs := make(map[string]bool)
-	var wildcardEnabled bool
-	if s.config.WildcardDetection {
-		if ips := s.detectWildcard(domain); len(ips) > 0 {
-			log.Printf("[ActiveScanner] Wildcard detected for %s, IPs: %v (will filter these)", domain, ips)
-			for _, ip := range ips {
-				wildcardIPs[ip] = true
-			}
-			wildcardEnabled = true
-		} else {
-			log.Printf("[ActiveScanner] No wildcard detected for %s", domain)
-		}
-	}
-
-	// 使用 ksubdomain 进行枚举
-	runner := NewKSubdomainRunner()
-	results, err := runner.RunEnumeration(ctx, domain, subdomains)
+	// T11：直接走纯 Go 爆破。泛解析基线过滤由 brute 内部完成，
+	// 不再调用 ksubdomain 库/子进程，也不再做第二遍 wildcard 过滤。
+	hits, stats, err := brute.Brute(ctx, domain, brute.Options{
+		Words:     subdomains,
+		Resolvers: dnsServers,
+		QPS:       300,
+	})
 	if err != nil {
-		log.Printf("[ActiveScanner] ksubdomain error: %v", err)
+		log.Printf("[ActiveScanner] brute error: %v", err)
 		return
 	}
-
-	log.Printf("[ActiveScanner] ksubdomain found %d potential subdomains", len(results))
+	log.Printf("[ActiveScanner] brute: probed=%d hits=%d wildcard=%v filtered=%d",
+		stats.Probed, stats.Hits, stats.Wildcard, stats.WildcardFiltered)
 
 	var added int64
-	for sub, ips := range results {
-		// 过滤泛解析
-		if wildcardEnabled && len(wildcardIPs) > 0 {
-			allWildcard := true
-			for _, ip := range ips {
-				if !wildcardIPs[ip] {
-					allWildcard = false
-					break
-				}
-			}
-			if allWildcard {
-				continue // 跳过泛解析结果
-			}
-		}
-
-		s.addResult(sub, ips, "ksubdomain")
+	for _, h := range hits {
+		s.addResult(h.Name, h.IPs, "brute")
 		added++
 	}
-
-	log.Printf("[ActiveScanner] Brute force completed, added %d new subdomains", added)
+	log.Printf("[ActiveScanner] Brute force completed, added %d subdomains", added)
 }
 
 // resolveDomain 解析域名（使用多个DNS服务器并带重试机制）

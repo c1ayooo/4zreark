@@ -1,0 +1,1232 @@
+# 中国政企长尾产品指纹种子(dismap 对标人工筛选子集)
+# 来源:开源 dismap 2024-01 快照 rule.go 与库内五源(dddd/ehole/wappalyzergo/webanalyze/custom)
+# 2026-09-29 名称归一 diff 后的 1,149 条独有条目中,按「中国政企市场仍在部署」
+# 人工筛出厂商白名单子集;每条表达式保留 dismap 正则语义(~= 忽略大小写)。
+# 只收 body/header 类,不收 ico 类(favicon MD5 编码空间不兼容,无法转换)。
+# source=custom 不受上游同步影响;重名/重复表达式入库时由 rule_hash 幂等合并。
+rules:
+  - name: "263-Enterprise-Mailbox"
+    category: "Mail"
+    enabled: true
+    expression: 'body ~= "(net263.wm.custom_login.homepage_init|/custom_login/js/net263_wm_util.js)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "360-Enterprise-security"
+    category: "Endpoint-Security"
+    enabled: true
+    expression: 'body ~= "(360entinst|关于全网部署360私有云的通知|私有云控制中心|/download/360inst.exe)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "360-NGFW"
+    category: "Endpoint-Security"
+    enabled: true
+    expression: 'body ~= "(var __permission = \"360防火墙\"|<span class=\"fwtitle_big\">360)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "360-SecFox"
+    category: "Endpoint-Security"
+    enabled: true
+    expression: 'body ~= "(id=mtokenplugin width=0 height=0 style=\"position: absolute;left: 0px; top: 0px\"|type=application/x-xtx-axhost|document.getelementbyid(''pic'').src|class=\"secfox-login-browser-continue\"|<p>欢迎您使用网神secfox日志收集与分析系统)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "360-Skyeye"
+    category: "Endpoint-Security"
+    enabled: true
+    expression: 'body ~= "(/index.bundle.872998a4.js|src=\"/static/img/skyeye-logo-big.png\">)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "360-TianQing"
+    category: "Endpoint-Security"
+    enabled: true
+    expression: 'body ~= "(/task/index/detail?id={item.id}|已过期或者未授权，购买请联系4008-136-360)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "360-Total-Security"
+    category: "Endpoint-Security"
+    enabled: true
+    expression: 'header ~= "(x-safe-firewall)"'
+    note: "dismap 独有条目(type=header,rank=1),2026-09-29 筛选导入"
+  - name: "360-Webscan"
+    category: "Endpoint-Security"
+    enabled: true
+    expression: 'body ~= "(webscan.360.cn/status/pai/hash)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "53kf"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'header ~= "(customer_service_language)"'
+    note: "dismap 独有条目(type=header,rank=1),2026-09-29 筛选导入"
+  - name: "Authine-H3-BPM"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(h3 bpm suite信息化的最佳实践)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Bluedon-Firewall"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(class=\"banquan\">蓝盾信息安全技术股份有限公司)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Bluedon-WebGuard-Tamper-Resistance"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(background: url(images/loginbg.jpg) #e5f1fc)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Byzoro-Security-gateway"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(&nbsp;patrolflow 多业务安全网关)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "CETHIK-Reader-Configuration-System"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'body ~= "(if (suser == \"admin\" && spass == \"cetc52\") {|rfid/content/superuser)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Chanjet-TPlus"
+    category: "ERP-Finance"
+    enabled: true
+    expression: 'body ~= "(><script>location=''/tplus/'';</script></body>)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Chanzhicms"
+    category: "CMS"
+    enabled: true
+    expression: 'body ~= "(title=''cms系统，首选蝉知cms|chanzhi.js)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Chinaiwb-Intelligent-Firewal"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "( <body bgcolor=#ddeeff onload=\"document.all.user.focus()\">|style=\"background:url(images/login.gif) no-repeat center\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Cnoa-OA"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(powered by 协众oa|admin@cnoa.cn|powered by cnoa.cn)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "DAS-Security-DAS-WEB-Application-Firewall"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(<img id=\"company_logo\" src=\"images/waf.company.png)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "DAS-Security-Firewall"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(scripts/web-common.js|dbapp security)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "DCN-Router"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(content=\"dcn-utm-web-management|/script/dcn_common.js|src=\"/function/classes/class.checkcode.php|/dcn_ui.css|web management|''www.dcnetworks.com.cn'')"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Dahua-DH-NVR4104HS"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'header ~= "(nvr4104hs)"'
+    note: "dismap 独有条目(type=header,rank=1),2026-09-29 筛选导入"
+  - name: "Dptech-Device"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(window.location = \"html/login_en.html\";|/func/web_main/validate?check=\"+hex_md5(s).tolowercase())"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "EQMail"
+    category: "Mail"
+    enabled: true
+    expression: 'body ~= "(href=\"eqmail.ico|<frame src=\"/cgi-bin/eqwebmail?empty=1)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Emay-B/S-SMS"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'body ~= "(亿美满意通)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Epoint-OA"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(SourceControl=\"EpointCommon\" ></script>|<script>window.location.href=''../netoffice6'';</script>)"'
+    note: "dismap 独有条目(type=body,rank=3),2026-09-29 筛选导入"
+  - name: "Eyou-Anti-Spam-Mailbox-Firewall"
+    category: "Mail"
+    enabled: true
+    expression: 'body ~= "(content=\"亿邮大容量电子邮件系统，反垃圾邮件网关)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "FanRuan-OA"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(Powered by FanRuan|ReportServe\\?op=fs)"'
+    note: "dismap 独有条目(type=body,rank=3),2026-09-29 筛选导入"
+  - name: "FiberHome-Product"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(fiberhome systems, inc.|scos_fx@fiberhome.com )"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Foosun"
+    category: "CMS"
+    enabled: true
+    expression: 'body ~= "(created by dotnetcms|powered by www.foosun.net,products:foosun content manage system)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Goldencis-NACP"
+    category: "Ops-Platform"
+    enabled: true
+    expression: 'body ~= "(<div class=\"tit_b\"> 通过管理员分配的密码使用紧急入口。</div>)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Gzsa-Intranet-security"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(gzsa. all rights reserved</span>)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "H3C-Firewall"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(class=\"dl_margin0\" align=\"left\">web网管用户登录</div>|/php/common/checknum_creat.php?module=config_authnum)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "H3C-SecPath-Operation-and-maintenance-audit-system"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(<span>h3c secpath 运维审计系统</span></div>)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "H3C-Web-managerment-Home"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(/wnm/ssl/web/frame/login.html)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "HIKVISION-BigDataDiagnosis"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(大数据诊断工具</strong>)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "HIKVISION-CloudVideo"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(嗨看云视频</p>)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "HIKVISION-SG"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(src=\"./webui/js/jquerylib/jquery-1.7.2.min.js\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "HIKVISION-VideoCload"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'header ~= "(server: face-webs)"'
+    note: "dismap 独有条目(type=header,rank=1),2026-09-29 筛选导入"
+  - name: "HIKVISION-iVMS7200"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(onkeydown=\"return cms.util.keydownpermit)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "HUAWEI-Eudemon1000E"
+    category: "Security-Device"
+    enabled: true
+    expression: 'header ~= "(huawei eudemon1000e-n6)"'
+    note: "dismap 独有条目(type=header,rank=1),2026-09-29 筛选导入"
+  - name: "HUAWEI-FusionCompute"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(resources/themes/images/logo/favicon.ico)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "HUAWEI-S5730"
+    category: "Security-Device"
+    enabled: true
+    expression: 'header ~= "(s5730)"'
+    note: "dismap 独有条目(type=header,rank=1),2026-09-29 筛选导入"
+  - name: "HUAWEI-S7700"
+    category: "Security-Device"
+    enabled: true
+    expression: 'header ~= "(s7700)"'
+    note: "dismap 独有条目(type=header,rank=1),2026-09-29 筛选导入"
+  - name: "HUAWEI-honorBox"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(modelname>vihomemediaserver)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Hanming-Video-Conferencing"
+    category: "Video-Conferencing"
+    enabled: true
+    expression: 'body ~= "(class=\"win_introduce|/resources/fmweb/other/js/login.js)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "HaoShiTong-Cloud-Conference"
+    category: "Video-Conferencing"
+    enabled: true
+    expression: 'body ~= "(images/common/logina_1.gif|type=\"hidden\" id=\"app.index.configsuclogin)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Hikvision-Cameras-and-Surveillance"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(updatetips|doc/page/login.asp|hcnetvideoactivex.cab|/ui/css/ui.css?version=\" + new date().gettime|ng-bind=\"olan.anonymous\" ng-click=\"login(''anonymous'')\"|css/login.css?version=\" + new date()|var syslanguage= navigator.browserlanguage.tolowercase()|var szlanguage = syslanguage.substring(0,2)|ng-bind=\"olan.anonymous\" ng-click=\"login(''anonymous'')\">|class=\"btn btn-primary login-btn\"|id=\"divanonymous\"|id=\"divpswstrength\"|<form action=\"/goform/formcobralogin|去除edge下将数字处理成电话的错误)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Hikvision-Face-analysis-system"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(人脸分析子系统|人脸实时报警系统|杭州海康威视数字技术股份有限公司)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Hikvision-Image-Recovery-Configuration"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(杭州海康威视数字技术股份有限公司)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Hikvision-Video-Quality-Diagnostic-"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(id =\"helpdoc\" class=\"help\" href=\"common/helpdoc/vqd system user manual(v2.4).pdf|<meta http-equiv=\"refresh\" content=\"0;url=vqd.workbench.aspx\" /> )"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Hikvision-Video-coding-device-access-gateway"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(<input id=\"p_pass\" class=\"int\" onfocus=\"this.value='''';\" tabindex=\"2\" name=\"p_pass|href=\"/bncgi-bin/test.pl)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Hikvision-Video-retrieval"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(海康威视)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Hikvision-iVMS-8700"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(src=\"/portal/common/js/commonvar.js)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Hillstone-Traffic-Management"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(hillstone|images/login_bg.gif|''hillstone networks'', ''hillstone-logo.gif'')"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "HuaWei-Cloud-Bastion-Host"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(id=mtokenplugin width=0 height=0 style=\"position: absolute;left: 0px; top: 0px\"|type=application/x-xtx-axhost)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "HuaWei-Enterprise-proxy-server"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(huawei technologies co., ltd.|<form name=\"frmlogon\" id=\"frmlogon\" method=\"post\"  action=\"/operatorlogin\" onsubmit=\"return check()\">)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "HuaWei-SSL-VPN"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(href=\"./logo/&logo&.ico\"|var apppath = \"/app/hw/\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "HuaWei-Security-Device"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(sweb-internal/resource/|sweb-internal/plat/login/login_new.js)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "HuaWei-Video-Conferencing"
+    category: "Video-Conferencing"
+    enabled: true
+    expression: 'body ~= "(window.location.replace(pathname + \"login.html\");)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "HuaWei-Video-Device"
+    category: "Video-Conferencing"
+    enabled: true
+    expression: 'body ~= "(<html><body><script language=javascript>window.open(''/cn/login.htm'',''_top'', null, true);</script></body></html>)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "IBOS-OA"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(<meta name=\"author\" content=\"IBOS Team\" />)" || header ~= "(Set-Cookie: 8uxd_saltkey=)"'
+    note: "dismap 独有条目(type=body|header,rank=1),2026-09-29 筛选导入"
+  - name: "Infosec-UTRUST"
+    category: "PKI-CA"
+    enabled: true
+    expression: 'body ~= "(china utrust infortech co,.ltd)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Inspur-EC-Government-Approval-Platform"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'body ~= "(onlinequery/querylist.aspx|langchao.ecgap.outportal)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Inspur-InCloud-Sphere"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'body ~= "(class=\"easyui-layout)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "JNSEC-USG"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(content=\"jnsec web ui\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Jinher-OA"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(Jinher Software|<title>金和|js/passwordcommon.js|js/passwordnew.js|jinher network|c6/jhsoft.web.login|closewindownoask)"'
+    note: "dismap 独有条目(type=body,rank=3),2026-09-29 筛选导入"
+  - name: "Join-Cheer-General-financial-system"
+    category: "ERP-Finance"
+    enabled: true
+    expression: 'body ~= "(北京久其软件股份有限公司 版权所有|/netrep/intf|/netrep/message2/|<meta http-equiv=\"refresh\" content=\"0\";url=\"../netrep\">)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Jumpserver"
+    category: "Ops-Platform"
+    enabled: true
+    expression: 'body ~= "(<script src=\"/static/js/jumpserver.js\"></script>)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "KEDACOM-MediaServer"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(/grid/propsgrid.js|src=\"js/ext/adapter/ext/ext-base.js\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "KEDACOM-Product"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'header ~= "(realm=\"kedacom)"'
+    note: "dismap 独有条目(type=header,rank=1),2026-09-29 筛选导入"
+  - name: "KILL-Mail-security-gateway"
+    category: "Mail"
+    enabled: true
+    expression: 'body ~= "(background=\"skins/default/images/login_ksgm.jpg)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Kedacom-Redundant-Arrays-of-Independent-Drives"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(<meta name=\"kedacom\" content=\"true\">)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Kedacom-Redundant-Arrays-of-Independent-Drives（RAID）"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(href=\"kstormon.exe)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Kedacom-SXM"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(titlename = \"sxms审讯业务管理系统\";|classid=\"clsid:01dfb4b4-0e07-4e3f-8b7a-98fd6bff153f\" codebase=\"files/ofctnewclsid.cab)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Kedacom-Video-On-Demand"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(<param name=\"conpwd\" value=\"kdc\">|clsid:da6a00a4-fa81-43ad-a686-ff8ad342395e)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Kedacom-phoenix"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(id=\"cuocx\" classid=\"clsid:a7ff7a36-3eef-4139-bfc0-faeb4c8eba08)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Kingdee"
+    category: "ERP-Finance"
+    enabled: true
+    expression: 'body ~= "(href=\"/kingdee/index.jsp\"|img src=\"images/logo-kingdee.gif\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Kodcloud-System"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(/common/loading_simple.gif)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Landray-EIS-Smart-collaboration-platform"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(/scripts/jquery.landray.common.js|v11_qrcodebar clr)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Leadsec-Employee-Internet-Management"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(asdf</div>-->|txtmac)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Leadsec-SOC"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(/leadsec-soc|action=\"/leadsec-soc/signin)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Leadsec-SSL-VPN"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(欢迎使用leadsec网御ssl vpn|/ssl/down/usbkey.exe|content=\"ssl,vpn,sslvpn|/ssl/down/images_pc/)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Leadsec-Security-gateway"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(var cookiename = \"sagloginfailtimes\";|<img src=\"securitycodeservlet|href=\"leadsec.cer|www.leadsec.com.cn</a>|content=\"北京启明星辰信息安全技术有限公司\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Leadsec-VPN"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(/js/leadsec.js|src=\"/vpn/user/common/)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Lenovo-Enterprise-Network-Disk"
+    category: "ERP-Finance"
+    enabled: true
+    expression: 'body ~= "(client/android/bin/lenovobox.apk|alt=\"联想企业网盘android客户端下载\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "MAiPU-Config"
+    category: "Security-Device"
+    enabled: true
+    expression: 'header ~= "(maipu)"'
+    note: "dismap 独有条目(type=header,rank=1),2026-09-29 筛选导入"
+  - name: "MAiPU-Gateway"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(/webui/images/maipu/login/login_adminbg_a.gif)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Maccms"
+    category: "CMS"
+    enabled: true
+    expression: 'body ~= "(src=\"/template/paody/images/)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "MagicMail"
+    category: "Mail"
+    enabled: true
+    expression: 'body ~= "(/aboutus/magicmail.gif)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Mailgard-WebMail"
+    category: "Mail"
+    enabled: true
+    expression: 'body ~= "(window.open(''http://www.hechen.com''))"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Maipu-Wireless-Access-Point-Controller"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(js/localil8n.js)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "NETENTSEC-Internet-control-gateway"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(北京网康科技有限公司|function getslotserialnumber(slotid))"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "NETENTSEC-Log-analysis"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(网康)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "NETENTSEC-NGFW"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(/images/dashboard/dashboard.png)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "NSFOCUS-Aurora-self-service-scanning-Agent"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(/aurora_nsfocus.png)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "NSFOCUS-Fortres-Machine"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(/login_logo_sas_h_zh_cn.png)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "NSFOCUS-NGFW"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(/login_logo_nf_zh_cn.png)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "NSFOCUS-SG-Security-Gateway"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(/login_logo_sg_zh_cn.png)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "NSFOCUS-UTS"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(/uts_v2/webstatic/)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "NSFOCUS-Website-security-monitoring-system"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(stylesheet/nsfocus|nsfocus.png|/login_logo_wsm_zh_cn.png)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "NSOC-BigData"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'body ~= "(<h2>nsoc大数据分析系统</h2>|src=\"/nfw/static/framework/images/views.png|<b>nsoc云安全解决方案)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Netentsec-NS-ASG-Security-gateway"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(400-678-3600|client/thickbox.css|/commonplugin/softkeyboard.js|id=\"slotserialnumber\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "PCITC--LIMS"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'body ~= "(/home/plug_in_download)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "PCITC-Cameras-and-Surveillance"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'body ~= "(images/slider/banner-gis.png)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "PCITC-File-Management-System"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'body ~= "(js/scripts/common/easyui/jquery.easyui.min.js)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "PCITC-Logistics Management Mystem"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'body ~= "( href=\"/newimages/login/logo_icon.ico)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "PCITC-Management-Platform"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'body ~= "(window.open(\"http://itmc.mmsh.sinopec.com/itgk/sysmgr/productregister/yunweiproregister.view\"); }  )"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "PCITC-System"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'body ~= "(动设备运行风险分析系统)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Palladium-Unified-security-management-and-comprehensive-audit-system"
+    category: "Ops-Platform"
+    enabled: true
+    expression: 'body ~= "(module/image/pldsec.css)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Pansoft-Financial-System"
+    category: "ERP-Finance"
+    enabled: true
+    expression: 'body ~= "(pansoftplugins/multithreading/pancalc.js|src=\"/login/img/loading.gif\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Pansoft-Management-System"
+    category: "ERP-Finance"
+    enabled: true
+    expression: 'body ~= "(directlink = \"eafc.application\";)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "PigCms"
+    category: "CMS"
+    enabled: true
+    expression: 'header ~= "(x-powered-by: pigcms.com)"'
+    note: "dismap 独有条目(type=header,rank=1),2026-09-29 筛选导入"
+  - name: "QiAnXin-Analytics"
+    category: "Endpoint-Security"
+    enabled: true
+    expression: 'body ~= "(href=\"/static/build/animate_nprogress_timepiacker_tooltipster.min.css)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "QianXing-OA"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(input name=\"s1\" type=\"image\"|count/mystat.asp)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Ranzhi-OA"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(/sys/index.php?m=user&f=login&referer=)"'
+    note: "dismap 独有条目(type=body,rank=3),2026-09-29 筛选导入"
+  - name: "RenWoXing-CRM"
+    category: "ERP-Finance"
+    enabled: true
+    expression: 'body ~= "(/resources/imgs/defaultannex/loginpictures/|欢迎使用任我行crm)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Rising-Antivirus-Online"
+    category: "Endpoint-Security"
+    enabled: true
+    expression: 'body ~= "(src=\"ravweb_files/)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Rising-Antivirus-Wall"
+    category: "Endpoint-Security"
+    enabled: true
+    expression: 'body ~= "(action=\"/index.php\" onsubmit=\"return checkfrm(this);)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Ruijie--EWEB"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(<span class=\"resource\" mark=\"login.copyright\">锐捷网络</span>|login.getdeviceinfo)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Ruijie-Cloud"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(content=\"rcp, 管理平台\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Ruijie-EG"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(锐捷网络有限公司 eg易网关|webchat.ruijie.com.cn|4008 111 000|www.ruijie.com.cn/service/know.aspx)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Ruijie-Employee-Internet-Management"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(webui/images/ruijie)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Ruijie-IT"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(var logincookiename = ''riil_id'')"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Ruijie-NBR-Router"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(ruijie - nbr|support.ruijie.com.cn|<p>系统负荷过高，导致网络拥塞，建议降低系统负荷或重启路由器|class=\"line resource\" id=\"nbr_1\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Ruijie-NGFW"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(webui/images/ruijie|锐捷)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Ruijie-NPE"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(alt=\"npe 网络出口控制设备\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Ruijie-WiFi"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(var apmainpage = ''ap/main.htm)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "SANGFOR-ManagementSystem"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(/cgi-bin/login.cgi?requestname=|var msg = ''对不起，集中管理平台暂不支持您当前使用的浏览器|var msg = ''对不起, ''+str+''暂不支持您当前使用的浏览器)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "SHECA-CERT"
+    category: "PKI-CA"
+    enabled: true
+    expression: 'body ~= "(content: \"获取一证通信息异常。请检查数字证书是否正常运行|<li class=\"in\" id=\"cert_li\">)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Sangfor Branch Business Center"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(location.href = ''/bbc/index'')"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Sangfor-Application-Delivery"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(default_target=\"/cgi-bin/login.cgi?action=log&fro=self|var check_login_key|/static/es5_shim/es5-sham.js)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Sangfor-Behavior-Management-or-Identity-Authentication-System"
+    category: "Security-Device"
+    enabled: true
+    expression: 'header ~= "(sinforhttpd)"'
+    note: "dismap 独有条目(type=header,rank=1),2026-09-29 筛选导入"
+  - name: "Sangfor-Company's-product"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(arr[count++] = ''%'' + (''0''+(parseint(str.substr(i, 2), 16)^key[i/2%32]).tostring(16)).touppercase().slice(-2);)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Sangfor-Employee-Internet-Management"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(content=\"must-revalidate\"| = function(str, key)|document.cookie = ''sangfor_session_hash=0''|上网优化管理|href=\"http://sec.sangfor.com.cn/events/89.html\"|internet authentication system)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Sangfor-Tamper-resistance"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(<li style=\"color:#999999;margin-left:6px;list-style:circle inside;\">如忘记密码，请与防火墙管理员联系</li>|href=\"tamper/style/control.css\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Secworld-Firewall"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(css/lsec/login.css|src=\"?g=login_captcha|content=\"上海斐讯数据通信技术有限公司\"|360网神防火墙系统nsg|var __permission = \"360网神防火墙系统\"|var __permission = \"网神防火墙\"|var __permission = \"网神secgate3600 防火墙\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Secworld-SecIPS"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(usbkey_plugin.cab|无服务权限|网神)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Secworld-VPN"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(admin/js/virtual_keyboard.js|src=\"images/login_logo.gif\"|/images/sslvpnportallogo.jpg|证书认证|secworld)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Sinosoft-Technology-E-government-System"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'body ~= "(app_themes/1/style.css|window.location = \"homepages/index.aspx|homepages/content_page.aspx)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "SuperMap-GIS"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'body ~= "(北京超图软件股份有限公司)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Surfilter-NET110"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(net110网络安全审计系统|simplemodal.1.4.1.min.js)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Surfilter-SURFNX-Security-Gateway"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(internal/templates/surfilter/images/logo_big.png|/internal/templates/surfilter/css/)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "TOPSEC-Firewall"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(web user interface)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "TOPSEC-Product"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(content=\"jnsec web ui\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "TOPSEC-VPN"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(window.location=\"/portal_default/index.html\";</script>|window.location.href=\"/vone/pub/pda.html\";)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "TRS-Hybase"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'body ~= "(href=\"#\">trs hybase</a>)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "TRS-MAS"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'header ~= "(x-mas-server)"'
+    note: "dismap 独有条目(type=header,rank=1),2026-09-29 筛选导入"
+  - name: "TRS-WCM"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'body ~= "(window.location.href = \"/wcm\";|forum.trs.com.cn)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Tenda-N60"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(class=\"loagin_title\">tenda n60|tenda n60|tenda n60)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Tenda-WiFi"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(src=\"img/logo-inverse.png\" alt=\"tenda logo\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Tmailer"
+    category: "Mail"
+    enabled: true
+    expression: 'body ~= "(href=\"/tmailer/img/logo/favicon.ico)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Topsec-Intrusion-detection-system-TopSentry"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(天融信入侵检测系统topsentry)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Topsec-Intrusion-prevention-system-TopIDP"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(天融信入侵防御系统topidp)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Topsec-TTopWAF"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(this.src=''/style/images/rand.php?update=1'')"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Topsec-TopFlow"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(天融信topflow)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Topsec-TopScanner"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(/js/report/horizontalreportpanel.js)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Topsec-WEB-application-firewall"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(evpng.fix(''div, ul, img, li, input''); //evpng.fix(''pngid1, pngid2''))"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Topsec-Web-application-security-&-protection-system"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(class=\"logintop\"|href=\"login_html_files/loginstyle.css\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "UNIS-Firewall"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(name=\"adminlogin\" action=\"/cgi-bin/manageaccount\">|<b><nobr>紫光防火墙)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "URP-Integrated-educational-system"
+    category: "Education"
+    enabled: true
+    expression: 'body ~= "(<input name=\"j_captcha_response\" type=\"hidden|北京清元优软科技有限公司|教务系统)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "UXSINO-NGFW"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(http://www.uxsino.com)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Uniview-Cameras-and-Surveillance"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(to=\"href_version_div\">版本<|<a href=\"#\" onclick=\"pophelp(varhelpancvalue);\">|classid=\"clsid:0796c71f-aa80-4921-b6d1-aa4252d097ae\" id=\"recordmanager_activex|<meta http-equiv=\"refresh\" content=\"0; url=cgi-bin/main.cgi?webid=1\" />|recordmanager_activex|pophelp(varhelpancvalue);|<label for=''autologin'' class=\"login_autologinlabel\">|text.videomanagesystem|wanlanswitch|gjs_producttype|uniview|宇视)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Uniview-CloudEye"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(class=\"glyphicon glyphicon-eye-open)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Uniview-VM8500"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(vm8500-imos110)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "V2-Video-Conferencing"
+    category: "Video-Conferencing"
+    enabled: true
+    expression: 'body ~= "(<frame src=\"../conference/currentconfaction.do|src=\"content.jsp\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "VRV-Desktop-Application-System"
+    category: "Endpoint-Security"
+    enabled: true
+    expression: 'body ~= "(<span id=\"lblvalidcompany\" class=\"validcompany\">vrv|var vver = $(''#hidverify'').val();)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "VRV-IM"
+    category: "Endpoint-Security"
+    enabled: true
+    expression: 'body ~= "(<h3>连豆豆pc客户端 </h3>|href=\"http://im.vrv.cn/server-securitycenter/password/goretrieval.vrv|class=\"loginusername\" value=\"\" placeholder=\"连豆豆账号/邮箱/手机号|class=\"wj-text wj-title\">下载信源豆豆</p>)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "VRV-NAC"
+    category: "Endpoint-Security"
+    enabled: true
+    expression: 'body ~= "(id=\"modal_delay\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Venustech-Firewall"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(var title_zh = ''天清汉马usg防火墙'';|venusense fw)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Venustech-TianQing-Application-Security-Gateway"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(v2/global/vendor/modernizr/modernizr.js|天清web应用安全网关)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Venustech-TianQing-IPS"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(/css/cover_admin.css)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Venustech-TianTina-IDS"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(<div class=\"login_name\">天阗入侵检测与管理系统v7.0</div>)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Venustech-TianYue"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(<a href=\"../client/site-downloadruntimedetector)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Volans-VOLANS-Router"
+    category: "Security-Device"
+    enabled: true
+    expression: 'header ~= "(飞鱼星科技volans)"'
+    note: "dismap 独有条目(type=header,rank=1),2026-09-29 筛选导入"
+  - name: "WHOLETON-Employee-Internet-Management"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(updateloginpswd.php|passroedele|下一代防火墙|classid=\"clsid:81be1f16-9d88-48cc-8d3e-cb8e37b71fee)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "WHOLETON-NGFW"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(/base/img/login_logo_ngaf.jpg)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "WHOLETON-Remote-Access"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "( 远程接入平台|<a href=\"http://www.wholeton.com\" target=\"_blank\">)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Weaver-EMobile"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(content=\"weaver e-mobile\"|e-mobile&nbsp;|action=\"/verifylogin.do|/images/login_logo@2x.png|window.apiprifix = \"/emp\";)"'
+    note: "dismap 独有条目(type=body,rank=3),2026-09-29 筛选导入"
+  - name: "Weaver-OA"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(/wui/common/css/w7ovfont.css|typeof poppedwindow|client/jquery.client_wev8.js|/theme/ecology8/jquery/js/zdialog_wev8.js|ecology8/lang/weaver_lang_7_wev8.js)" || header ~= "(testbancookie)"'
+    note: "dismap 独有条目(type=body|header,rank=3),2026-09-29 筛选导入"
+  - name: "Weaver-e-Bridge"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(content=\"泛微云桥e-bridge\")"'
+    note: "dismap 独有条目(type=body,rank=3),2026-09-29 筛选导入"
+  - name: "WebRAY-Cyberspace"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(asset_search_form)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "WebRay-Situation-Awareness"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(class=\"disclaimer\" style=\"color: #ffffff\">《盛邦安全网站监控预警平台服务协议》</a>)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Weidun"
+    category: "Endpoint-Security"
+    enabled: true
+    expression: 'header ~= "(firewall: www.weidun.com.cn)"'
+    note: "dismap 独有条目(type=header,rank=1),2026-09-29 筛选导入"
+  - name: "Whir"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(css/css_whir.css)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Whir-ezOFFICE"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(ezofficeusername|whirrootpath|/defaultroot/js/cookie.js)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Xinnet-Enterprise-mail"
+    category: "Mail"
+    enabled: true
+    expression: 'body ~= "(北京新网数码信息技术有限公司 版权所有)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Xtoa-OA"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(/app_qjuserinfo/qjuserinfoadd.jsp|/images/default/first/xtoa_logo.png|src=\"systemfiles/js/iawebclientactivexcheck.js\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Yongyou-ism"
+    category: "ERP-Finance"
+    enabled: true
+    expression: 'body ~= "(sheight*window.screen.deviceydpi)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Yonyou-ERP"
+    category: "ERP-Finance"
+    enabled: true
+    expression: 'body ~= "(login_main_bg|login_owner)"'
+    note: "dismap 独有条目(type=body,rank=3),2026-09-29 筛选导入"
+  - name: "Yonyou-ERP-NC"
+    category: "ERP-Finance"
+    enabled: true
+    expression: 'body ~= "(/nc/servlet/nc.ui.iufo.login.index)"'
+    note: "dismap 独有条目(type=body,rank=3),2026-09-29 筛选导入"
+  - name: "Yonyou-GRP-U8"
+    category: "ERP-Finance"
+    enabled: true
+    expression: 'body ~= "(window.location.replace(\"login.jsp?up=1\"))"'
+    note: "dismap 独有条目(type=body,rank=3),2026-09-29 筛选导入"
+  - name: "Yonyou-OA"
+    category: "ERP-Finance"
+    enabled: true
+    expression: 'body ~= "(url[(]/images/logon/bg_login.jpg[)] repeat-x top)"'
+    note: "dismap 独有条目(type=body,rank=3),2026-09-29 筛选导入"
+  - name: "Yonyou-Seeyon-OA"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(/seeyon/user-data/images/login/login.gif|a6-v5企业版|seeyon|seeyonproductid|/seeyon/common/|var _ctxpath = ''/seeyon''|a8-v5企业版|/seeyon/)" || header ~= "(path=/yyoa)"'
+    note: "dismap 独有条目(type=body|header,rank=3),2026-09-29 筛选导入"
+  - name: "Yonyou-TurboCRM"
+    category: "ERP-Finance"
+    enabled: true
+    expression: 'body ~= "(turboui.js)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Yonyou-Uclient"
+    category: "ERP-Finance"
+    enabled: true
+    expression: 'body ~= "(http-equiv=refresh content=0;url=index.jsp)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Yottabyte-Company's-product"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'body ~= "(class=\"btn btn-primary form-btn form-btn-login pull-right\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Yottabyte-Rizhiyi"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'body ~= "(href=\"/static/assets/yottaweb-elements/index.css\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Yunsuo"
+    category: "Endpoint-Security"
+    enabled: true
+    expression: 'body ~= "(href=\"http://bbs.yunsuo.com.cn|<img class=\"yunsuologo\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "ZKTECO-Security-Management-System"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(百傲瑞达|src=''/login/images/zksecurity.png''|id=\"password_hidden\"|class=\"login-finger-btn disabled\"|$(\".copyright\").text(\"copyright ? \" + server_current_year + \" zkteco co., ltd. all rights reserved\");)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "ZKTECO-System"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(class=\"m-btn  zkgreen rnd\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "ZTE-Police-research-system"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'body ~= "(深圳市中兴信息技术有限公司版权所有|src=\"img/gonanlogo.jpg)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "ZTE-Super-Conference-Center"
+    category: "Video-Conferencing"
+    enabled: true
+    expression: 'body ~= "(link href=''./zxms80.css)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "ZTE-WLANController"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(background:transparent;border:0px;color=#de0108;font-weight:|中兴通讯|var url=\"resetwebsvr.php?act=reset\";|中兴通讯 - wlan无线接入控制器)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "Zfsoft-Educational-management-system"
+    category: "Education"
+    enabled: true
+    expression: 'body ~= "(style/base/jw.css|content=\"站点介绍\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "beijinghuayu-SafeGateway"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(copy_right = {cn : \"\", en |var opzoon_ver)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "bjca"
+    category: "PKI-CA"
+    enabled: true
+    expression: 'body ~= "(<li><a href=\"/install/certapp_bd.exe\">下载证书应用环境</a></li>)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "byzoro-NFW"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(var title_zh = ''下一代防火墙''|class=\"login_main_text\">下一代防火墙</div>)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "dahua-VIID"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(id=\"js_title\">视频图像信息库</span>)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "dahua-WP"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'body ~= "(src=\"/wpms/asset/common/js/jsencrypt.min.js\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "fanruansem-FineReport"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(content=\"finereport--web reporting tool\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "getck-SafeGateway"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(webui/images/basic/login/main_logo.gif|应用安全网关)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "hillston-OperationAndAnalysis"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(/static/css/main.4672616b.chunk.css)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "hws-Host"
+    category: "Endpoint-Security"
+    enabled: true
+    expression: 'body ~= "(content=\"护卫神·主机大师 前台管理登录\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "ikuai-flow-control-router"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(/resources/images/land_prompt_ico01.gif|<li><a href=\"http://www.ikuai8.com\" target=\"_blank\">官网</a></li>|src=/static/js/manifest.6513b08df486af67396b.js>)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "ikuai8-Cloud"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(<strong>we''re sorry but ikuai cloud platform doesn''t )"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "ikuai8-Product"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(fc tc y_bg prompt-head-div)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "kingdee-K3-cloud"
+    category: "ERP-Finance"
+    enabled: true
+    expression: 'body ~= "(金蝶国际软件集团有限公司版权所有|var formidafterlogin = ''\"bos_mainconsolesutra\"|class=\"kd-div-loading-ct\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "kingosoft"
+    category: "Education"
+    enabled: true
+    expression: 'body ~= "(setkingoencypt.jsp|/jkingo.js)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "kingsoft-DuBa-Enterprise"
+    category: "Endpoint-Security"
+    enabled: true
+    expression: 'body ~= "(class=\"title\">关于全网部署金山毒霸企业版)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "kingsoft-KingGate"
+    category: "Endpoint-Security"
+    enabled: true
+    expression: 'body ~= "(/src/system/login.php)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "kingsoft-V8+-Terminal-security-system"
+    category: "Endpoint-Security"
+    enabled: true
+    expression: 'body ~= "(class=\"anouncetext\">为了更好的保障企业内网的安全，公司决定从即日起全面部署金山企业安全终端防护优化系统|href=\"mobiletools/android/net.ejinshan.avclient.apk)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "libsys-Library"
+    category: "Education"
+    enabled: true
+    expression: 'body ~= "(<div class=\"header_opac_logo\">)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "pcitc-RemoteSystem"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'body ~= "(src=\"validatecode.aspx\"|class=\"f-loading-mask ui-widget ui-widget-content\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "pcitc-SSLVPN"
+    category: "Gov-Enterprise-System"
+    enabled: true
+    expression: 'body ~= "(src=\"new_style/placeholderfriend.js\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "qibosoft-MicroSite"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(powered by qibosoft v1.0)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "qibosoft-v7"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(/images/v7/cms.css\">)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "sangfor-sip"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(window.sessionstorage.removeitem(''serialcheckobj'')|src=\"/apps/secvisual/static/js/runtime.js?|url: ''../auth_manage/auth_manage/on_login'')"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "sansec-SJJ1012"
+    category: "PKI-CA"
+    enabled: true
+    expression: 'body ~= "(>多用户在线管理可能导致不可预知错误)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "shterm-Fortres-Machine"
+    category: "Ops-Platform"
+    enabled: true
+    expression: 'body ~= "(class=\"forget_pwd hide\" href=\"#\" onclick=\"forgot_pwd();|var driver = dllregistered(\"xectrl13.xfpauthenexportx\");)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "sugon-Firewall"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(class=\"login_main_text\">曙光龙芯防火墙</div>)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "topsec-DLP"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(<img src=\"static/images/login/loading.gif\" /><span id=\"message\">loading......</span>)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "topsec-TopAudit"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(topaudit|ta-w 登录系统)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "uniview-NVR516"
+    category: "Video-Surveillance"
+    enabled: true
+    expression: 'header ~= "(realm=\"nvr516)"'
+    note: "dismap 独有条目(type=header,rank=1),2026-09-29 筛选导入"
+  - name: "whir-flexoffice"
+    category: "OA"
+    enabled: true
+    expression: 'body ~= "(var flexofficepath=\"\\/flexoffice\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "wholeton-VPN"
+    category: "Security-Device"
+    enabled: true
+    expression: 'body ~= "(images/l_name.jpg|jtpsoft style1)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "xinnet-Mail"
+    category: "Mail"
+    enabled: true
+    expression: 'body ~= "(src=\"cgijson/getloginimg.php?img=logo|/webmail//cssv2/tamail.css)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "xunfeng"
+    category: "Ops-Platform"
+    enabled: true
+    expression: 'body ~= "(<a href=\"/filter\" class=\"logo\"><span>巡风</span></a>)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "yonyou-IntelligentPlant"
+    category: "ERP-Finance"
+    enabled: true
+    expression: 'body ~= "(/modules/core/client/views/sidemenu.client.view.html)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "yonyou-KSOA"
+    category: "ERP-Finance"
+    enabled: true
+    expression: 'body ~= "(onmouseout=\"this.classname=''btn btnoff''\")"'
+    note: "dismap 独有条目(type=body,rank=3),2026-09-29 筛选导入"
+  - name: "yonyou-RMIS"
+    category: "ERP-Finance"
+    enabled: true
+    expression: 'body ~= "(meta http-equiv=\"grp-rmis|href=\"clientfile/rmisupdate.exe)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "yonyou-Shop"
+    category: "ERP-Finance"
+    enabled: true
+    expression: 'body ~= "(/shophome/ajaxgetcompetemessagelist.action|/shopfront/shoppingcar/gotoshoppingcartajax.action)"'
+    note: "dismap 独有条目(type=body,rank=3),2026-09-29 筛选导入"
+  - name: "yonyou-U8"
+    category: "ERP-Finance"
+    enabled: true
+    expression: 'body ~= "(getfirstu8accid|javascript/bw8.js|var servervendor = ''yonyouupcn'')"'
+    note: "dismap 独有条目(type=body,rank=3),2026-09-29 筛选导入"
+  - name: "yulong-HIDS"
+    category: "Endpoint-Security"
+    enabled: true
+    expression: 'body ~= "(<h1>驭龙</h1>|<h2>yulong - a cool hids system.</h2>)"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"
+  - name: "zfsoft-Leaingrn"
+    category: "Education"
+    enabled: true
+    expression: 'body ~= "(href=\"/jwglxt/logo/favicon.ico\")"'
+    note: "dismap 独有条目(type=body,rank=1),2026-09-29 筛选导入"

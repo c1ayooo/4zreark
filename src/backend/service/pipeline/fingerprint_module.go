@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/c1ayooo/4zreark/scanner/fingerprint"
+	"github.com/c1ayooo/4zreark/scanner/scope"
 )
 
 // FingerprintModule 指纹识别模块
@@ -17,7 +18,15 @@ type FingerprintModule struct {
 	fingerprintScanner *fingerprint.FingerprintScanner
 	resultChan         chan interface{}
 	concurrency        int
+	scope              *scope.Scope
+	targetDelay        time.Duration
 }
+
+// SetScope 设置任务授权边界。
+func (m *FingerprintModule) SetScope(s *scope.Scope) { m.scope = s }
+
+// SetTargetDelay 设置单目标之间的间隔，用于控制请求节奏、避免被封 IP。
+func (m *FingerprintModule) SetTargetDelay(d time.Duration) { m.targetDelay = d }
 
 // NewFingerprintModule 创建指纹识别模块
 func NewFingerprintModule(ctx context.Context, nextModule ModuleRunner, concurrency int) *FingerprintModule {
@@ -128,6 +137,13 @@ func (m *FingerprintModule) ModuleRun() error {
 				defer allWg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
+				if m.targetDelay > 0 {
+					select {
+					case <-m.ctx.Done():
+						return
+					case <-time.After(m.targetDelay):
+					}
+				}
 				m.scanFingerprint(pa)
 			}(portAlive)
 		}
@@ -136,6 +152,9 @@ func (m *FingerprintModule) ModuleRun() error {
 
 // scanFingerprint 执行指纹识别
 func (m *FingerprintModule) scanFingerprint(pa PortAlive) {
+	if m.scope != nil && !m.scope.AllowsHost(pa.Host) {
+		return
+	}
 	// 构建目标URL
 	target := m.buildTarget(pa)
 
@@ -156,13 +175,17 @@ func (m *FingerprintModule) scanFingerprint(pa PortAlive) {
 
 	// 构建 AssetHttp 结果
 	asset := AssetHttp{
-		Host:       pa.Host,
-		IP:         pa.IP,
-		Port:       pa.Port,
-		URL:        result.URL,
-		Title:      result.Title,
-		StatusCode: result.StatusCode,
-		Server:     result.Server,
+		Host:            pa.Host,
+		IP:              pa.IP,
+		Port:            pa.Port,
+		URL:             result.URL,
+		Title:           result.Title,
+		StatusCode:      result.StatusCode,
+		Server:          result.Server,
+		IconSHA256:      result.IconSHA256,
+		IconMMH3:        result.IconMMH3,
+		IconContentType: result.IconType,
+		IconData:        result.IconData,
 	}
 
 	// 提取技术栈

@@ -12,12 +12,120 @@ import (
 
 type NodeHandler struct {
 	nodeService *service.NodeService
+	selection   *service.NodeSelectionService
+	hub         *NodeHub
 }
 
-func NewNodeHandler() *NodeHandler {
+func NewNodeHandler(hub *NodeHub) *NodeHandler {
 	return &NodeHandler{
 		nodeService: service.NewNodeService(),
+		selection:   service.NewNodeSelectionService(),
+		hub:         hub,
 	}
+}
+
+// GetDefaultScanNode GET /api/nodes/default
+func (h *NodeHandler) GetDefaultScanNode(c *gin.Context) {
+	id := h.selection.DefaultNodeID(c.Request.Context())
+	var node *models.ScannerNode
+	if id != "" {
+		if n, err := h.nodeService.GetNodeByID(id); err == nil {
+			node = n
+		}
+	}
+	utils.Success(c, gin.H{"node_id": id, "node": node})
+}
+
+// SetDefaultScanNode PUT /api/nodes/default  body: {"node_id":"..."}；空 = 清除
+func (h *NodeHandler) SetDefaultScanNode(c *gin.Context) {
+	var body struct {
+		NodeID string `json:"node_id"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		utils.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+	id, err := h.selection.SetDefaultNode(c.Request.Context(), body.NodeID)
+	if err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "默认扫描节点已更新", gin.H{"node_id": id})
+}
+
+// EnrollNode 预创建节点并签发一次性密钥，节点侧只保存密钥原文。
+// POST /api/nodes/enroll
+func (h *NodeHandler) EnrollNode(c *gin.Context) {
+	var req struct {
+		Name         string                `json:"name" binding:"required"`
+		Description  string                `json:"description"`
+		MaxTasks     int                   `json:"max_tasks"`
+		Capabilities []string              `json:"capabilities"`
+		Tags         []string              `json:"tags"`
+		SystemInfo   models.NodeSystemInfo `json:"system_info"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+	node := &models.ScannerNode{
+		Name:              req.Name,
+		Description:       req.Description,
+		Type:              models.NodeTypeWorker,
+		Capabilities:      req.Capabilities,
+		MaxTasks:          req.MaxTasks,
+		SystemInfo:        req.SystemInfo,
+		HeartbeatInterval: 30,
+		Tags:              req.Tags,
+	}
+	if node.MaxTasks == 0 {
+		node.MaxTasks = 5
+	}
+	token, err := h.nodeService.CreateNodeWithToken(node)
+	if err != nil {
+		utils.Error(c, utils.ErrCodeInternalError, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "节点已创建，请保存密钥（只显示一次）", gin.H{
+		"node_id": node.NodeID,
+		"id":      node.ID.Hex(),
+		"token":   token,
+	})
+}
+
+// RotateNodeToken 重新签发密钥，旧连接会被断开。
+// POST /api/nodes/:id/token
+func (h *NodeHandler) RotateNodeToken(c *gin.Context) {
+	nodeID := c.Param("id")
+	token, err := h.nodeService.RotateNodeToken(nodeID)
+	if err != nil {
+		utils.Error(c, utils.ErrCodeInternalError, err.Error())
+		return
+	}
+	if h.hub != nil {
+		if node, err := h.nodeService.GetNodeByID(nodeID); err == nil {
+			h.hub.CloseNode(node.NodeID)
+		}
+	}
+	utils.SuccessWithMessage(c, "新密钥已生成，旧密钥立即失效", gin.H{"token": token})
+}
+
+// RevokeNodeToken 吊销密钥并踢掉在线连接。
+// DELETE /api/nodes/:id/token
+func (h *NodeHandler) RevokeNodeToken(c *gin.Context) {
+	nodeID := c.Param("id")
+	node, _ := h.nodeService.GetNodeByID(nodeID)
+	if err := h.nodeService.RevokeNodeToken(nodeID); err != nil {
+		utils.Error(c, utils.ErrCodeInternalError, err.Error())
+		return
+	}
+	if node != nil {
+		stopLocalGostTunnel(node.NodeID)
+		if h.hub != nil {
+			h.hub.CloseNode(node.NodeID)
+		}
+	}
+	utils.SuccessWithMessage(c, "节点密钥已吊销，节点无法再连接平台", nil)
 }
 
 // ListNodes lists all scanner nodes
@@ -140,9 +248,16 @@ func (h *NodeHandler) UpdateNode(c *gin.Context) {
 func (h *NodeHandler) DeleteNode(c *gin.Context) {
 	nodeID := c.Param("id")
 
+	node, _ := h.nodeService.GetNodeByID(nodeID)
 	if err := h.nodeService.DeleteNode(nodeID); err != nil {
 		utils.Error(c, utils.ErrCodeInternalError, err.Error())
 		return
+	}
+	if node != nil {
+		stopLocalGostTunnel(node.NodeID)
+		if h.hub != nil {
+			h.hub.CloseNode(node.NodeID)
+		}
 	}
 
 	utils.SuccessWithMessage(c, "删除成功", nil)
