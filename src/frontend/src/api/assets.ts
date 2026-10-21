@@ -219,7 +219,7 @@ export const assetApi = {
   /** 图标字节地址（公开路由，可直接放 <img src>） */
   iconURL: (sha256: string) => `/api/asset-icons/${sha256}`,
   /** 资产星图：不分页、保留父子关系，供分层布局 */
-  graph: (params: { project_id?: number; q?: string } = {}) =>
+  graph: (params: { project_id?: number; q?: string; mode?: 'summary' | 'full' } = {}) =>
     api.get<unknown, { code: number; data: AssetGraphData }>('/assets/graph', { params }),
   /** 资产详情：站点 + 入口 + 证据链（验证/指纹/原始记录/事件/关系） */
   detail: (id: number) =>
@@ -284,6 +284,10 @@ export interface AssetGraphData {
   /** 站点数超过上限时为 true，图只包含最近发现的那一批 */
   truncated: boolean
   limit: number
+  /** 摘要模式：只含项目/根域名，子域/服务/入口折叠为 counts */
+  summary?: boolean
+  counts?: Record<string, Record<string, number>>
+  totals?: Record<string, number>
 }
 
 // ---- 资产详情（证据链）----

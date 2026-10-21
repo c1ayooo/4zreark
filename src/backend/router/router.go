@@ -26,6 +26,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 
 	// Middleware
 	r.Use(middleware.CORSMiddleware())
+	r.Use(middleware.Gzip())
 	r.Use(middleware.OperationLogMiddleware())
 
 	// SPA 静态托管：有前端构建产物时，根路径直接出页面，不用另起 nginx。

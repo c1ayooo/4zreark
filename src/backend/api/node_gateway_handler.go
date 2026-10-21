@@ -170,7 +170,7 @@ func (h *NodeGatewayHandler) PostResults(c *gin.Context) {
 	}
 
 	rs := service.NewResultService()
-	saved := 0
+	results := make([]*models.ScanResult, 0, len(body.Results))
 	for _, r := range body.Results {
 		if r == nil {
 			continue
@@ -180,19 +180,14 @@ func (h *NodeGatewayHandler) PostResults(c *gin.Context) {
 		if r.CreatedAt.IsZero() {
 			r.CreatedAt = time.Now().UTC()
 		}
-		var err error
-		switch r.Type {
-		case models.ResultTypeService, models.ResultTypeURL, models.ResultTypeCrawler, models.ResultTypeDirScan:
-			err = rs.CreateResultWithDedup(r)
-		default:
-			err = rs.CreateResult(r)
-		}
-		if err != nil {
-			continue
-		}
-		saved++
+		results = append(results, r)
 	}
-	utils.Success(c, gin.H{"saved": saved})
+	inserted, updated, err := rs.BatchCreateResultPtrsWithDedup(results)
+	if err != nil {
+		utils.Error(c, utils.ErrCodeInternalError, "结果写入失败: "+err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"saved": inserted + updated, "inserted": inserted, "updated": updated})
 }
 
 // PostAssets 接收节点侧归并好的资产和路由，由平台写 sites/raw_records/site_routes。

@@ -184,30 +184,29 @@ func (s *ResultService) BatchCreateResults(results []models.ScanResult) error {
 }
 
 // BatchCreateResultsWithDedup 批量创建扫描结果（带去重）
-// 返回 (新增, 更新) 条数；单条失败不影响其余条目。
+// 返回 (新增, 更新) 条数；整批在一个事务里完成。
 func (s *ResultService) BatchCreateResultsWithDedup(results []models.ScanResult) (int, int, error) {
+	ptrs := make([]*models.ScanResult, 0, len(results))
+	for i := range results {
+		ptrs = append(ptrs, &results[i])
+	}
+	return s.BatchCreateResultPtrsWithDedup(ptrs)
+}
+
+// BatchCreateResultPtrsWithDedup 是指针版本，供 worker 回传直接复用。
+func (s *ResultService) BatchCreateResultPtrsWithDedup(results []*models.ScanResult) (int, int, error) {
 	store, err := s.store()
 	if err != nil {
 		return 0, 0, err
 	}
-
-	inserted, updated := 0, 0
-	for i := range results {
-		applyDedupKey(&results[i])
-
-		ctx, cancel := dbCtx()
-		isNew, err := store.CreateWithDedup(ctx, &results[i])
-		cancel()
-		if err != nil {
-			continue
-		}
-		if isNew {
-			inserted++
-		} else {
-			updated++
+	for _, res := range results {
+		if res != nil {
+			applyDedupKey(res)
 		}
 	}
-	return inserted, updated, nil
+	ctx, cancel := dbCtx()
+	defer cancel()
+	return store.BatchCreateWithDedup(ctx, results)
 }
 
 // GetResultsByTask 获取任务的扫描结果

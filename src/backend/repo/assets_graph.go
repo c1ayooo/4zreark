@@ -51,10 +51,120 @@ type AssetGraphEdge struct {
 }
 
 type AssetGraphData struct {
-	Nodes     []*AssetGraphNode `json:"nodes"`
-	Edges     []*AssetGraphEdge `json:"edges"`
-	Truncated bool              `json:"truncated"`
-	Limit     int               `json:"limit"`
+	Nodes     []*AssetGraphNode         `json:"nodes"`
+	Edges     []*AssetGraphEdge         `json:"edges"`
+	Truncated bool                      `json:"truncated"`
+	Limit     int                       `json:"limit"`
+	Summary   bool                      `json:"summary,omitempty"`
+	Counts    map[string]map[string]int `json:"counts,omitempty"`
+	Totals    map[string]int            `json:"totals,omitempty"`
+}
+
+// SummarizeAssetGraph 保留项目/根域名（纯 IP 资产时保留前 12 个 IP），
+// 把子域、服务、入口、路由折叠成计数。星图首屏只需要这份摘要。
+func SummarizeAssetGraph(g *AssetGraphData) *AssetGraphData {
+	if g == nil {
+		return nil
+	}
+	nodeByKey := make(map[string]*AssetGraphNode, len(g.Nodes))
+	for _, n := range g.Nodes {
+		nodeByKey[n.Key] = n
+	}
+
+	totals := make(map[string]int)
+	for _, n := range g.Nodes {
+		totals[n.Kind]++
+	}
+
+	children := make(map[string][]*AssetGraphEdge)
+	parentOf := make(map[string]string)
+	for _, e := range g.Edges {
+		children[e.Src] = append(children[e.Src], e)
+		if _, ok := parentOf[e.Dst]; !ok {
+			parentOf[e.Dst] = e.Src
+		}
+	}
+
+	var roots []*AssetGraphNode
+	for _, n := range g.Nodes {
+		if n.Kind == "root_domain" {
+			roots = append(roots, n)
+		}
+	}
+	visible := make([]*AssetGraphNode, 0, len(roots)+1)
+	for _, n := range g.Nodes {
+		if n.Kind == "project" {
+			visible = append(visible, n)
+		}
+	}
+	visible = append(visible, roots...)
+	if len(roots) == 0 {
+		ipCount := 0
+		for _, n := range g.Nodes {
+			if n.Kind == "ip" && ipCount < 12 {
+				visible = append(visible, n)
+				ipCount++
+			}
+		}
+	}
+
+	visibleSet := make(map[string]bool, len(visible))
+	for _, n := range visible {
+		visibleSet[n.Key] = true
+	}
+
+	counts := make(map[string]map[string]int, len(visible))
+	for _, root := range visible {
+		tally := make(map[string]int)
+		seen := make(map[string]bool)
+		stack := append([]*AssetGraphEdge(nil), children[root.Key]...)
+		for len(stack) > 0 {
+			e := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if seen[e.Dst] {
+				continue
+			}
+			seen[e.Dst] = true
+			if child, ok := nodeByKey[e.Dst]; ok {
+				tally[child.Kind]++
+			}
+			stack = append(stack, children[e.Dst]...)
+		}
+		counts[root.Key] = tally
+	}
+
+	edges := make([]*AssetGraphEdge, 0, len(visible))
+	edgeSeen := make(map[string]bool)
+	for _, e := range g.Edges {
+		if !visibleSet[e.Dst] {
+			continue
+		}
+		src := e.Src
+		guard := make(map[string]bool)
+		for src != "" && !visibleSet[src] && parentOf[src] != "" && !guard[src] {
+			guard[src] = true
+			src = parentOf[src]
+		}
+		if src == "" || !visibleSet[src] || src == e.Dst {
+			continue
+		}
+		key := src + "|" + e.Dst
+		if edgeSeen[key] {
+			continue
+		}
+		edgeSeen[key] = true
+		edges = append(edges, &AssetGraphEdge{Src: src, Dst: e.Dst, Rel: e.Rel})
+	}
+
+	return &AssetGraphData{
+		Nodes:     visible,
+		Edges:     edges,
+		Truncated: g.Truncated,
+		Limit:     g.Limit,
+		Summary:   true,
+		Counts:    counts,
+		Totals:    totals,
+	}
 }
 
 // BuildAssetGraph 生成资产星图。q 只使用 ProjectID 与 Q 两个字段。

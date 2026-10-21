@@ -18,6 +18,7 @@ src/backend/data/
 
 # 报告测试产物（go test 在包目录下生成的临时报告）
 src/backend/test/data/
+src/backend/test/*.stat
 
 # 本地数据库备份（含业务数据，不入库）
 backup_*.sql

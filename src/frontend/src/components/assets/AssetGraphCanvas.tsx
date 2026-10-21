@@ -256,6 +256,10 @@ export interface AssetGraphCanvasProps {
   truncatedText?: string
   /** 覆盖画布尺寸，默认 h-[72vh] */
   className?: string
+  /** 受控的概览/全量切换；不传则本地切换 */
+  showAll?: boolean
+  onShowAllChange?: (showAll: boolean) => void
+  loadingFull?: boolean
 }
 
 export function AssetGraphCanvas({
@@ -267,9 +271,17 @@ export function AssetGraphCanvas({
   note = '星图展示资产层级关系，不包含漏洞信息。要看站点的漏洞，去「资产探索」或「漏洞管理」按主机筛选。',
   truncatedText,
   className,
+  showAll: showAllProp,
+  onShowAllChange,
+  loadingFull = false,
 }: AssetGraphCanvasProps) {
   const [selected, setSelected] = useState<AssetGraphNode | null>(null)
-  const [showAll, setShowAll] = useState(false)
+  const [localShowAll, setLocalShowAll] = useState(false)
+  const showAll = showAllProp ?? localShowAll
+  const setShowAll = (value: boolean) => {
+    if (onShowAllChange) onShowAllChange(value)
+    else setLocalShowAll(value)
+  }
   const [isMobile, setIsMobile] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches
   )
@@ -288,10 +300,17 @@ export function AssetGraphCanvas({
   // 会自激成无限渲染。
   const allNodes = useMemo(() => data?.nodes ?? [], [data])
   const allEdges = useMemo(() => data?.edges ?? [], [data])
-  const graphView = useMemo(
-    () => buildGraphView(allNodes, allEdges, showAll),
-    [allNodes, allEdges, showAll]
-  )
+  const graphView = useMemo(() => {
+    // 后端摘要只返回项目/根域名，计数直接用它；全量数据才在本地折叠。
+    if (data?.summary) {
+      return {
+        nodes: allNodes,
+        edges: allEdges,
+        counts: new Map(Object.entries(data.counts ?? {})),
+      }
+    }
+    return buildGraphView(allNodes, allEdges, showAll)
+  }, [data, allNodes, allEdges, showAll])
   const nodes = graphView.nodes
   const edges = graphView.edges
 
@@ -330,7 +349,7 @@ export function AssetGraphCanvas({
           node: n,
           rootLabel,
           counts: graphView.counts.get(n.key),
-          overview: !showAll,
+          overview: Boolean(data?.summary) || !showAll,
           vertical: isMobile && !showAll,
         },
         sourcePosition: isMobile && !showAll ? Position.Bottom : Position.Right,
@@ -357,10 +376,11 @@ export function AssetGraphCanvas({
   }, [viewSig, layout, nodes, edges, rootLabel, graphView.counts, setRfNodes, setRfEdges])
 
   const stats = useMemo(() => {
+    if (data?.totals) return data.totals
     const byKind: Record<string, number> = {}
     for (const n of allNodes) byKind[n.kind] = (byKind[n.kind] ?? 0) + 1
     return byKind
-  }, [allNodes])
+  }, [data, allNodes])
 
   useEffect(() => {
     if (selected && !nodes.some((n) => n.key === selected.key)) setSelected(null)
@@ -413,7 +433,7 @@ export function AssetGraphCanvas({
                         : 'bg-background text-muted-foreground hover:bg-muted'
                     )}
                   >
-                    全量
+                    {loadingFull ? '加载中…' : '全量'}
                   </button>
                 </div>
               </div>

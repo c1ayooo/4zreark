@@ -390,10 +390,19 @@ func (h *AssetHandler) IconImage(c *gin.Context) {
 // 与 /api/assets 的区别：不分页、保留父子关系，供前端做分层布局。
 func (h *AssetHandler) AssetGraph(c *gin.Context) {
 	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
-	g, err := h.assets.AssetGraph(c.Request.Context(), repo.AssetQuery{
+	query := repo.AssetQuery{
 		ProjectID: projectID,
 		Q:         c.Query("q"),
-	})
+	}
+	var (
+		g   *repo.AssetGraphData
+		err error
+	)
+	if c.Query("mode") == "summary" {
+		g, err = h.assets.AssetGraphSummary(c.Request.Context(), query)
+	} else {
+		g, err = h.assets.AssetGraph(c.Request.Context(), query)
+	}
 	if err != nil {
 		if errors.Is(err, repo.ErrDSLSyntax) {
 			utils.Error(c, utils.ErrCodeInvalidParams, err.Error())

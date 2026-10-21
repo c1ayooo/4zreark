@@ -190,7 +190,6 @@ func (m *SubdomainScanModule) ModuleRun() error {
 				case <-m.ctx.Done():
 					return
 				case m.nextModule.GetInput() <- result:
-					log.Printf("[%s] Sent result to next module: %+v", m.name, result)
 				}
 			}
 		}
@@ -279,8 +278,6 @@ func (m *SubdomainScanModule) scanSubdomains(domain string) {
 		if m.resolveIP && len(result.IPs) == 0 {
 			result.IPs = m.resolveIPs(subResult.FullDomain)
 		}
-
-		log.Printf("[%s] Found subdomain: %s (IPs: %v)", m.name, subResult.FullDomain, result.IPs)
 
 		if m.enableHTTPProbe && m.httpxScanner != nil {
 			// 小批探测：每攒够一批就探测并立即下发，页面不用等整轮枚举结束。

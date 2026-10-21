@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -96,5 +97,24 @@ func TestSaveCrawledRoutes(t *testing.T) {
 	}
 	if !found {
 		t.Error("资产星图里没有该站点的 route 节点")
+	}
+
+	summary := repo.SummarizeAssetGraph(g)
+	if summary == nil || !summary.Summary {
+		t.Fatal("摘要图未标记 summary")
+	}
+	if len(summary.Nodes) >= len(g.Nodes) {
+		t.Fatalf("摘要节点数 %d 应少于全量 %d", len(summary.Nodes), len(g.Nodes))
+	}
+	for _, n := range summary.Nodes {
+		if n.Kind != "project" && n.Kind != "root_domain" && n.Kind != "ip" {
+			t.Fatalf("摘要不应包含 %s 节点", n.Kind)
+		}
+	}
+	if summary.Totals["route"] == 0 {
+		t.Error("摘要 totals 缺少 route 计数")
+	}
+	if summary.Counts["p:"+strconv.FormatInt(projectID, 10)] == nil {
+		t.Error("摘要缺少项目层计数")
 	}
 }

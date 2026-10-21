@@ -30,6 +30,7 @@ type ResultRepo interface {
 	Create(ctx context.Context, res *models.ScanResult) error
 	CreateWithDedup(ctx context.Context, res *models.ScanResult) (bool, error)
 	BatchCreate(ctx context.Context, results []models.ScanResult) error
+	BatchCreateWithDedup(ctx context.Context, results []*models.ScanResult) (int, int, error)
 
 	ListByTask(ctx context.Context, taskID, resultType string, page, pageSize int, search string, statusCode int) ([]*models.ScanResult, int64, error)
 	ExportByTask(ctx context.Context, taskID, resultType string) ([]*models.ScanResult, error)
@@ -300,6 +301,52 @@ func (r *resultRepo) Create(ctx context.Context, res *models.ScanResult) error {
 	return execInsert(ctx, r.r.pool, res)
 }
 
+// upsertDedup 在给定事务里执行一次「占位去重键 + 插入/刷新结果」。
+// 返回值 isNew=true 表示首次落行，false 表示刷新已有行。
+func upsertDedup(ctx context.Context, tx pgx.Tx, res *models.ScanResult, now time.Time) (bool, error) {
+	var key string
+	err := tx.QueryRow(ctx,
+		`insert into result_dedup (dedup_key, task_id, created_at) values ($1, $2, now())
+		 on conflict (dedup_key) do nothing
+		 returning dedup_key`,
+		res.DedupKey, res.TaskID.Hex()).Scan(&key)
+
+	switch {
+	case err == nil:
+		if err := execInsert(ctx, tx, res); err != nil {
+			return false, err
+		}
+		return true, nil
+
+	case errors.Is(err, pgx.ErrNoRows):
+		data, mErr := json.Marshal(nonNilData(res.Data))
+		if mErr != nil {
+			return false, fmt.Errorf("序列化结果 data 失败: %w", mErr)
+		}
+		d := deriveColumns(res.Data)
+		ct, uErr := tx.Exec(ctx,
+			`update scan_results
+			    set data = $3, source = $4, tags = $5, project = $6, updated_at = $7,
+			        host = nullif($8, ''), url = nullif($9, ''), ip = nullif($10, '')::inet,
+			        port = $11, status_code = $12
+			  where task_id = $1 and type = $2 and dedup_key = $13`,
+			res.TaskID.Hex(), string(res.Type), data, res.Source, textArray(res.Tags),
+			res.Project, now, d.host, d.url, d.ip, d.port, d.status, res.DedupKey)
+		if uErr != nil {
+			return false, fmt.Errorf("刷新扫描结果失败: %w", uErr)
+		}
+		if ct.RowsAffected() == 0 {
+			if err := execInsert(ctx, tx, res); err != nil {
+				return false, err
+			}
+		}
+		return false, nil
+
+	default:
+		return false, err
+	}
+}
+
 func (r *resultRepo) CreateWithDedup(ctx context.Context, res *models.ScanResult) (bool, error) {
 	// 没给去重键就退化成普通插入，语义与 Mongo 版「filter 为空」不同也不会误合并
 	if res.DedupKey == "" {
@@ -321,50 +368,72 @@ func (r *resultRepo) CreateWithDedup(ctx context.Context, res *models.ScanResult
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var key string
-	err = tx.QueryRow(ctx,
-		`insert into result_dedup (dedup_key, task_id, created_at) values ($1, $2, now())
-		 on conflict (dedup_key) do nothing
-		 returning dedup_key`,
-		res.DedupKey, res.TaskID.Hex()).Scan(&key)
-
-	switch {
-	case err == nil:
-		// 首次出现：落结果行
-		if err := execInsert(ctx, tx, res); err != nil {
-			return false, err
-		}
-		return true, tx.Commit(ctx)
-
-	case errors.Is(err, pgx.ErrNoRows):
-		// 已出现过：按原 Mongo $set 语义刷新既有行（data/source/tags/project）
-		data, mErr := json.Marshal(nonNilData(res.Data))
-		if mErr != nil {
-			return false, fmt.Errorf("序列化结果 data 失败: %w", mErr)
-		}
-		d := deriveColumns(res.Data)
-		ct, uErr := tx.Exec(ctx,
-			`update scan_results
-			    set data = $3, source = $4, tags = $5, project = $6, updated_at = $7,
-			        host = nullif($8, ''), url = nullif($9, ''), ip = nullif($10, '')::inet,
-			        port = $11, status_code = $12
-			  where task_id = $1 and type = $2 and dedup_key = $13`,
-			res.TaskID.Hex(), string(res.Type), data, res.Source, textArray(res.Tags),
-			res.Project, now, d.host, d.url, d.ip, d.port, d.status, res.DedupKey)
-		if uErr != nil {
-			return false, fmt.Errorf("刷新扫描结果失败: %w", uErr)
-		}
-		if ct.RowsAffected() == 0 {
-			// 去重账本还在、结果行已被删除（例如清理过结果），补回一行
-			if err := execInsert(ctx, tx, res); err != nil {
-				return false, err
-			}
-		}
-		return false, tx.Commit(ctx)
-
-	default:
+	isNew, err := upsertDedup(ctx, tx, res, now)
+	if err != nil {
 		return false, err
 	}
+	return isNew, tx.Commit(ctx)
+}
+
+// batchDedupType 保持扫描期原有的去重范围；端口/漏洞/接管/敏感仍按发现逐条插入。
+func batchDedupType(t models.ResultType) bool {
+	switch t {
+	case models.ResultTypeSubdomain, models.ResultTypeService, models.ResultTypeURL,
+		models.ResultTypeCrawler, models.ResultTypeDirScan:
+		return true
+	default:
+		return false
+	}
+}
+
+// BatchCreateWithDedup 在一个事务里写入一批结果，避免 worker 回传 20 条就开 20 个事务。
+func (r *resultRepo) BatchCreateWithDedup(ctx context.Context, results []*models.ScanResult) (int, int, error) {
+	if len(results) == 0 {
+		return 0, 0, nil
+	}
+	now := time.Now()
+	for _, res := range results {
+		if res == nil {
+			continue
+		}
+		if res.ID.IsZero() {
+			res.ID = oid.NewObjectID()
+		}
+		if res.CreatedAt.IsZero() {
+			res.CreatedAt = now
+		}
+		res.UpdatedAt = now
+	}
+
+	tx, err := r.r.pool.Begin(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	inserted, updated := 0, 0
+	for _, res := range results {
+		if res == nil {
+			continue
+		}
+		if res.DedupKey == "" || !batchDedupType(res.Type) {
+			if err := execInsert(ctx, tx, res); err != nil {
+				return 0, 0, err
+			}
+			inserted++
+			continue
+		}
+		isNew, err := upsertDedup(ctx, tx, res, now)
+		if err != nil {
+			return 0, 0, err
+		}
+		if isNew {
+			inserted++
+		} else {
+			updated++
+		}
+	}
+	return inserted, updated, tx.Commit(ctx)
 }
 
 func (r *resultRepo) BatchCreate(ctx context.Context, results []models.ScanResult) error {

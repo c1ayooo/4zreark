@@ -295,6 +295,15 @@ func (s *AssetService) AssetGraph(ctx context.Context, q repo.AssetQuery) (*repo
 	return a.BuildAssetGraph(ctx, q)
 }
 
+// AssetGraphSummary 返回星图首屏摘要：项目/根域名 + 各层计数，不含全量节点。
+func (s *AssetService) AssetGraphSummary(ctx context.Context, q repo.AssetQuery) (*repo.AssetGraphData, error) {
+	g, err := s.AssetGraph(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	return repo.SummarizeAssetGraph(g), nil
+}
+
 // CrawledEndpoint 是爬虫产出的一条 URL。
 type CrawledEndpoint struct {
 	URL        string `json:"url"`

@@ -324,7 +324,6 @@ func (s *ActiveScanner) addResult(subdomain string, ips []string, source string)
 
 	// 去重存储
 	if _, loaded := s.results.LoadOrStore(subdomain, result); !loaded {
-		log.Printf("[ActiveScanner] Found: %s -> %v (%s)", subdomain, ips, source)
 
 		// 调用回调函数（如果设置了）
 		if s.callback != nil {
