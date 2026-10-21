@@ -257,6 +257,38 @@ worker 不配置 PostgreSQL。若平台使用自签 CA，把 CA 放到 worker �
 
 `all` 会在本机执行扫描，适合开发和联调，不建议作为生产拓扑。
 
+> 仓库里的 `src/backend/Dockerfile` 和 `src/backend/docker-compose.yml` 是 Mongo/Redis 时期的历史文件，尚未按当前 PostgreSQL-only 运行时更新。生产部署请使用上面的二进制/systemd 方式，或先把这两个文件改成 PostgreSQL 版本再使用。
+
+### 8. systemd 示例
+
+`/etc/systemd/system/4zreark.service`：
+
+```ini
+[Unit]
+Description=4zreark master
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/4zreark/src/backend
+Environment=ZRE_PG_PASSWORD=change-me
+Environment=ZRE_SECRET_KEY=change-me-to-a-fixed-32-byte-key
+ExecStart=/opt/4zreark/src/backend/4zreark -role master
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now 4zreark
+```
+
+worker 用同一份二进制，只把 `ExecStart` 换成 `-role worker -platform-url ... -node-token ...`。
+
 ---
 
 ## 配置
