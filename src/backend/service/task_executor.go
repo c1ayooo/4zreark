@@ -1079,6 +1079,10 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 			if !taskScope.AllowsURL(r.Output) {
 				continue
 			}
+			// 静态资源即使绕过爬虫侧过滤也不入库：这是最后一道闸。
+			if scope.IsStaticAsset(r.Output) {
+				continue
+			}
 			urlCount++
 			crawledRoutes = append(crawledRoutes, CrawledEndpoint{
 				URL: r.Output, Method: r.Method, StatusCode: r.StatusCode,

@@ -428,7 +428,13 @@ func (m *CrawlerModule) crawlWithKatana(target string, asset AssetHttp) {
 
 	log.Printf("[%s] Katana found %d URLs for %s", m.name, len(result.URLs), target)
 
+	skipped := 0
 	for _, url := range result.URLs {
+		// 非 JS 静态资源不进结果；JS 保留，里面的接口/路由需要继续分析。
+		if scope.IsStaticAsset(url.URL) {
+			skipped++
+			continue
+		}
 		urlResult := UrlResult{
 			Input:      target,
 			Output:     url.URL,
@@ -463,6 +469,9 @@ func (m *CrawlerModule) crawlWithRad(target string, asset AssetHttp) {
 	log.Printf("[%s] Rad found %d URLs for %s", m.name, len(result.URLs), target)
 
 	for _, url := range result.URLs {
+		if scope.IsStaticAsset(url.URL) {
+			continue
+		}
 		urlResult := UrlResult{
 			Input:  target,
 			Output: url.URL,
