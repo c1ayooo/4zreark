@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/c1ayooo/4zreark/internal/recon/score"
 )
@@ -202,39 +203,57 @@ func (a *AssetRepo) attachRisk(ctx context.Context, sites []*Site) error {
 	return nil
 }
 
+// riskOrderCache 缓存 sort=risk 的全量算分结果（30 秒）：评分要拉全量候选
+// + 全量漏洞表再内存算分排序，翻页重复计算是显式代价，30 秒内的翻页直接复用。
+var riskOrderCache = newTTLCache[riskOrderResult](30 * time.Second)
+
+type riskOrderResult struct {
+	order []riskOrder
+	total int64
+}
+
 // listSiteRowsByRisk 按评分全局排序后再取当前页。
 // 评分依赖观测字段而不是已落库的列，所以只能把候选行全部算完再切片；
 // 这是 sort=risk 的显式代价，默认排序不受影响。
 func (a *AssetRepo) listSiteRowsByRisk(ctx context.Context, w *whereBuilder, q AssetQuery) (any, int64, error) {
-	var total int64
-	if err := a.r.pool.QueryRow(ctx,
-		"SELECT count(*) FROM sites s JOIN projects p ON p.id = s.project_id WHERE "+w.String(),
-		w.args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("统计资产失败: %w", err)
-	}
-	if total == 0 {
-		return []*Site{}, 0, nil
-	}
+	ck := cacheKey("riskorder", w.String(), fmt.Sprint(w.args...))
+	cached, ok := riskOrderCache.get(ck)
+	if !ok {
+		var total int64
+		if err := a.r.pool.QueryRow(ctx,
+			"SELECT count(*) FROM sites s JOIN projects p ON p.id = s.project_id WHERE "+w.String(),
+			w.args...).Scan(&total); err != nil {
+			return nil, 0, fmt.Errorf("统计资产失败: %w", err)
+		}
+		if total == 0 {
+			return []*Site{}, 0, nil
+		}
 
-	inputs, err := a.queryRiskInputs(ctx, w.String(), w.args)
-	if err != nil {
-		return nil, 0, err
-	}
-	hosts := make([]string, 0, len(inputs))
-	for _, r := range inputs {
-		hosts = append(hosts, strings.ToLower(r.Host))
-	}
-	stats, err := a.vulnStatsByHost(ctx, hosts)
-	if err != nil {
-		return nil, 0, err
-	}
+		inputs, err := a.queryRiskInputs(ctx, w.String(), w.args)
+		if err != nil {
+			return nil, 0, err
+		}
+		hosts := make([]string, 0, len(inputs))
+		for _, r := range inputs {
+			hosts = append(hosts, strings.ToLower(r.Host))
+		}
+		stats, err := a.vulnStatsByHost(ctx, hosts)
+		if err != nil {
+			return nil, 0, err
+		}
 
-	order := make([]riskOrder, 0, len(inputs))
-	for _, r := range inputs {
-		sc, level, factors := computeSiteRisk(r, stats[strings.ToLower(r.Host)])
-		order = append(order, riskOrder{ID: r.ID, Score: sc, Level: level, Factors: factors})
+		order := make([]riskOrder, 0, len(inputs))
+		for _, r := range inputs {
+			sc, level, factors := computeSiteRisk(r, stats[strings.ToLower(r.Host)])
+			order = append(order, riskOrder{ID: r.ID, Score: sc, Level: level, Factors: factors})
+		}
+		sortByRisk(order)
+
+		cached = riskOrderResult{order: order, total: total}
+		riskOrderCache.put(ck, cached)
 	}
-	sortByRisk(order)
+	total := cached.total
+	order := cached.order
 
 	offset := (q.Page - 1) * q.PageSize
 	if offset >= len(order) {

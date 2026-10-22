@@ -156,13 +156,18 @@ func (s *CruiseService) loadEnabledCruises() error {
 func (s *CruiseService) scheduleCruise(cruise *models.CruiseTask) error {
 	cruiseID := cruise.ID.Hex()
 
+	spec, err := cruiseScheduleSpec(cruise.CronExpr, cruise.Timezone)
+	if err != nil {
+		return err
+	}
+
 	cruiseEntryMu.Lock()
 	if entryID, exists := cruiseEntries[cruiseID]; exists {
 		cronScheduler().Remove(entryID)
 		delete(cruiseEntries, cruiseID)
 	}
 
-	entryID, err := cronScheduler().AddFunc(cruise.CronExpr, func() {
+	entryID, err := cronScheduler().AddFunc(spec, func() {
 		s.executeCruise(cruise.ID)
 	})
 	if err != nil {
@@ -369,11 +374,42 @@ func (s *CruiseService) executeCruiseWithMode(cruiseID oid.ObjectID, manual bool
 	}()
 }
 
+// cruiseScheduleSpec 把巡航的 cron 表达式与其 timezone 组装成 robfig/cron 认识的
+// spec：时区有效且非 Local 时加 "CRON_TZ=<tz> " 前缀，Entry.Next 与触发时间都按
+// 该时区计算。此前 timezone 存而不用，容器默认 UTC 时按北京时间配的 9 点实际 17 点触发。
+func cruiseScheduleSpec(cronExpr, timezone string) (string, error) {
+	tz := strings.TrimSpace(timezone)
+	if tz == "" || tz == "Local" || tz == time.Local.String() {
+		return cronExpr, nil
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		return "", fmt.Errorf("无效时区 %q: %v", tz, err)
+	}
+	_ = loc
+	return "CRON_TZ=" + tz + " " + cronExpr, nil
+}
+
+// validateCruiseTimezone 校验时区名（空值视为服务器本地时区）。
+func validateCruiseTimezone(tz string) error {
+	tz = strings.TrimSpace(tz)
+	if tz == "" || tz == "Local" {
+		return nil
+	}
+	if _, err := time.LoadLocation(tz); err != nil {
+		return fmt.Errorf("无效时区 %q: %v", tz, err)
+	}
+	return nil
+}
+
 // CreateCruise 创建巡航任务
 func (s *CruiseService) CreateCruise(req *models.CruiseTaskCreateRequest, userID, workspaceID oid.ObjectID) (*models.CruiseTask, error) {
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 	if _, err := parser.Parse(req.CronExpr); err != nil {
 		return nil, fmt.Errorf("invalid cron expression: %v", err)
+	}
+	if err := validateCruiseTimezone(req.Timezone); err != nil {
+		return nil, err
 	}
 
 	source, err := normalizeCruiseTargetSource(req.TargetSource)
@@ -477,6 +513,9 @@ func (s *CruiseService) UpdateCruise(cruiseID string, req *models.CruiseTaskUpda
 		update["cron_expr"] = *req.CronExpr
 	}
 	if req.Timezone != nil {
+		if err := validateCruiseTimezone(*req.Timezone); err != nil {
+			return err
+		}
 		update["timezone"] = *req.Timezone
 	}
 	if req.Targets != nil {

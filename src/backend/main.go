@@ -17,6 +17,9 @@ import (
 	"syscall"
 	"time"
 
+	// 精简容器（scratch/alpine）常无系统 tzdata：cruise 的 CRON_TZ 调度依赖它。
+	_ "time/tzdata"
+
 	"github.com/c1ayooo/4zreark/api"
 	"github.com/c1ayooo/4zreark/config"
 	"github.com/c1ayooo/4zreark/repo"
@@ -319,6 +322,9 @@ func main() {
 
 	// Setup router with WebSocket hub
 	r := router.SetupRouterWithWebSocket(wsHub, nodeHub)
+
+	// 通用队列 worker（/api/queue）随路由注册启动，关停时先于 HTTP 断开前收口。
+	defer api.StopQueueHandler()
 
 	// Start server
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

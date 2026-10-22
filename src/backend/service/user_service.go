@@ -320,8 +320,14 @@ func (s *UserService) InitAdmin() error {
 	}
 	if created {
 		log.Printf("[InitAdmin] Admin user created successfully")
+		log.Printf("[InitAdmin] 警告：admin 使用默认口令 admin123，请立即登录修改！")
 	} else {
 		log.Printf("[InitAdmin] Admin user already exists")
+		// 存量部署：默认口令未改则每次启动都提醒（一次 bcrypt 比对，成本可忽略）。
+		if admin, gerr := ur.GetByUsername(ctx, "admin"); gerr == nil && admin != nil &&
+			utils.CheckPassword("admin123", admin.Password) {
+			log.Printf("[InitAdmin] 警告：admin 账户仍在使用默认口令 admin123，请尽快修改！")
+		}
 	}
 	return nil
 }

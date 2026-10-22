@@ -28,6 +28,7 @@ type TaskQueue struct {
 
 	handlersMu sync.RWMutex
 	stopCh     chan struct{}
+	stopOnce   sync.Once
 	wg         sync.WaitGroup
 
 	taskTimeout time.Duration
@@ -163,9 +164,11 @@ func (q *TaskQueue) Start() {
 	log.Printf("[TaskQueue] Started %d workers (postgres backed)", q.workers)
 }
 
-// Stop 停止队列
+// Stop 停止队列。幂等：重复调用安全；在跑的 handler 最多等到 taskTimeout。
 func (q *TaskQueue) Stop() {
-	close(q.stopCh)
+	q.stopOnce.Do(func() {
+		close(q.stopCh)
+	})
 	q.wg.Wait()
 	log.Println("[TaskQueue] Stopped")
 }
@@ -311,12 +314,16 @@ func (q *TaskQueue) worker(workerID string) {
 		job, err := q.jobs.ClaimGeneric(context.Background(), workerID, q.lease)
 		if err != nil {
 			log.Printf("[%s] Claim error: %v", workerID, err)
-			time.Sleep(time.Second)
+			if !q.sleepAware(1 * time.Second) {
+				return
+			}
 			continue
 		}
 		if job == nil {
 			// 队列空：退避到 1s 上限，避免空转压着数据库
-			time.Sleep(backoff)
+			if !q.sleepAware(backoff) {
+				return
+			}
 			if backoff < time.Second {
 				backoff *= 2
 			}
@@ -325,6 +332,16 @@ func (q *TaskQueue) worker(workerID string) {
 		backoff = 200 * time.Millisecond
 
 		q.processJob(workerID, job)
+	}
+}
+
+// sleepAware 可被 Stop 打断的睡眠；返回 false 表示队列已停止，worker 应退出。
+func (q *TaskQueue) sleepAware(d time.Duration) bool {
+	select {
+	case <-q.stopCh:
+		return false
+	case <-time.After(d):
+		return true
 	}
 }
 
@@ -338,21 +355,33 @@ func (q *TaskQueue) processJob(workerID string, job *repo.Job) {
 	handler, ok := q.handlers[task.Type]
 	q.handlersMu.RUnlock()
 
+	// handler 用完整超时执行；收尾写库（Complete/Retry）用独立短超时 ctx：
+	// handler 耗尽超时刚返回时执行 ctx 已到期，复用它会让结果落不进库，
+	// 作业悬在 running 直到租约过期被重跑一次。
 	ctx, cancel := context.WithTimeout(context.Background(), q.taskTimeout)
 	defer cancel()
 
+	// handler 是公开扩展点，panic 不能击穿 worker（更不能击穿主进程）：
+	// 转成普通错误走失败重试路径。
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[%s] Job %d (%s) handler panic: %v", workerID, job.ID, task.Type, r)
+			q.failWithFreshCtx(job.ID, task, fmt.Errorf("handler panic: %v", r))
+		}
+	}()
+
 	if !ok {
-		q.failJob(ctx, job.ID, task, fmt.Errorf("no handler for task type: %s", task.Type))
+		q.failWithFreshCtx(job.ID, task, fmt.Errorf("no handler for task type: %s", task.Type))
 		return
 	}
 
 	result, err := handler(ctx, task)
 	if err != nil {
-		q.failJob(ctx, job.ID, task, err)
+		q.failWithFreshCtx(job.ID, task, err)
 		return
 	}
 
-	if err := q.jobs.Complete(ctx, job.ID, checkpointEnvelope{
+	if err := q.completeWithFreshCtx(job.ID, checkpointEnvelope{
 		Result:      result,
 		Status:      string(TaskStatusCompleted),
 		CompletedAt: time.Now(),
@@ -362,9 +391,18 @@ func (q *TaskQueue) processJob(workerID string, job *repo.Job) {
 	log.Printf("[%s] Job %d (%s) completed", workerID, job.ID, task.Type)
 }
 
-// failJob 失败重试：未超次数按指数退避回队列，超了进死信（status='dead'）。
-func (q *TaskQueue) failJob(ctx context.Context, jobID int64, task *Task, err error) {
+// completeWithFreshCtx 用独立短超时写完成态，不复用可能已超时的执行 ctx。
+func (q *TaskQueue) completeWithFreshCtx(jobID int64, cp checkpointEnvelope) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return q.jobs.Complete(ctx, jobID, cp)
+}
+
+// failWithFreshCtx 用独立短超时写失败/重试态。
+func (q *TaskQueue) failWithFreshCtx(jobID int64, task *Task, err error) {
 	backoff := time.Duration((task.Retries+1)*(task.Retries+1)) * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	status, rerr := q.jobs.Retry(ctx, jobID, err.Error(), backoff)
 	if rerr != nil {
 		log.Printf("[TaskQueue] Retry job %d error: %v", jobID, rerr)

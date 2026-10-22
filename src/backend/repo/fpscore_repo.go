@@ -149,6 +149,10 @@ func (a *AssetRepo) buildFpScoreWhere(q FpScoreQuery) *whereBuilder {
 	return w
 }
 
+// fpScorePageCache 缓存指纹评分列表的整页结果：评分依赖命中指纹集合，
+// 每请求全量算分（候选最多 2 万行），翻页/刷新 30 秒内直接复用。
+var fpScorePageCache = newTTLCache[*FpScorePage](30 * time.Second)
+
 // ListFpScores 是指纹评分列表：取候选行 → 评分 → 过滤 → 排序 → 切页。
 //
 // 分数依赖命中的指纹集合而不是已落库的列，所以必须先算后排序；这是与
@@ -171,6 +175,21 @@ func (a *AssetRepo) ListFpScores(ctx context.Context, q FpScoreQuery) (*FpScoreP
 		q.PageSize = 500
 	}
 
+	ck := cacheKey("fpscore", fmt.Sprintf("%+v", q))
+	if page, ok := fpScorePageCache.get(ck); ok {
+		return page, nil
+	}
+
+	page, err := a.computeFpScores(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	fpScorePageCache.put(ck, page)
+	return page, nil
+}
+
+// computeFpScores 是 ListFpScores 的实际计算路径（无缓存）。
+func (a *AssetRepo) computeFpScores(ctx context.Context, q FpScoreQuery) (*FpScorePage, error) {
 	w := a.buildFpScoreWhere(q)
 
 	var candidates int64

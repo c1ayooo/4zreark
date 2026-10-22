@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -132,6 +133,9 @@ func (m *Manager) Run(ctx context.Context, opts RunOptions) (*RunResult, error) 
 	resultName := resultFile.Name()
 	resultFile.Close()
 	_ = os.Chmod(resultName, 0o600)
+	// ResultFile 在 Run 返回后仍要可读（调用方/测试会 os.Stat），本次不删；
+	// 历史文件由 cleanupOldScans 限龄清理，否则无限累积且 retention 服务不管这个目录。
+	defer m.cleanupOldScans(scanDir)
 
 	maxDur := m.MaxScanDuration()
 	if opts.MaxDuration > 0 {
@@ -406,4 +410,31 @@ func (m *Manager) ResultDirFor() string {
 		return ""
 	}
 	return filepath.Clean(m.ScansDir())
+}
+
+// scanFileRetention 是扫描目录里临时文件的保留时长：ResultFile 在调用返回后
+// 仍需可读（排障/复核），超过一天的 jsonl/targets 已无消费方，删掉防累积。
+const scanFileRetention = 24 * time.Hour
+
+// cleanupOldScans 清理扫描目录里超龄的临时文件。尽力而为：错误只记日志。
+func (m *Manager) cleanupOldScans(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-scanFileRetention)
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() ||
+			(!strings.HasPrefix(name, "nuclei-") && !strings.HasPrefix(name, "targets-")) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, name)); err != nil {
+			log.Printf("[nucleiruntime] 清理旧扫描文件失败 %s: %v", name, err)
+		}
+	}
 }

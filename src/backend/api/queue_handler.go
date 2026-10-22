@@ -17,6 +17,10 @@ type QueueHandler struct {
 	taskQueue *queue.TaskQueue
 }
 
+// defaultQueueHandler 记录进程内创建的队列实例：worker 在路由注册副作用里启动，
+// 优雅关停由 main 通过 StopQueueHandler 触发（否则 SIGTERM 时在跑的 handler 被硬杀）。
+var defaultQueueHandler *QueueHandler
+
 // NewQueueHandler 创建队列处理器
 func NewQueueHandler(config *queue.QueueConfig) (*QueueHandler, error) {
 	taskQueue, err := queue.NewTaskQueue(config)
@@ -30,9 +34,18 @@ func NewQueueHandler(config *queue.QueueConfig) (*QueueHandler, error) {
 	// 启动工作者
 	taskQueue.Start()
 
-	return &QueueHandler{
+	h := &QueueHandler{
 		taskQueue: taskQueue,
-	}, nil
+	}
+	defaultQueueHandler = h
+	return h, nil
+}
+
+// StopQueueHandler 停止通用队列 worker（幂等；未创建时为 no-op）。
+func StopQueueHandler() {
+	if defaultQueueHandler != nil {
+		defaultQueueHandler.taskQueue.Stop()
+	}
 }
 
 // registerBuiltinHandlers 注册内置任务处理器
