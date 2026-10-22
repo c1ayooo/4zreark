@@ -165,6 +165,72 @@ func (q *ScanQueue) Enqueue(ctx context.Context, taskID string, priority int) er
 	return nil
 }
 
+// CancelTerminal 清理终态任务（cancelled/failed/completed）遗留的未完成 River job。
+// 老版本取消任务时只清 queued，running job 会一直挂在 river_job 里。
+func (q *ScanQueue) CancelTerminal(ctx context.Context) (int, error) {
+	if q == nil || q.client == nil || q.pool == nil {
+		return 0, nil
+	}
+	rows, err := q.pool.Query(ctx, `
+		select j.id
+		  from river_job j
+		  join tasks t on t.id = j.args->>'task_id'
+		 where j.kind = 'scan_task'
+		   and j.state in ('available','pending','retryable','scheduled','running')
+		   and t.status in ('cancelled','failed','completed')
+		 limit 500`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	cancelled := 0
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return cancelled, err
+		}
+		if _, err := q.client.JobCancel(ctx, id); err != nil {
+			log.Printf("[ScanQueue] 清理终态任务作业 %d 失败: %v", id, err)
+			continue
+		}
+		cancelled++
+	}
+	return cancelled, rows.Err()
+}
+
+// CancelAll 取消某个任务所有未完成的 River 作业，包括正在运行的 job。
+// JobCancel 对 running 只是标记取消并通知 worker context；它不会强杀节点进程，
+// 但控制面状态和队列不会再留下 running 僵尸。
+func (q *ScanQueue) CancelAll(ctx context.Context, taskID string) (int, error) {
+	if q == nil || q.client == nil {
+		return 0, nil
+	}
+	params := river.NewJobListParams().
+		Kinds(ScanJobKind).
+		States(
+			rivertype.JobStateAvailable,
+			rivertype.JobStatePending,
+			rivertype.JobStateRetryable,
+			rivertype.JobStateScheduled,
+			rivertype.JobStateRunning,
+		).
+		Where("args->>'task_id' = @task_id", river.NamedArgs{"task_id": taskID}).
+		First(1000)
+	res, err := q.client.JobList(ctx, params)
+	if err != nil {
+		return 0, fmt.Errorf("查询任务作业失败: %w", err)
+	}
+	cancelled := 0
+	for _, job := range res.Jobs {
+		if _, err := q.client.JobCancel(ctx, job.ID); err != nil {
+			log.Printf("[ScanQueue] 取消作业 %d（task=%s）失败: %v", job.ID, taskID, err)
+			continue
+		}
+		cancelled++
+	}
+	return cancelled, nil
+}
+
 // CancelQueued 取消某个任务还没开始执行的 River 作业（暂停/取消任务时调用）。
 func (q *ScanQueue) CancelQueued(ctx context.Context, taskID string) (int, error) {
 	if q == nil || q.client == nil {

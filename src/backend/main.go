@@ -220,6 +220,9 @@ func main() {
 		log.Printf("[FATAL] 启动 River 扫描队列失败: %v", err)
 		os.Exit(2)
 	}
+	// 僵尸任务回收：节点离线或长时间无进展的 running 任务自动置失败并取消 River job。
+	service.StartStaleTaskReaper(queueCtx)
+
 	// 先停 River（不再拉新作业），再由 taskExecutor.Stop 取消本地流水线/派单。
 	defer func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), 40*time.Second)

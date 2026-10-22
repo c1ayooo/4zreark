@@ -508,12 +508,12 @@ func (s *TaskService) discardQueued(taskID string) {
 	ctx, cancel := dbCtx()
 	defer cancel()
 
-	// River 是扫描作业的主队列；旧 task_jobs 记录一并清理，兼容升级前遗留数据。
+	// River 是扫描作业的主队列；running 也一起取消，避免暂停/取消后留下僵尸 job。
 	if q := DefaultScanQueue(); q != nil {
-		if n, err := q.CancelQueued(ctx, taskID); err != nil {
-			log.Printf("[TaskService] 取消任务 %s 的 River 排队作业失败: %v", taskID, err)
+		if n, err := q.CancelAll(ctx, taskID); err != nil {
+			log.Printf("[TaskService] 取消任务 %s 的 River 作业失败: %v", taskID, err)
 		} else if n > 0 {
-			log.Printf("[TaskService] 任务 %s 已取消 %d 个 River 排队作业", taskID, n)
+			log.Printf("[TaskService] 任务 %s 已取消 %d 个 River 作业（含运行中）", taskID, n)
 		}
 	}
 
