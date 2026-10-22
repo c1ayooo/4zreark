@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import {keepPreviousData, useQuery, useMutation, useQueryClient} from '@tanstack/react-query'
 import { pocApi, POC, CreatePOCRequest } from '@/api/pocs'
 import { Button } from '@/components/ui/button'
 import { useConfirm } from '@/components/common/confirm-provider'
@@ -67,6 +67,8 @@ export default function POCsPage() {
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['pocs', page, search],
+    // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
+    placeholderData: keepPreviousData,
     queryFn: () =>
       pocApi.list({
         page,

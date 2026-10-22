@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {keepPreviousData, useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import { Building2, DownloadCloud, FileSearch, GitBranch, Link2, Plus, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
 
 import { projectApi } from '@/api/projects'
@@ -105,6 +105,8 @@ export default function EnterprisePage() {
   const projects = useQuery({ queryKey: ['asset-projects'], queryFn: () => projectApi.list() })
   const list = useQuery({
     queryKey: ['enterprise-entities', projectId, q, status, page],
+    // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
+    placeholderData: keepPreviousData,
     queryFn: () =>
       enterpriseApi.list({
         project_id: Number(projectId) || undefined,

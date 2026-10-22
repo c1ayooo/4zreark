@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {keepPreviousData, useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import { Activity, Play, RefreshCw } from 'lucide-react'
 
 import { projectApi } from '@/api/projects'
@@ -71,6 +71,8 @@ export default function RunsPage() {
   })
   const targets = useQuery({
     queryKey: ['run-targets', selectedId, targetState],
+    // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
+    placeholderData: keepPreviousData,
     queryFn: () => runApi.targets(selectedId as number, targetState || undefined, 200),
     enabled: selectedId !== null,
   })

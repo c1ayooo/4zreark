@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import {keepPreviousData, useQuery, useMutation, useQueryClient} from '@tanstack/react-query'
 import { userApi } from '@/api/auth'
 import { registrationApi } from '@/api/registration'
 import { Button } from '@/components/ui/button'
@@ -61,6 +61,8 @@ export default function UsersPage() {
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['users', page, search],
+    // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
+    placeholderData: keepPreviousData,
     queryFn: () =>
       userApi.getUsers({
         page,

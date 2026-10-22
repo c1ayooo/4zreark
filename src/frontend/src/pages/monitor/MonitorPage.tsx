@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import {keepPreviousData, useQuery, useMutation, useQueryClient} from '@tanstack/react-query'
 import { monitorApi, MonitorType } from '@/api/monitor'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -94,6 +94,8 @@ export default function MonitorPage() {
   // 获取变化记录
   const { data: changesData, isLoading: changesLoading } = useQuery({
     queryKey: ['monitor-changes', changesPage],
+    // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
+    placeholderData: keepPreviousData,
     queryFn: () => monitorApi.getChanges({ page: changesPage, pageSize: 10 }),
     enabled: activeTab === 'changes',
   })

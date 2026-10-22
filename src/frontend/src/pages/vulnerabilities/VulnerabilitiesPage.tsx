@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import {keepPreviousData, useQuery, useMutation, useQueryClient} from '@tanstack/react-query'
 import { vulnApi } from '@/api/vulnerabilities'
 import { reportApi, type ReportProfile } from '@/api/reports'
 import { vulnStatusLabel, type VulnStatus } from '@/api/vulnerabilities'
@@ -61,6 +61,8 @@ export default function VulnerabilitiesPage() {
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['vulnerabilities', page, search, severityFilter, statusFilter],
+    // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
+    placeholderData: keepPreviousData,
     queryFn: () =>
       vulnApi.getVulnerabilities({
         page,
@@ -182,15 +184,14 @@ export default function VulnerabilitiesPage() {
           </SelectContent>
         </Select>
         
-        {/* Batch Actions */}
-        {selectedIds.length > 0 && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm">
-                批量操作 ({selectedIds.length})
-                <MoreHorizontal className="ml-2 h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
+        {/* Batch Actions：常驻渲染按需禁用，勾选变化不引起工具栏重排 */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" disabled={selectedIds.length === 0}>
+              批量操作{selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}
+              <MoreHorizontal className="ml-2 h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
             <DropdownMenuContent>
               <DropdownMenuItem onClick={() => handleBatchAction('confirmed')}>
                 标记为已确认
@@ -204,9 +205,8 @@ export default function VulnerabilitiesPage() {
               <DropdownMenuItem onClick={() => handleBatchAction('false_positive')}>
                 标记为误报
               </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Table */}

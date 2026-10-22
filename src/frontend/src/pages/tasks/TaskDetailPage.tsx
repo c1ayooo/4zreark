@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import {keepPreviousData, useQuery, useMutation, useQueryClient} from '@tanstack/react-query'
 import { taskApi, type Task } from '@/api/tasks'
 import { resultApi, type SubdomainResult, type ResultType } from '@/api/results'
 import TaskTopologyView from '@/components/tasks/TaskTopologyView'
@@ -136,6 +136,8 @@ export default function TaskDetailPage() {
   // 端口数据使用聚合 API
   const { data: portResultsData, isLoading: portResultsLoading } = useQuery({
     queryKey: ['task-port-results', id, page, search],
+    // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
+    placeholderData: keepPreviousData,
     queryFn: () => resultApi.getPortResults(id!, { page, pageSize, search }),
     enabled: !!id && currentTab === 'port',
   })
@@ -143,6 +145,8 @@ export default function TaskDetailPage() {
   // 其他类型使用通用 API
   const { data: resultsData, isLoading: resultsLoading } = useQuery({
     queryKey: ['task-results', id, currentTab, page, search, statusCodeFilter],
+    // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
+    placeholderData: keepPreviousData,
     queryFn: () => resultApi.getTaskResults(id!, { 
       type: currentTab as ResultType, 
       page, 
@@ -1399,9 +1403,12 @@ export default function TaskDetailPage() {
               <SelectItem value="all">全部项目</SelectItem>
             </SelectContent>
           </Select>
-          {currentTab === 'dirscan' && (
-            <div className="flex items-center gap-1">
-              <Select value={statusCodeFilter} onValueChange={setStatusCodeFilter}>
+          {(() => {
+            // 常驻渲染按需禁用：切 Tab 时工具栏几何形状不变
+            const statusApplicable = currentTab === 'dirscan'
+            return (
+            <div className="flex items-center gap-1" title={statusApplicable ? undefined : '仅目录扫描结果支持按状态码筛选'}>
+              <Select value={statusCodeFilter} onValueChange={setStatusCodeFilter} disabled={!statusApplicable}>
                 <SelectTrigger className="w-28">
                   <SelectValue placeholder="状态码" />
                 </SelectTrigger>
@@ -1433,11 +1440,12 @@ export default function TaskDetailPage() {
                 }}
               />
             </div>
-          )}
+            )
+          })()}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm" disabled={selectedRows.length === 0}>
-                操作 ({selectedRows.length})
+                操作{selectedRows.length > 0 ? ` (${selectedRows.length})` : ''}
                 <ChevronDown className="h-4 w-4 ml-2" />
               </Button>
             </DropdownMenuTrigger>

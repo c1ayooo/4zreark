@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {keepPreviousData, useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import { Plus, RefreshCw, Trash2, Undo2 } from 'lucide-react'
 
 import { projectApi } from '@/api/projects'
@@ -55,6 +55,8 @@ export default function DigitalAssetsPage() {
   const projects = useQuery({ queryKey: ['asset-projects'], queryFn: () => projectApi.list() })
   const list = useQuery({
     queryKey: ['digital-assets', projectId, kind, q, page],
+    // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
+    placeholderData: keepPreviousData,
     queryFn: () =>
       digitalApi.list({
         project_id: Number(projectId) || undefined,

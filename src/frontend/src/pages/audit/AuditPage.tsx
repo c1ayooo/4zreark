@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import {keepPreviousData, useQuery} from '@tanstack/react-query'
 import { RefreshCw, ScrollText } from 'lucide-react'
 
 import { auditApi, type OperationLog } from '@/api/audit'
@@ -33,6 +33,8 @@ export default function AuditPage() {
 
   const list = useQuery({
     queryKey: ['audit', applied, page],
+    // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
+    placeholderData: keepPreviousData,
     queryFn: () =>
       auditApi.list({
         username: applied.username || undefined,

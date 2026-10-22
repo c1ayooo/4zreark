@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import {keepPreviousData, useQuery} from '@tanstack/react-query'
 import { assetApi } from '@/api/assets'
 import {
   fingerprintScoreApi,
@@ -149,6 +149,8 @@ export default function FingerprintScorePage() {
       minScore, maxScore, category, fingerprint, sort,
     ],
     staleTime: 30_000,
+    // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
+    placeholderData: keepPreviousData,
     queryFn: () =>
       fingerprintScoreApi.list({
         project_id: Number(projectId) || undefined,

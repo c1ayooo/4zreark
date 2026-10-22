@@ -928,10 +928,14 @@ export default function AssetsPage() {
           <Button variant="outline" onClick={() => list.refetch()}>
             <RefreshCw className="mr-2 h-4 w-4" /> 刷新
           </Button>
-          {kind === 'site' && siteGroup && (
+          {(() => {
+            // 常驻渲染按需禁用：切粒度时工具栏几何形状不变
+            const colsApplicable = kind === 'site' && siteGroup
+            return (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline">
+              <Button variant="outline" disabled={!colsApplicable}
+                title={colsApplicable ? undefined : '仅站点归并视图支持自定义列'}>
                 <SlidersHorizontal className="mr-2 h-4 w-4" /> 列
               </Button>
             </DropdownMenuTrigger>
@@ -966,7 +970,8 @@ export default function AssetsPage() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          )}
+            )
+          })()}
           <Button variant="outline" onClick={() => list.refetch()}>
             <RefreshCw className="mr-2 h-4 w-4" /> 刷新
           </Button>

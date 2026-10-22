@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {keepPreviousData, useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import { RefreshCw, RotateCcw, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
 
 import { projectApi } from '@/api/projects'
@@ -58,6 +58,8 @@ export default function VerificationsPage() {
   })
   const list = useQuery({
     queryKey: ['verifications', projectId, status, reason, page],
+    // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
+    placeholderData: keepPreviousData,
     queryFn: () =>
       verificationApi.list({
         project_id: Number(projectId) || undefined,

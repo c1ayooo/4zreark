@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import {keepPreviousData, useQuery, useMutation, useQueryClient} from '@tanstack/react-query'
 import { taskApi, Task } from '@/api/tasks'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -52,6 +52,8 @@ export default function TasksPage() {
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['tasks', cursor, search, statusFilter],
+    // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
+    placeholderData: keepPreviousData,
     queryFn: () =>
       taskApi.getTasks({
         cursor: cursor ?? '',
