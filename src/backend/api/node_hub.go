@@ -23,6 +23,8 @@ type NodeHub struct {
 	mu      sync.RWMutex
 	conns   map[string]*nodeConn
 	pending map[string]map[string]chan scanReply
+	// taskConns 记录 task_id → 当前执行的节点连接，用于暂停/取消时发 cancel 指令。
+	taskConns map[string]*nodeConn
 
 	nodes *service.NodeService
 	tasks *service.TaskService
@@ -92,10 +94,11 @@ type wsNodeMessage struct {
 
 func NewNodeHub() *NodeHub {
 	return &NodeHub{
-		conns:   make(map[string]*nodeConn),
-		pending: make(map[string]map[string]chan scanReply),
-		nodes:   service.NewNodeService(),
-		tasks:   service.NewTaskService(),
+		conns:     make(map[string]*nodeConn),
+		pending:   make(map[string]map[string]chan scanReply),
+		taskConns: make(map[string]*nodeConn),
+		nodes:     service.NewNodeService(),
+		tasks:     service.NewTaskService(),
 	}
 }
 
@@ -107,6 +110,23 @@ func (h *NodeHub) CloseNode(nodeID string) {
 	if c != nil {
 		c.close()
 	}
+}
+
+// CancelTask 通知正在执行该任务的 worker 取消扫描 context。
+// 节点不在本进程或任务已经结束时返回 false，不影响控制面状态回收。
+func (h *NodeHub) CancelTask(taskID string) bool {
+	h.mu.RLock()
+	c := h.taskConns[taskID]
+	h.mu.RUnlock()
+	if c == nil {
+		return false
+	}
+	if err := c.sendJSON(wsCommand{Type: "cancel", TaskID: taskID}); err != nil {
+		log.Printf("[NodeHub] 发送取消指令失败 task=%s node=%s: %v", taskID, c.nodeID, err)
+		return false
+	}
+	log.Printf("[NodeHub] 已发送取消指令 task=%s node=%s", taskID, c.nodeID)
+	return true
 }
 
 // Dispatch 选一个在线且有容量的节点，把任务 id 发过去并等待 scan_done。
@@ -137,10 +157,14 @@ func (h *NodeHub) Dispatch(ctx context.Context, taskID string) error {
 	}
 	replyCh := make(chan scanReply, 1)
 	h.pending[c.nodeID][reqID] = replyCh
+	h.taskConns[taskID] = c
 	h.mu.Unlock()
 	defer func() {
 		h.mu.Lock()
 		delete(h.pending[c.nodeID], reqID)
+		if h.taskConns[taskID] == c {
+			delete(h.taskConns, taskID)
+		}
 		h.mu.Unlock()
 	}()
 

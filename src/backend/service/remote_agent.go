@@ -47,17 +47,19 @@ type RemoteAgent struct {
 	client   *RemoteClient
 	executor *TaskExecutor
 
-	mu      sync.Mutex
-	ws      *websocket.Conn
-	cancels map[string]context.CancelFunc
+	mu          sync.Mutex
+	ws          *websocket.Conn
+	cancels     map[string]context.CancelFunc // request_id → cancel
+	taskCancels map[string]context.CancelFunc // task_id → cancel（平台 pause/cancel 用）
 }
 
 func NewRemoteAgent(cfg *config.NodeConfig, client *RemoteClient, executor *TaskExecutor) *RemoteAgent {
 	return &RemoteAgent{
-		cfg:      cfg,
-		client:   client,
-		executor: executor,
-		cancels:  make(map[string]context.CancelFunc),
+		cfg:         cfg,
+		client:      client,
+		executor:    executor,
+		cancels:     make(map[string]context.CancelFunc),
+		taskCancels: make(map[string]context.CancelFunc),
 	}
 }
 
@@ -152,6 +154,16 @@ func (a *RemoteAgent) connectAndServe(ctx context.Context) error {
 				a.executor.SetIdentity(msg.NodeID, a.cfg.Name)
 			}
 			a.startScan(ctx, ws, msg)
+		case "cancel":
+			if msg.TaskID != "" {
+				a.mu.Lock()
+				cancel := a.taskCancels[msg.TaskID]
+				a.mu.Unlock()
+				if cancel != nil {
+					cancel()
+					log.Printf("[RemoteAgent] 收到平台取消指令 task=%s，已取消本地扫描 context", msg.TaskID)
+				}
+			}
 		case "hello_ack":
 			if msg.NodeID != "" {
 				a.executor.SetIdentity(msg.NodeID, a.cfg.Name)
@@ -206,6 +218,9 @@ func (a *RemoteAgent) startScan(parent context.Context, ws *websocket.Conn, msg 
 	taskCtx, cancel := context.WithCancel(parent)
 	a.mu.Lock()
 	a.cancels[msg.RequestID] = cancel
+	if msg.TaskID != "" {
+		a.taskCancels[msg.TaskID] = cancel
+	}
 	a.mu.Unlock()
 
 	go func() {
@@ -213,6 +228,9 @@ func (a *RemoteAgent) startScan(parent context.Context, ws *websocket.Conn, msg 
 			cancel()
 			a.mu.Lock()
 			delete(a.cancels, msg.RequestID)
+			if msg.TaskID != "" {
+				delete(a.taskCancels, msg.TaskID)
+			}
 			a.mu.Unlock()
 		}()
 
@@ -230,6 +248,10 @@ func (a *RemoteAgent) cancelAll() {
 	for id, cancel := range a.cancels {
 		cancel()
 		delete(a.cancels, id)
+	}
+	for id, cancel := range a.taskCancels {
+		cancel()
+		delete(a.taskCancels, id)
 	}
 	a.mu.Unlock()
 }

@@ -16,6 +16,21 @@ import (
 // 数据全部走 repo，本文件不出现任何 SQL 或驱动调用。
 type TaskService struct{}
 
+// taskCancelNotifier 由 main 注入 NodeHub.CancelTask；worker 不在本进程时自然 no-op。
+// 放在包级别是为了让 TaskService（暂停/取消）和 StaleTaskReaper 都能通知远端节点。
+var taskCancelNotifier func(taskID string)
+
+func SetTaskCancelNotifier(fn func(taskID string)) {
+	taskCancelNotifier = fn
+}
+
+// NotifyTaskCancel 通知正在执行该任务的 worker 取消扫描 context。
+func NotifyTaskCancel(taskID string) {
+	if taskCancelNotifier != nil {
+		taskCancelNotifier(taskID)
+	}
+}
+
 func NewTaskService() *TaskService {
 	return &TaskService{}
 }
@@ -526,6 +541,7 @@ func (s *TaskService) discardQueued(taskID string) {
 	} else if n > 0 {
 		log.Printf("[TaskService] 任务 %s 已丢弃 %d 个旧排队作业", taskID, n)
 	}
+	NotifyTaskCancel(taskID)
 }
 
 // CreateTaskTemplate creates a task template

@@ -73,6 +73,7 @@ func reapStaleTasks(ctx context.Context) {
 					log.Printf("[StaleReaper] 取消任务 %s 的 River job 失败: %v", id, err)
 				}
 			}
+			NotifyTaskCancel(id)
 			if node {
 				log.Printf("[StaleReaper] 已回收任务 %s（node=%s, updated=%s）", id, task.NodeID, task.UpdatedAt.Format(time.RFC3339))
 			} else {

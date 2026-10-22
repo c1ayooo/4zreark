@@ -158,6 +158,9 @@ func main() {
 
 	// 节点网关：worker 通过 WebSocket 连上来，master 通过它派单。
 	nodeHub := api.NewNodeHub()
+	service.SetTaskCancelNotifier(func(taskID string) {
+		nodeHub.CancelTask(taskID)
+	})
 
 	// worker 二进制托管：节点心跳回包里比对版本，不一致就从这个地址拉新版自更新。
 	workerBinaryPath := os.Getenv("ZRE_WORKER_BINARY")
