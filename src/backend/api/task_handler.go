@@ -38,6 +38,20 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 		pageSize = 10
 	}
 
+	if cursor, hasCursor := c.GetQuery("cursor"); hasCursor {
+		tasks, next, hasMore, err := h.taskService.ListTasksCursor(workspaceID, taskType, status, projectID, cursor, pageSize)
+		if err != nil {
+			utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+			return
+		}
+		c.JSON(200, gin.H{
+			"code": 0, "message": "success", "data": tasks,
+			"total": 0, "page": 1, "size": pageSize,
+			"next_cursor": next, "has_more": hasMore,
+		})
+		return
+	}
+
 	tasks, total, err := h.taskService.ListTasks(workspaceID, taskType, status, projectID, page, pageSize)
 	if err != nil {
 		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())

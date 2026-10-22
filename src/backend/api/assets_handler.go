@@ -162,6 +162,7 @@ func (h *AssetHandler) ListAssets(c *gin.Context) {
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
 	siteGroup := c.DefaultQuery("site_group", "1") != "0"
+	cursor, hasCursor := c.GetQuery("cursor")
 
 	res, err := h.assets.ListAssets(c.Request.Context(), repo.AssetQuery{
 		ProjectID: projectID,
@@ -173,6 +174,8 @@ func (h *AssetHandler) ListAssets(c *gin.Context) {
 		Sort:      c.Query("sort"),
 		Page:      page,
 		PageSize:  pageSize,
+		UseCursor: hasCursor,
+		Cursor:    cursor,
 	})
 	if err != nil {
 		if errors.Is(err, repo.ErrDSLSyntax) {

@@ -8,6 +8,8 @@ interface BackendPaginatedResponse<T> {
   total: number
   page: number
   size: number
+  next_cursor?: string
+  has_more?: boolean
 }
 
 // Helper to transform backend task to frontend format
@@ -175,10 +177,12 @@ export const taskApi = {
     status?: string
     type?: string
     projectId?: number
+    cursor?: string
   }): Promise<PaginatedResponse<Task>> => {
     const backendParams = {
       page: params?.page,
       page_size: params?.pageSize,
+      cursor: params?.cursor,
       status: params?.status,
       type: params?.type,
       project_id: params?.projectId,
@@ -192,6 +196,8 @@ export const taskApi = {
         total: response.total || 0,
         page: response.page || 1,
         pageSize: response.size || 10,
+        nextCursor: response.next_cursor || '',
+        hasMore: response.has_more || false,
       }
     }
   },
@@ -297,6 +303,8 @@ export const taskApi = {
         total: response.total || 0,
         page: response.page || 1,
         pageSize: response.size || 10,
+        nextCursor: response.next_cursor || '',
+        hasMore: response.has_more || false,
       }
     }
   },

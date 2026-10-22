@@ -115,6 +115,20 @@ func (s *TaskService) GetTaskByID(taskID string) (*models.Task, error) {
 }
 
 // ListTasks lists tasks with filtering and pagination
+func (s *TaskService) ListTasksCursor(workspaceID, taskType, status string, projectID int64, cursor string, pageSize int) ([]*models.Task, string, bool, error) {
+	ctx, cancel := dbCtx()
+	defer cancel()
+	tasks, _, err := s.stores()
+	if err != nil {
+		return nil, "", false, err
+	}
+	list, next, hasMore, err := tasks.ListCursor(ctx, workspaceID, taskType, status, projectID, cursor, pageSize)
+	if err != nil {
+		return nil, "", false, errors.New("查询任务列表失败: " + err.Error())
+	}
+	return list, next, hasMore, nil
+}
+
 func (s *TaskService) ListTasks(workspaceID string, taskType string, status string, projectID int64, page, pageSize int) ([]*models.Task, int64, error) {
 	ctx, cancel := dbCtx()
 	defer cancel()

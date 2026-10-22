@@ -2,7 +2,9 @@ package repo
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -26,6 +28,9 @@ type AssetQuery struct {
 	Sort      string // ""|first_seen（缺省）|risk（按 P0-P4 评分倒序）
 	Page      int
 	PageSize  int
+	// UseCursor 时走 keyset 分页：不执行 count(*)，用 next_cursor 翻页。
+	UseCursor bool
+	Cursor    string
 }
 
 // ConnectivityPolicy 是连通性与清理策略，随列表响应下发，前端不再二次请求。
@@ -44,19 +49,21 @@ type ConnectivityPolicy struct {
 //	domain → []*DomainRow
 //	ip     → []*IPRow
 type AssetPage struct {
-	Items     any                 `json:"items"`
-	Total     int64               `json:"total"`
-	Page      int                 `json:"page"`
-	PageSize  int                 `json:"page_size"`
-	Kind      string              `json:"kind"`
-	Catalog   string              `json:"catalog"`
-	View      string              `json:"view"`
-	Lifecycle string              `json:"lifecycle"`
-	SiteGroup bool                `json:"site_group"`
-	Sort      string              `json:"sort,omitempty"`
-	Supported bool                `json:"view_supported"`
-	Note      string              `json:"note,omitempty"`
-	Policy    *ConnectivityPolicy `json:"connectivity_policy,omitempty"`
+	Items      any                 `json:"items"`
+	Total      int64               `json:"total"`
+	Page       int                 `json:"page"`
+	PageSize   int                 `json:"page_size"`
+	NextCursor string              `json:"next_cursor,omitempty"`
+	HasMore    bool                `json:"has_more"`
+	Kind       string              `json:"kind"`
+	Catalog    string              `json:"catalog"`
+	View       string              `json:"view"`
+	Lifecycle  string              `json:"lifecycle"`
+	SiteGroup  bool                `json:"site_group"`
+	Sort       string              `json:"sort,omitempty"`
+	Supported  bool                `json:"view_supported"`
+	Note       string              `json:"note,omitempty"`
+	Policy     *ConnectivityPolicy `json:"connectivity_policy,omitempty"`
 }
 
 // DomainRow 是域名粒度的一行。
@@ -237,11 +244,32 @@ func (a *AssetRepo) ListAssets(ctx context.Context, q AssetQuery) (*AssetPage, e
 		return nil, err
 	}
 
+	cursorMode := q.UseCursor && (page.Kind != "site" || (q.SiteGroup && normalizeSort(q.Sort) != "risk"))
+	if q.UseCursor && !cursorMode {
+		// 风险排序要先把全量候选算完，展开入口是聚合视图；这两种继续用 page。
+		q.UseCursor = false
+	}
 	switch page.Kind {
 	case "domain":
-		page.Items, page.Total, err = a.listDomains(ctx, w, q)
+		if q.UseCursor {
+			var items []*DomainRow
+			var next string
+			var more bool
+			items, next, more, err = a.listDomainsCursor(ctx, w, q)
+			page.Items, page.NextCursor, page.HasMore = items, next, more
+		} else {
+			page.Items, page.Total, err = a.listDomains(ctx, w, q)
+		}
 	case "ip":
-		page.Items, page.Total, err = a.listIPs(ctx, w, q)
+		if q.UseCursor {
+			var items []*IPRow
+			var next string
+			var more bool
+			items, next, more, err = a.listIPsCursor(ctx, w, q)
+			page.Items, page.NextCursor, page.HasMore = items, next, more
+		} else {
+			page.Items, page.Total, err = a.listIPs(ctx, w, q)
+		}
 	default:
 		switch {
 		case !q.SiteGroup:
@@ -249,7 +277,15 @@ func (a *AssetRepo) ListAssets(ctx context.Context, q AssetQuery) (*AssetPage, e
 		case normalizeSort(q.Sort) == "risk":
 			page.Items, page.Total, err = a.listSiteRowsByRisk(ctx, w, q)
 		default:
-			page.Items, page.Total, err = a.listSiteRows(ctx, w, q)
+			if q.UseCursor {
+				var items []*Site
+				var next string
+				var more bool
+				items, next, more, err = a.listSiteRowsCursor(ctx, w, q)
+				page.Items, page.NextCursor, page.HasMore = items, next, more
+			} else {
+				page.Items, page.Total, err = a.listSiteRows(ctx, w, q)
+			}
 		}
 	}
 	if err != nil {
@@ -273,6 +309,194 @@ func (a *AssetRepo) ConnectivityPolicy(ctx context.Context) (*ConnectivityPolicy
 		return nil, err
 	}
 	return &p, nil
+}
+
+func encodeAssetCursor(parts ...string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(strings.Join(parts, "|")))
+}
+
+func decodeAssetCursor(s string) ([]string, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.Split(string(raw), "|")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("invalid cursor")
+	}
+	return parts, nil
+}
+
+func (a *AssetRepo) listSiteRowsCursor(ctx context.Context, w *whereBuilder, q AssetQuery) ([]*Site, string, bool, error) {
+	if q.PageSize < 1 || q.PageSize > 500 {
+		q.PageSize = 20
+	}
+	where := w.String()
+	args := append([]any{}, w.args...)
+	if q.Cursor != "" {
+		parts, err := decodeAssetCursor(q.Cursor)
+		if err != nil {
+			return nil, "", false, err
+		}
+		nano, err := strconv.ParseInt(parts[0], 10, 64)
+		if err != nil {
+			return nil, "", false, err
+		}
+		args = append(args, time.Unix(0, nano).UTC(), parts[1])
+		where += fmt.Sprintf(" AND (s.first_seen, s.id) < ($%d, $%d)", len(args)-1, len(args))
+	}
+	args = append(args, q.PageSize+1)
+	stmt := fmt.Sprintf(`SELECT %s FROM sites s JOIN projects p ON p.id = s.project_id
+		WHERE %s ORDER BY s.first_seen DESC, s.id DESC LIMIT $%d`,
+		siteColumns, where, len(args))
+	rows, err := a.r.pool.Query(ctx, stmt, args...)
+	if err != nil {
+		return nil, "", false, fmt.Errorf("查询资产失败: %w", err)
+	}
+	defer rows.Close()
+	out := make([]*Site, 0, q.PageSize+1)
+	for rows.Next() {
+		s, err := scanSite(rows.Scan)
+		if err != nil {
+			return nil, "", false, fmt.Errorf("解析资产失败: %w", err)
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", false, err
+	}
+	hasMore := len(out) > q.PageSize
+	if hasMore {
+		out = out[:q.PageSize]
+	}
+	if err := a.attachRisk(ctx, out); err != nil {
+		return nil, "", false, err
+	}
+	next := ""
+	if len(out) > 0 {
+		last := out[len(out)-1]
+		next = encodeAssetCursor(strconv.FormatInt(last.FirstSeen.UnixNano(), 10), strconv.FormatInt(last.ID, 10))
+	}
+	return out, next, hasMore, nil
+}
+
+func (a *AssetRepo) listDomainsCursor(ctx context.Context, w *whereBuilder, q AssetQuery) ([]*DomainRow, string, bool, error) {
+	if q.PageSize < 1 || q.PageSize > 500 {
+		q.PageSize = 20
+	}
+	where := w.String()
+	args := append([]any{}, w.args...)
+	having := ""
+	if q.Cursor != "" {
+		parts, err := decodeAssetCursor(q.Cursor)
+		if err != nil {
+			return nil, "", false, err
+		}
+		cnt, err := strconv.ParseInt(parts[0], 10, 64)
+		if err != nil {
+			return nil, "", false, err
+		}
+		args = append(args, cnt, parts[1])
+		having = fmt.Sprintf(" HAVING count(*) < $%d OR (count(*) = $%d AND s.host > $%d)",
+			len(args)-1, len(args)-1, len(args))
+	}
+	args = append(args, q.PageSize+1)
+	stmt := fmt.Sprintf(`
+		SELECT s.host, count(*) AS site_count, min(s.project_id),
+		       min(p.code), min(p.name),
+		       count(*) FILTER (WHERE s.state = 'reachable') AS reachable_count,
+		       max(s.last_seen)
+		  FROM sites s JOIN projects p ON p.id = s.project_id
+		 WHERE %s
+		 GROUP BY s.host%s
+		 ORDER BY site_count DESC, s.host
+		 LIMIT $%d`, where, having, len(args))
+	rows, err := a.r.pool.Query(ctx, stmt, args...)
+	if err != nil {
+		return nil, "", false, fmt.Errorf("查询域名失败: %w", err)
+	}
+	defer rows.Close()
+	out := make([]*DomainRow, 0, q.PageSize+1)
+	for rows.Next() {
+		var d DomainRow
+		if err := rows.Scan(&d.Host, &d.SiteCount, &d.ProjectID, &d.ProjectCode, &d.ProjectName,
+			&d.ReachableCnt, &d.LastSeen); err != nil {
+			return nil, "", false, fmt.Errorf("解析域名失败: %w", err)
+		}
+		d.ResourceType = "domain"
+		out = append(out, &d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", false, err
+	}
+	hasMore := len(out) > q.PageSize
+	if hasMore {
+		out = out[:q.PageSize]
+	}
+	next := ""
+	if len(out) > 0 {
+		last := out[len(out)-1]
+		next = encodeAssetCursor(strconv.FormatInt(last.SiteCount, 10), last.Host)
+	}
+	return out, next, hasMore, nil
+}
+
+func (a *AssetRepo) listIPsCursor(ctx context.Context, w *whereBuilder, q AssetQuery) ([]*IPRow, string, bool, error) {
+	if q.PageSize < 1 || q.PageSize > 500 {
+		q.PageSize = 20
+	}
+	where := w.String() + " AND s.ip IS NOT NULL"
+	args := append([]any{}, w.args...)
+	having := ""
+	if q.Cursor != "" {
+		parts, err := decodeAssetCursor(q.Cursor)
+		if err != nil {
+			return nil, "", false, err
+		}
+		cnt, err := strconv.ParseInt(parts[0], 10, 64)
+		if err != nil {
+			return nil, "", false, err
+		}
+		args = append(args, cnt, parts[1])
+		having = fmt.Sprintf(" HAVING count(*) < $%d OR (count(*) = $%d AND s.ip > $%d::inet)",
+			len(args)-1, len(args)-1, len(args))
+	}
+	args = append(args, q.PageSize+1)
+	stmt := fmt.Sprintf(`
+		SELECT s.ip::text, count(*) AS site_count, count(DISTINCT s.host) AS domain_count,
+		       min(s.project_id), max(s.last_seen)
+		  FROM sites s
+		 WHERE %s
+		 GROUP BY s.ip%s
+		 ORDER BY site_count DESC, s.ip
+		 LIMIT $%d`, where, having, len(args))
+	rows, err := a.r.pool.Query(ctx, stmt, args...)
+	if err != nil {
+		return nil, "", false, fmt.Errorf("查询 IP 失败: %w", err)
+	}
+	defer rows.Close()
+	out := make([]*IPRow, 0, q.PageSize+1)
+	for rows.Next() {
+		var r IPRow
+		if err := rows.Scan(&r.IP, &r.SiteCount, &r.DomainCount, &r.ProjectID, &r.LastSeen); err != nil {
+			return nil, "", false, fmt.Errorf("解析 IP 失败: %w", err)
+		}
+		r.ResourceType = "ip"
+		out = append(out, &r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", false, err
+	}
+	hasMore := len(out) > q.PageSize
+	if hasMore {
+		out = out[:q.PageSize]
+	}
+	next := ""
+	if len(out) > 0 {
+		last := out[len(out)-1]
+		next = encodeAssetCursor(strconv.FormatInt(last.SiteCount, 10), last.IP)
+	}
+	return out, next, hasMore, nil
 }
 
 func (a *AssetRepo) listSiteRows(ctx context.Context, w *whereBuilder, q AssetQuery) (any, int64, error) {

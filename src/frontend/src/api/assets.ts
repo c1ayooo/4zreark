@@ -129,6 +129,9 @@ export interface AssetPage {
   view_supported: boolean
   note?: string
   connectivity_policy?: ConnectivityPolicy
+  /** keyset 分页游标；空字符串表示没有下一页 */
+  next_cursor?: string
+  has_more?: boolean
 }
 
 export interface ProbeEndpointResult {
@@ -189,8 +192,10 @@ export interface AssetProject {
 }
 
 export interface AssetQueryParams {
-  page: number
+  page?: number
   page_size: number
+  /** keyset 分页；传空字符串表示第一页 */
+  cursor?: string
   q?: string
   project_id?: number
   kind?: AssetKind

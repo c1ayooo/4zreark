@@ -54,6 +54,9 @@ export interface PaginatedResponse<T> {
     total: number
     page: number
     pageSize: number
+    /** keyset 分页：空字符串表示已经到底 */
+    nextCursor?: string
+    hasMore?: boolean
   }
 }
 

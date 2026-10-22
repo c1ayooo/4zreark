@@ -2,9 +2,11 @@ package repo
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +21,7 @@ type TaskRepo interface {
 	Create(ctx context.Context, t *models.Task) error
 	GetByID(ctx context.Context, id string) (*models.Task, error)
 	List(ctx context.Context, workspaceID, taskType, status string, projectID int64, page, pageSize int) ([]*models.Task, int64, error)
+	ListCursor(ctx context.Context, workspaceID, taskType, status string, projectID int64, cursor string, pageSize int) ([]*models.Task, string, bool, error)
 	UpdateFields(ctx context.Context, id string, fields map[string]any) error
 	Delete(ctx context.Context, id string) error
 	StatusCounts(ctx context.Context, workspaceID string) (map[string]int, error)
@@ -335,6 +338,78 @@ func (r *taskRepo) List(ctx context.Context, workspaceID, taskType, status strin
 		tasks = append(tasks, t)
 	}
 	return tasks, total, rows.Err()
+}
+
+// EncodeTaskCursor 用 (created_at, id) 作为 keyset 游标，避免 offset + count。
+func encodeTaskCursor(t time.Time, id string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(t.UTC().Format(time.RFC3339Nano) + "|" + id))
+}
+
+func decodeTaskCursor(s string) (time.Time, string, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return time.Time{}, "", err
+	}
+	parts := strings.SplitN(string(raw), "|", 2)
+	if len(parts) != 2 {
+		return time.Time{}, "", fmt.Errorf("invalid cursor")
+	}
+	t, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return time.Time{}, "", err
+	}
+	return t, parts[1], nil
+}
+
+// ListCursor 返回下一页任务；next 为空表示到底。
+func (r *taskRepo) ListCursor(ctx context.Context, workspaceID, taskType, status string, projectID int64, cursor string, pageSize int) ([]*models.Task, string, bool, error) {
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 10
+	}
+	where := `where ($1 = '' or workspace_id = $1)
+	                 and ($2 = '' or type = $2)
+	                 and ($3 = '' or status = $3)
+	                 and ($4 = 0 or project_id = $4)`
+	args := []any{workspaceID, taskType, status, projectID}
+	if cursor != "" {
+		t, id, err := decodeTaskCursor(cursor)
+		if err != nil {
+			return nil, "", false, fmt.Errorf("分页游标无效: %w", err)
+		}
+		args = append(args, t, id)
+		where += fmt.Sprintf(" and (created_at, id) < ($%d, $%d)", len(args)-1, len(args))
+	}
+	args = append(args, pageSize+1)
+	rows, err := r.r.pool.Query(ctx,
+		`select `+taskColumns+` from tasks `+where+`
+		  order by created_at desc, id desc
+		  limit $`+strconv.Itoa(len(args)), args...)
+	if err != nil {
+		return nil, "", false, err
+	}
+	defer rows.Close()
+
+	tasks := make([]*models.Task, 0, pageSize+1)
+	for rows.Next() {
+		t, err := scanTask(rows)
+		if err != nil {
+			return nil, "", false, err
+		}
+		tasks = append(tasks, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", false, err
+	}
+	hasMore := len(tasks) > pageSize
+	if hasMore {
+		tasks = tasks[:pageSize]
+	}
+	next := ""
+	if len(tasks) > 0 {
+		last := tasks[len(tasks)-1]
+		next = encodeTaskCursor(last.CreatedAt, last.ID.Hex())
+	}
+	return tasks, next, hasMore, nil
 }
 
 func (r *taskRepo) UpdateFields(ctx context.Context, id string, fields map[string]any) error {

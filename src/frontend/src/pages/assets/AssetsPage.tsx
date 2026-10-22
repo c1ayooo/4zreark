@@ -175,6 +175,11 @@ export default function AssetsPage() {
     const n = Number(searchParams.get('page_size'))
     return [20, 50, 100, 200, 500].includes(n) ? n : 50
   })
+  const [cursorStack, setCursorStack] = useState<Array<string | undefined>>([undefined])
+  const cursor = cursorStack[cursorStack.length - 1]
+  const clusterView = view === 'icons' || view === 'technologies'
+  const riskSort = kind === 'site' && siteGroup && sort === 'risk'
+  const cursorMode = !clusterView && !riskSort && (kind === 'site' ? siteGroup : true)
 
   // 外部入口（顶部全局搜索、分享链接）改了 q：先同步进列表状态，再让下方回写。
   const urlQ = searchParams.get('q') || ''
@@ -189,6 +194,11 @@ export default function AssetsPage() {
 
   // 所有筛选/分页同步进 URL：刷新、分享链接、浏览器后退都能还原完整视图。
   useEffect(() => {
+    setPage(1)
+    setCursorStack([undefined])
+  }, [appliedQ, projectId, kind, catalog, view, siteGroup, sort, pageSize])
+
+  useEffect(() => {
     // URL 上的 q 还没被应用时先跳过回写，否则会把外部传来的查询条件立即冲掉。
     if (urlQ !== appliedQ) return
     const next = new URLSearchParams()
@@ -200,24 +210,23 @@ export default function AssetsPage() {
     if (!siteGroup) next.set('site_group', '0')
     if (sort === 'risk') next.set('sort', 'risk')
     if (pageSize !== 50) next.set('page_size', String(pageSize))
-    if (page > 1) next.set('page', String(page))
+    if (!cursorMode && page > 1) next.set('page', String(page))
     setSearchParams(next, { replace: true })
-  }, [appliedQ, urlQ, projectId, kind, catalog, view, siteGroup, sort, pageSize, page, setSearchParams])
+  }, [appliedQ, urlQ, projectId, kind, catalog, view, siteGroup, sort, pageSize, page, cursorMode, setSearchParams])
 
   const overview = useQuery({ queryKey: ['asset-overview'], queryFn: () => assetApi.overview() })
   const projects = useQuery({ queryKey: ['asset-projects'], queryFn: () => assetApi.projects() })
 
   const hasFilters = !!appliedQ || kind !== 'site' || catalog !== 'all' || !!view
 
-  const clusterView = view === 'icons' || view === 'technologies'
-  const riskSort = kind === 'site' && siteGroup && sort === 'risk'
+  // 站点默认/域名/IP 用 keyset；风险排序、展开入口和聚类仍走 page。
   const list = useQuery({
-    queryKey: ['assets', page, pageSize, appliedQ, projectId, kind, catalog, view, siteGroup, riskSort],
+    queryKey: ['assets', cursorMode ? `c:${cursor ?? ''}` : `p:${page}`, pageSize, appliedQ, projectId, kind, catalog, view, siteGroup, riskSort],
     enabled: !clusterView,
     staleTime: 30_000,
     queryFn: () =>
       assetApi.list({
-        page,
+        ...(cursorMode ? { cursor: cursor ?? '' } : { page }),
         page_size: pageSize,
         q: appliedQ || undefined,
         project_id: Number(projectId) || undefined,
@@ -340,6 +349,8 @@ export default function AssetsPage() {
   const total = data?.total ?? 0
   const size = data?.page_size ?? pageSize
   const pages = Math.max(1, Math.ceil(total / size))
+  const nextCursor = data?.next_cursor ?? ''
+  const hasMore = data?.has_more ?? false
   const stats = overview.data?.data
   const policy = data?.connectivity_policy
   const busy = probe.isPending || verify.isPending || protect.isPending
@@ -576,7 +587,7 @@ export default function AssetsPage() {
           </Select>
         </div>
         <span className="ml-auto text-sm text-muted-foreground">
-          共 {total.toLocaleString()} 条
+          {cursorMode ? `已加载 ${items.length} 条` : `共 ${total.toLocaleString()} 条`}
         </span>
       </div>
 
@@ -830,37 +841,63 @@ export default function AssetsPage() {
         </div>
       )}
 
-      <div className="flex items-center justify-between text-sm">
-        <span className="text-muted-foreground">
-          共{' '}
-          {(clusterView
-            ? view === 'icons'
-              ? iconClusters.data?.data.total ?? 0
-              : techClusters.data?.data.total ?? 0
-            : total
-          ).toLocaleString()}{' '}
-          条 · 第 {page} /{' '}
-          {Math.max(
-            1,
-            Math.ceil(
-              (clusterView
-                ? view === 'icons'
-                  ? iconClusters.data?.data.total ?? 0
-                  : techClusters.data?.data.total ?? 0
-                : total) / (clusterView ? 60 : size)
-            )
-          )}{' '}
-          页
-        </span>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-            上一页
-          </Button>
-          <Button variant="outline" size="sm" disabled={page >= pages} onClick={() => setPage((p) => p + 1)}>
-            下一页
-          </Button>
+      {cursorMode ? (
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-muted-foreground">
+            第 {cursorStack.length} 页 · 本页 {items.length} 条
+          </span>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={cursorStack.length <= 1}
+              onClick={() => setCursorStack((stack) => stack.slice(0, -1))}
+            >
+              上一页
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!hasMore || !nextCursor}
+              onClick={() => setCursorStack((stack) => [...stack, nextCursor])}
+            >
+              下一页
+            </Button>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-muted-foreground">
+            共{' '}
+            {(clusterView
+              ? view === 'icons'
+                ? iconClusters.data?.data.total ?? 0
+                : techClusters.data?.data.total ?? 0
+              : total
+            ).toLocaleString()}{' '}
+            条 · 第 {page} /{' '}
+            {Math.max(
+              1,
+              Math.ceil(
+                (clusterView
+                  ? view === 'icons'
+                    ? iconClusters.data?.data.total ?? 0
+                    : techClusters.data?.data.total ?? 0
+                  : total) / (clusterView ? 60 : size)
+              )
+            )}{' '}
+            页
+          </span>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+              上一页
+            </Button>
+            <Button variant="outline" size="sm" disabled={page >= pages} onClick={() => setPage((p) => p + 1)}>
+              下一页
+            </Button>
+          </div>
+        </div>
+      )}
 
       <CreateTaskFromAssetsDialog
         open={createOpen}

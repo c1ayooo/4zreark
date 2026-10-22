@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { taskApi, Task } from '@/api/tasks'
 import { Button } from '@/components/ui/button'
@@ -41,14 +41,20 @@ export default function TasksPage() {
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
-  const [page, setPage] = useState(1)
+  const [cursorStack, setCursorStack] = useState<Array<string | undefined>>([undefined])
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
+  const cursor = cursorStack[cursorStack.length - 1]
+  const page = cursorStack.length
+
+  useEffect(() => {
+    setCursorStack([undefined])
+  }, [search, statusFilter])
 
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['tasks', page, search, statusFilter],
+    queryKey: ['tasks', cursor, search, statusFilter],
     queryFn: () =>
       taskApi.getTasks({
-        page,
+        cursor: cursor ?? '',
         pageSize: 10,
         search,
         status: statusFilter === 'all' ? undefined : statusFilter,
@@ -123,8 +129,8 @@ export default function TasksPage() {
   })
 
   const tasks = data?.data?.list || []
-  const total = data?.data?.total || 0
-  const totalPages = Math.ceil(total / 10)
+  const hasMore = data?.data?.hasMore ?? false
+  const nextCursor = data?.data?.nextCursor ?? '' 
 
   const getStatusLabel = (status: Task['status']) => {
     const labels: Record<string, string> = {
@@ -319,24 +325,24 @@ export default function TasksPage() {
       </div>
 
       {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex justify-center gap-2">
+      {(page > 1 || hasMore) && (
+        <div className="flex items-center justify-center gap-2">
           <Button
             variant="outline"
             size="sm"
-            disabled={page === 1}
-            onClick={() => setPage(page - 1)}
+            disabled={page <= 1}
+            onClick={() => setCursorStack((stack) => stack.slice(0, -1))}
           >
             上一页
           </Button>
-          <span className="py-2 px-4 text-sm">
-            {page} / {totalPages}
+          <span className="px-4 py-2 text-sm text-muted-foreground">
+            第 {page} 页 · 本页 {tasks.length} 条
           </span>
           <Button
             variant="outline"
             size="sm"
-            disabled={page === totalPages}
-            onClick={() => setPage(page + 1)}
+            disabled={!hasMore || !nextCursor}
+            onClick={() => setCursorStack((stack) => [...stack, nextCursor])}
           >
             下一页
           </Button>
