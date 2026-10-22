@@ -3,6 +3,8 @@ package service
 import (
 	"compress/gzip"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -67,9 +69,30 @@ func SelfVersion() string {
 	return BinaryVersion(exe)
 }
 
+// newUpdateClient 构造信任平台自签 CA 的下载客户端。
+// worker 连平台走的是自签证书链，用系统根证书池会直接握手失败。
+func newUpdateClient(caPath string) (*http.Client, error) {
+	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if caPath != "" {
+		pem, err := os.ReadFile(caPath)
+		if err != nil {
+			return nil, fmt.Errorf("读取平台 CA 失败: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("平台 CA 无法解析: %s", caPath)
+		}
+		tlsCfg.RootCAs = pool
+	}
+	return &http.Client{
+		Timeout:   10 * time.Minute,
+		Transport: &http.Transport{TLSClientConfig: tlsCfg},
+	}, nil
+}
+
 // TrySelfUpdate 从平台拉取新版 worker，校验后原地替换并 exec 重启。
 // 任何一步失败都只返回错误，当前进程继续按旧版干活，不会把节点搞丢。
-func TrySelfUpdate(platformURL, token, binaryURL, wantVersion string) error {
+func TrySelfUpdate(platformURL, token, binaryURL, wantVersion, caPath string) error {
 	if !atomic.CompareAndSwapInt32(&updatingFlag, 0, 1) {
 		return nil
 	}
@@ -112,7 +135,11 @@ func TrySelfUpdate(platformURL, token, binaryURL, wantVersion string) error {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	client := &http.Client{Timeout: 10 * time.Minute}
+	// 下载客户端必须信任平台自签 CA，否则会报 x509: certificate signed by unknown authority
+	client, err := newUpdateClient(caPath)
+	if err != nil {
+		return err
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("下载失败: %w", err)

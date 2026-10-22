@@ -169,6 +169,31 @@ func (s *AssetService) ListAssets(ctx context.Context, q repo.AssetQuery) (*repo
 	return a.ListAssets(ctx, q)
 }
 
+// ListFingerprintScores 是指纹评分列表：按项目取资产，用指纹命中算分并筛选。
+// 分数是读时计算的（不落库），所以排序与分页都在 repo 内完成。
+func (s *AssetService) ListFingerprintScores(ctx context.Context, q repo.FpScoreQuery) (*repo.FpScorePage, error) {
+	a, err := s.repo()
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case q.PageSize < 1:
+		q.PageSize = 20
+	case q.PageSize > 200:
+		q.PageSize = 200
+	}
+	if q.Page < 1 {
+		q.Page = 1
+	}
+	if q.MinScore < 0 {
+		q.MinScore = 0
+	}
+	if q.MaxScore < 0 {
+		q.MaxScore = 0
+	}
+	return a.ListFpScores(ctx, q)
+}
+
 // ListTaskSites 是任务详情「本任务资产」页签的数据源：
 // 按 raw_records.task_id 找出该任务贡献过证据的站点。
 func (s *AssetService) ListTaskSites(ctx context.Context, taskID string, page, pageSize int, q string) ([]repo.TaskSite, int64, error) {

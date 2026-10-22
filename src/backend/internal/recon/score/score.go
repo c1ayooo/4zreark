@@ -41,6 +41,7 @@ type Input struct {
 	MissingSecurityHeaders []string // HSTS/CSP/X-Content-Type-Options 等
 	DirectoryListing       bool     // 目录列表开启
 	DefaultPage            bool     // 默认/示例页特征
+	ErrorPage              bool     // 错误/调试页（框架、堆栈、SQL 报错等）
 
 	// 蜜罐甄别（recon/honeypot 结论）："" / "suspect" / "likely"。
 	// likely 强制压到 p4（蜜罐资产不值得消耗测试预算），suspect 减 20 分。
@@ -125,6 +126,13 @@ func Compute(in Input) (int, string, []factorOut) {
 	if consolePts, consoleHits := adminConsolePoints(in); consolePts > 0 {
 		total += consolePts
 		factors = append(factors, factorOut{"admin_console", consolePts, strings.Join(consoleHits, "、")})
+	}
+
+	// ── 3.6 错误/调试页（8）──
+	// 错误页本身是弱证据，但它暴露框架/堆栈/SQL 方言，是「可能有洞」的旁证。
+	if in.ErrorPage {
+		total += 8
+		factors = append(factors, factorOut{"error_page", 8, "错误/调试页暴露框架或堆栈信息"})
 	}
 
 	// ── 3.7 高产路径先验（10）──
@@ -256,7 +264,7 @@ func Level(score int) string {
 		return "p0"
 	case score >= 60:
 		return "p1"
-	case score >= 40:
+	case score >= 30:
 		return "p2"
 	case score >= 15:
 		return "p3"
@@ -271,23 +279,54 @@ var riskyPortDict = map[int]struct {
 	name string
 }{
 	23:    {20, "Telnet"},
+	2375:  {20, "Docker API"},
+	2376:  {20, "Docker API (TLS)"},
 	3389:  {18, "RDP"},
 	6379:  {18, "Redis"},
 	9200:  {18, "Elasticsearch"},
-	2375:  {20, "Docker API"},
+	6443:  {18, "K8s API"},
+	10250: {18, "Kubelet API"},
 	27017: {16, "MongoDB"},
+	15672: {16, "RabbitMQ 管理台"},
+	2379:  {16, "etcd"},
+	2380:  {16, "etcd peer"},
+	50070: {16, "HDFS NameNode"},
+	9000:  {16, "MinIO"},
+	9001:  {16, "MinIO Console"},
+	7001:  {16, "WebLogic"},
+	7002:  {16, "WebLogic (SSL)"},
 	445:   {14, "SMB"},
 	1433:  {14, "MSSQL"},
 	5900:  {14, "VNC"},
 	11211: {14, "Memcached"},
+	2181:  {14, "ZooKeeper"},
+	2049:  {14, "NFS"},
+	9300:  {14, "Elasticsearch transport"},
+	10000: {14, "Webmin"},
+	8088:  {14, "YARN ResourceManager"},
+	16010: {14, "HBase Master"},
+	9042:  {14, "Cassandra"},
+	8848:  {14, "Nacos"},
 	3306:  {12, "MySQL"},
 	5432:  {12, "PostgreSQL"},
-	7001:  {12, "WebLogic"},
-	8848:  {12, "Nacos"},
+	1521:  {12, "Oracle"},
+	9092:  {12, "Kafka"},
+	8500:  {12, "Consul"},
+	8086:  {12, "InfluxDB"},
+	5601:  {12, "Kibana"},
 	21:    {10, "FTP"},
 	161:   {10, "SNMP"},
-	6443:  {8, "K8s API"},
-	5601:  {8, "Kibana"},
+	139:   {10, "NetBIOS"},
+	873:   {10, "rsync"},
+	5000:  {10, "Docker Registry"},
+	8888:  {10, "Jupyter"},
+	389:   {8, "LDAP"},
+	636:   {8, "LDAPS"},
+	111:   {8, "rpcbind"},
+	19888: {8, "Hadoop JobHistory"},
+	9090:  {10, "Prometheus"},
+	3000:  {10, "Grafana"},
+	5672:  {8, "RabbitMQ"},
 }
 
 // riskyPortPoints 高危端口字典：返回（分数, 命中描述）。取最高一个端口计分，
@@ -362,26 +401,203 @@ func riskyPortPoints(ports []int) (int, string) {
 	return maxPts, "高危端口暴露 " + strings.Join(hits, "、")
 }
 
-// riskyProductDict 高风险产品关键词 → 风险分（代表该产品线历史上高频出现可利用面）。
+// riskyProductDict 高风险产品/组件关键词 → 风险分。
+//
+// 分组口径：
+//   - S 40：历史 RCE / 反序列化 / 未授权执行（WebLogic/Struts/Shiro/Fastjson/
+//     Log4j/Jenkins/HZERO/Actuator/K8s Dashboard 等）
+//   - A 25-35：常见未授权管理面/数据平台/对象存储（Nacos/Eureka/Druid/
+//     Jupyter/Airflow/XXL-JOB/MinIO/S3 桶/phpMyAdmin 等）
+//   - B 8-20：通用组件/CMS/调试页/敏感路径（Tomcat/JSP/Swagger/.git 等）
+//
+// family 用于去重：同一产品的多个关键词只计一次（如 spring/spring boot）。
+// keyword 长度 <=3 时按 token 精确匹配，避免 s3 命中 s3cr3t、cos 命中 cost。
 var riskyProductDict = []struct {
 	keyword string
+	family  string
 	pts     int
 }{
-	{"jenkins", 16}, {"weblogic", 16}, {"nacos", 14}, {"struts", 14}, {"thinkphp", 14},
-	{"phpmyadmin", 14}, {"actuator", 14}, {"shiro", 12}, {"jboss", 12}, {"druid", 12},
-	{"elasticsearch", 10}, {"solr", 12}, {"kibana", 10}, {"grafana", 10}, {"zabbix", 10},
-	{"gitlab", 10}, {"harbor", 10}, {"minio", 8}, {"tomcat", 8}, {"spring", 8},
-	{"confluence", 12}, {"jira", 10}, {"webdav", 10}, {"rundeck", 12}, {"nexus", 10},
-	// 管理后台/调度/数据平台/容器平台(实测高频未授权面:小鹏项目 dolphinscheduler/
-	// apisix-dashboard/prometheus 曾被压到 P4,2026-09-11 补齐)
-	{"dolphinscheduler", 14}, {"apisix", 12}, {"kubernetes-dashboard", 14}, {"rancher", 12},
-	{"xxl-job", 12}, {"airflow", 10}, {"superset", 10}, {"eureka", 10},
-	{"prometheus", 8}, {"consul", 10}, {"activemq", 8}, {"rocketmq", 8}, {"skywalking", 10},
-	{"sonarqube", 8}, {"sentry", 8}, {"metabase", 8}, {"jupyter", 10}, {"traefik", 8}, {"kong", 8},
+	// ── S：历史 RCE / 反序列化 / 未授权执行 ──
+	{"actuator", "actuator", 40},
+	{"hzero", "", 40},
+	{"weblogic", "", 40},
+	{"struts", "", 40},
+	{"shiro", "", 40},
+	{"fastjson", "", 40},
+	{"log4j", "", 40},
+	{"jenkins", "jenkins", 40},
+	{"hudson", "jenkins", 35},
+	{"kubernetes-dashboard", "k8s-dashboard", 40},
+	{"jboss", "jboss", 35},
+	{"wildfly", "jboss", 35},
+	{"confluence", "", 35},
+	{"gitlab", "", 35},
+	{"harbor", "", 35},
+	{"thinkphp", "", 35},
+	{"dolphinscheduler", "", 35},
+	{"citrix", "citrix", 35},
+	{"netscaler", "citrix", 35},
+	{"solr", "", 30},
+	{"ofbiz", "", 30},
+	{"rundeck", "", 30},
+	{"webmin", "", 30},
+	{"vcenter", "", 30},
+	{"exchange", "", 30},
+	{"fortinet", "fortinet", 30},
+	{"fortigate", "fortinet", 30},
+	{"pulse secure", "", 30},
+	{"pan-os", "", 30},
+	{"sonicwall", "", 30},
+	{"apisix", "apisix", 30},
+	{"h2-console", "h2", 25},
+	{"jmx-console", "jmx", 25},
+	{"jmx", "jmx", 20},
+
+	// ── A：常见未授权管理面 / 数据平台 / 对象存储 ──
+	{"spring boot", "spring", 35},
+	{"springboot", "spring", 35},
+	{"spring cloud", "spring", 35},
+	{"spring", "spring", 30},
+	{"nacos", "", 30},
+	{"eureka", "", 25},
+	{"consul", "", 25},
+	{"druid", "", 25},
+	{"kubernetes", "k8s", 30},
+	{"k8s", "k8s", 30},
+	{"rancher", "", 30},
+	{"portainer", "", 30},
+	{"argocd", "", 30},
+	{"kubesphere", "", 25},
+	{"openshift", "", 25},
+	{"nexus", "", 30},
+	{"minio", "object-storage", 30},
+	{"aws-bucket", "object-storage", 30},
+	{"aws bucket", "object-storage", 30},
+	{"bucket", "object-storage", 30},
+	{"s3", "object-storage", 30},
+	{"oss", "object-storage", 30},
+	{"cos", "object-storage", 30},
+	{"storage", "object-storage", 20},
+	{"phpmyadmin", "", 30},
+	{"adminer", "", 30},
+	{"myadmin", "phpmyadmin", 25},
+	{"jupyter", "", 30},
+	{"airflow", "", 30},
+	{"xxl-job", "xxl-job", 30},
+	{"xxljob", "xxl-job", 30},
+	{"superset", "", 30},
+	{"metabase", "", 25},
+	{"kibana", "", 25},
+	{"elasticsearch", "", 25},
+	{"rabbitmq", "", 20},
+	{"activemq", "", 25},
+	{"rocketmq", "", 25},
+	{"zookeeper", "", 25},
+	{"kafka", "", 20},
+	{"hdfs", "", 30},
+	{"hadoop yarn", "", 30},
+	{"resourcemanager", "", 30},
+	{"apache hive", "", 20},
+	{"hive server", "", 20},
+	{"hbase", "", 25},
+	{"spark", "", 25},
+	{"flink", "", 30},
+	{"hue", "", 30},
+	{"zeppelin", "", 30},
+	{"livy", "", 25},
+	{"sonarqube", "", 20},
+	{"sentry", "", 20},
+	{"grafana", "", 20},
+	{"prometheus", "", 15},
+	{"zabbix", "", 20},
+	{"skywalking", "", 20},
+	{"apollo", "", 25},
+	{"seata", "", 20},
+	{"sentinel", "", 20},
+	{"dubbo", "", 25},
+	{"ruoyi", "", 30},
+	{"jeecg", "", 30},
+	{"magic-api", "magic-api", 30},
+	{"jimureport", "", 25},
+	{"dataease", "", 25},
+	{"erupt", "", 25},
+	{"shenyu", "", 25},
+	{"wordpress", "", 20},
+	{"drupal", "", 20},
+	{"joomla", "", 20},
+	{"discuz", "", 25},
+	{"dedecms", "", 25},
+	{"phpcms", "", 25},
+	{"typecho", "", 15},
+	{"eyoucms", "", 20},
+	{"laravel", "", 15},
+	{"django", "", 20},
+	{"flask", "", 20},
+	{"werkzeug", "", 20},
+	{"rails", "", 15},
+	{"tomcat", "", 15},
+	{"jsp", "", 8},
+	{"swagger", "", 15},
+	{"knife4j", "", 15},
+	{"openapi", "", 15},
+	{"graphql", "", 15},
+	{"redoc", "", 10},
+	{"phpinfo", "", 25},
+	{".git", "", 25},
+	{".svn", "", 20},
+	{".env", "", 25},
+	{"backup", "", 15},
+	{"dump", "", 15},
+	{"webdav", "", 20},
+	{"ftp", "", 10},
+	{"smb", "", 15},
+	{"nfs", "", 15},
+	{"ldap", "", 15},
+	{"rsync", "", 10},
+	{"telnet", "", 15},
+	{"rdp", "", 15},
+	{"vnc", "", 15},
+	{"snmp", "", 10},
+	{"iis", "", 10},
+	{"asp.net", "", 15},
+	{"cpanel", "", 20},
+	{"plesk", "", 20},
+	{"宝塔", "", 25},
+	{"bt panel", "", 25},
+	{"redis", "", 15},
+	{"mongodb", "", 15},
+	{"memcached", "", 15},
+	{"mysql", "", 10},
+	{"postgres", "", 10},
+	{"oracle", "", 10},
+	{"mssql", "", 10},
+	{"cassandra", "", 15},
+	{"couchdb", "", 20},
+	{"influxdb", "", 20},
+	{"netdata", "", 15},
+	{"nagios", "", 15},
+	{"cacti", "", 20},
+	{"victoriametrics", "", 15},
+	{"zipkin", "", 15},
+	{"jaeger", "", 15},
+	{"gitea", "", 25},
+	{"gogs", "", 25},
+	{"bitbucket", "", 25},
+	{"teamcity", "", 25},
+	{"bamboo", "", 20},
+	{"drone", "", 20},
+	{"spinnaker", "", 25},
+	{"awx", "", 25},
+	{"kong", "", 20},
+	{"traefik", "", 15},
+	{"envoy", "", 15},
+	{"caddy", "", 10},
+	{"logstash", "", 15},
+	{"jira", "", 30},
 }
 
 // serviceRiskPoints 高风险产品关键词（fingerprint 命中/Server 头/标题）。
-// 取最高一档 + 多产品附加，上限 20。
+// 取最高一档 + 多产品附加（每个额外产品 +4，上限 40）。
 func serviceRiskPoints(in Input) (int, []string) {
 	texts := []string{strings.ToLower(in.Server), strings.ToLower(in.Title)}
 	for _, fp := range in.Fingerprints {
@@ -394,23 +610,54 @@ func serviceRiskPoints(in Input) (int, []string) {
 	maxPts := 0
 	distinct := 0
 	var hits []string
+	seen := make(map[string]bool, 8)
 	for _, product := range riskyProductDict {
-		if strings.Contains(joined, product.keyword) {
-			distinct++
-			hits = append(hits, product.keyword)
-			if product.pts > maxPts {
-				maxPts = product.pts
-			}
+		if !keywordHit(joined, product.keyword) {
+			continue
+		}
+		fam := product.family
+		if fam == "" {
+			fam = product.keyword
+		}
+		if seen[fam] {
+			continue
+		}
+		seen[fam] = true
+		distinct++
+		hits = append(hits, product.keyword)
+		if product.pts > maxPts {
+			maxPts = product.pts
 		}
 	}
 	if maxPts == 0 {
 		return 0, nil
 	}
 	if distinct > 1 {
-		maxPts += 4 // 多个高风险产品共存
+		maxPts += 4 * (distinct - 1)
 	}
-	if maxPts > 20 {
-		maxPts = 20
+	if maxPts > 40 {
+		maxPts = 40
 	}
 	return maxPts, hits
+}
+
+// keywordHit 对短关键词按 token 精确匹配（s3/cos/oss/k8s 等），
+// 长关键词按子串匹配。避免 "s3" 命中 "s3cr3t"、"cos" 命中 "cost"。
+func keywordHit(joined, keyword string) bool {
+	joined = strings.ToLower(joined)
+	keyword = strings.ToLower(keyword)
+	if keyword == "" {
+		return false
+	}
+	if len(keyword) > 3 {
+		return strings.Contains(joined, keyword)
+	}
+	for _, token := range strings.FieldsFunc(joined, func(r rune) bool {
+		return !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_')
+	}) {
+		if token == keyword {
+			return true
+		}
+	}
+	return false
 }

@@ -156,6 +156,8 @@ func (h *AssetHandler) ResumeProject(c *gin.Context) { h.SetProjectPaused(c, fal
 // ListAssets 资产列表：view × kind × catalog 三层维度 + DSL。
 // GET /api/assets?kind=site&catalog=verified&view=lost&site_group=1&sort=risk&page=1&page_size=20&q=...
 //
+//	&with_recent=1&recent_limit=5  站点列表顺带返回每站最近几条采集证据
+//
 // 容错口径（v4 §11.4）：q 语法错误明确报错；kind/catalog/view/sort 非法值静默回落缺省。
 func (h *AssetHandler) ListAssets(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -163,6 +165,7 @@ func (h *AssetHandler) ListAssets(c *gin.Context) {
 	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
 	siteGroup := c.DefaultQuery("site_group", "1") != "0"
 	cursor, hasCursor := c.GetQuery("cursor")
+	recentLimit, _ := strconv.Atoi(c.DefaultQuery("recent_limit", "5"))
 
 	res, err := h.assets.ListAssets(c.Request.Context(), repo.AssetQuery{
 		ProjectID: projectID,
@@ -176,12 +179,45 @@ func (h *AssetHandler) ListAssets(c *gin.Context) {
 		PageSize:  pageSize,
 		UseCursor: hasCursor,
 		Cursor:    cursor,
+		// 行内最近记录是可选开销：默认不查，前端展开某一行时才带 with_recent=1。
+		WithRecentRecords:  c.Query("with_recent") == "1" || c.Query("with_recent") == "true",
+		RecentRecordsLimit: recentLimit,
 	})
 	if err != nil {
 		if errors.Is(err, repo.ErrDSLSyntax) {
 			utils.Error(c, utils.ErrCodeInvalidParams, err.Error())
 			return
 		}
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.Success(c, res)
+}
+
+// ListFingerprintScores 指纹评分列表：项目内资产按指纹命中算 0-100 分。
+// GET /api/assets/fingerprint-scores?project_id=1&min_score=40&max_score=100&level=high
+//
+//	&category=OA&fingerprint=Jenkins&q=example.com&sort=score&page=1&page_size=20
+func (h *AssetHandler) ListFingerprintScores(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
+	minScore, _ := strconv.Atoi(c.Query("min_score"))
+	maxScore, _ := strconv.Atoi(c.Query("max_score"))
+
+	res, err := h.assets.ListFingerprintScores(c.Request.Context(), repo.FpScoreQuery{
+		ProjectID:   projectID,
+		Category:    c.Query("category"),
+		Fingerprint: c.Query("fingerprint"),
+		Level:       c.Query("level"),
+		MinScore:    minScore,
+		MaxScore:    maxScore,
+		Q:           c.Query("q"),
+		Sort:        c.Query("sort"),
+		Page:        page,
+		PageSize:    pageSize,
+	})
+	if err != nil {
 		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
 		return
 	}

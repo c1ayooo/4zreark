@@ -61,6 +61,9 @@ type Site struct {
 	RecordCount      int        `json:"record_count"`
 	FingerprintCount int        `json:"fingerprint_count"`
 	LastRecordAt     *time.Time `json:"last_record_at,omitempty"`
+	// RecentRecords 是该站点最近几条采集证据，供列表行内展开；
+	// 只在带 with_recent 参数时查询，避免给 381 行各带一条子查询拖慢列表。
+	RecentRecords []*AssetRecord `json:"recent_records,omitempty"`
 }
 
 // RiskFactor 是一条评分因子：加分/减分的来源与原因。

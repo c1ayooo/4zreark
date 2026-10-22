@@ -81,3 +81,61 @@ func levelRank(level string) int {
 		return 4
 	}
 }
+
+func TestServiceRiskCoversLikelyVulnProducts(t *testing.T) {
+	cases := []struct {
+		fp   string
+		want int
+	}{
+		{"HZERO", 40},
+		{"Actuator", 40},
+		{"WebLogic", 40},
+		{"Struts2", 40},
+		{"Shiro", 40},
+		{"Fastjson", 40},
+		{"Log4j", 40},
+		{"Jenkins", 40},
+		{"vmware-SpringBoot-Framework", 35},
+		{"Nacos", 30},
+		{"AWS-Bucket", 30},
+		{"S3", 30},
+		{"OSS", 30},
+		{"MinIO", 30},
+		{"phpMyAdmin", 30},
+		{"Swagger", 15},
+		{"JSP", 8},
+		{"OpenResty", 0},
+		{"Linkfinder", 0},
+	}
+	for _, c := range cases {
+		pts, hits := serviceRiskPoints(Input{Fingerprints: []string{c.fp}})
+		if pts != c.want {
+			t.Fatalf("serviceRiskPoints(%q)=%d，期望 %d（hits=%v）", c.fp, pts, c.want, hits)
+		}
+	}
+}
+
+func TestKeywordHitShortTokens(t *testing.T) {
+	// 短词按 token 精确匹配，避免 s3/cos/oss 误伤普通字符串。
+	yes := []struct{ text, kw string }{
+		{"aws-s3|bucket", "s3"},
+		{"OSS|openresty", "oss"},
+		{"COS|tencent", "cos"},
+		{"k8s|kubernetes", "k8s"},
+	}
+	for _, c := range yes {
+		if !keywordHit(c.text, c.kw) {
+			t.Fatalf("keywordHit(%q,%q) 应为 true", c.text, c.kw)
+		}
+	}
+	no := []struct{ text, kw string }{
+		{"s3cr3t|css3", "s3"},
+		{"cost|cosmos", "cos"},
+		{"cross|boss", "oss"},
+	}
+	for _, c := range no {
+		if keywordHit(c.text, c.kw) {
+			t.Fatalf("keywordHit(%q,%q) 应为 false", c.text, c.kw)
+		}
+	}
+}

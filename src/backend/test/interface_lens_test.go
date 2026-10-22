@@ -95,3 +95,72 @@ func TestInterfaceLens(t *testing.T) {
 		}
 	}
 }
+
+// 站点列表的 with_recent 只带出最近几条证据，且与站点正确关联。
+func TestSiteListWithRecentRecords(t *testing.T) {
+	r := openTestRepo(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	project, err := service.NewAssetService().CreateProject(ctx, repo.ProjectInput{
+		Code: fmt.Sprintf("recent%d", time.Now().UnixNano()),
+		Name: "site recent records test",
+	})
+	if err != nil {
+		t.Fatalf("创建项目失败: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = r.Pool().Exec(context.Background(), `DELETE FROM projects WHERE id = $1`, project.ID)
+	})
+
+	host := "recent.example"
+	base := "https://" + host
+	assets := repo.NewAssetRepo()
+	records := make([]repo.RawRecord, 0, 8)
+	for i, path := range []string{"/a", "/b", "/c", "/d", "/e", "/f", "/g", "/h"} {
+		records = append(records, repo.RawRecord{
+			Host: host, Port: 443, Protocol: "https", Value: base + path, StatusCode: 200 + i,
+		})
+	}
+	if _, err := assets.ImportRecords(ctx, project.ID, "scan", records); err != nil {
+		t.Fatalf("导入资产失败: %v", err)
+	}
+
+	page, err := assets.ListAssets(ctx, repo.AssetQuery{
+		ProjectID:          project.ID,
+		Kind:               "site",
+		SiteGroup:          true,
+		PageSize:           20,
+		WithRecentRecords:  true,
+		RecentRecordsLimit: 3,
+	})
+	if err != nil {
+		t.Fatalf("查询站点失败: %v", err)
+	}
+	sites, ok := page.Items.([]*repo.Site)
+	if !ok || len(sites) != 1 {
+		t.Fatalf("站点返回异常: %T %+v", page.Items, page)
+	}
+	if len(sites[0].RecentRecords) != 3 {
+		t.Fatalf("最近记录 = %d 条，期望 3", len(sites[0].RecentRecords))
+	}
+	// 最新导入的状态码最大，应按时间倒序排在最前。
+	if sites[0].RecentRecords[0].StatusCode != 207 {
+		t.Fatalf("最近记录顺序不对，首条状态码 = %d", sites[0].RecentRecords[0].StatusCode)
+	}
+	if sites[0].RecentRecords[0].Value != base+"/h" {
+		t.Fatalf("最近记录首条 = %s", sites[0].RecentRecords[0].Value)
+	}
+
+	// 不带 with_recent 时完全不做这次查询，字段为空。
+	page, err = assets.ListAssets(ctx, repo.AssetQuery{
+		ProjectID: project.ID, Kind: "site", SiteGroup: true, PageSize: 20,
+	})
+	if err != nil {
+		t.Fatalf("再次查询站点失败: %v", err)
+	}
+	sites = page.Items.([]*repo.Site)
+	if len(sites[0].RecentRecords) != 0 {
+		t.Fatalf("未开启 with_recent 时不应返回最近记录，实际 %d 条", len(sites[0].RecentRecords))
+	}
+}

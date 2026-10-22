@@ -35,6 +35,7 @@ import {
   Wrench,
   Sprout,
   PieChart,
+  Gauge,
   X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -73,6 +74,7 @@ const menuGroups: MenuGroup[] = [
     items: [
       { path: '/asset-overview', icon: PieChart, label: '资产总览', roles: ALL },
       { path: '/assets', icon: Database, label: '资产探索', roles: ALL },
+      { path: '/assets/fingerprint-scores', icon: Gauge, label: '指纹评分', roles: ALL },
       { path: '/topology', icon: Network, label: '资产星图', roles: ALL },
     ],
   },
@@ -220,8 +222,13 @@ export default function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps
     }))
     .filter((group) => group.items.length > 0)
 
-  const isActive = (item: MenuItem) =>
-    location.pathname === item.path || location.pathname.startsWith(`${item.path}/`)
+  // 子路径（/assets/fingerprint-scores）优先于父路径（/assets），避免两个菜单同时高亮。
+  const activePath = groups
+    .flatMap((group) => group.items.map((item) => item.path))
+    .filter((path) => location.pathname === path || location.pathname.startsWith(`${path}/`))
+    .sort((a, b) => b.length - a.length)[0]
+
+  const isActive = (item: MenuItem) => item.path === activePath
 
   const activeGroupId = groups.find((group) => group.items.some(isActive))?.id
 

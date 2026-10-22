@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
@@ -29,8 +29,10 @@ import {
 } from '@/components/ui/select'
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
@@ -60,6 +62,10 @@ import {
   Download,
   Plus,
   Trash2,
+  SlidersHorizontal,
+  ChevronDown,
+  ChevronUp,
+  RotateCcw,
 } from 'lucide-react'
 
 const stateLabel: Record<string, string> = {
@@ -193,6 +199,38 @@ function downloadCSV(filename: string, rows: unknown[][]) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
+type SiteColumn = 'icon' | 'risk' | 'status' | 'title' | 'records' | 'project' | 'first_seen' | 'actions'
+
+const SITE_COLUMNS: { key: SiteColumn; label: string }[] = [
+  { key: 'icon', label: '图标' },
+  { key: 'risk', label: '风险' },
+  { key: 'status', label: '状态码' },
+  { key: 'title', label: '标题' },
+  { key: 'records', label: '记录 / 最近记录' },
+  { key: 'project', label: '项目' },
+  { key: 'first_seen', label: '发现时间' },
+  { key: 'actions', label: '操作' },
+]
+
+const DEFAULT_SITE_COLUMNS: Record<SiteColumn, boolean> = {
+  icon: true, risk: true, status: true, title: true,
+  records: true, project: true, first_seen: true, actions: true,
+}
+
+const SITE_COLUMNS_KEY = 'zre.asset.siteColumns.v1'
+
+function loadSiteColumns(): Record<SiteColumn, boolean> {
+  try {
+    const raw = localStorage.getItem(SITE_COLUMNS_KEY)
+    if (!raw) return { ...DEFAULT_SITE_COLUMNS }
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return { ...DEFAULT_SITE_COLUMNS }
+    return { ...DEFAULT_SITE_COLUMNS, ...parsed }
+  } catch {
+    return { ...DEFAULT_SITE_COLUMNS }
+  }
+}
+
 /** 三段切换的小控件 */
 function Segmented<T extends string>({
   value,
@@ -259,11 +297,15 @@ export default function AssetsPage() {
   const [savedViews, setSavedViews] = useState<SavedAssetView[]>(loadSavedViews)
   const [saveViewOpen, setSaveViewOpen] = useState(false)
   const [viewName, setViewName] = useState('')
+  const [siteCols, setSiteCols] = useState<Record<SiteColumn, boolean>>(loadSiteColumns)
+  const [expandedSiteIDs, setExpandedSiteIDs] = useState<Set<number>>(new Set())
   const recordsCursor = recordsCursorStack[recordsCursorStack.length - 1]
   const cursor = cursorStack[cursorStack.length - 1]
   const clusterView = view === 'icons' || view === 'technologies'
   const riskSort = kind === 'site' && siteGroup && sort === 'risk'
   const cursorMode = !clusterView && !riskSort && (kind === 'site' ? siteGroup : true)
+  // 只有真的展开了某一行才请求最近记录，正常浏览列表不付这份查询成本。
+  const recentLoaded = kind === 'site' && siteGroup && expandedSiteIDs.size > 0
 
   // 外部入口（顶部全局搜索、分享链接）改了 q：先同步进列表状态，再让下方回写。
   const urlQ = searchParams.get('q') || ''
@@ -305,7 +347,7 @@ export default function AssetsPage() {
 
   // 站点默认/域名/IP 用 keyset；风险排序、展开入口和聚类仍走 page。
   const list = useQuery({
-    queryKey: ['assets', cursorMode ? `c:${cursor ?? ''}` : `p:${page}`, pageSize, appliedQ, projectId, kind, catalog, view, siteGroup, riskSort],
+    queryKey: ['assets', cursorMode ? `c:${cursor ?? ''}` : `p:${page}`, pageSize, appliedQ, projectId, kind, catalog, view, siteGroup, riskSort, recentLoaded ? 'recent' : 'plain'],
     enabled: !clusterView,
     staleTime: 30_000,
     queryFn: () =>
@@ -319,6 +361,7 @@ export default function AssetsPage() {
         view,
         site_group: siteGroup ? 1 : 0,
         sort: riskSort ? 'risk' : undefined,
+        ...(recentLoaded ? { with_recent: 1 as const, recent_limit: 3 } : {}),
       }),
   })
 
@@ -562,7 +605,8 @@ export default function AssetsPage() {
     downloadCSV(`assets-${kind}-${stamp}.csv`, rows)
   }
 
-  const colCount = expanded ? 7 : kind === 'site' ? 11 : kind === 'record' ? 7 : 5
+  const visibleSiteCols = SITE_COLUMNS.reduce((n, c) => n + (siteCols[c.key] ? 1 : 0), 0)
+  const colCount = expanded ? 7 : kind === 'site' ? 3 + visibleSiteCols : kind === 'record' ? 7 : 5
 
   // 资产多选：选中后可直接对这些资产派新任务（选资产 → 选类型 → 起任务）
   const [selectedHosts, setSelectedHosts] = useState<Set<string>>(new Set())
@@ -587,7 +631,7 @@ export default function AssetsPage() {
   }
 
   // 大页（>=100 行）启用虚拟滚动：只渲染视口附近的站点行。
-  const virtualize = kind === 'site' && !expanded && pageSize >= 100 && !clusterView
+  const virtualize = kind === 'site' && !expanded && pageSize >= 100 && !clusterView && expandedSiteIDs.size === 0
   const scrollRef = useRef<HTMLDivElement>(null)
   const rowVirtualizer = useVirtualizer({
     count: virtualize ? (items as Site[]).length : 0,
@@ -597,15 +641,18 @@ export default function AssetsPage() {
   })
   const virtualItems = rowVirtualizer.getVirtualItems()
 
-  const renderSiteRow = (s: Site, virtualIndex?: number) => (
-    <TableRow
-      key={s.id}
-      ref={virtualIndex !== undefined ? rowVirtualizer.measureElement : undefined}
-      data-index={virtualIndex}
-      className="hover:bg-muted/40 cursor-pointer"
-      data-state={selectedHosts.has(s.value) ? 'selected' : undefined}
-      onClick={() => navigate(`/assets/${s.id}`)}
-    >
+  const renderSiteRow = (s: Site, virtualIndex?: number) => {
+    const isOpen = expandedSiteIDs.has(s.id)
+    const recent = s.recent_records ?? []
+    return (
+      <Fragment key={s.id}>
+      <TableRow
+        ref={virtualIndex !== undefined ? rowVirtualizer.measureElement : undefined}
+        data-index={virtualIndex}
+        className="hover:bg-muted/40 cursor-pointer"
+        data-state={selectedHosts.has(s.value) ? 'selected' : undefined}
+        onClick={() => navigate(`/assets/${s.id}`)}
+      >
       <TableCell onClick={(e) => e.stopPropagation()}>
         <Checkbox
           checked={selectedHosts.has(s.value)}
@@ -637,34 +684,65 @@ export default function AssetsPage() {
           </span>
         </div>
       </TableCell>
-      <TableCell className="hidden sm:table-cell">
-        <SiteIcon sha256={s.icon_sha256} alt={s.host} />
-      </TableCell>
-      <TableCell className="hidden text-right lg:table-cell">
-        <Badge variant={priorityVariant(s.priority)} title={riskTitle(s)}>
-          {priorityLabel(s.priority)} · {s.risk_score}
-        </Badge>
-      </TableCell>
-      <TableCell className="hidden text-right sm:table-cell">
-        <Badge variant={s.http_status >= 200 && s.http_status < 400 ? 'default' : 'secondary'}>
-          {s.http_status || '—'}
-        </Badge>
-      </TableCell>
-      <TableCell className="hidden max-w-[260px] truncate text-sm md:table-cell">{s.title || '—'}</TableCell>
-      <TableCell
-        className="hidden text-right text-sm tabular-nums lg:table-cell"
-        title={`入口 ${s.endpoint_count} · 原始记录 ${s.record_count} · 指纹 ${s.fingerprint_count}`}
-      >
-        {s.record_count}
-      </TableCell>
-      <TableCell className="hidden text-sm lg:table-cell">{s.project_name}</TableCell>
-      <TableCell className="hidden text-right text-[13px] tabular-nums text-muted-foreground xl:table-cell">{s.first_seen?.slice(0, 10)}</TableCell>
+      {siteCols.icon && (
+        <TableCell className="hidden sm:table-cell">
+          <SiteIcon sha256={s.icon_sha256} alt={s.host} />
+        </TableCell>
+      )}
+      {siteCols.risk && (
+        <TableCell className="hidden text-right lg:table-cell">
+          <Badge variant={priorityVariant(s.priority)} title={riskTitle(s)}>
+            {priorityLabel(s.priority)} · {s.risk_score}
+          </Badge>
+        </TableCell>
+      )}
+      {siteCols.status && (
+        <TableCell className="hidden text-right sm:table-cell">
+          <Badge variant={s.http_status >= 200 && s.http_status < 400 ? 'default' : 'secondary'}>
+            {s.http_status || '—'}
+          </Badge>
+        </TableCell>
+      )}
+      {siteCols.title && (
+        <TableCell className="hidden max-w-[260px] truncate text-sm md:table-cell">{s.title || '—'}</TableCell>
+      )}
+      {siteCols.records && (
+        <TableCell
+          className="hidden text-right text-sm tabular-nums lg:table-cell"
+          title={`入口 ${s.endpoint_count} · 原始记录 ${s.record_count} · 指纹 ${s.fingerprint_count}`}
+        >
+          <div className="flex items-center justify-end gap-1">
+            <button
+              type="button"
+              aria-label={isOpen ? '收起最近记录' : '展开最近记录'}
+              className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              onClick={(e) => {
+                e.stopPropagation()
+                setExpandedSiteIDs((prev) => {
+                  const next = new Set(prev)
+                  if (next.has(s.id)) next.delete(s.id)
+                  else next.add(s.id)
+                  return next
+                })
+              }}
+            >
+              {isOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            </button>
+            <span>{s.record_count}</span>
+          </div>
+        </TableCell>
+      )}
+      {siteCols.project && <TableCell className="hidden text-sm lg:table-cell">{s.project_name}</TableCell>}
+      {siteCols.first_seen && (
+        <TableCell className="hidden text-right text-[13px] tabular-nums text-muted-foreground xl:table-cell">{s.first_seen?.slice(0, 10)}</TableCell>
+      )}
       <TableCell>
         <Badge variant={stateVariant(s.state)}>{stateLabel[s.state] ?? s.state}</Badge>
         {s.consecutive_failures > 0 && (
           <span className="ml-1 text-[13px] text-destructive">×{s.consecutive_failures}</span>
         )}
       </TableCell>
+      {siteCols.actions && (
       <TableCell className="hidden sm:table-cell" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-1">
           <Button size="sm" variant="outline" onClick={() => setDetailSite(s)} disabled={busy}>
@@ -680,6 +758,19 @@ export default function AssetsPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                onClick={() => {
+                  setExpandedSiteIDs((prev) => {
+                    const next = new Set(prev)
+                    if (next.has(s.id)) next.delete(s.id)
+                    else next.add(s.id)
+                    return next
+                  })
+                }}
+              >
+                {isOpen ? <ChevronUp className="mr-2 h-3.5 w-3.5" /> : <ChevronDown className="mr-2 h-3.5 w-3.5" />}
+                {isOpen ? '收起最近记录' : '展开最近记录'}
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => verify.mutate({ site: s, reachable: true })}>
                 <ShieldCheck className="mr-2 h-3.5 w-3.5" /> 人工标记可达
               </DropdownMenuItem>
@@ -693,8 +784,51 @@ export default function AssetsPage() {
           </DropdownMenu>
         </div>
       </TableCell>
-    </TableRow>
-  )
+      )}
+      </TableRow>
+      {isOpen && (
+        <TableRow className="bg-muted/30 hover:bg-muted/30">
+          <TableCell colSpan={colCount} className="p-0">
+            <div className="space-y-2 px-3 py-2">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>最近 {recent.length} 条采集证据 · 共 {s.record_count} 条</span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-xs"
+                  onClick={() => {
+                    setDetailSite(s)
+                    setDetailTab('records')
+                  }}
+                >
+                  <Eye className="mr-1 h-3 w-3" /> 查看全部记录
+                </Button>
+              </div>
+              {recent.length === 0 ? (
+                <div className="text-xs text-muted-foreground">这个站点还没有原始记录。</div>
+              ) : (
+                <div className="space-y-1">
+                  {recent.map((r) => (
+                    <div key={r.id} className="flex items-start gap-2 font-mono text-xs">
+                      <Badge variant="outline" className="shrink-0 text-[10px]">{r.method || 'GET'}</Badge>
+                      {r.is_interface && (
+                        <Badge variant="secondary" className="shrink-0 text-[10px]">接口</Badge>
+                      )}
+                      <span className="break-all">{r.value}</span>
+                      <span className="ml-auto shrink-0 tabular-nums text-muted-foreground">
+                        {r.status_code || '—'} · {formatDate(r.observed_at)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </TableCell>
+        </TableRow>
+      )}
+      </Fragment>
+    )
+  }
 
   return (
     <div className="space-y-5 p-6">
@@ -762,6 +896,48 @@ export default function AssetsPage() {
           <Button variant="outline" onClick={() => exportCurrent()} disabled={items.length === 0}>
             <Download className="mr-2 h-4 w-4" /> 导出本页
           </Button>
+          <Button variant="outline" onClick={() => list.refetch()}>
+            <RefreshCw className="mr-2 h-4 w-4" /> 刷新
+          </Button>
+          {kind === 'site' && siteGroup && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline">
+                <SlidersHorizontal className="mr-2 h-4 w-4" /> 列
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuLabel>站点列表列</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {SITE_COLUMNS.map((c) => (
+                <DropdownMenuCheckboxItem
+                  key={c.key}
+                  checked={siteCols[c.key]}
+                  onCheckedChange={(v) => {
+                    const next = { ...siteCols, [c.key]: v === true }
+                    setSiteCols(next)
+                    try {
+                      localStorage.setItem(SITE_COLUMNS_KEY, JSON.stringify(next))
+                    } catch { /* 存储不可用时只影响本次会话 */ }
+                  }}
+                >
+                  {c.label}
+                </DropdownMenuCheckboxItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={() => {
+                  setSiteCols({ ...DEFAULT_SITE_COLUMNS })
+                  try {
+                    localStorage.removeItem(SITE_COLUMNS_KEY)
+                  } catch { /* noop */ }
+                }}
+              >
+                <RotateCcw className="mr-2 h-4 w-4" /> 恢复默认列
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          )}
           <Button variant="outline" onClick={() => list.refetch()}>
             <RefreshCw className="mr-2 h-4 w-4" /> 刷新
           </Button>
@@ -969,13 +1145,13 @@ export default function AssetsPage() {
                 {kind === 'record' && <TableHead className="w-[150px]">IP / 服务</TableHead>}
                 {kind === 'record' && <TableHead className="w-[170px] text-right">观察时间</TableHead>}
                 {kind === 'record' && <TableHead className="w-[120px]">项目</TableHead>}
-                {kind === 'site' && !expanded && <TableHead className="hidden w-[52px] sm:table-cell">图标</TableHead>}
-                {kind === 'site' && !expanded && <TableHead className="hidden w-[90px] text-right lg:table-cell">风险</TableHead>}
-                {kind === 'site' && !expanded && <TableHead className="hidden w-[90px] text-right sm:table-cell">状态码</TableHead>}
-                {kind === 'site' && !expanded && <TableHead className="hidden md:table-cell">标题</TableHead>}
-                {kind === 'site' && !expanded && <TableHead className="hidden w-[82px] text-right lg:table-cell">记录</TableHead>}
-                {kind === 'site' && !expanded && <TableHead className="hidden w-[120px] lg:table-cell">项目</TableHead>}
-                {kind === 'site' && !expanded && <TableHead className="hidden w-[110px] text-right xl:table-cell">发现时间</TableHead>}
+                {kind === 'site' && !expanded && siteCols.icon && <TableHead className="hidden w-[52px] sm:table-cell">图标</TableHead>}
+                {kind === 'site' && !expanded && siteCols.risk && <TableHead className="hidden w-[90px] text-right lg:table-cell">风险</TableHead>}
+                {kind === 'site' && !expanded && siteCols.status && <TableHead className="hidden w-[90px] text-right sm:table-cell">状态码</TableHead>}
+                {kind === 'site' && !expanded && siteCols.title && <TableHead className="hidden md:table-cell">标题</TableHead>}
+                {kind === 'site' && !expanded && siteCols.records && <TableHead className="hidden w-[82px] text-right lg:table-cell">记录</TableHead>}
+                {kind === 'site' && !expanded && siteCols.project && <TableHead className="hidden w-[120px] lg:table-cell">项目</TableHead>}
+                {kind === 'site' && !expanded && siteCols.first_seen && <TableHead className="hidden w-[110px] text-right xl:table-cell">发现时间</TableHead>}
                 {kind === 'site' && !expanded && <TableHead className="w-[110px]">连通</TableHead>}
                 {expanded && <TableHead className="w-[90px]">协议</TableHead>}
                 {expanded && <TableHead className="hidden md:table-cell">标题</TableHead>}
@@ -989,7 +1165,7 @@ export default function AssetsPage() {
                 {kind === 'ip' && <TableHead className="w-[100px] text-right">站点数</TableHead>}
                 {kind === 'ip' && <TableHead className="w-[100px] text-right">域名数</TableHead>}
                 {kind === 'ip' && <TableHead className="w-[110px] text-right">最近发现</TableHead>}
-                {kind === 'site' && !expanded && <TableHead className="hidden w-[150px] sm:table-cell">操作</TableHead>}
+                {kind === 'site' && !expanded && siteCols.actions && <TableHead className="hidden w-[150px] sm:table-cell">操作</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>

@@ -44,6 +44,8 @@ export interface Site {
   record_count: number
   fingerprint_count: number
   last_record_at?: string
+  /** 行内最近记录：仅 with_recent=1 时返回 */
+  recent_records?: AssetRawRecord[]
 }
 
 export interface RiskFactor {
@@ -230,6 +232,9 @@ export interface AssetQueryParams {
   site_group?: 0 | 1
   /** risk=按资产 P0-P4 评分倒序；缺省按首次发现时间 */
   sort?: 'risk'
+  /** 站点列表顺带返回每站最近几条采集证据 */
+  with_recent?: 1
+  recent_limit?: number
 }
 
 export const assetApi = {

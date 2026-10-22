@@ -144,17 +144,21 @@ SELECT lower(h.host), max(v.rank)::int, count(*)::int
 
 // computeSiteRisk 是「观测字段 → 评分」的唯一转换点，保持 score.Compute 为纯函数。
 func computeSiteRisk(r riskInputRow, vs vulnStat) (int, string, []RiskFactor) {
+	defaultPage, directoryListing, errorPage := webSurfaceFlags(r.Title)
 	total, level, raw := score.Compute(score.Input{
-		OpenPorts:    r.Ports,
-		EdgeType:     "unknown", // CDN 归属未接入，不按「无 CDN」加分
-		Server:       r.Server,
-		Title:        r.Title,
-		Fingerprints: r.Tech,
-		HTTPStatus:   r.HTTPStatus,
-		HTTPSeen:     r.Verified || r.HTTPStatus > 0 || r.State == "reachable" || r.VerificationStatus == "verified",
-		VulnSeverity: vs.Severity,
-		VulnCount:    vs.Count,
-		HasOwner:     true, // 归属字段尚未建模，不能据此判定影子资产
+		OpenPorts:        r.Ports,
+		EdgeType:         "unknown", // CDN 归属未接入，不按「无 CDN」加分
+		Server:           r.Server,
+		Title:            r.Title,
+		Fingerprints:     r.Tech,
+		HTTPStatus:       r.HTTPStatus,
+		HTTPSeen:         r.Verified || r.HTTPStatus > 0 || r.State == "reachable" || r.VerificationStatus == "verified",
+		VulnSeverity:     vs.Severity,
+		VulnCount:        vs.Count,
+		HasOwner:         true, // 归属字段尚未建模，不能据此判定影子资产
+		DefaultPage:      defaultPage,
+		DirectoryListing: directoryListing,
+		ErrorPage:        errorPage,
 	})
 	factors := make([]RiskFactor, 0, len(raw))
 	for _, f := range raw {
@@ -262,4 +266,42 @@ func (a *AssetRepo) listSiteRowsByRisk(ctx context.Context, w *whereBuilder, q A
 		out = append(out, s)
 	}
 	return out, total, rows.Err()
+}
+
+// defaultPagePatterns 是默认/示例页标题特征：默认部署通常版本旧、配置松。
+var defaultPagePatterns = []string{
+	"welcome to openresty", "welcome to nginx", "apache2 ubuntu default page",
+	"apache2 debian default page", "it works!", "test page for the apache http server",
+	"iis windows server", "welcome to tomcat", "welcome to jboss", "jboss as",
+	"wildfly", "welcome to centos", "default web site page", "site not found",
+	"no website is configured",
+}
+
+// errorPagePatterns 是错误/调试页标题特征：暴露框架、堆栈或 SQL 方言。
+var errorPagePatterns = []string{
+	"whitelabel error page", "whitelabel", "http status 500", "internal server error",
+	"stack trace", "traceback", "werkzeug debugger", "phpinfo()", "fatal error",
+	"sql syntax", "ora-0", "warning: mysql", "undefined index", "notice: undefined",
+}
+
+// webSurfaceFlags 从标题推导 Web 卫生三个弱信号；没有标题时全部为 false。
+func webSurfaceFlags(title string) (defaultPage, directoryListing, errorPage bool) {
+	t := strings.ToLower(strings.TrimSpace(title))
+	if t == "" {
+		return false, false, false
+	}
+	directoryListing = strings.HasPrefix(t, "index of /") || strings.Contains(t, "directory listing for")
+	for _, p := range defaultPagePatterns {
+		if strings.Contains(t, p) {
+			defaultPage = true
+			break
+		}
+	}
+	for _, p := range errorPagePatterns {
+		if strings.Contains(t, p) {
+			errorPage = true
+			break
+		}
+	}
+	return defaultPage, directoryListing, errorPage
 }

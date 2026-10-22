@@ -38,6 +38,7 @@ const ProjectsPage = lazy(() => import('@/pages/projects/ProjectsPage'))
 const ProjectDetailPage = lazy(() => import('@/pages/projects/ProjectDetailPage'))
 const AssetsPage = lazy(() => import('@/pages/assets/AssetsPage'))
 const AssetOverviewPage = lazy(() => import('@/pages/assets/AssetOverviewPage'))
+const FingerprintScorePage = lazy(() => import('@/pages/assets/FingerprintScorePage'))
 const SeedsPage = lazy(() => import('@/pages/seeds/SeedsPage'))
 const AssetDetailPage = lazy(() => import('@/pages/assets/AssetDetailPage'))
 const IntelPage = lazy(() => import('@/pages/intel/IntelPage'))
@@ -92,6 +93,7 @@ function App() {
             <Route path="/assets" element={<AssetsPage />} />
             <Route path="/seeds" element={<SeedsPage />} />
             <Route path="/assets/:id" element={<AssetDetailPage />} />
+            <Route path="/assets/fingerprint-scores" element={<FingerprintScorePage />} />
             <Route path="/events" element={<EventsPage />} />
             <Route path="/relations" element={<RelationsPage />} />
             <Route path="/runs" element={<RunsPage />} />

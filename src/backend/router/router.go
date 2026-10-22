@@ -117,6 +117,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				protected.GET("/assets/query-check", middleware.RequirePermission("asset:read"), assetHandler.CheckQuery)
 				protected.GET("/assets/icons", middleware.RequirePermission("asset:read"), assetHandler.IconClusters)
 				protected.GET("/assets/technologies", middleware.RequirePermission("asset:read"), assetHandler.TechClusters)
+				protected.GET("/assets/fingerprint-scores", middleware.RequirePermission("asset:read"), assetHandler.ListFingerprintScores)
 				protected.POST("/assets/import", middleware.RequirePermission("asset:write"), assetHandler.ImportAssets)
 				protected.POST("/assets/import/preview", middleware.RequirePermission("asset:write"), assetHandler.PreviewImport)
 				protected.POST("/assets/import/commit", middleware.RequirePermission("asset:write"), assetHandler.CommitImport)

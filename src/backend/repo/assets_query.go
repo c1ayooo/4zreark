@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -23,7 +24,7 @@ type AssetQuery struct {
 	Q         string
 	Kind      string // site | domain | ip
 	Catalog   string // all | verified | candidates
-	View      string // "" | clues | candidates | lost | icons | technologies | apps | media
+	View      string // "" | clues | candidates | lost | interfaces | icons | technologies | apps | media
 	SiteGroup bool   // true=归并到站点，false=展开到入口（仅 kind=site 有意义）
 	Sort      string // ""|first_seen（缺省）|risk（按 P0-P4 评分倒序）
 	Page      int
@@ -31,6 +32,11 @@ type AssetQuery struct {
 	// UseCursor 时走 keyset 分页：不执行 count(*)，用 next_cursor 翻页。
 	UseCursor bool
 	Cursor    string
+	// WithRecentRecords 让站点列表顺带返回每站最近几条采集证据，
+	// 供前端行内展开；不开时一次额外的按站点分组查询都不做。
+	WithRecentRecords bool
+	// RecentRecordsLimit 是行内展开条数，缺省 5，上限 20。
+	RecentRecordsLimit int
 }
 
 // ConnectivityPolicy 是连通性与清理策略，随列表响应下发，前端不再二次请求。
@@ -191,6 +197,9 @@ const interfacePredicateSQL = `(coalesce({{a}}.evidence->>'is_interface','') = '
 	OR {{a}}.value ~* '/(api|ajax|graphql|gql|rest|rpc|json|openapi|swagger|gateway)(/|\?|$)')`
 
 func interfacePredicate(alias string) string {
+	if alias == "" {
+		return strings.ReplaceAll(interfacePredicateSQL, "{{a}}.", "")
+	}
 	return strings.ReplaceAll(interfacePredicateSQL, "{{a}}", alias)
 }
 
@@ -351,6 +360,14 @@ func (a *AssetRepo) ListAssets(ctx context.Context, q AssetQuery) (*AssetPage, e
 	if err != nil {
 		return nil, err
 	}
+	// 行内最近记录只对归并站点有意义；入口展开/域名/IP 视图不做这次查询。
+	if q.WithRecentRecords && page.Kind == "site" && q.SiteGroup {
+		if sites, ok := page.Items.([]*Site); ok {
+			if err := a.attachRecentRecords(ctx, sites, q.RecentRecordsLimit); err != nil {
+				return nil, err
+			}
+		}
+	}
 	page.Policy, _ = a.ConnectivityPolicy(ctx)
 	return page, nil
 }
@@ -438,6 +455,66 @@ func (a *AssetRepo) listSiteRowsCursor(ctx context.Context, w *whereBuilder, q A
 		next = encodeAssetCursor(strconv.FormatInt(last.FirstSeen.UnixNano(), 10), strconv.FormatInt(last.ID, 10))
 	}
 	return out, next, hasMore, nil
+}
+
+// attachRecentRecords 用一次分组查询给整页站点带出最近几条采集证据。
+// 按 (site_id, observed_at DESC, id DESC) 排名后取前 limit 条，
+// 比每行一次子查询少 N-1 次往返。
+func (a *AssetRepo) attachRecentRecords(ctx context.Context, sites []*Site, limit int) error {
+	if len(sites) == 0 {
+		return nil
+	}
+	if limit < 1 || limit > 20 {
+		limit = 5
+	}
+	ids := make([]int64, 0, len(sites))
+	byID := make(map[int64]*Site, len(sites))
+	for _, s := range sites {
+		ids = append(ids, s.ID)
+		byID[s.ID] = s
+	}
+
+	rows, err := a.r.pool.Query(ctx, `
+		WITH ranked AS (
+			SELECT r.id, r.source, r.host, r.port, r.protocol, r.value, r.status_code,
+			       r.title, r.ip, r.evidence, r.observed_at, r.site_id,
+			       row_number() OVER (
+				   PARTITION BY r.site_id ORDER BY r.observed_at DESC, r.id DESC
+			       ) AS rn
+			  FROM raw_records r
+			 WHERE r.site_id = ANY($1)
+		)
+		SELECT id, source, host, port, protocol, value, status_code, coalesce(title,''),
+		       coalesce(ip::text,''), coalesce(evidence->>'method',''), `+interfacePredicate("")+`,
+		       evidence, observed_at, site_id
+		  FROM ranked
+		 WHERE rn <= $2`, ids, limit)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			r        AssetRecord
+			evidence []byte
+			siteID   int64
+		)
+		if err := rows.Scan(&r.ID, &r.Source, &r.Host, &r.Port, &r.Protocol, &r.Value,
+			&r.StatusCode, &r.Title, &r.IP, &r.Method, &r.IsInterface, &evidence, &r.ObservedAt, &siteID); err != nil {
+			return err
+		}
+		if len(evidence) > 0 {
+			_ = json.Unmarshal(evidence, &r.Evidence)
+		}
+		if r.Evidence == nil {
+			r.Evidence = map[string]any{}
+		}
+		if s, ok := byID[siteID]; ok {
+			s.RecentRecords = append(s.RecentRecords, &r)
+		}
+	}
+	return rows.Err()
 }
 
 func (a *AssetRepo) listDomainsCursor(ctx context.Context, w *whereBuilder, q AssetQuery) ([]*DomainRow, string, bool, error) {

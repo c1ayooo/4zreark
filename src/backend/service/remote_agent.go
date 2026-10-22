@@ -179,7 +179,7 @@ func (a *RemoteAgent) connectAndServe(ctx context.Context) error {
 			// 与本地不一致就拉新版替换后 exec 重启，配置原文仍在内存里。
 			if msg.ServerVersion != "" && msg.ServerVersion != SelfVersion() {
 				go func(version, url string) {
-					if err := TrySelfUpdate(a.cfg.PlatformURL, a.cfg.Token, url, version); err != nil {
+					if err := TrySelfUpdate(a.cfg.PlatformURL, a.cfg.Token, url, version, a.cfg.PlatformCA); err != nil {
 						log.Printf("[RemoteAgent] 自更新失败: %v", err)
 					}
 				}(msg.ServerVersion, msg.BinaryURL)
