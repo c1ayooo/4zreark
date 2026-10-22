@@ -6,6 +6,8 @@ server:
   mode: "release"  # debug, release, test
 
 jwt:
+  # 生产必须换掉：控制面启动时检测到默认值会拒绝运行（除非 ZRE_ALLOW_DEFAULT_SECRET=1）。
+  # 推荐用环境变量 ZRE_JWT_SECRET 覆盖（openssl rand -hex 32），密钥不进 git。
   secret: "4zreark-secret-key-change-in-production"
   expire: 7200  # 2 hours in seconds
   issuer: "4zreark"
