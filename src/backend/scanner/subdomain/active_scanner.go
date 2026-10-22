@@ -44,6 +44,9 @@ type ActiveScannerConfig struct {
 	// EngineKeys 任务级引擎 key（fofa/hunter/quake/zoomeye/shodan/securitytrails）。
 	// 为空时回落到全局配置；数据源表由 service 层解析后注入。
 	EngineKeys map[string]string
+	// EngineGuard 防烧额度闸门：按（引擎,注册域）去重 + 每引擎总量上限。
+	// 任务侧所有扫描器实例共享同一个守卫；nil = 不限制（测试场景）。
+	EngineGuard *EngineQueryGuard
 }
 
 // ActiveScanner 综合子域名扫描器
@@ -156,6 +159,11 @@ func (s *ActiveScanner) runAPIEnum(ctx context.Context, domain string) {
 		}
 		if ctx.Err() != nil {
 			return
+		}
+		// 防烧额度：按注册域去重 + 每引擎总量上限（引擎语法本就按注册域匹配）。
+		if allowed, reason := s.config.EngineGuard.Allow(provider, domain); !allowed {
+			log.Printf("[ActiveScanner] Engine %s skipped for %s: %s", provider, domain, reason)
+			continue
 		}
 
 		query := spacemap.DomainQuery(provider, domain)

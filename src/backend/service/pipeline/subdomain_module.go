@@ -46,6 +46,9 @@ type SubdomainScanConfig struct {
 	EnableAPI     bool     // 是否启用第三方API (默认 true)
 	APISources    []string // 启用的API源
 	APIMaxResults int      // 每个API最大结果数 (默认 500)
+	// EngineQueryMaxPerEngine 单任务内每个引擎最多查询的注册域数（防烧额度）。
+	// <=0 取默认 10。任务侧所有扫描器实例共享同一个守卫。
+	EngineQueryMaxPerEngine int
 
 	// API 密钥
 	FofaEmail         string
@@ -70,8 +73,10 @@ func DefaultSubdomainScanConfig() *SubdomainScanConfig {
 		EnableAPI:        false, // 默认关闭API，只使用字典爆破
 		APISources:       []string{},
 		APIMaxResults:    500,
-		ResolveIP:        true,
-		VerifySubdomains: true,
+
+		EngineQueryMaxPerEngine: 10,
+		ResolveIP:               true,
+		VerifySubdomains:        true,
 	}
 }
 
@@ -109,8 +114,10 @@ func NewSubdomainScanModuleWithConfig(ctx context.Context, nextModule ModuleRunn
 		APISources:        scanConfig.APISources,
 		APIMaxResults:     scanConfig.APIMaxResults,
 		VerifySubdomains:  scanConfig.VerifySubdomains,
-		EnableHTTPProbe:   false,
-		Wordlist:          scanConfig.Wordlist,
+		// 防烧额度闸门：每域名的扫描器实例共享同一个守卫（按注册域去重 + 上限）。
+		EngineGuard:     subdomain.NewEngineQueryGuard(scanConfig.EngineQueryMaxPerEngine),
+		EnableHTTPProbe: false,
+		Wordlist:        scanConfig.Wordlist,
 		EngineKeys: map[string]string{
 			"fofa":           scanConfig.FofaKey,
 			"hunter":         scanConfig.HunterKey,
@@ -246,7 +253,7 @@ func (m *SubdomainScanModule) ModuleRun() error {
 }
 
 // domainScanConcurrency 同时枚举的域名数。每域名一个独立 ActiveScanner 实例
-//（ActiveScanner 每次 Run 会重置内部去重表和回调，共享实例并发 Run 会互相清掉
+// （ActiveScanner 每次 Run 会重置内部去重表和回调，共享实例并发 Run 会互相清掉
 // 结果），信号量只负责控制外层并发，避免目标多时 goroutine 失控。
 const domainScanConcurrency = 2
 
