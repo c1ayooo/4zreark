@@ -34,7 +34,14 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useToast } from '@/components/ui/use-toast'
-import { RefreshCw, Search, Radar, MoreHorizontal, ShieldCheck, ShieldAlert, Lock, Globe, Rocket, X } from 'lucide-react'
+import { formatDate } from '@/lib/utils'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { RefreshCw, Search, Radar, MoreHorizontal, ShieldCheck, ShieldAlert, Lock, Globe, Rocket, X, Eye } from 'lucide-react'
 
 const stateLabel: Record<string, string> = {
   reachable: '可访问',
@@ -92,10 +99,10 @@ const verdictLabel: Record<string, string> = {
 }
 
 const KINDS: { value: AssetKind; label: string }[] = [
-  { value: 'record', label: '原始记录' },
   { value: 'site', label: '站点' },
   { value: 'domain', label: '域名' },
   { value: 'ip', label: 'IP' },
+  { value: 'record', label: '原始记录' },
 ]
 
 const CATALOGS: { value: AssetCatalog; label: string }[] = [
@@ -163,7 +170,7 @@ export default function AssetsPage() {
   const [projectId, setProjectId] = useState<string>(() => searchParams.get('project_id') || '0')
   const [kind, setKind] = useState<AssetKind>(() => {
     const v = searchParams.get('kind')
-    return v === 'domain' || v === 'ip' || v === 'record' ? v : 'record'
+    return v === 'domain' || v === 'ip' || v === 'record' ? v : 'site'
   })
   const [catalog, setCatalog] = useState<AssetCatalog>(() => {
     const v = searchParams.get('catalog')
@@ -178,6 +185,7 @@ export default function AssetsPage() {
     return [20, 50, 100, 200, 500].includes(n) ? n : 50
   })
   const [cursorStack, setCursorStack] = useState<Array<string | undefined>>([undefined])
+  const [detailSite, setDetailSite] = useState<Site | null>(null)
   const cursor = cursorStack[cursorStack.length - 1]
   const clusterView = view === 'icons' || view === 'technologies'
   const riskSort = kind === 'site' && siteGroup && sort === 'risk'
@@ -219,7 +227,7 @@ export default function AssetsPage() {
   const overview = useQuery({ queryKey: ['asset-overview'], queryFn: () => assetApi.overview() })
   const projects = useQuery({ queryKey: ['asset-projects'], queryFn: () => assetApi.projects() })
 
-  const hasFilters = !!appliedQ || kind !== 'record' || catalog !== 'all' || !!view
+  const hasFilters = !!appliedQ || kind !== 'site' || catalog !== 'all' || !!view
 
   // 站点默认/域名/IP 用 keyset；风险排序、展开入口和聚类仍走 page。
   const list = useQuery({
@@ -239,6 +247,14 @@ export default function AssetsPage() {
         sort: riskSort ? 'risk' : undefined,
       }),
   })
+
+  const detailQuery = useQuery({
+    queryKey: ['asset-detail', detailSite?.id],
+    queryFn: () => assetApi.detail(detailSite!.id),
+    enabled: !!detailSite,
+    staleTime: 30_000,
+  })
+  const detail = detailQuery.data?.data
 
   const iconClusters = useQuery({
     queryKey: ['asset-icons', projectId, appliedQ, page],
@@ -457,6 +473,9 @@ export default function AssetsPage() {
       </TableCell>
       <TableCell className="hidden sm:table-cell" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-1">
+          <Button size="sm" variant="outline" onClick={() => setDetailSite(s)} disabled={busy}>
+            <Eye className="mr-1 h-3.5 w-3.5" /> 详情
+          </Button>
           <Button size="sm" variant="outline" onClick={() => probe.mutate(s)} disabled={busy}>
             <Radar className="mr-1 h-3.5 w-3.5" /> 探测
           </Button>
@@ -939,6 +958,97 @@ export default function AssetsPage() {
           </div>
         </div>
       )}
+
+      <Dialog open={!!detailSite} onOpenChange={(open) => { if (!open) setDetailSite(null) }}>
+        <DialogContent className="max-h-[85vh] max-w-4xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 pr-8">
+              <span className="truncate font-mono text-base">{detailSite?.value || detailSite?.host}</span>
+              {detailSite && <Badge variant={stateVariant(detailSite.state)}>{stateLabel[detailSite.state] ?? detailSite.state}</Badge>}
+            </DialogTitle>
+          </DialogHeader>
+          {detailQuery.isLoading ? (
+            <div className="py-10 text-center text-sm text-muted-foreground">加载全部信息…</div>
+          ) : !detail ? (
+            <div className="py-10 text-center text-sm text-muted-foreground">详情加载失败</div>
+          ) : (
+            <div className="space-y-5">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {[
+                  ['入口', detail.site.endpoints?.length ?? 0],
+                  ['原始记录', detail.records.length],
+                  ['指纹命中', detail.fingerprints.length],
+                  ['验证记录', detail.verifications.length],
+                ].map(([label, value]) => (
+                  <div key={String(label)} className="rounded-md border px-3 py-2">
+                    <div className="text-[13px] text-muted-foreground">{label}</div>
+                    <div className="mt-1 text-xl font-semibold tabular-nums">{value}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div>
+                <div className="mb-2 text-sm font-semibold">入口</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(detail.site.endpoints ?? []).length === 0 ? (
+                    <span className="text-sm text-muted-foreground">—</span>
+                  ) : detail.site.endpoints.map((e) => (
+                    <Badge key={`${e.scheme}-${e.port}`} variant="outline" className="font-mono text-xs">
+                      {e.scheme}:{e.port}{e.status_code ? ` · ${e.status_code}` : ''}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-2 text-sm font-semibold">指纹</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(detail.site.technology_stack ?? []).length === 0 ? (
+                    <span className="text-sm text-muted-foreground">—</span>
+                  ) : detail.site.technology_stack.map((t) => (
+                    <Badge key={t} variant="secondary" className="text-xs">{t}</Badge>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-2 text-sm font-semibold">原始记录（{detail.records.length}）</div>
+                <div className="max-h-64 overflow-auto rounded-md border">
+                  <Table>
+                    <TableHeader className="sticky top-0 bg-background">
+                      <TableRow>
+                        <TableHead>记录</TableHead>
+                        <TableHead className="w-[70px]">来源</TableHead>
+                        <TableHead className="w-[70px] text-right">状态</TableHead>
+                        <TableHead className="w-[150px] text-right">观测时间</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {detail.records.length === 0 ? (
+                        <TableRow><TableCell colSpan={4} className="py-6 text-center text-muted-foreground">暂无原始记录</TableCell></TableRow>
+                      ) : detail.records.map((r) => (
+                        <TableRow key={r.id}>
+                          <TableCell className="max-w-[420px] break-all font-mono text-xs">{r.value}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{r.source}</TableCell>
+                          <TableCell className="text-right text-xs tabular-nums">{r.status_code || '—'}</TableCell>
+                          <TableCell className="text-right text-xs tabular-nums text-muted-foreground">{formatDate(r.observed_at)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 border-t pt-3">
+                <Button variant="outline" onClick={() => setDetailSite(null)}>关闭</Button>
+                <Button onClick={() => { const id = detailSite?.id; setDetailSite(null); if (id) navigate(`/assets/${id}`) }}>
+                  打开完整详情页
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <CreateTaskFromAssetsDialog
         open={createOpen}
