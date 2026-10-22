@@ -31,11 +31,36 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
-import { RefreshCw, Search, Radar, MoreHorizontal, ShieldCheck, ShieldAlert, Lock, Globe, Rocket, X, Eye } from 'lucide-react'
+import {
+  RefreshCw,
+  Search,
+  Radar,
+  MoreHorizontal,
+  ShieldCheck,
+  ShieldAlert,
+  Lock,
+  Globe,
+  Rocket,
+  X,
+  Eye,
+  Bookmark,
+  Download,
+  Plus,
+  Trash2,
+} from 'lucide-react'
 
 const stateLabel: Record<string, string> = {
   reachable: '可访问',
@@ -121,6 +146,53 @@ const SORTS: { value: AssetSort; label: string }[] = [
   { value: 'risk', label: '风险优先' },
 ]
 
+// 保存视图只存筛选条件与粒度，不存页码/游标：资产在变，位置没有意义。
+type SavedAssetView = {
+  id: string
+  name: string
+  q: string
+  projectId: string
+  kind: AssetKind
+  catalog: AssetCatalog
+  view: AssetView
+  siteGroup: boolean
+  sort: AssetSort
+  pageSize: number
+}
+
+const SAVED_VIEW_KEY = 'zre.asset.savedViews.v1'
+
+function loadSavedViews(): SavedAssetView[] {
+  try {
+    const raw = localStorage.getItem(SAVED_VIEW_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((v): v is SavedAssetView =>
+      v && typeof v.id === 'string' && typeof v.name === 'string'
+    )
+  } catch {
+    return []
+  }
+}
+
+function csvCell(value: unknown): string {
+  let text = String(value ?? '')
+  // CSV 公式注入：以这些字符开头的单元格加前缀，避免被表格软件执行。
+  if (/^[=+\-@]/.test(text)) text = `'${text}`
+  return `"${text.replace(/"/g, '""')}"`
+}
+
+function downloadCSV(filename: string, rows: unknown[][]) {
+  const csv = '\uFEFF' + rows.map((row) => row.map(csvCell).join(',')).join('\n')
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
 /** 三段切换的小控件 */
 function Segmented<T extends string>({
   value,
@@ -184,6 +256,9 @@ export default function AssetsPage() {
   const [detailTab, setDetailTab] = useState<'overview' | 'endpoints' | 'records' | 'fingerprints' | 'verifications'>('overview')
   const [recordsCursorStack, setRecordsCursorStack] = useState<Array<string | undefined>>([undefined])
   const [recordsInterfaceOnly, setRecordsInterfaceOnly] = useState(false)
+  const [savedViews, setSavedViews] = useState<SavedAssetView[]>(loadSavedViews)
+  const [saveViewOpen, setSaveViewOpen] = useState(false)
+  const [viewName, setViewName] = useState('')
   const recordsCursor = recordsCursorStack[recordsCursorStack.length - 1]
   const cursor = cursorStack[cursorStack.length - 1]
   const clusterView = view === 'icons' || view === 'technologies'
@@ -380,6 +455,55 @@ export default function AssetsPage() {
     setPage(1)
   }
 
+  const persistSavedViews = (next: SavedAssetView[]) => {
+    setSavedViews(next)
+    try {
+      localStorage.setItem(SAVED_VIEW_KEY, JSON.stringify(next))
+    } catch {
+      toast({ title: '保存失败', description: '浏览器存储不可用', variant: 'destructive' })
+    }
+  }
+
+  const applySavedView = (v: SavedAssetView) => {
+    setQ(v.q)
+    setAppliedQ(v.q)
+    setProjectId(v.projectId)
+    setKind(v.kind)
+    setCatalog(v.catalog)
+    setView(v.view)
+    setSiteGroup(v.siteGroup)
+    setSort(v.sort)
+    setPageSize(v.pageSize)
+    setPage(1)
+    setCursorStack([undefined])
+  }
+
+  const saveCurrentView = () => {
+    const name = viewName.trim()
+    if (!name) return
+    const saved: SavedAssetView = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name,
+      q: appliedQ,
+      projectId,
+      kind,
+      catalog,
+      view,
+      siteGroup,
+      sort,
+      pageSize,
+    }
+    // 同名覆盖，避免反复保存出现一堆同名项。
+    persistSavedViews([saved, ...savedViews.filter((v) => v.name !== name)])
+    setSaveViewOpen(false)
+    setViewName('')
+    toast({ title: `已保存视图「${name}」` })
+  }
+
+  const deleteSavedView = (id: string) => {
+    persistSavedViews(savedViews.filter((v) => v.id !== id))
+  }
+
   const data = list.data?.data
   const items = data?.items ?? []
   const total = data?.total ?? 0
@@ -391,6 +515,52 @@ export default function AssetsPage() {
   const policy = data?.connectivity_policy
   const busy = probe.isPending || verify.isPending || protect.isPending
   const expanded = kind === 'site' && !siteGroup
+
+  const exportCurrent = (siteSubset?: Site[]) => {
+    const stamp = new Date().toISOString().slice(0, 10)
+    let rows: unknown[][] = []
+    if (kind === 'site') {
+      const sites = siteSubset ?? (items as Site[])
+      rows = [
+        ['资产', '标题', 'IP', '协议', '端口', '状态码', '状态', '风险', '记录数', '项目'],
+        ...sites.map((s) => [
+          s.value || s.host, s.title, s.ip, s.protocol, s.port, s.http_status,
+          stateLabel[s.state] ?? s.state, `${priorityLabel(s.priority)} ${s.risk_score}`,
+          s.record_count, s.project_name,
+        ]),
+      ]
+    } else if (kind === 'record') {
+      rows = [
+        ['URL', '方法', '接口', '来源', '状态码', '主机', 'IP', '观察时间', '项目'],
+        ...(items as RawRecordRow[]).map((r) => [
+          r.value, r.method || 'GET', r.is_interface ? '是' : '否', r.source,
+          r.status_code, `${r.host}:${r.port}`, r.ip, r.observed_at, r.project_name,
+        ]),
+      ]
+    } else if (kind === 'domain') {
+      rows = [
+        ['域名', '站点数', '可达', '项目', '最近发现'],
+        ...(items as DomainRow[]).map((d) => [d.host, d.site_count, d.reachable_count, d.project_name, d.last_seen]),
+      ]
+    } else if (kind === 'ip') {
+      rows = [
+        ['IP', '站点数', '域名数', '最近发现'],
+        ...(items as IPRow[]).map((r) => [r.ip, r.site_count, r.domain_count, r.last_seen]),
+      ]
+    } else {
+      rows = [
+        ['入口', '协议', '标题', '记录数', '状态', '项目', '最近发现'],
+        ...(items as EndpointRow[]).map((e) => [
+          `${e.host}:${e.port}`, e.protocol, e.title, e.record_count, e.state, e.project_name, e.last_seen,
+        ]),
+      ]
+    }
+    if (rows.length <= 1) {
+      toast({ title: '当前没有可导出的数据' })
+      return
+    }
+    downloadCSV(`assets-${kind}-${stamp}.csv`, rows)
+  }
 
   const colCount = expanded ? 7 : kind === 'site' ? 11 : kind === 'record' ? 7 : 5
 
@@ -545,9 +715,57 @@ export default function AssetsPage() {
             </p>
           )}
         </div>
-        <Button variant="outline" onClick={() => list.refetch()}>
-          <RefreshCw className="mr-2 h-4 w-4" /> 刷新
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline">
+                <Bookmark className="mr-2 h-4 w-4" /> 保存的视图
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-60">
+              {savedViews.length === 0 ? (
+                <div className="px-2 py-1.5 text-sm text-muted-foreground">还没有保存的视图</div>
+              ) : (
+                savedViews.map((v) => (
+                  <DropdownMenuItem
+                    key={v.id}
+                    className="gap-2"
+                    onSelect={() => applySavedView(v)}
+                  >
+                    <span className="flex-1 truncate">{v.name}</span>
+                    <button
+                      type="button"
+                      aria-label={`删除视图 ${v.name}`}
+                      className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        deleteSavedView(v.id)
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </DropdownMenuItem>
+                ))
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={() => {
+                  setViewName('')
+                  setSaveViewOpen(true)
+                }}
+              >
+                <Plus className="mr-2 h-4 w-4" /> 保存当前视图
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button variant="outline" onClick={() => exportCurrent()} disabled={items.length === 0}>
+            <Download className="mr-2 h-4 w-4" /> 导出本页
+          </Button>
+          <Button variant="outline" onClick={() => list.refetch()}>
+            <RefreshCw className="mr-2 h-4 w-4" /> 刷新
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -718,6 +936,14 @@ export default function AssetsPage() {
           <Button size="sm" onClick={() => setCreateOpen(true)}>
             <Rocket className="mr-1 h-4 w-4" />
             用选中资产创建任务
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => exportCurrent((items as Site[]).filter((s) => selectedHosts.has(s.value)))}
+          >
+            <Download className="mr-1 h-4 w-4" />
+            导出所选
           </Button>
           <Button variant="outline" size="sm" onClick={() => setSelectedHosts(new Set())}>
             <X className="mr-1 h-4 w-4" />
@@ -1243,6 +1469,30 @@ export default function AssetsPage() {
           </aside>
         </>
       )}
+
+      <Dialog open={saveViewOpen} onOpenChange={setSaveViewOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>保存当前视图</DialogTitle>
+            <DialogDescription>
+              保存查询串、粒度、视图、项目、排序与每页条数；不保存页码。
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            autoFocus
+            value={viewName}
+            placeholder="例如：美团接口资产"
+            onChange={(e) => setViewName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') saveCurrentView()
+            }}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSaveViewOpen(false)}>取消</Button>
+            <Button onClick={saveCurrentView} disabled={!viewName.trim()}>保存</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <CreateTaskFromAssetsDialog
         open={createOpen}
