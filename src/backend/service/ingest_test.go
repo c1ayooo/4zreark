@@ -5,6 +5,7 @@ import (
 
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/repo"
+	"github.com/c1ayooo/4zreark/service/pipeline"
 )
 
 func TestRawRecordFromScan(t *testing.T) {
@@ -39,6 +40,42 @@ func TestRawRecordFromScan(t *testing.T) {
 		if rec.Source != "scan" || rec.Title != "title" || rec.IP != "1.2.3.4" {
 			t.Fatalf("%s: 证据字段不符: %+v", c.name, rec)
 		}
+	}
+}
+
+func TestRawRecordFromCrawlKeepsInterfaceEvidence(t *testing.T) {
+	rec, ok := rawRecordFromCrawl(pipeline.UrlResult{
+		Output:      "https://career.meituan.com/category/allData",
+		Method:      "POST",
+		ContentType: "application/json; charset=utf-8",
+		Tag:         "script",
+		Attribute:   "jsluice-fetch",
+		Referrer:    "https://career.meituan.com/",
+	})
+	if !ok {
+		t.Fatal("爬虫 URL 应转成原始记录")
+	}
+	if rec.Evidence["method"] != "POST" ||
+		rec.Evidence["content_type"] != "application/json; charset=utf-8" ||
+		rec.Evidence["tag"] != "script" ||
+		rec.Evidence["attribute"] != "jsluice-fetch" ||
+		rec.Evidence["referrer"] != "https://career.meituan.com/" {
+		t.Fatalf("采集来源没有完整保留: %+v", rec.Evidence)
+	}
+	if rec.Evidence["is_interface"] != true || rec.Evidence["interface_reason"] != "method" {
+		t.Fatalf("接口标记不符: %+v", rec.Evidence)
+	}
+
+	// 没有 /api 前缀、没有方法/来源标签时，查询串仍能命中。
+	rec, ok = rawRecordFromCrawl(pipeline.UrlResult{
+		Output: "https://career.meituan.com/category/allData?type=1",
+		Method: "GET",
+	})
+	if !ok {
+		t.Fatal("带查询串的 URL 应转成原始记录")
+	}
+	if rec.Evidence["is_interface"] != true || rec.Evidence["interface_reason"] != "query" {
+		t.Fatalf("查询串接口标记不符: %+v", rec.Evidence)
 	}
 }
 
