@@ -11,9 +11,13 @@ func TestKatanaCommonArgsIncludeFieldScope(t *testing.T) {
 	k := &KatanaScanner{Depth: 3, Concurrency: 10, Timeout: 30, RateLimit: 150}
 	args := k.commonArgs("/tmp/katana.json")
 
-	var scope, rdn, output bool
+	var scope, rdn, output, jsCrawl, jsluice bool
 	for i, a := range args {
 		switch a {
+		case "-jc":
+			jsCrawl = true
+		case "-jsl":
+			jsluice = true
 		case "-fs":
 			scope = true
 			if i+1 < len(args) && args[i+1] == "rdn" {
@@ -30,6 +34,9 @@ func TestKatanaCommonArgsIncludeFieldScope(t *testing.T) {
 	}
 	if !output {
 		t.Fatalf("katana 参数缺少输出文件: %v", args)
+	}
+	if !jsCrawl || !jsluice {
+		t.Fatalf("katana 需要同时开启 -jc 和 -jsl: %v", args)
 	}
 }
 
