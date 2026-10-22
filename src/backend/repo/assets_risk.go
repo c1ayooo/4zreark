@@ -26,6 +26,7 @@ import (
 type riskInputRow struct {
 	ID                 int64
 	Host               string
+	IP                 *string // 域名/IP 粒度按风险聚合时要用；站点无 IP 时为 nil
 	Title              string
 	Tech               []string
 	HTTPStatus         int
@@ -59,7 +60,7 @@ func sortByRisk(rows []riskOrder) {
 	})
 }
 
-const riskSelect = `s.id, s.host, coalesce(s.title,''), s.tech, s.http_status, s.state,
+const riskSelect = `s.id, s.host, s.ip, coalesce(s.title,''), s.tech, s.http_status, s.state,
 	s.verification_status, (s.verified_at IS NOT NULL),
 	coalesce(rr.ports, '[]'::jsonb), coalesce(rr.server, '')`
 
@@ -91,7 +92,7 @@ func (a *AssetRepo) queryRiskInputs(ctx context.Context, cond string, args []any
 	for rows.Next() {
 		var r riskInputRow
 		var tech, ports []byte
-		if err := rows.Scan(&r.ID, &r.Host, &r.Title, &tech, &r.HTTPStatus, &r.State,
+		if err := rows.Scan(&r.ID, &r.Host, &r.IP, &r.Title, &tech, &r.HTTPStatus, &r.State,
 			&r.VerificationStatus, &r.Verified, &ports, &r.Server); err != nil {
 			return nil, fmt.Errorf("解析风险评分输入失败: %w", err)
 		}
@@ -210,47 +211,90 @@ var riskOrderCache = newTTLCache[riskOrderResult](30 * time.Second)
 type riskOrderResult struct {
 	order []riskOrder
 	total int64
+	// hostRisk / ipRisk 是域名/IP 粒度风险排序的聚合视图：取归属站点的最高分。
+	hostRisk map[string]riskAgg // key: lower(host)
+	ipRisk   map[string]riskAgg // key: ip 字符串；无 IP 站点不进表
+}
+
+// riskAgg 是聚合后的风险摘要（域名/IP 行只需要分数和等级）。
+type riskAgg struct {
+	Score int
+	Level string
+}
+
+// riskOrdersFor 计算给定条件下全部候选站点的风险序表（带 30s TTL 缓存）。
+// 站点/域名/IP 三种粒度的风险排序共用：域名/IP 取归属站点的最高分聚合。
+func (a *AssetRepo) riskOrdersFor(ctx context.Context, w *whereBuilder) (riskOrderResult, bool, error) {
+	ck := cacheKey("riskorder", w.String(), fmt.Sprint(w.args...))
+	if cached, ok := riskOrderCache.get(ck); ok {
+		return cached, true, nil
+	}
+
+	var total int64
+	if err := a.r.pool.QueryRow(ctx,
+		"SELECT count(*) FROM sites s JOIN projects p ON p.id = s.project_id WHERE "+w.String(),
+		w.args...).Scan(&total); err != nil {
+		return riskOrderResult{}, false, fmt.Errorf("统计资产失败: %w", err)
+	}
+	if total == 0 {
+		empty := riskOrderResult{order: []riskOrder{}, total: 0}
+		riskOrderCache.put(ck, empty)
+		return empty, false, nil
+	}
+
+	inputs, err := a.queryRiskInputs(ctx, w.String(), w.args)
+	if err != nil {
+		return riskOrderResult{}, false, err
+	}
+	hosts := make([]string, 0, len(inputs))
+	for _, r := range inputs {
+		hosts = append(hosts, strings.ToLower(r.Host))
+	}
+	stats, err := a.vulnStatsByHost(ctx, hosts)
+	if err != nil {
+		return riskOrderResult{}, false, err
+	}
+
+	order := make([]riskOrder, 0, len(inputs))
+	hostRisk := make(map[string]riskAgg, len(inputs))
+	ipRisk := make(map[string]riskAgg, len(inputs))
+	for _, r := range inputs {
+		sc, level, factors := computeSiteRisk(r, stats[strings.ToLower(r.Host)])
+		order = append(order, riskOrder{ID: r.ID, Score: sc, Level: level, Factors: factors})
+		agg := riskAgg{Score: sc, Level: level}
+		host := strings.ToLower(r.Host)
+		if cur, ok := hostRisk[host]; !ok || sc > cur.Score {
+			hostRisk[host] = agg
+		}
+		if r.IP != nil {
+			if cur, ok := ipRisk[*r.IP]; !ok || sc > cur.Score {
+				ipRisk[*r.IP] = agg
+			}
+		}
+	}
+	sortByRisk(order)
+
+	cached := riskOrderResult{order: order, total: total, hostRisk: hostRisk, ipRisk: ipRisk}
+	riskOrderCache.put(ck, cached)
+	return cached, false, nil
+}
+
+// riskOrderByID 把风险序表转成 site_id → 风险 的映射。
+func riskOrderByID(order []riskOrder) map[int64]riskOrder {
+	m := make(map[int64]riskOrder, len(order))
+	for _, o := range order {
+		m[o.ID] = o
+	}
+	return m
 }
 
 // listSiteRowsByRisk 按评分全局排序后再取当前页。
 // 评分依赖观测字段而不是已落库的列，所以只能把候选行全部算完再切片；
 // 这是 sort=risk 的显式代价，默认排序不受影响。
 func (a *AssetRepo) listSiteRowsByRisk(ctx context.Context, w *whereBuilder, q AssetQuery) (any, int64, error) {
-	ck := cacheKey("riskorder", w.String(), fmt.Sprint(w.args...))
-	cached, ok := riskOrderCache.get(ck)
-	if !ok {
-		var total int64
-		if err := a.r.pool.QueryRow(ctx,
-			"SELECT count(*) FROM sites s JOIN projects p ON p.id = s.project_id WHERE "+w.String(),
-			w.args...).Scan(&total); err != nil {
-			return nil, 0, fmt.Errorf("统计资产失败: %w", err)
-		}
-		if total == 0 {
-			return []*Site{}, 0, nil
-		}
-
-		inputs, err := a.queryRiskInputs(ctx, w.String(), w.args)
-		if err != nil {
-			return nil, 0, err
-		}
-		hosts := make([]string, 0, len(inputs))
-		for _, r := range inputs {
-			hosts = append(hosts, strings.ToLower(r.Host))
-		}
-		stats, err := a.vulnStatsByHost(ctx, hosts)
-		if err != nil {
-			return nil, 0, err
-		}
-
-		order := make([]riskOrder, 0, len(inputs))
-		for _, r := range inputs {
-			sc, level, factors := computeSiteRisk(r, stats[strings.ToLower(r.Host)])
-			order = append(order, riskOrder{ID: r.ID, Score: sc, Level: level, Factors: factors})
-		}
-		sortByRisk(order)
-
-		cached = riskOrderResult{order: order, total: total}
-		riskOrderCache.put(ck, cached)
+	cached, _, err := a.riskOrdersFor(ctx, w)
+	if err != nil {
+		return nil, 0, err
 	}
 	total := cached.total
 	order := cached.order

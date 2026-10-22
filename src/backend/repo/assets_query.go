@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"sort"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -82,6 +83,9 @@ type DomainRow struct {
 	ReachableCnt int64     `json:"reachable_count"`
 	LastSeen     time.Time `json:"last_seen"`
 	ResourceType string    `json:"resource_type"`
+	// RiskScore/Priority 是 sort=risk 时的聚合风险（归属站点的最高分）。
+	RiskScore int    `json:"risk_score,omitempty"`
+	Priority  string `json:"priority,omitempty"`
 }
 
 // IPRow 是 IP 粒度的一行。
@@ -92,6 +96,9 @@ type IPRow struct {
 	ProjectID    int64     `json:"project_id"`
 	LastSeen     time.Time `json:"last_seen"`
 	ResourceType string    `json:"resource_type"`
+	// RiskScore/Priority 是 sort=risk 时的聚合风险（归属站点的最高分）。
+	RiskScore int    `json:"risk_score,omitempty"`
+	Priority  string `json:"priority,omitempty"`
 }
 
 // RawRecordRow 是「原始记录」粒度的一行：一次采集的证据，不归并。
@@ -313,14 +320,17 @@ func (a *AssetRepo) ListAssets(ctx context.Context, q AssetQuery) (*AssetPage, e
 		return nil, err
 	}
 
-	cursorMode := q.UseCursor && (page.Kind != "site" || (q.SiteGroup && normalizeSort(q.Sort) != "risk"))
+	// 风险排序（任意粒度）都要先把全量候选算完，继续用 page 翻页。
+	cursorMode := q.UseCursor && normalizeSort(q.Sort) != "risk" && (page.Kind != "site" || q.SiteGroup)
 	if q.UseCursor && !cursorMode {
 		// 风险排序要先把全量候选算完，展开入口是聚合视图；这两种继续用 page。
 		q.UseCursor = false
 	}
 	switch page.Kind {
 	case "domain":
-		if q.UseCursor {
+		if normalizeSort(q.Sort) == "risk" {
+			page.Items, page.Total, err = a.listDomainsByRisk(ctx, w, q)
+		} else if q.UseCursor {
 			var items []*DomainRow
 			var next string
 			var more bool
@@ -330,7 +340,9 @@ func (a *AssetRepo) ListAssets(ctx context.Context, q AssetQuery) (*AssetPage, e
 			page.Items, page.Total, err = a.listDomains(ctx, w, q)
 		}
 	case "ip":
-		if q.UseCursor {
+		if normalizeSort(q.Sort) == "risk" {
+			page.Items, page.Total, err = a.listIPsByRisk(ctx, w, q)
+		} else if q.UseCursor {
 			var items []*IPRow
 			var next string
 			var more bool
@@ -894,6 +906,148 @@ func (a *AssetRepo) listDomains(ctx context.Context, w *whereBuilder, q AssetQue
 		out = append(out, &d)
 	}
 	return out, total, rows.Err()
+}
+
+// domainAggregateSQL 是域名粒度的分组聚合列（listDomains 与 listDomainsByRisk 共用，
+// 保证两种排序口径下每行的字段语义一致）。
+const domainAggregateCols = `s.host, count(*) AS site_count, min(s.project_id),
+		       min(p.code), min(p.name),
+		       count(*) FILTER (WHERE s.state = 'reachable') AS reachable_count,
+		       max(s.last_seen)`
+
+// ipAggregateSQL 同上，IP 粒度。
+const ipAggregateCols = `s.ip::text, count(*) AS site_count, count(DISTINCT s.host) AS domain_count,
+		       min(s.project_id), max(s.last_seen)`
+
+// listDomainsByRisk 按聚合风险（归属站点最高分）排序域名行。
+// 与站点风险排序同一套缓存计算（riskOrdersFor），翻页在内存切片。
+func (a *AssetRepo) listDomainsByRisk(ctx context.Context, w *whereBuilder, q AssetQuery) (any, int64, error) {
+	cached, _, err := a.riskOrdersFor(ctx, w)
+	if err != nil {
+		return nil, 0, err
+	}
+	cond := w.String()
+	stmt := fmt.Sprintf(`
+		SELECT ` + domainAggregateCols + `
+		  FROM sites s JOIN projects p ON p.id = s.project_id
+		 WHERE %s
+		 GROUP BY s.host`, cond)
+	rows, err := a.r.pool.Query(ctx, stmt, w.args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("查询域名失败: %w", err)
+	}
+	defer rows.Close()
+
+	type domRow struct {
+		DomainRow
+		score int
+	}
+	out := []domRow{}
+	for rows.Next() {
+		var d DomainRow
+		if err := rows.Scan(&d.Host, &d.SiteCount, &d.ProjectID, &d.ProjectCode, &d.ProjectName,
+			&d.ReachableCnt, &d.LastSeen); err != nil {
+			return nil, 0, fmt.Errorf("解析域名失败: %w", err)
+		}
+		d.ResourceType = "domain"
+		if agg, ok := cached.hostRisk[strings.ToLower(d.Host)]; ok {
+			d.RiskScore, d.Priority = agg.Score, agg.Level
+		}
+		out = append(out, domRow{DomainRow: d, score: d.RiskScore})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("遍历域名失败: %w", err)
+	}
+
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].score != out[j].score {
+			return out[i].score > out[j].score
+		}
+		if out[i].SiteCount != out[j].SiteCount {
+			return out[i].SiteCount > out[j].SiteCount
+		}
+		return out[i].Host < out[j].Host
+	})
+
+	total := int64(len(out))
+	offset := int64((q.Page - 1) * q.PageSize)
+	if offset >= total {
+		return []*DomainRow{}, total, nil
+	}
+	end := offset + int64(q.PageSize)
+	if end > total {
+		end = total
+	}
+	page := make([]*DomainRow, 0, end-offset)
+	for _, r := range out[offset:end] {
+		page = append(page, &r.DomainRow)
+	}
+	return page, total, nil
+}
+
+// listIPsByRisk 按聚合风险（归属站点最高分）排序 IP 行。
+func (a *AssetRepo) listIPsByRisk(ctx context.Context, w *whereBuilder, q AssetQuery) (any, int64, error) {
+	cached, _, err := a.riskOrdersFor(ctx, w)
+	if err != nil {
+		return nil, 0, err
+	}
+	// 与 listIPs 一致：排除没有 IP 的站点，避免出现空 IP 行。
+	cond := w.String() + " AND s.ip IS NOT NULL"
+	stmt := fmt.Sprintf(`
+		SELECT ` + ipAggregateCols + `
+		  FROM sites s
+		 WHERE %s
+		 GROUP BY s.ip`, cond)
+	rows, err := a.r.pool.Query(ctx, stmt, w.args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("查询 IP 失败: %w", err)
+	}
+	defer rows.Close()
+
+	type ipRow struct {
+		IPRow
+		score int
+	}
+	out := []ipRow{}
+	for rows.Next() {
+		var r IPRow
+		if err := rows.Scan(&r.IP, &r.SiteCount, &r.DomainCount, &r.ProjectID, &r.LastSeen); err != nil {
+			return nil, 0, fmt.Errorf("解析 IP 失败: %w", err)
+		}
+		r.ResourceType = "ip"
+		if agg, ok := cached.ipRisk[r.IP]; ok {
+			r.RiskScore, r.Priority = agg.Score, agg.Level
+		}
+		out = append(out, ipRow{IPRow: r, score: r.RiskScore})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("遍历 IP 失败: %w", err)
+	}
+
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].score != out[j].score {
+			return out[i].score > out[j].score
+		}
+		if out[i].SiteCount != out[j].SiteCount {
+			return out[i].SiteCount > out[j].SiteCount
+		}
+		return out[i].IP < out[j].IP
+	})
+
+	total := int64(len(out))
+	offset := int64((q.Page - 1) * q.PageSize)
+	if offset >= total {
+		return []*IPRow{}, total, nil
+	}
+	end := offset + int64(q.PageSize)
+	if end > total {
+		end = total
+	}
+	page := make([]*IPRow, 0, end-offset)
+	for _, r := range out[offset:end] {
+		page = append(page, &r.IPRow)
+	}
+	return page, total, nil
 }
 
 func (a *AssetRepo) listIPs(ctx context.Context, w *whereBuilder, q AssetQuery) (any, int64, error) {

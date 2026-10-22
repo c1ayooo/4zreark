@@ -63,6 +63,9 @@ export interface DomainRow {
   project_name: string
   reachable_count: number
   last_seen: string
+  /** sort=risk 时的聚合风险（归属站点的最高分） */
+  risk_score?: number
+  priority?: string
 }
 
 /** kind=ip 的一行 */
@@ -72,6 +75,9 @@ export interface IPRow {
   domain_count: number
   project_id: number
   last_seen: string
+  /** sort=risk 时的聚合风险（归属站点的最高分） */
+  risk_score?: number
+  priority?: string
 }
 
 /** site_group=0（展开到入口）的一行 */

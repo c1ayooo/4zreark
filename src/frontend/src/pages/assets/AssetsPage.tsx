@@ -302,7 +302,16 @@ export default function AssetsPage() {
   const recordsCursor = recordsCursorStack[recordsCursorStack.length - 1]
   const cursor = cursorStack[cursorStack.length - 1]
   const clusterView = view === 'icons' || view === 'technologies'
-  const riskSort = kind === 'site' && siteGroup && sort === 'risk'
+  const riskSort = sort === 'risk' && (kind === 'domain' || kind === 'ip' || (kind === 'site' && siteGroup))
+
+  // 聚类下钻：把图标/技术栈变成资产列表的过滤条件，回到站点粒度看命中的资产。
+  const drillDown = (expr: string) => {
+    setQ(expr)
+    setAppliedQ(expr)
+    setKind('site')
+    setView('')
+    setPage(1)
+  }
   const cursorMode = !clusterView && !riskSort && (kind === 'site' ? siteGroup : true)
   // 只有真的展开了某一行才请求最近记录，正常浏览列表不付这份查询成本。
   const recentLoaded = kind === 'site' && siteGroup && expandedSiteIDs.size > 0
@@ -582,13 +591,25 @@ export default function AssetsPage() {
       ]
     } else if (kind === 'domain') {
       rows = [
+        ...(riskSort ? [['风险分']] : []),
         ['域名', '站点数', '可达', '项目', '最近发现'],
-        ...(items as DomainRow[]).map((d) => [d.host, d.site_count, d.reachable_count, d.project_name, d.last_seen]),
+        ...(items as DomainRow[]).map((d) => {
+          const risk = riskSort ? (d.risk_score ? `${d.priority} · ${d.risk_score}` : '') : null
+          const cells: unknown[] = risk === null ? [] : [risk]
+          cells.push(d.host, d.site_count, d.reachable_count, d.project_name, d.last_seen)
+          return cells
+        }),
       ]
     } else if (kind === 'ip') {
       rows = [
+        ...(riskSort ? [['风险分']] : []),
         ['IP', '站点数', '域名数', '最近发现'],
-        ...(items as IPRow[]).map((r) => [r.ip, r.site_count, r.domain_count, r.last_seen]),
+        ...(items as IPRow[]).map((r) => {
+          const risk = riskSort ? (r.risk_score ? `${r.priority} · ${r.risk_score}` : '') : null
+          const cells: unknown[] = risk === null ? [] : [risk]
+          cells.push(r.ip, r.site_count, r.domain_count, r.last_seen)
+          return cells
+        }),
       ]
     } else {
       rows = [
@@ -1003,7 +1024,7 @@ export default function AssetsPage() {
             按站点归并
           </label>
         )}
-        {kind === 'site' && siteGroup && (
+        {(kind === 'domain' || kind === 'ip' || (kind === 'site' && siteGroup)) && (
           <div className="flex items-center gap-2">
             <span className="text-[13px] text-muted-foreground">排序</span>
             <Segmented value={sort} options={SORTS} onChange={(v) => { setSort(v); setPage(1) }} />
@@ -1047,11 +1068,19 @@ export default function AssetsPage() {
       {view === 'icons' && (
         <div className="space-y-3">
           <p className="text-[13px] text-muted-foreground">
-            共 {iconClusters.data?.data.total ?? 0} 组图标 · 点开站点看详情（图标按内容哈希去重）
+            共 {iconClusters.data?.data.total ?? 0} 组图标 · 点击图标下钻看对应站点（按内容哈希去重）
           </p>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             {(iconClusters.data?.data.items ?? []).map((ic) => (
-              <div key={ic.icon_sha256} className="flex flex-col items-center gap-2 rounded-md border p-3">
+              <div
+                key={ic.icon_sha256}
+                role="button"
+                tabIndex={0}
+                title={`下钻：icon_hash=&quot;${ic.icon_sha256.slice(0, 12)}…&quot;`}
+                onClick={() => drillDown(`icon_hash="${ic.icon_sha256}"`)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') drillDown(`icon_hash="${ic.icon_sha256}"`) }}
+                className="flex cursor-pointer flex-col items-center gap-2 rounded-md border p-3 transition-colors hover:border-foreground/30 hover:bg-muted/50"
+              >
                 <img
                   src={assetApi.iconURL(ic.icon_sha256)}
                   alt={ic.sample_host}
@@ -1076,14 +1105,18 @@ export default function AssetsPage() {
       {view === 'technologies' && (
         <div className="space-y-3">
           <p className="text-[13px] text-muted-foreground">
-            共 {techClusters.data?.data.total ?? 0} 种技术 · 数字是命中的站点数
+            共 {techClusters.data?.data.total ?? 0} 种技术 · 点击技术名下钻看对应站点
           </p>
           <div className="flex flex-wrap gap-2">
             {(techClusters.data?.data.items ?? []).map((t) => (
               <span
                 key={t.name}
-                className="rounded-full border px-3 py-1 text-sm"
-                title={`${t.site_count} 个站点`}
+                role="button"
+                tabIndex={0}
+                onClick={() => drillDown(`app="${t.name.replace(/"/g, '')}"`)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') drillDown(`app="${t.name.replace(/"/g, '')}"`) }}
+                className="cursor-pointer rounded-full border px-3 py-1 text-sm transition-colors hover:border-foreground/30 hover:bg-muted/50"
+                title={`下钻：app=&quot;${t.name}&quot;（${t.site_count} 个站点）`}
               >
                 {t.name}
                 <span className="ml-1 text-[13px] text-muted-foreground">{t.site_count}</span>
@@ -1159,9 +1192,11 @@ export default function AssetsPage() {
                 {expanded && <TableHead className="w-[110px]">连通</TableHead>}
                 {expanded && <TableHead className="w-[110px] text-right">最近发现</TableHead>}
                 {expanded && <TableHead className="hidden w-[120px] lg:table-cell">项目</TableHead>}
+                {kind === 'domain' && riskSort && <TableHead className="w-[90px] text-right">风险</TableHead>}
                 {kind === 'domain' && <TableHead className="w-[100px] text-right">站点数</TableHead>}
                 {kind === 'domain' && <TableHead className="w-[100px] text-right">可达</TableHead>}
                 {kind === 'domain' && <TableHead className="hidden w-[120px] lg:table-cell">项目</TableHead>}
+                {kind === 'ip' && riskSort && <TableHead className="w-[90px] text-right">风险</TableHead>}
                 {kind === 'ip' && <TableHead className="w-[100px] text-right">站点数</TableHead>}
                 {kind === 'ip' && <TableHead className="w-[100px] text-right">域名数</TableHead>}
                 {kind === 'ip' && <TableHead className="w-[110px] text-right">最近发现</TableHead>}
@@ -1322,6 +1357,15 @@ export default function AssetsPage() {
                 (items as DomainRow[]).map((d) => (
                   <TableRow key={d.host}>
                     <TableCell className="text-sm font-medium">{d.host}</TableCell>
+                    {riskSort && (
+                      <TableCell className="text-right">
+                        {d.risk_score ? (
+                          <Badge variant="outline" className="tabular-nums">
+                            {d.priority?.toUpperCase() || `P? · ${d.risk_score}`} · {d.risk_score}
+                          </Badge>
+                        ) : '—'}
+                      </TableCell>
+                    )}
                     <TableCell className="text-right text-sm tabular-nums">{d.site_count}</TableCell>
                     <TableCell className="text-right text-sm tabular-nums">{d.reachable_count}</TableCell>
                     <TableCell className="text-sm">{d.project_name}</TableCell>
@@ -1333,6 +1377,15 @@ export default function AssetsPage() {
                 (items as IPRow[]).map((r) => (
                   <TableRow key={r.ip}>
                     <TableCell className="text-sm font-medium">{r.ip}</TableCell>
+                    {riskSort && (
+                      <TableCell className="text-right">
+                        {r.risk_score ? (
+                          <Badge variant="outline" className="tabular-nums">
+                            {r.priority?.toUpperCase() || `P? · ${r.risk_score}`} · {r.risk_score}
+                          </Badge>
+                        ) : '—'}
+                      </TableCell>
+                    )}
                     <TableCell className="text-right text-sm tabular-nums">{r.site_count}</TableCell>
                     <TableCell className="text-right text-sm tabular-nums">{r.domain_count}</TableCell>
                     <TableCell className="text-right text-[13px] tabular-nums text-muted-foreground">{r.last_seen?.slice(0, 10)}</TableCell>
