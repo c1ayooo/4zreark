@@ -57,22 +57,35 @@ func reapStaleTasks(ctx context.Context) {
 		log.Printf("[StaleReaper] 查询僵尸任务失败: %v", err)
 		return
 	}
-	for _, task := range tasks {
-		id := task.ID.Hex()
-		msg := "执行节点离线或任务长时间无进展，已自动回收"
-		if err := svc.UpdateTask(id, map[string]interface{}{
-			"status":       models.TaskStatusFailed,
-			"last_error":   msg,
-			"completed_at": now,
-		}); err != nil {
-			log.Printf("[StaleReaper] 标记任务 %s 失败: %v", id, err)
-			continue
-		}
-		if q := DefaultScanQueue(); q != nil {
-			if _, err := q.CancelAll(ctx, id); err != nil {
-				log.Printf("[StaleReaper] 取消任务 %s 的 River job 失败: %v", id, err)
+	reapList := func(list []*models.Task, msg string, node bool) {
+		for _, task := range list {
+			id := task.ID.Hex()
+			if err := svc.UpdateTask(id, map[string]interface{}{
+				"status":       models.TaskStatusFailed,
+				"last_error":   msg,
+				"completed_at": now,
+			}); err != nil {
+				log.Printf("[StaleReaper] 标记任务 %s 失败: %v", id, err)
+				continue
+			}
+			if q := DefaultScanQueue(); q != nil {
+				if _, err := q.CancelAll(ctx, id); err != nil {
+					log.Printf("[StaleReaper] 取消任务 %s 的 River job 失败: %v", id, err)
+				}
+			}
+			if node {
+				log.Printf("[StaleReaper] 已回收任务 %s（node=%s, updated=%s）", id, task.NodeID, task.UpdatedAt.Format(time.RFC3339))
+			} else {
+				log.Printf("[StaleReaper] 已回收无节点任务 %s（node=%s）", id, task.NodeID)
 			}
 		}
-		log.Printf("[StaleReaper] 已回收任务 %s（node=%s, updated=%s）", id, task.NodeID, task.UpdatedAt.Format(time.RFC3339))
+	}
+
+	reapList(tasks, "执行节点离线或任务长时间无进展，已自动回收", true)
+
+	if pending, err := store.ListStalePending(ctx, now.Add(-30*time.Minute)); err != nil {
+		log.Printf("[StaleReaper] 查询无节点 pending 任务失败: %v", err)
+	} else {
+		reapList(pending, "指定的执行节点不存在，任务已自动回收", false)
 	}
 }

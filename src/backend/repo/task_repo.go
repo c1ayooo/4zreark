@@ -23,6 +23,7 @@ type TaskRepo interface {
 	List(ctx context.Context, workspaceID, taskType, status string, projectID int64, page, pageSize int) ([]*models.Task, int64, error)
 	ListCursor(ctx context.Context, workspaceID, taskType, status string, projectID int64, cursor string, pageSize int) ([]*models.Task, string, bool, error)
 	ListStaleRunning(ctx context.Context, nodeHeartbeatBefore, taskIdleBefore, hardBefore time.Time) ([]*models.Task, error)
+	ListStalePending(ctx context.Context, createdBefore time.Time) ([]*models.Task, error)
 	UpdateFields(ctx context.Context, id string, fields map[string]any) error
 	Delete(ctx context.Context, id string) error
 	StatusCounts(ctx context.Context, workspaceID string) (map[string]int, error)
@@ -430,6 +431,33 @@ func (r *taskRepo) ListStaleRunning(ctx context.Context, nodeHeartbeatBefore, ta
 		    )
 		  order by t.updated_at asc
 		  limit 200`, nodeHeartbeatBefore, taskIdleBefore, hardBefore)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*models.Task, 0, 16)
+	for rows.Next() {
+		t, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// ListStalePending 找出指定了节点、但节点已不存在的 pending 任务。
+func (r *taskRepo) ListStalePending(ctx context.Context, createdBefore time.Time) ([]*models.Task, error) {
+	qualified := "t." + strings.ReplaceAll(taskColumns, ",", ", t.")
+	rows, err := r.r.pool.Query(ctx,
+		`select `+qualified+`
+		   from tasks t
+		  where t.status = 'pending'
+		    and t.node_id <> ''
+		    and t.created_at < $1
+		    and not exists (select 1 from scanner_nodes n where n.node_id = t.node_id)
+		  order by t.created_at asc
+		  limit 200`, createdBefore)
 	if err != nil {
 		return nil, err
 	}
