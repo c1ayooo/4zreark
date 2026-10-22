@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { notifyApi, NotifyConfig, NotifyHistory, InAppNotification } from '@/api/notify'
 import { Button } from '@/components/ui/button'
@@ -33,6 +33,7 @@ import {
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
+import { notificationLink } from '@/lib/notifyLink'
 import {
   Bell,
   Plus,
@@ -45,6 +46,7 @@ import {
   CheckCircle,
   XCircle,
   CheckCheck,
+  ChevronRight,
 } from 'lucide-react'
 
 const channelTypeIcons: Record<string, React.ReactNode> = {
@@ -64,6 +66,7 @@ const channelTypeLabels: Record<string, string> = {
 }
 
 export default function NotifyPage() {
+  const navigate = useNavigate()
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -421,44 +424,65 @@ export default function NotifyPage() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  inbox.map((n) => (
-                    <TableRow
-                      key={n.id}
-                      className={n.read ? undefined : 'cursor-pointer bg-muted/30'}
-                      onClick={() => {
-                        if (!n.read) markOneMutation.mutate(n.id)
-                      }}
-                    >
-                      <TableCell>
-                        <Badge
-                          variant={
-                            n.level === 'critical'
-                              ? 'destructive'
-                              : n.level === 'warning'
-                                ? 'warning'
-                                : 'outline'
+                  inbox.map((n) => {
+                    const target = notificationLink(n)
+                    const open = () => {
+                      if (!n.read) markOneMutation.mutate(n.id)
+                      if (target) navigate(target)
+                    }
+                    return (
+                      <TableRow
+                        key={n.id}
+                        className={
+                          target
+                            ? 'cursor-pointer hover:bg-muted/40'
+                            : n.read
+                              ? undefined
+                              : 'bg-muted/30'
+                        }
+                        tabIndex={target ? 0 : undefined}
+                        onClick={open}
+                        onKeyDown={(e) => {
+                          if (target && (e.key === 'Enter' || e.key === ' ')) {
+                            e.preventDefault()
+                            open()
                           }
-                        >
-                          {n.level}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <div className={n.read ? 'text-sm' : 'text-sm font-medium'}>{n.title}</div>
-                        {n.content && (
-                          <div className="mt-0.5 line-clamp-2 whitespace-pre-wrap text-xs text-muted-foreground">
-                            {n.content}
+                        }}
+                      >
+                        <TableCell>
+                          <Badge
+                            variant={
+                              n.level === 'critical'
+                                ? 'destructive'
+                                : n.level === 'warning'
+                                  ? 'warning'
+                                  : 'outline'
+                            }
+                          >
+                            {n.level}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className={n.read ? 'text-sm' : 'text-sm font-medium'}>{n.title}</div>
+                          {n.content && (
+                            <div className="mt-0.5 line-clamp-2 whitespace-pre-wrap text-xs text-muted-foreground">
+                              {n.content}
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{n.source || '—'}</TableCell>
+                        <TableCell>
+                          <Badge variant={n.read ? 'outline' : 'default'}>{n.read ? '已读' : '未读'}</Badge>
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          <div className="flex items-center justify-end gap-1">
+                            {formatDate(n.created_at)}
+                            {target && <ChevronRight className="size-3.5" />}
                           </div>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{n.source || '—'}</TableCell>
-                      <TableCell>
-                        <Badge variant={n.read ? 'outline' : 'default'}>{n.read ? '已读' : '未读'}</Badge>
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {formatDate(n.created_at)}
-                      </TableCell>
-                    </TableRow>
-                  ))
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })
                 )}
               </TableBody>
             </Table>

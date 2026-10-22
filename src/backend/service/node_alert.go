@@ -116,5 +116,9 @@ func pushNodeEvent(n *models.ScannerNode, online bool, age time.Duration) {
 		Title:   title,
 		Content: content,
 		Source:  "node-watchdog",
+		Extra: map[string]interface{}{
+			"link":    "/nodes",
+			"node_id": n.NodeID,
+		},
 	})
 }

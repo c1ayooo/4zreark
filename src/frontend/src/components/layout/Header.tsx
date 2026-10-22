@@ -14,8 +14,9 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { notifyApi, type InAppNotification } from '@/api/notify'
 import { cn, formatDate } from '@/lib/utils'
-import { Bell, CheckCheck, Sun, Moon, User, LogOut, Settings, Search, Menu } from 'lucide-react'
+import { Bell, CheckCheck, Sun, Moon, User, LogOut, Settings, Search, Menu, ChevronRight } from 'lucide-react'
 import { navCurrentLabel } from '@/components/layout/Sidebar'
+import { notificationLink } from '@/lib/notifyLink'
 import { Input } from '@/components/ui/input'
 
 const levelDot: Record<string, string> = {
@@ -159,30 +160,36 @@ export default function Header({ onMenuClick }: { onMenuClick?: () => void }) {
               ) : items.length === 0 ? (
                 <div className="px-3 py-8 text-center text-sm text-muted-foreground">暂无通知</div>
               ) : (
-                items.map((n) => (
-                  <DropdownMenuItem
-                    key={n.id}
-                    className="flex cursor-pointer flex-col items-start gap-1 rounded-none px-3 py-2.5"
-                    onSelect={() => {
-                      if (!n.read) markOne.mutate(n.id)
-                    }}
-                  >
-                    <div className="flex w-full items-center gap-2">
-                      <span className={cn('size-1.5 shrink-0 rounded-full', levelDot[n.level] ?? levelDot.info)} />
-                      <span className={cn('min-w-0 truncate text-sm', !n.read && 'font-medium')}>
-                        {n.title}
-                      </span>
-                      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                        {formatDate(n.created_at)}
-                      </span>
-                    </div>
-                    {n.content && (
-                      <p className="line-clamp-2 w-full whitespace-pre-wrap text-xs text-muted-foreground">
-                        {n.content}
-                      </p>
-                    )}
-                  </DropdownMenuItem>
-                ))
+                items.map((n) => {
+                  const target = notificationLink(n)
+                  return (
+                    <DropdownMenuItem
+                      key={n.id}
+                      className="flex cursor-pointer flex-col items-start gap-1 rounded-none px-3 py-2.5"
+                      onSelect={() => {
+                        if (!n.read) markOne.mutate(n.id)
+                        setNotifyOpen(false)
+                        if (target) navigate(target)
+                      }}
+                    >
+                      <div className="flex w-full items-center gap-2">
+                        <span className={cn('size-1.5 shrink-0 rounded-full', levelDot[n.level] ?? levelDot.info)} />
+                        <span className={cn('min-w-0 truncate text-sm', !n.read && 'font-medium')}>
+                          {n.title}
+                        </span>
+                        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                          {formatDate(n.created_at)}
+                        </span>
+                        {target && <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />}
+                      </div>
+                      {n.content && (
+                        <p className="line-clamp-2 w-full whitespace-pre-wrap text-xs text-muted-foreground">
+                          {n.content}
+                        </p>
+                      )}
+                    </DropdownMenuItem>
+                  )
+                })
               )}
             </div>
 

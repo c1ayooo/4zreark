@@ -241,5 +241,10 @@ func pushVulnReviewNotify(vuln *models.Vulnerability, review *models.VulnReview)
 		Title:   "漏洞复核：" + models.VulnStatusLabel(review.ToStatus),
 		Content: content,
 		Source:  "vuln-review",
+		Extra: map[string]interface{}{
+			"link":    "/vulnerabilities/" + vuln.ID.Hex(),
+			"vuln_id": vuln.ID.Hex(),
+			"target":  vuln.Target,
+		},
 	})
 }
