@@ -195,7 +195,29 @@ func (q *ScanQueue) CancelTerminal(ctx context.Context) (int, error) {
 		}
 		cancelled++
 	}
-	return cancelled, rows.Err()
+	if err := rows.Err(); err != nil {
+		return cancelled, err
+	}
+	rows.Close()
+
+	// JobCancel 对 running 只是标记取消，原 worker 已经退出时状态会永远停在 running。
+	// 对终态任务且 30 分钟没有推进的 running job 做强制清理；正常 worker 的作业不会被选中。
+	tag, err := q.pool.Exec(ctx, `
+		delete from river_job j
+		 using tasks t
+		 where t.id = j.args->>'task_id'
+		   and j.kind = 'scan_task'
+		   and j.state = 'running'
+		   and coalesce(j.attempted_at, j.created_at) < now() - interval '30 minutes'
+		   and t.status in ('cancelled','failed','completed')`)
+	if err != nil {
+		return cancelled, err
+	}
+	if n := int(tag.RowsAffected()); n > 0 {
+		log.Printf("[ScanQueue] 强制清理终态任务僵尸 River job %d 个", n)
+		cancelled += n
+	}
+	return cancelled, nil
 }
 
 // CancelAll 取消某个任务所有未完成的 River 作业，包括正在运行的 job。
