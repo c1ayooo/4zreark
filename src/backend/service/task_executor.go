@@ -585,6 +585,10 @@ func (e *TaskExecutor) processTask(ctx context.Context, task *models.Task, jobID
 		}
 	}()
 
+	// 子域枚举可用的第三方测绘引擎：任务级 key > sources 表/全局配置，
+	// 只启用真正配了 key 的源（没配的引擎查了也白查，还烧配额）。
+	engineAPI, engineSources, engineKeys := e.engineSourcesForTask(ctx, task)
+
 	// 使用 StreamingPipeline 处理所有扫描任务
 	switch task.Type {
 	case models.TaskTypeFull:
@@ -596,6 +600,9 @@ func (e *TaskExecutor) processTask(ctx context.Context, task *models.Task, jobID
 			SubdomainHTTPProbe:     true, // 启用 HTTP 探测
 			PortScan:               true,
 			PortScanMode:           "top1000",
+			SubdomainEnableAPI:     engineAPI,
+			SubdomainAPISources:    engineSources,
+			SubdomainEngineKeys:    engineKeys,
 			SkipCDN:                true,
 			Fingerprint:            true,
 			VulnScan:               true,
@@ -612,6 +619,9 @@ func (e *TaskExecutor) processTask(ctx context.Context, task *models.Task, jobID
 			SubdomainCheckTakeover: false,
 			SubdomainHTTPProbe:     true, // 启用 HTTP 探测获取标题、状态码等
 			PortScan:               false,
+			SubdomainEnableAPI:     engineAPI,
+			SubdomainAPISources:    engineSources,
+			SubdomainEngineKeys:    engineKeys,
 		})
 
 	case models.TaskTypeTakeover:

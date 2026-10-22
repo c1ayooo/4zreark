@@ -22,6 +22,13 @@ type PipelineConfig struct {
 	// SubdomainWordlist 任务级子域字典；为空时用内置词表。
 	SubdomainWordlist []string `json:"subdomain_wordlist,omitempty"`
 
+	// 子域名枚举的第三方测绘引擎（fofa/hunter/quake/zoomeye/shodan/securitytrails）。
+	// SubdomainEnableAPI 仅在存在已配置引擎时置 true；SubdomainEngineKeys 是任务级
+	// key，缺失的引擎由 activeScanner 的 KeyResolver 回落到 sources 表/全局配置。
+	SubdomainEnableAPI  bool              `json:"subdomain_enable_api,omitempty"`
+	SubdomainAPISources []string          `json:"subdomain_api_sources,omitempty"`
+	SubdomainEngineKeys map[string]string `json:"subdomain_engine_keys,omitempty"`
+
 	// 端口扫描
 	PortScan     bool   `json:"port_scan"`
 	PortScanMode string `json:"port_scan_mode"` // quick, full, top1000, custom
@@ -399,6 +406,13 @@ func (p *StreamingPipeline) buildModuleChain() error {
 		scanCfg.ResolveIP = p.config.SubdomainResolveIP
 		scanCfg.EnableHTTPProbe = p.config.SubdomainHTTPProbe
 		scanCfg.Wordlist = p.config.SubdomainWordlist
+		// 任务配置的第三方测绘引擎：此前 EnableAPI 恒为 false，引擎接线形同虚设。
+		scanCfg.EnableAPI = p.config.SubdomainEnableAPI
+		scanCfg.APISources = p.config.SubdomainAPISources
+		scanCfg.FofaKey = p.config.SubdomainEngineKeys["fofa"]
+		scanCfg.HunterKey = p.config.SubdomainEngineKeys["hunter"]
+		scanCfg.QuakeKey = p.config.SubdomainEngineKeys["quake"]
+		scanCfg.SecurityTrailsKey = p.config.SubdomainEngineKeys["securitytrails"]
 		// 爆破并发跟随任务级速率，默认 20，避免 500 并发把权威 DNS 和出口 IP 一起打爆。
 		scanCfg.BruteConcurrency = p.config.rate()
 		p.subdomainModule = NewSubdomainScanModuleWithConfig(p.ctx, lastModule, scanCfg)

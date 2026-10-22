@@ -33,6 +33,9 @@ export interface Site {
   last_seen: string
   verified_at: string | null
   next_verification_at: string | null
+  /** 页面正文提取的 ICP 备案/许可证号（多号逗号分隔） */
+  icp?: string
+  icp_seen_at?: string
   /** 站点的全部入口。站点按 host 归并，端口视图只能从这里读。 */
   endpoints: AssetEndpoint[]
   /** 读时按观测证据实时评分（0-100 / p0-p4），不落库 */

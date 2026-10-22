@@ -561,6 +561,18 @@ export default function AssetDetailPage() {
         <Stat icon={GitBranch} label="关系边" value={detail.relations.length} />
       </div>
 
+      {site.icp && (
+        <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm">
+          <span className="text-muted-foreground">ICP 备案：</span>
+          <span className="font-mono">{site.icp}</span>
+          {site.icp_seen_at && (
+            <span className="ml-2 text-xs text-muted-foreground">
+              提取于 {site.icp_seen_at.slice(0, 10)}
+            </span>
+          )}
+        </div>
+      )}
+
       <div className="grid gap-4 xl:grid-cols-3">
         <div className="space-y-4 xl:col-span-2">
           <SectionCard

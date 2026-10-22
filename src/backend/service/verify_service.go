@@ -151,6 +151,13 @@ func (s *VerifyService) ProbeSite(ctx context.Context, siteID int64) (*SiteProbe
 		if snapshot != nil {
 			_ = assets.UpdateSiteObservations(ctx, siteID, snapshot.CertSHA256,
 				redirectHost(host, snapshot.FinalURL))
+			// 备案号：从探测正文提取，是资产归属最强的外部证据之一。
+			// 空值不覆盖（repo 侧保证），多号逗号分隔。
+			if len(snapshot.ICP) > 0 {
+				if ierr := assets.UpdateSiteICP(ctx, siteID, strings.Join(snapshot.ICP, ", ")); ierr != nil {
+					log.Printf("[Verify] 站点 %d 备案号写入失败: %v", siteID, ierr)
+				}
+			}
 		}
 		// 图标先抓：条件树里的 icon_hash 叶子要用它，技术栈聚类也靠它。
 		// 抓不到不影响探测结论，只记日志。

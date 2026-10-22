@@ -1,6 +1,7 @@
 package service
 
 import (
+	"github.com/c1ayooo/4zreark/internal/extractor"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -51,6 +52,8 @@ type ProbeResult struct {
 	Server  string            `json:"server,omitempty"`
 	Body    string            `json:"-"`
 	Headers map[string]string `json:"-"`
+	// ICP 是从正文提取的工信部备案/许可证号（快照字段，不进 API 响应）。
+	ICP []string `json:"-"`
 }
 
 // Reachable 表示这个结果能证明「站点还活着」。
@@ -203,6 +206,8 @@ func ProbeEndpoint(ctx context.Context, host string, port int, scheme string) Pr
 	res.Title = extractTitle(res.Body)
 	res.Server = resp.Header.Get("Server")
 	res.Headers = flattenHeaders(resp.Header)
+	// 备案号：正文页脚几乎必有，是资产归属最强的外部证据之一。
+	res.ICP = extractor.ExtractICPNumbers(res.Body)
 	// 关系层观测值：最终 URL 与证书指纹。都取自本次响应，不额外发包。
 	if resp.Request != nil && resp.Request.URL != nil {
 		res.FinalURL = resp.Request.URL.String()

@@ -363,6 +363,71 @@ export function TaskCreateDialog({ open, onOpenChange, initialProjectId }: TaskC
               </Select>
             </div>
           )}
+          {/* 第三方测绘引擎：仅子域名枚举相关；只勾选了已配置 key 的引擎才会真正生效 */}
+          {formData.config.scanTypes?.includes('subdomain') && (
+            <div className="space-y-2">
+              <Label>测绘引擎（子域名收集）</Label>
+              <div className="flex flex-wrap gap-3">
+                {['fofa', 'hunter', 'quake', 'zoomeye', 'shodan'].map((engine) => {
+                  const selected = formData.config.thirdparty_sources ?? []
+                  const checked = selected.includes(engine)
+                  return (
+                    <label key={engine} className="flex items-center gap-1.5 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) => {
+                          const next = e.target.checked
+                            ? [...selected, engine]
+                            : selected.filter((x) => x !== engine)
+                          setFormData({
+                            ...formData,
+                            config: { ...formData.config, thirdparty_sources: next },
+                          })
+                        }}
+                      />
+                      {engine.toUpperCase()}
+                    </label>
+                  )
+                })}
+              </div>
+              <p className="text-muted-foreground text-xs">
+                不勾选 = 默认使用所有已配置 key 的引擎；引擎 key 在「数据源管理」配置，任务级 key 可在下方覆盖。
+              </p>
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">FOFA Key（可选）</Label>
+                  <Input
+                    value={formData.config.fofa_key || ''}
+                    onChange={(e) =>
+                      setFormData({ ...formData, config: { ...formData.config, fofa_key: e.target.value } })
+                    }
+                    placeholder="留空用数据源管理里的配置"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Hunter Key（可选）</Label>
+                  <Input
+                    value={formData.config.hunter_key || ''}
+                    onChange={(e) =>
+                      setFormData({ ...formData, config: { ...formData.config, hunter_key: e.target.value } })
+                    }
+                    placeholder="留空用数据源管理里的配置"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Quake Key（可选）</Label>
+                  <Input
+                    value={formData.config.quake_key || ''}
+                    onChange={(e) =>
+                      setFormData({ ...formData, config: { ...formData.config, quake_key: e.target.value } })
+                    }
+                    placeholder="留空用数据源管理里的配置"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
           {formData.config.scanTypes?.includes('dir_scan') && (
             <div className="space-y-2">
               <Label>目录字典</Label>

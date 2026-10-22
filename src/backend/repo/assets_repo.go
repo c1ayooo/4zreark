@@ -46,6 +46,10 @@ type Site struct {
 	ResourceType string `json:"resource_type"`
 	// LastHTTPVerifiedAt 是「最近一次 HTTP 探测确认」的时间，语义比 verified_at 更窄。
 	LastHTTPVerifiedAt *time.Time `json:"last_http_verified_at"`
+	// ICP 是从页面正文提取的工信部备案/许可证号（多号逗号分隔），
+	// 存活验证探测时提取；icp_seen_at 记录最近一次提取时间。
+	Icp       string     `json:"icp,omitempty"`
+	IcpSeenAt *time.Time `json:"icp_seen_at,omitempty"`
 	// Endpoints 是站点的全部入口（协议 + 端口）。
 	// 站点按 host 归并，所以 http:80 / https:443 / http:8080 都挂在这一个站点下，
 	// 端口视图只能从这里读，sites.port 只是 https 优先的展示值。
@@ -119,6 +123,7 @@ const siteColumns = `s.id, s.project_id, p.code, p.name, s.host, s.port, s.proto
 	s.tech, s.discovery_type, s.state, s.consecutive_failures, s.retry_step, s.cleanup_eligible,
 	s.verification_status, coalesce(s.verification_reason,''), s.attempts, s.max_attempts,
 	s.first_seen, s.last_seen, s.verified_at, s.next_verification_at, s.last_http_verified_at,
+	s.icp, s.icp_seen_at,
 	coalesce((SELECT jsonb_agg(jsonb_build_object('scheme', e.scheme, 'port', e.port,
 	                                             'status_code', e.status_code) ORDER BY e.port, e.scheme)
 	            FROM site_endpoints e WHERE e.site_id = s.id), '[]'::jsonb),
@@ -134,7 +139,8 @@ func scanSite(scan func(...any) error) (*Site, error) {
 		&s.Protocol, &s.Value, &s.IP, &s.HTTPStatus, &s.Title, &s.IconSHA256, &tech,
 		&s.DiscoveryType, &s.State, &s.ConsecutiveFailures, &s.RetryStep, &s.CleanupEligible,
 		&s.VerificationStatus, &s.VerificationReason, &s.Attempts, &s.MaxAttempts,
-		&s.FirstSeen, &s.LastSeen, &s.VerifiedAt, &s.NextVerificationAt, &s.LastHTTPVerifiedAt, &eps,
+		&s.FirstSeen, &s.LastSeen, &s.VerifiedAt, &s.NextVerificationAt, &s.LastHTTPVerifiedAt,
+		&s.Icp, &s.IcpSeenAt, &eps,
 		&s.EndpointCount, &s.RecordCount, &s.FingerprintCount, &s.LastRecordAt)
 	if err != nil {
 		return nil, err

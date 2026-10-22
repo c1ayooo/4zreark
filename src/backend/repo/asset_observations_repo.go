@@ -21,3 +21,17 @@ UPDATE sites SET
  WHERE id = $1`, siteID, certSHA256, finalHost)
 	return err
 }
+
+// UpdateSiteICP 记录从页面正文提取的 ICP 备案/许可证号。
+// 语义：非空新值覆盖（站点易主后备案会换），空值不覆盖已有值。
+func (a *AssetRepo) UpdateSiteICP(ctx context.Context, siteID int64, icp string) error {
+	if a == nil || a.r == nil {
+		return errUninitialized()
+	}
+	if icp == "" {
+		return nil
+	}
+	_, err := a.r.pool.Exec(ctx,
+		`update sites set icp = $2, icp_seen_at = now() where id = $1`, siteID, icp)
+	return err
+}
