@@ -122,7 +122,7 @@ func (e *TaskExecutor) executeVulnScan(task *models.Task, jobID int64) {
 
 	scanResults, err := scanner.Scan(ctx, targets, &vulnscan.NucleiScanConfig{
 		Concurrency: 25,
-		RateLimit:   150,
+		RateLimit:   50, // 与自动链路 nucleiruntime 的 50 硬顶对齐：150rps 对小目标是 DoS 级
 		Timeout:     timeout,
 	})
 	if err != nil {

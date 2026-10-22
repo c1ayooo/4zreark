@@ -226,7 +226,7 @@ func (h *NucleiHandler) ScanTarget(c *gin.Context) {
 
 	results, err := scanner.Scan(ctx, []string{req.Target}, &vulnscan.NucleiScanConfig{
 		Concurrency: 25,
-		RateLimit:   150,
+		RateLimit:   50, // 与自动链路 nucleiruntime 的 50 硬顶对齐：150rps 对小目标是 DoS 级
 		Timeout:     timeout,
 	})
 	if err != nil {

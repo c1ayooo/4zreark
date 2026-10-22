@@ -18,8 +18,8 @@ postgres:
   dbname: "zreark"
   schema: "zre"
   sslmode: "disable"
-  max_conns: 20
-  min_conns: 2
+  max_conns: 50
+  min_conns: 5
 
 # 已决定移除 Redis：队列 / 去重 / 登出由 PG 承担。该段待代码层删掉 go-redis 后一并移除
 scanner:

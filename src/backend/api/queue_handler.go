@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	"strings"
+	"time"
+
 	"github.com/c1ayooo/4zreark/service/queue"
 	"github.com/c1ayooo/4zreark/utils"
 	"strconv"
-	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -115,6 +117,12 @@ func (h *QueueHandler) EnqueueTask(c *gin.Context) {
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+
+	// 未注册 handler 的类型入队只会空转退避后进死信，入口直接拒绝。
+	if !h.taskQueue.HasHandler(req.Type) {
+		utils.BadRequest(c, "不支持的任务类型: "+req.Type+"（可用: "+strings.Join(h.taskQueue.RegisteredTypes(), ", ")+"）")
 		return
 	}
 
@@ -255,57 +263,43 @@ func (h *QueueHandler) ClearDeadLetter(c *gin.Context) {
 }
 
 // GetTaskTypes 获取支持的任务类型
+// 只列已注册 handler 的类型：此前宣告的 fingerprint_scan/dir_scan 没有
+// handler，提交后只会空转进死信。注意 port_scan/vuln_scan/subdomain_enum
+// 目前是演示实现（直接返回 completed）；真实扫描走 /api/tasks。
 // @Summary 获取支持的任务类型
 // @Tags Queue
 // @Security ApiKeyAuth
 // @Success 200 {object} utils.Response
 // @Router /api/queue/types [get]
 func (h *QueueHandler) GetTaskTypes(c *gin.Context) {
-	types := []map[string]interface{}{
-		{
-			"type":        "port_scan",
-			"name":        "端口扫描",
-			"description": "对目标进行端口扫描",
-			"payload_schema": map[string]string{
-				"target": "目标IP或域名",
-				"ports":  "端口范围，如 1-1000",
-			},
+	registered := map[string]map[string]interface{}{
+		"port_scan": {
+			"type":           "port_scan",
+			"name":           "端口扫描",
+			"description":    "对目标进行端口扫描（演示实现，真实扫描走 /api/tasks）",
+			"payload_schema": map[string]string{"target": "目标IP或域名", "ports": "端口范围，如 1-1000"},
 		},
-		{
-			"type":        "vuln_scan",
-			"name":        "漏洞扫描",
-			"description": "对目标进行漏洞扫描",
-			"payload_schema": map[string]string{
-				"target":  "目标URL",
-				"poc_ids": "POC ID列表 (可选)",
-			},
+		"vuln_scan": {
+			"type":           "vuln_scan",
+			"name":           "漏洞扫描",
+			"description":    "对目标进行漏洞扫描（演示实现，真实扫描走 /api/tasks）",
+			"payload_schema": map[string]string{"target": "目标URL", "poc_ids": "POC ID列表 (可选)"},
 		},
-		{
-			"type":        "subdomain_enum",
-			"name":        "子域名枚举",
-			"description": "对域名进行子域名枚举",
-			"payload_schema": map[string]string{
-				"domain": "目标域名",
-				"mode":   "扫描模式: quick/full",
-			},
+		"subdomain_enum": {
+			"type":           "subdomain_enum",
+			"name":           "子域名枚举",
+			"description":    "对域名进行子域名枚举（演示实现，真实扫描走 /api/tasks）",
+			"payload_schema": map[string]string{"domain": "目标域名", "mode": "扫描模式: quick/full"},
 		},
-		{
-			"type":        "fingerprint_scan",
-			"name":        "指纹识别",
-			"description": "识别目标的技术栈指纹",
-			"payload_schema": map[string]string{
-				"target": "目标URL",
-			},
-		},
-		{
-			"type":        "dir_scan",
-			"name":        "目录扫描",
-			"description": "扫描目标的敏感目录和文件",
-			"payload_schema": map[string]string{
-				"target": "目标URL",
-				"dict":   "字典名称 (可选)",
-			},
-		},
+	}
+
+	types := make([]map[string]interface{}, 0, len(registered))
+	for _, t := range h.taskQueue.RegisteredTypes() {
+		if meta, ok := registered[t]; ok {
+			types = append(types, meta)
+		} else {
+			types = append(types, map[string]interface{}{"type": t, "name": t, "description": "自定义任务类型"})
+		}
 	}
 
 	utils.Success(c, types)

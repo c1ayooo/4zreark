@@ -2,6 +2,7 @@ package api
 
 import (
 	"strings"
+	"time"
 
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/service"
@@ -58,6 +59,11 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	})
 }
 
+// loginAttemptLimiter 是登录失败的进程级限速器：按 IP+用户名计数，
+// 15 分钟窗口内失败满 10 次锁定 15 分钟，成功登录即清零。
+// 只在内存里：重启清零可接受（防在线爆破足够，PG 里已有 token 黑名单等持久状态）。
+var loginAttemptLimiter = newFailureLimiter(10, 15*time.Minute)
+
 // Login handles user login
 // POST /api/auth/login
 func (h *AuthHandler) Login(c *gin.Context) {
@@ -71,11 +77,19 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
+	key := c.ClientIP() + "|" + req.Username
+	if loginAttemptLimiter.blocked(key) {
+		utils.Error(c, utils.ErrCodeTooManyRequests, "尝试次数过多，请 15 分钟后再试")
+		return
+	}
+
 	token, user, err := h.userService.Login(req.Username, req.Password)
 	if err != nil {
+		loginAttemptLimiter.fail(key)
 		utils.Error(c, utils.ErrCodePasswordWrong, err.Error())
 		return
 	}
+	loginAttemptLimiter.reset(key)
 
 	utils.Success(c, gin.H{
 		"token": token,
@@ -203,6 +217,14 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.BadRequest(c, "参数错误")
+		return
+	}
+
+	// 与 AuthMiddleware 同一套吊销检查：已登出（进黑名单）或版本号已失效的
+	// token 不得换新，否则用户登出无法止损被窃 token。
+	claims, err := utils.ParseToken(req.Token)
+	if err == nil && h.userService.IsTokenRevoked(req.Token, claims.UserID, claims.Ver) {
+		utils.Error(c, utils.ErrCodeTokenInvalid, "Token已失效")
 		return
 	}
 

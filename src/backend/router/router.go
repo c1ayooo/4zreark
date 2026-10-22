@@ -26,6 +26,8 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 
 	// Middleware
 	r.Use(middleware.CORSMiddleware())
+	// 请求体上限：未单独设限的 JSON 端点统一封顶，防超大 body 撑爆内存。
+	r.Use(middleware.MaxBodyLimit(32 << 20))
 	r.Use(middleware.Gzip())
 	r.Use(middleware.OperationLogMiddleware())
 
@@ -430,6 +432,9 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 			scanHandler := api.NewScanHandler()
 			scanGroup := protected.Group("/scan")
 			scanGroup.Use(middleware.RequirePermission("run:execute"))
+			// 平台会对 body 里的 target 发起真实请求：拦掉云元数据地址，
+			// 防止扫描端点被当成读取实例元数据（凭据）的跳板。
+			scanGroup.Use(middleware.MetadataTargetGuard())
 			{
 				// 端口扫描
 				scanGroup.POST("/port/quick", scanHandler.QuickPortScan)

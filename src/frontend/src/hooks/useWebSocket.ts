@@ -54,17 +54,21 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}) {
       const isDevelopment = import.meta.env.DEV
       let wsUrl: string
 
+      // 后端要求 ?token= 鉴权（浏览器 WebSocket 无法带 Authorization 头）
+      const token = localStorage.getItem('token')
+      const authQuery = token ? `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}` : url
+
       if (isDevelopment) {
         // Use relative URL in development to leverage Vite's proxy
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
         const host = window.location.host // includes port
-        wsUrl = `${protocol}//${host}${url}`
+        wsUrl = `${protocol}//${host}${authQuery}`
       } else {
         // In production, use the API base URL
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
         const host = window.location.hostname
         const port = import.meta.env.VITE_API_PORT || '8080'
-        wsUrl = `${protocol}//${host}:${port}${url}`
+        wsUrl = `${protocol}//${host}:${port}${authQuery}`
       }
 
       const ws = new WebSocket(wsUrl)

@@ -1,4 +1,37 @@
+# 单机部署编排。存储只有 PostgreSQL 16（代码已全面 PG 化，
+# 不再依赖 MongoDB / Redis；旧 compose 里的 mongo/redis 已移除）。
+# 凭据通过环境变量注入，不要写死在文件里：
+#   ZRE_PG_PASSWORD  数据库密码（必需）
+#   ZRE_JWT_SECRET   JWT 签名密钥（必需，openssl rand -hex 32）
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: zreark_postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=zre
+      - POSTGRES_DB=zreark
+      - POSTGRES_PASSWORD=${ZRE_PG_PASSWORD:?需要设置 ZRE_PG_PASSWORD}
+    # PG 资源：与 app 连接池（max_conns=50）匹配，留出 maintenance 连接。
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=80"
+      - "-c"
+      - "shared_buffers=256MB"
+      - "-c"
+      - "work_mem=16MB"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "25433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zre -d zreark"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
   app:
     image: moon-app
     container_name: moongazing_app
@@ -8,45 +41,23 @@ services:
     restart: unless-stopped
     ports:
       - "5003:8080"
+      - "9443:9443"
     depends_on:
-      mongo:
+      postgres:
         condition: service_healthy
-      redis:
-        condition: service_started
     volumes:
       - ./config:/app/config:ro
       - ./tools:/app/tools:ro
       - ./web:/app/web:ro
     environment:
       - CONFIG_PATH=/app/config/config.yaml
+      - ZRE_PG_HOST=postgres
+      - ZRE_PG_PORT=5432
+      - ZRE_PG_USER=zre
+      - ZRE_PG_DBNAME=zreark
+      - ZRE_PG_PASSWORD=${ZRE_PG_PASSWORD}
+      - ZRE_JWT_SECRET=${ZRE_JWT_SECRET:?需要设置 ZRE_JWT_SECRET}
     command: ["/app/server"]
 
-  mongo:
-    image: mongo:5.0
-    container_name: moongazing_mongo
-    restart: unless-stopped
-    environment:
-      - MONGO_INITDB_DATABASE=moongazing
-    volumes:
-      - mongo_data:/data/db
-    ports:
-      - "27017:27017"
-    healthcheck:
-      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping').ok"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 10s
-
-  redis:
-    image: redis:6-alpine
-    container_name: moongazing_redis
-    restart: unless-stopped
-    volumes:
-      - redis_data:/data
-    ports:
-      - "6379:6379"
-
 volumes:
-  mongo_data:
-  redis_data:
+  pg_data:

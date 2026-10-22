@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/c1ayooo/4zreark/middleware"
 	"github.com/c1ayooo/4zreark/service"
 	"github.com/c1ayooo/4zreark/utils"
 	"github.com/gin-gonic/gin"
@@ -16,8 +18,13 @@ import (
 // WebSocketHandler handles WebSocket connections for real-time data
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		// Allow connections from any origin (configure appropriately for production)
-		return true
+		// Origin 校验与 CORS 白名单保持一致（精确匹配，含 ZRE_CORS_ORIGINS）；
+		// 非浏览器客户端没有 Origin，放行（仍要过下面的 token 校验）。
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true
+		}
+		return middleware.OriginAllowed(origin)
 	},
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
@@ -135,6 +142,25 @@ func (h *Hub) getMonitorData(sysService *service.SystemService, nodeService *ser
 
 // WebSocketHandler handles WebSocket connections
 func (h *Hub) WebSocketHandler(c *gin.Context) {
+	// 升级前鉴权：该通道每 5 秒广播系统资源与节点统计，不允许匿名接入。
+	// token 走 ?token= 查询参数（浏览器 WebSocket 不能自定义请求头）；
+	// 吊销检查与 HTTP 中间件同一套。
+	token := c.Query("token")
+	if token == "" {
+		if auth := c.GetHeader("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			token = strings.TrimPrefix(auth, "Bearer ")
+		}
+	}
+	claims, err := utils.ParseToken(token)
+	if err != nil {
+		utils.Error(c, utils.ErrCodeTokenInvalid, "WebSocket 连接需要有效 token（?token=）")
+		return
+	}
+	if service.NewUserService().IsTokenRevoked(token, claims.UserID, claims.Ver) {
+		utils.Error(c, utils.ErrCodeTokenInvalid, "Token已失效")
+		return
+	}
+
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		utils.Error(c, utils.ErrCodeInvalidParams, "WebSocket upgrade failed")
@@ -146,7 +172,7 @@ func (h *Hub) WebSocketHandler(c *gin.Context) {
 		send:        make(chan []byte, 256),
 		hub:         h,
 		clientID:    "", // Generate unique client ID
-		userID:      "", // Extract from JWT/auth
+		userID:      claims.UserID,
 		workspaceID: c.Query("workspace_id"),
 	}
 

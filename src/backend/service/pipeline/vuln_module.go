@@ -454,7 +454,7 @@ func (m *VulnScanModule) scanVulnerabilities(target string, techs []string) {
 
 	results, err := scanner.Scan(ctx, []string{target}, &vulnscan.NucleiScanConfig{
 		Concurrency: 25,
-		RateLimit:   150,
+		RateLimit:   50, // 与自动链路 nucleiruntime 的 50 硬顶对齐：150rps 对小目标是 DoS 级
 		Timeout:     30 * time.Minute,
 	})
 	if err != nil {

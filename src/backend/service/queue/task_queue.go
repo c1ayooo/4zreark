@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -130,6 +131,27 @@ func (q *TaskQueue) RegisterHandler(taskType string, handler TaskHandler) {
 	q.handlersMu.Lock()
 	defer q.handlersMu.Unlock()
 	q.handlers[taskType] = handler
+}
+
+// HasHandler 报告任务类型是否已注册处理器。
+// 未注册的类型入队只会空转三次退避后进死信，调用方应在入口拒绝。
+func (q *TaskQueue) HasHandler(taskType string) bool {
+	q.handlersMu.RLock()
+	defer q.handlersMu.RUnlock()
+	_, ok := q.handlers[taskType]
+	return ok
+}
+
+// RegisteredTypes 返回已注册的任务类型（字典序）。
+func (q *TaskQueue) RegisteredTypes() []string {
+	q.handlersMu.RLock()
+	defer q.handlersMu.RUnlock()
+	out := make([]string, 0, len(q.handlers))
+	for t := range q.handlers {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Start 启动工作者

@@ -314,7 +314,7 @@ func (s *ScanService) NucleiScan(ctx context.Context, targets []string, severity
 	defer cancel()
 	results, err := scanner.Scan(c, targets, &vulnscan.NucleiScanConfig{
 		Concurrency: 25,
-		RateLimit:   150,
+		RateLimit:   50, // 与自动链路 nucleiruntime 的 50 硬顶对齐：150rps 对小目标是 DoS 级
 		Timeout:     10 * time.Minute,
 	})
 	if err != nil {
