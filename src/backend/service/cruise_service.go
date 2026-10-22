@@ -92,6 +92,18 @@ func (s *CruiseService) Start() error {
 	cruiseRunning = true
 	cruiseRunState.Unlock()
 
+	// 进程刚启动不可能有在跑的巡航：把上次崩溃残留在 running 的记录复位，
+	// 否则这些巡航不在 ListEnabled 里，调度和「立即执行」都被永久拒绝。
+	if store, err := s.store(); err == nil {
+		ctx, cancel := dbCtx()
+		if n, rerr := store.ResetStaleRunning(ctx); rerr != nil {
+			log.Printf("[CruiseService] Failed to reset stale running cruises: %v", rerr)
+		} else if n > 0 {
+			log.Printf("[CruiseService] Reset %d stale running cruise(s) from previous run", n)
+		}
+		cancel()
+	}
+
 	log.Println("[CruiseService] Cruise scheduler started")
 
 	if err := s.loadEnabledCruises(); err != nil {
@@ -211,7 +223,17 @@ func (s *CruiseService) executeCruiseWithMode(cruiseID oid.ObjectID, manual bool
 		restoreStatus = models.CruiseStatusDisabled
 	}
 
-	s.updateCruiseStatus(cruiseID, models.CruiseStatusRunning)
+	// 原子抢占：cron 触发与「立即执行」并发时只允许一个把状态改成 running，
+	// 抢不到的说明另一个入口已经在跑。
+	acquired, err := s.acquireCruiseRun(cruiseID)
+	if err != nil {
+		log.Printf("[CruiseService] Failed to acquire cruise %s: %v", hexID, err)
+		return
+	}
+	if !acquired {
+		log.Printf("[CruiseService] Cruise %s is already running (acquired by concurrent trigger), skipping", cruise.Name)
+		return
+	}
 	startTime := time.Now()
 
 	if cruise.ProjectID <= 0 {
@@ -888,6 +910,16 @@ func (s *CruiseService) updateCruiseStatus(cruiseID oid.ObjectID, status models.
 	ctx, cancel := dbCtx()
 	defer cancel()
 	return store.SetStatus(ctx, cruiseID.Hex(), string(status))
+}
+
+func (s *CruiseService) acquireCruiseRun(cruiseID oid.ObjectID) (bool, error) {
+	store, err := s.store()
+	if err != nil {
+		return false, err
+	}
+	ctx, cancel := dbCtx()
+	defer cancel()
+	return store.AcquireRun(ctx, cruiseID.Hex())
 }
 
 func (s *CruiseService) updateNextRunTime(cruiseID oid.ObjectID, nextRun time.Time) {

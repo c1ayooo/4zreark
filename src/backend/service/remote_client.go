@@ -140,6 +140,11 @@ func (c *RemoteClient) call(ctx context.Context, method, path string, body any, 
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return ErrNodeRevoked
 	}
+	// 404 统一映射为 ErrNotFound 哨兵：调用方要能区分「不存在」和「平台故障」，
+	// 否则瞬时网络问题会被误判成任务已删除而取消在跑的扫描。
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("平台返回 HTTP 404: %w", repo.ErrNotFound)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("平台返回 HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
@@ -260,6 +265,17 @@ func (s *remoteResultStore) CreateResult(result *models.ScanResult) error {
 
 func (s *remoteResultStore) CreateResultWithDedup(result *models.ScanResult) error {
 	return s.add(result)
+}
+
+// BatchCreateResultPtrsWithDedup 逐条进本地缓冲，真正的批量由 Flush 完成
+// （远程路径的瓶颈是 HTTP 往返，不是本地事务）。
+func (s *remoteResultStore) BatchCreateResultPtrsWithDedup(results []*models.ScanResult) (int, int, error) {
+	for _, res := range results {
+		if err := s.add(res); err != nil {
+			return 0, 0, err
+		}
+	}
+	return len(results), 0, nil
 }
 
 func (s *remoteResultStore) UpdateSubdomainCDN(taskID, domain, cdnProvider string) error {

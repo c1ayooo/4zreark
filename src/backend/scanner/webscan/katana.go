@@ -166,11 +166,15 @@ func (k *KatanaScanner) Crawl(ctx context.Context, target string) (*KatanaResult
 	fmt.Printf("[*] Running Katana: %s %s\n", k.BinPath, strings.Join(args, " "))
 
 	err = cmd.Run()
+	// 超时/取消不丢弃已爬到的结果：输出文件里已经写出的 URL 仍然有效，
+	// 先解析完再把这个错误交给调用方，由调用方决定是否采用部分结果。
+	var ctxErr error
 	if err != nil {
 		if ctx.Err() != nil {
-			return result, ctx.Err()
+			ctxErr = ctx.Err()
+		} else {
+			fmt.Printf("[!] Katana error: %v\n", err)
 		}
-		fmt.Printf("[!] Katana error: %v\n", err)
 	}
 
 	// 解析输出
@@ -214,7 +218,7 @@ func (k *KatanaScanner) Crawl(ctx context.Context, target string) (*KatanaResult
 	result.Duration = result.EndTime.Sub(result.StartTime).String()
 	result.Total = len(result.URLs)
 
-	return result, nil
+	return result, ctxErr
 }
 
 // QuickCrawl 快速爬取（深度2）
@@ -283,11 +287,15 @@ func (k *KatanaScanner) CrawlList(ctx context.Context, urls []string) (*KatanaRe
 	fmt.Printf("[*] Running Katana (list mode): %s -list [%d urls] ...\n", k.BinPath, len(urls))
 
 	err = cmd.Run()
+	// 超时/取消不丢弃已爬到的结果：输出文件里已经写出的 URL 仍然有效，
+	// 先解析完再把这个错误交给调用方，由调用方决定是否采用部分结果。
+	var ctxErr error
 	if err != nil {
 		if ctx.Err() != nil {
-			return result, ctx.Err()
+			ctxErr = ctx.Err()
+		} else {
+			fmt.Printf("[!] Katana error: %v\n", err)
 		}
-		fmt.Printf("[!] Katana error: %v\n", err)
 	}
 
 	// 解析输出
@@ -328,5 +336,5 @@ func (k *KatanaScanner) CrawlList(ctx context.Context, urls []string) (*KatanaRe
 
 	fmt.Printf("[*] Katana list crawl completed: %d URLs found from %d targets\n", result.Total, len(urls))
 
-	return result, nil
+	return result, ctxErr
 }

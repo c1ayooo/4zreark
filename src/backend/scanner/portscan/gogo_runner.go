@@ -68,16 +68,9 @@ func NewGoGoScanner() *GoGoScanner {
 // NewGoGoScannerWithConfig 使用配置创建 GoGo 扫描器
 func NewGoGoScannerWithConfig(config *GoGoConfig) *GoGoScanner {
 	scanner := GetGoGoScanner()
-
 	if config != nil {
-		if config.Timeout > 0 {
-			scanner.Timeout = config.Timeout
-		}
-		if config.Threads > 0 {
-			scanner.Threads = config.Threads
-		}
+		scanner.SetConfig(config)
 	}
-
 	return scanner
 }
 
@@ -95,6 +88,23 @@ func (g *GoGoScanner) SetConfig(config *GoGoConfig) {
 	if config.Threads > 0 {
 		g.Threads = config.Threads
 	}
+}
+
+// SetThreads 更新并发线程数。gogo 是进程级单例，多个任务会并发改/读线程数，
+// 必须走锁；直接写字段是 data race。
+func (g *GoGoScanner) SetThreads(n int) {
+	if n <= 0 {
+		return
+	}
+	g.mu.Lock()
+	g.Threads = n
+	g.mu.Unlock()
+}
+
+func (g *GoGoScanner) snapshot() (threads, timeout int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.Threads, g.Timeout
 }
 
 // findToolPath 查找 GoGo 工具路径
@@ -180,12 +190,13 @@ func (g *GoGoScanner) ScanPorts(ctx context.Context, target string, ports string
 	log.Printf("[GoGoScanner] Scanning %s with ports: %s", target, ports)
 
 	// 构建命令参数
+	threads, timeout := g.snapshot()
 	args := []string{
 		"-i", target,
 		"-p", ports,
 		"-o", "jl", // jsonlines 输出
-		"-t", strconv.Itoa(g.Threads),
-		"-d", strconv.Itoa(g.Timeout), // 超时时间
+		"-t", strconv.Itoa(threads),
+		"-d", strconv.Itoa(timeout), // 超时时间
 	}
 
 	// 创建命令
@@ -317,7 +328,8 @@ func (g *GoGoScanner) FullScan(ctx context.Context, target string) (*core.ScanRe
 
 // ScanOne 扫描单个端口（快速检测）
 func (g *GoGoScanner) ScanOne(target string, port string) *core.PortResult {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(g.Timeout)*time.Second)
+	_, timeout := g.snapshot()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 	defer cancel()
 
 	result, err := g.ScanPorts(ctx, target, port)

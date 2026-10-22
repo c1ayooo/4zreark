@@ -72,11 +72,13 @@ func (d *DashboardRepo) Trends(ctx context.Context, days int) ([]map[string]any,
 	if days > 90 {
 		days = 90
 	}
+	// 列侧 ::date 强转会令 first_seen/created_at 的索引失效（每天一次全表扫描），
+	// 改成 [d, d+1day) 的范围比较让 planner 走索引。
 	rows, err := d.r.pool.Query(ctx, `
-		SELECT to_char(d::date, 'YYYY-MM-DD'),
-		       (SELECT count(*) FROM sites s WHERE s.first_seen::date = d::date),
-		       (SELECT count(*) FROM vulnerabilities v WHERE v.created_at::date = d::date),
-		       (SELECT count(*) FROM tasks t WHERE t.created_at::date = d::date)
+		SELECT to_char(d, 'YYYY-MM-DD'),
+		       (SELECT count(*) FROM sites s WHERE s.first_seen >= d AND s.first_seen < d + interval '1 day'),
+		       (SELECT count(*) FROM vulnerabilities v WHERE v.created_at >= d AND v.created_at < d + interval '1 day'),
+		       (SELECT count(*) FROM tasks t WHERE t.created_at >= d AND t.created_at < d + interval '1 day')
 		FROM generate_series(current_date - ($1::int - 1), current_date, interval '1 day') AS d
 		ORDER BY d`, days)
 	if err != nil {

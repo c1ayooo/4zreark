@@ -248,10 +248,10 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 			// Results routes (for tag management and batch operations)
 			resultGroup := protected.Group("/results")
 			{
-				resultGroup.PUT("/:id/tags", resultHandler.UpdateResultTags)
-				resultGroup.POST("/:id/tags", resultHandler.AddResultTag)
-				resultGroup.DELETE("/:id/tags", resultHandler.RemoveResultTag)
-				resultGroup.POST("/batch-delete", resultHandler.BatchDeleteResults)
+				resultGroup.PUT("/:id/tags", middleware.RequirePermission("task:write"), resultHandler.UpdateResultTags)
+				resultGroup.POST("/:id/tags", middleware.RequirePermission("task:write"), resultHandler.AddResultTag)
+				resultGroup.DELETE("/:id/tags", middleware.RequirePermission("task:write"), resultHandler.RemoveResultTag)
+				resultGroup.POST("/batch-delete", middleware.RequirePermission("task:write"), resultHandler.BatchDeleteResults)
 			}
 
 			// Vulnerability routes
@@ -263,17 +263,17 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				vulnGroup.GET("/stats", vulnHandler.GetVulnStats)
 				vulnGroup.GET("/review-stats", vulnHandler.ReviewStats)            // 复核分布
 				vulnGroup.GET("/statistics", vulnHandler.GetVulnStatistics)        // 详细统计
-				vulnGroup.POST("/batch-update", vulnHandler.BatchUpdateVulnStatus) // 批量更新
+				vulnGroup.POST("/batch-update", middleware.RequirePermission("vuln:write"), vulnHandler.BatchUpdateVulnStatus) // 批量更新
 				vulnGroup.GET("/:id", vulnHandler.GetVulnerability)
-				vulnGroup.POST("", vulnHandler.CreateVulnerability)
-				vulnGroup.PUT("/:id", vulnHandler.UpdateVulnerability)
-				vulnGroup.DELETE("/:id", vulnHandler.DeleteVulnerability)
-				vulnGroup.POST("/:id/review", vulnHandler.ReviewVuln)      // 复核（流转 + 记录）
+				vulnGroup.POST("", middleware.RequirePermission("vuln:write"), vulnHandler.CreateVulnerability)
+				vulnGroup.PUT("/:id", middleware.RequirePermission("vuln:write"), vulnHandler.UpdateVulnerability)
+				vulnGroup.DELETE("/:id", middleware.RequirePermission("vuln:delete"), vulnHandler.DeleteVulnerability)
+				vulnGroup.POST("/:id/review", middleware.RequirePermission("vuln:write"), vulnHandler.ReviewVuln)      // 复核（流转 + 记录）
 				vulnGroup.GET("/:id/reviews", vulnHandler.ListVulnReviews) // 复核历史
-				vulnGroup.PUT("/:id/fixed", vulnHandler.MarkVulnAsFixed)
-				vulnGroup.PUT("/:id/ignore", vulnHandler.MarkVulnAsIgnored)
-				vulnGroup.PUT("/:id/false-positive", vulnHandler.MarkVulnAsFalsePositive)
-				vulnGroup.POST("/:id/verify", vulnHandler.VerifyVulnerability) // 验证漏洞
+				vulnGroup.PUT("/:id/fixed", middleware.RequirePermission("vuln:write"), vulnHandler.MarkVulnAsFixed)
+				vulnGroup.PUT("/:id/ignore", middleware.RequirePermission("vuln:write"), vulnHandler.MarkVulnAsIgnored)
+				vulnGroup.PUT("/:id/false-positive", middleware.RequirePermission("vuln:write"), vulnHandler.MarkVulnAsFalsePositive)
+				vulnGroup.POST("/:id/verify", middleware.RequirePermission("vuln:write"), vulnHandler.VerifyVulnerability) // 验证漏洞
 			}
 
 			// POC routes
@@ -282,14 +282,14 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 			{
 				pocGroup.GET("", pocHandler.ListPOCs)
 				pocGroup.GET("/statistics", pocHandler.GetPOCStatistics)
-				pocGroup.POST("/import", pocHandler.ImportPOCsFromZip)
-				pocGroup.POST("/batch-delete", pocHandler.BatchDeletePOCs)
-				pocGroup.DELETE("/clear-all", pocHandler.ClearAllPOCs)
+				pocGroup.POST("/import", middleware.RequirePermission("poc:write"), pocHandler.ImportPOCsFromZip)
+				pocGroup.POST("/batch-delete", middleware.RequirePermission("poc:write"), pocHandler.BatchDeletePOCs)
+				pocGroup.DELETE("/clear-all", middleware.RequirePermission("poc:write"), pocHandler.ClearAllPOCs)
 				pocGroup.GET("/:id", pocHandler.GetPOC)
-				pocGroup.POST("", pocHandler.CreatePOC)
-				pocGroup.PUT("/:id", pocHandler.UpdatePOC)
-				pocGroup.DELETE("/:id", pocHandler.DeletePOC)
-				pocGroup.POST("/:id/toggle", pocHandler.TogglePOCEnabled)
+				pocGroup.POST("", middleware.RequirePermission("poc:write"), pocHandler.CreatePOC)
+				pocGroup.PUT("/:id", middleware.RequirePermission("poc:write"), pocHandler.UpdatePOC)
+				pocGroup.DELETE("/:id", middleware.RequirePermission("poc:write"), pocHandler.DeletePOC)
+				pocGroup.POST("/:id/toggle", middleware.RequirePermission("poc:write"), pocHandler.TogglePOCEnabled)
 			}
 
 			// 组件档案与证据质量
@@ -334,11 +334,11 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 			{
 				reportGroup.GET("", vulnHandler.ListReports)
 				reportGroup.GET("/templates", reportHandler.ListTemplates)
-				reportGroup.POST("/generate", reportHandler.GenerateReport)
+				reportGroup.POST("/generate", middleware.RequirePermission("report:write"), reportHandler.GenerateReport)
 				reportGroup.GET("/:id/download", reportHandler.DownloadReport)
 				reportGroup.GET("/:id", vulnHandler.GetReport)
-				reportGroup.POST("", vulnHandler.CreateReport)
-				reportGroup.DELETE("/:id", vulnHandler.DeleteReport)
+				reportGroup.POST("", middleware.RequirePermission("report:write"), vulnHandler.CreateReport)
+				reportGroup.DELETE("/:id", middleware.RequirePermission("report:delete"), vulnHandler.DeleteReport)
 			}
 
 			// Vuln intel routes（9 个公开漏洞源的轮询结果）
@@ -365,12 +365,12 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				nodeGroup.GET("/stats", nodeHandler.GetNodeStats)
 				nodeGroup.POST("/enroll", middleware.AdminMiddleware(), nodeHandler.EnrollNode)
 				nodeGroup.POST("/deploy", middleware.AdminMiddleware(), nodeHandler.DeployNode)
-				nodeGroup.POST("/register", nodeHandler.RegisterNode)
+				nodeGroup.POST("/register", middleware.RequirePermission("node:write"), nodeHandler.RegisterNode)
 				nodeGroup.GET("/:id", nodeHandler.GetNode)
-				nodeGroup.PUT("/:id", nodeHandler.UpdateNode)
-				nodeGroup.DELETE("/:id", nodeHandler.DeleteNode)
-				nodeGroup.POST("/:id/heartbeat", nodeHandler.Heartbeat)
-				nodeGroup.PUT("/:id/status", nodeHandler.SetNodeStatus)
+				nodeGroup.PUT("/:id", middleware.RequirePermission("node:write"), nodeHandler.UpdateNode)
+				nodeGroup.DELETE("/:id", middleware.RequirePermission("node:write"), nodeHandler.DeleteNode)
+				nodeGroup.POST("/:id/heartbeat", middleware.RequirePermission("node:write"), nodeHandler.Heartbeat)
+				nodeGroup.PUT("/:id/status", middleware.RequirePermission("node:write"), nodeHandler.SetNodeStatus)
 				nodeGroup.POST("/:id/token", middleware.AdminMiddleware(), nodeHandler.RotateNodeToken)
 				nodeGroup.DELETE("/:id/token", middleware.AdminMiddleware(), nodeHandler.RevokeNodeToken)
 				// 默认扫描节点：任务没显式指定节点时用它；空 = 任意在线节点。
@@ -546,14 +546,14 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				// 配置管理
 				notifyGroup.GET("/types", notifyHandler.GetSupportedTypes)
 				notifyGroup.GET("/configs", notifyHandler.GetConfigs)
-				notifyGroup.POST("/configs", notifyHandler.AddConfig)
-				notifyGroup.PUT("/configs", notifyHandler.UpdateConfig)
-				notifyGroup.DELETE("/configs", notifyHandler.DeleteConfig)
-				notifyGroup.POST("/configs/enable", notifyHandler.EnableConfig)
+				notifyGroup.POST("/configs", middleware.RequirePermission("notify:write"), notifyHandler.AddConfig)
+				notifyGroup.PUT("/configs", middleware.RequirePermission("notify:write"), notifyHandler.UpdateConfig)
+				notifyGroup.DELETE("/configs", middleware.RequirePermission("notify:write"), notifyHandler.DeleteConfig)
+				notifyGroup.POST("/configs/enable", middleware.RequirePermission("notify:write"), notifyHandler.EnableConfig)
 
 				// 测试和发送
-				notifyGroup.POST("/test", notifyHandler.TestConfig)
-				notifyGroup.POST("/send", notifyHandler.SendNotification)
+				notifyGroup.POST("/test", middleware.RequirePermission("notify:write"), notifyHandler.TestConfig)
+				notifyGroup.POST("/send", middleware.RequirePermission("notify:write"), notifyHandler.SendNotification)
 
 				// 历史记录
 				notifyGroup.GET("/history", notifyHandler.GetHistory)
@@ -573,17 +573,17 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				// 模板管理
 				nucleiGroup.GET("/templates", nucleiHandler.GetTemplates)
 				nucleiGroup.GET("/templates/:id", nucleiHandler.GetTemplate)
-				nucleiGroup.POST("/templates", nucleiHandler.UploadTemplate)
-				nucleiGroup.DELETE("/templates/:id", nucleiHandler.DeleteTemplate)
+				nucleiGroup.POST("/templates", middleware.RequirePermission("poc:write"), nucleiHandler.UploadTemplate)
+				nucleiGroup.DELETE("/templates/:id", middleware.RequirePermission("poc:write"), nucleiHandler.DeleteTemplate)
 
 				// 统计和管理
 				nucleiGroup.GET("/tags", nucleiHandler.GetTags)
 				nucleiGroup.GET("/statistics", nucleiHandler.GetStatistics)
-				nucleiGroup.POST("/reload", nucleiHandler.ReloadTemplates)
+				nucleiGroup.POST("/reload", middleware.RequirePermission("poc:write"), nucleiHandler.ReloadTemplates)
 				nucleiGroup.POST("/validate", nucleiHandler.ValidateTemplate)
 
-				// 扫描
-				nucleiGroup.POST("/scan", nucleiHandler.ScanTarget)
+				// 扫描：真实执行 nuclei 打目标，与任务同权限
+				nucleiGroup.POST("/scan", middleware.RequirePermission("task:write"), nucleiHandler.ScanTarget)
 				nucleiGroup.GET("/runtime/status", nucleiRuntimeHandler.Status)
 				nucleiGroup.POST("/runtime/ensure", middleware.AdminMiddleware(), nucleiRuntimeHandler.Ensure)
 				nucleiGroup.POST("/runtime/update", middleware.AdminMiddleware(), nucleiRuntimeHandler.Update)
@@ -600,10 +600,10 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				// 页面管理
 				monitorGroup.GET("/pages", monitorHandler.ListMonitoredPages)
 				monitorGroup.GET("/pages/:id", monitorHandler.GetMonitoredPage)
-				monitorGroup.POST("/pages", monitorHandler.AddMonitoredPage)
-				monitorGroup.DELETE("/pages/:id", monitorHandler.RemoveMonitoredPage)
-				monitorGroup.PUT("/pages/:id/enable", monitorHandler.EnableMonitoredPage)
-				monitorGroup.POST("/pages/:id/check", monitorHandler.CheckPageNow)
+				monitorGroup.POST("/pages", middleware.RequirePermission("monitor:write"), monitorHandler.AddMonitoredPage)
+				monitorGroup.DELETE("/pages/:id", middleware.RequirePermission("monitor:write"), monitorHandler.RemoveMonitoredPage)
+				monitorGroup.PUT("/pages/:id/enable", middleware.RequirePermission("monitor:write"), monitorHandler.EnableMonitoredPage)
+				monitorGroup.POST("/pages/:id/check", middleware.RequirePermission("monitor:write"), monitorHandler.CheckPageNow)
 
 				// 变化历史
 				monitorGroup.GET("/changes", monitorHandler.GetChanges)
@@ -617,15 +617,15 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				cruiseGroup.GET("", cruiseHandler.ListCruises)
 				cruiseGroup.GET("/stats", cruiseHandler.GetCruiseStats)
 				cruiseGroup.GET("/preview-targets", cruiseHandler.PreviewProjectTargets)
-				cruiseGroup.POST("", cruiseHandler.CreateCruise)
+				cruiseGroup.POST("", middleware.RequirePermission("cruise:write"), cruiseHandler.CreateCruise)
 				cruiseGroup.GET("/:id", cruiseHandler.GetCruise)
-				cruiseGroup.PUT("/:id", cruiseHandler.UpdateCruise)
-				cruiseGroup.DELETE("/:id", cruiseHandler.DeleteCruise)
+				cruiseGroup.PUT("/:id", middleware.RequirePermission("cruise:write"), cruiseHandler.UpdateCruise)
+				cruiseGroup.DELETE("/:id", middleware.RequirePermission("cruise:write"), cruiseHandler.DeleteCruise)
 
 				// 控制操作
-				cruiseGroup.POST("/:id/enable", cruiseHandler.EnableCruise)
-				cruiseGroup.POST("/:id/disable", cruiseHandler.DisableCruise)
-				cruiseGroup.POST("/:id/run", cruiseHandler.RunNow)
+				cruiseGroup.POST("/:id/enable", middleware.RequirePermission("cruise:write"), cruiseHandler.EnableCruise)
+				cruiseGroup.POST("/:id/disable", middleware.RequirePermission("cruise:write"), cruiseHandler.DisableCruise)
+				cruiseGroup.POST("/:id/run", middleware.RequirePermission("cruise:write"), cruiseHandler.RunNow)
 
 				// 执行日志
 				cruiseGroup.GET("/:id/logs", cruiseHandler.GetCruiseLogs)
@@ -649,13 +649,13 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 					queueGroup.GET("/stats", queueHandler.GetStats)
 					queueGroup.GET("/types", queueHandler.GetTaskTypes)
 					queueGroup.GET("/workers", queueHandler.GetWorkerStatus)
-					queueGroup.POST("/tasks", queueHandler.EnqueueTask)
+					queueGroup.POST("/tasks", middleware.RequirePermission("task:write"), queueHandler.EnqueueTask)
 					queueGroup.GET("/tasks/:id/result", middleware.RequirePermission("task:read"), queueHandler.GetTaskResult)
 					queueGroup.GET("/tasks/pending", middleware.RequirePermission("task:read"), queueHandler.GetPendingTasks)
 					queueGroup.GET("/tasks/processing", middleware.RequirePermission("task:read"), queueHandler.GetProcessingTasks)
 					queueGroup.GET("/tasks/deadletter", middleware.RequirePermission("task:read"), queueHandler.GetDeadLetterTasks)
-					queueGroup.POST("/tasks/deadletter/:id/retry", queueHandler.RetryDeadLetterTask)
-					queueGroup.DELETE("/tasks/deadletter", queueHandler.ClearDeadLetter)
+					queueGroup.POST("/tasks/deadletter/:id/retry", middleware.RequirePermission("task:write"), queueHandler.RetryDeadLetterTask)
+					queueGroup.DELETE("/tasks/deadletter", middleware.RequirePermission("task:write"), queueHandler.ClearDeadLetter)
 				}
 			} else {
 				log.Printf("[Router] Queue handler not available: %v", err)

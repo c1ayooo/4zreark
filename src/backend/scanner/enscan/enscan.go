@@ -339,6 +339,16 @@ type ENScanQueryOptions struct {
 
 // queryViaAPI 通过 API 查询
 func (s *ENScanScanner) queryViaAPI(ctx context.Context, companyName string, opts *ENScanQueryOptions) (*ENScanResult, error) {
+	// Delay 原本只在 CLI 模式生效；API 模式同样背靠企业信息站（aqc/tyc），
+	// 不透传延迟的话 BatchQuery 并发 5 直打风控敏感源。
+	if opts.Delay > 0 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(opts.Delay) * time.Second):
+		}
+	}
+
 	// 构建请求 URL
 	params := url.Values{}
 	params.Set("name", companyName)

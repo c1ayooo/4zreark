@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c1ayooo/4zreark/scanner/scope"
 	"github.com/c1ayooo/4zreark/scanner/webscan"
 )
 
@@ -16,6 +17,7 @@ type SensitiveModule struct {
 	contentScanner *webscan.ContentScanner
 	resultChan     chan interface{}
 	concurrency    int
+	scope          *scope.Scope
 }
 
 // NewSensitiveModule 创建敏感信息检测模块
@@ -36,6 +38,13 @@ func NewSensitiveModule(ctx context.Context, nextModule ModuleRunner, concurrenc
 		concurrency:    concurrency,
 	}
 	return m
+}
+
+// SetScope 设置任务授权边界。nil 表示不限制（仅测试场景）。
+func (m *SensitiveModule) SetScope(s *scope.Scope) { m.scope = s }
+
+func (m *SensitiveModule) allowsURL(raw string) bool {
+	return m.scope == nil || m.scope.AllowsURL(raw)
 }
 
 // ModuleRun 运行模块
@@ -98,7 +107,15 @@ func (m *SensitiveModule) ModuleRun() error {
 			}
 
 			// 先传递原始数据到下一个模块
-			m.resultChan <- data
+			select {
+			case <-m.ctx.Done():
+				allWg.Wait()
+				close(m.resultChan)
+				resultWg.Wait()
+				nextModuleRun.Wait()
+				return nil
+			case m.resultChan <- data:
+			}
 
 			// 获取要扫描的URL
 			var targetURL string
@@ -112,6 +129,12 @@ func (m *SensitiveModule) ModuleRun() error {
 			}
 
 			if targetURL == "" {
+				continue
+			}
+
+			// 越界 URL 只透传不做主动请求：敏感信息扫描会真实 GET 目标，
+			// 必须在请求前卡住授权边界（入库兜底过滤来不及阻止这次请求）。
+			if !m.allowsURL(targetURL) {
 				continue
 			}
 

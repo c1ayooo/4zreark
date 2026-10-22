@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/c1ayooo/4zreark/internal/recon/collect"
@@ -540,13 +541,78 @@ func (h *Client) hunterSearchCtx(ctx context.Context, req SearchRequest, apiKey 
 	}, nil
 }
 
+// engineGates 是引擎级节拍门（进程级共享）：Client 每次 NewClient() 都是新实例，
+// 限流状态挂实例上会被并发新建架空，所以挂在包级。
+// 策略来自 collect.PolicyFor（fofa/quake… 单飞 + 引擎专属最小间隔），
+// 付费配额引擎背靠背翻页连发会烧配额/触发风控。
+var engineGates sync.Map // map[string]*engineGate
+
+type engineGate struct {
+	mu   sync.Mutex
+	next time.Time
+}
+
+// waitEngineTurn 预约同一引擎的下一次请求时点并等到它。
+// 预约在锁内完成（保证间隔按发起顺序推进），等待在锁外做（不阻塞其他引擎）。
+func waitEngineTurn(ctx context.Context, engine string) {
+	g, _ := engineGates.LoadOrStore(strings.ToLower(strings.TrimSpace(engine)), &engineGate{})
+	gate := g.(*engineGate)
+	gate.mu.Lock()
+	wait := time.Until(gate.next)
+	gate.next = time.Now().Add(collect.PolicyFor(engine).MinInterval)
+	gate.mu.Unlock()
+	if wait > 0 {
+		select {
+		case <-ctx.Done():
+		case <-time.After(wait):
+		}
+	}
+}
+
 // doJSONRequestCtx 统一 JSON 请求:UA 伪装、引擎错误提取、32MB 响应上限。
 func (h *Client) doJSONRequestCtx(ctx context.Context, method, endpoint, apiKey, headerName string, body interface{}, out interface{}, label string) error {
+	// 引擎节拍：进程级最小间隔，翻页循环也必须排队。
+	waitEngineTurn(ctx, label)
+	if ctx.Err() != nil {
+		return fmt.Errorf("%s 请求在限流排队时被取消: %w", label, ctx.Err())
+	}
+
+	respBody, statusCode, err := h.doOnce(ctx, method, endpoint, apiKey, headerName, body, label)
+	if err != nil {
+		return err
+	}
+	// 429 限流退避：按 Retry-After 等一次（封顶 30 秒）再重试一回。
+	if statusCode == http.StatusTooManyRequests {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%s 请求在限流退避时被取消: %w", label, ctx.Err())
+		case <-time.After(10 * time.Second):
+		}
+		waitEngineTurn(ctx, label)
+		respBody, statusCode, err = h.doOnce(ctx, method, endpoint, apiKey, headerName, body, label)
+		if err != nil {
+			return err
+		}
+	}
+	if statusCode < 200 || statusCode >= 300 {
+		return fmt.Errorf("%s", extractRemoteAPIError(respBody, statusCode, label))
+	}
+	if err := json.Unmarshal(respBody, out); err != nil {
+		if msg := extractRemoteAPIError(respBody, statusCode, label); strings.Contains(msg, "网页") {
+			return fmt.Errorf("%s", msg)
+		}
+		return fmt.Errorf("解析 %s 响应失败: %w", label, err)
+	}
+	return nil
+}
+
+// doOnce 发一次请求并读干响应体（上限 32MB），不解析 JSON。
+func (h *Client) doOnce(ctx context.Context, method, endpoint, apiKey, headerName string, body interface{}, label string) ([]byte, int, error) {
 	var reqBody *strings.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("创建请求失败: %w", err)
+			return nil, 0, fmt.Errorf("创建请求失败: %w", err)
 		}
 		reqBody = strings.NewReader(string(b))
 	} else {
@@ -554,7 +620,7 @@ func (h *Client) doJSONRequestCtx(ctx context.Context, method, endpoint, apiKey,
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, method, endpoint, reqBody)
 	if err != nil {
-		return fmt.Errorf("创建请求失败: %w", err)
+		return nil, 0, fmt.Errorf("创建请求失败: %w", err)
 	}
 	httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36")
 	httpReq.Header.Set("Accept", "application/json")
@@ -568,25 +634,16 @@ func (h *Client) doJSONRequestCtx(ctx context.Context, method, endpoint, apiKey,
 	if err != nil {
 		_, _, timeout := safeRequestError(err)
 		if timeout {
-			return fmt.Errorf("%s 请求超时（60 秒）", label)
+			return nil, 0, fmt.Errorf("%s 请求超时（60 秒）", label)
 		}
-		return fmt.Errorf("无法连接 %s 服务，请检查服务器网络或代理配置", label)
+		return nil, 0, fmt.Errorf("无法连接 %s 服务，请检查服务器网络或代理配置", label)
 	}
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
-		return fmt.Errorf("读取 %s 响应失败: %w", label, err)
+		return nil, resp.StatusCode, fmt.Errorf("读取 %s 响应失败: %w", label, err)
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s", extractRemoteAPIError(respBody, resp.StatusCode, label))
-	}
-	if err := json.Unmarshal(respBody, out); err != nil {
-		if msg := extractRemoteAPIError(respBody, resp.StatusCode, label); strings.Contains(msg, "网页") {
-			return fmt.Errorf("%s", msg)
-		}
-		return fmt.Errorf("解析 %s 响应失败: %w", label, err)
-	}
-	return nil
+	return respBody, resp.StatusCode, nil
 }
 
 func safeRequestError(err error) (status int, message string, timeout bool) {

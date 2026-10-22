@@ -320,6 +320,7 @@ func (p *StreamingPipeline) buildModuleChain() error {
 	// 敏感信息检测模块
 	if p.config.SensitiveScan {
 		p.sensitiveModule = NewSensitiveModule(p.ctx, lastModule, p.config.moduleConcurrency(8))
+		p.sensitiveModule.SetScope(p.scope)
 		p.sensitiveModule.SetInput(make(chan interface{}, 500))
 		p.sensitiveModule.SetProgressTracker(p.progressTracker)
 		lastModule = p.sensitiveModule

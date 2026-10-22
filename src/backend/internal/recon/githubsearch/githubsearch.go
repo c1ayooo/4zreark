@@ -145,10 +145,8 @@ type Client struct {
 	http    *http.Client
 	proxy   func() string // 出站代理（空=直连；每次请求时取，热更新生效）
 
-	// GitHub Code Search 配额：已验证用户 10 次/分钟。滑动窗口排队，
-	// 超过窗口的请求按到达顺序等待，避免 403 secondary rate limit。
-	mu     sync.Mutex
-	callTs []time.Time
+	// GitHub Code Search 配额（10 次/分钟）的滑动窗口已提升为包级共享状态
+	//（见 waitQuota）：调用方习惯每次扫描新建 Client，实例级窗口挡不住并发。
 }
 
 // NewClient 创建客户端；tokenFn 每次调用时取最新 token（可为空 = 未配置）；
@@ -176,27 +174,35 @@ const (
 	maxResultCap = 1000 // GitHub Search API 结果绝对上限：page*per_page ≤ 1000
 )
 
+// 共享配额状态：Client 会被调用方每次扫描新建（github_leak_service 等），
+// 限流窗口挂实例上，N 个并发请求 = N 个独立窗口，10 次/分钟的保护完全失效。
+// 窗口状态收到包级，同 token 的所有实例共享同一个滑动窗口。
+var (
+	quotaMu     sync.Mutex
+	quotaCallTs []time.Time
+)
+
 // waitQuota 滑动窗口限流，等到有配额或 ctx 取消
 func (c *Client) waitQuota(ctx context.Context) error {
 	for {
-		c.mu.Lock()
+		quotaMu.Lock()
 		now := time.Now()
 		// 清理过期时间戳
-		valid := c.callTs[:0]
-		for _, ts := range c.callTs {
+		valid := quotaCallTs[:0]
+		for _, ts := range quotaCallTs {
 			if now.Sub(ts) < rateWindow {
 				valid = append(valid, ts)
 			}
 		}
-		c.callTs = valid
-		if len(c.callTs) < rateMaxCalls {
-			c.callTs = append(c.callTs, now)
-			c.mu.Unlock()
+		quotaCallTs = valid
+		if len(quotaCallTs) < rateMaxCalls {
+			quotaCallTs = append(quotaCallTs, now)
+			quotaMu.Unlock()
 			return nil
 		}
 		// 窗口满：等最早一次调用滑出窗口
-		wait := rateWindow - now.Sub(c.callTs[0]) + 50*time.Millisecond
-		c.mu.Unlock()
+		wait := rateWindow - now.Sub(quotaCallTs[0]) + 50*time.Millisecond
+		quotaMu.Unlock()
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

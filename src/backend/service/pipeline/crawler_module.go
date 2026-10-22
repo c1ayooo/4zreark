@@ -262,8 +262,12 @@ func (m *CrawlerModule) batchCrawlWithKatana(urls []string) {
 
 	result, err := m.katanaScanner.CrawlList(ctx, urls)
 	if err != nil {
-		log.Printf("[%s] Katana batch crawl error: %v", m.name, err)
-		return
+		// 超时/取消时 katana 已把部分结果写进输出文件并解析进 result，不能整批丢弃。
+		if result == nil || len(result.URLs) == 0 {
+			log.Printf("[%s] Katana batch crawl error: %v", m.name, err)
+			return
+		}
+		log.Printf("[%s] Katana batch crawl error: %v（采用部分结果 %d 条）", m.name, err, len(result.URLs))
 	}
 
 	if result == nil {
@@ -423,8 +427,12 @@ func (m *CrawlerModule) crawlWithKatana(target string, asset AssetHttp) {
 
 	result, err := m.katanaScanner.Crawl(ctx, target)
 	if err != nil {
-		log.Printf("[%s] Katana error for %s: %v", m.name, target, err)
-		return
+		// 超时/取消时保留已解析出的部分结果。
+		if result == nil || len(result.URLs) == 0 {
+			log.Printf("[%s] Katana error for %s: %v", m.name, target, err)
+			return
+		}
+		log.Printf("[%s] Katana error for %s: %v（采用部分结果 %d 条）", m.name, target, err, len(result.URLs))
 	}
 
 	if result == nil {
@@ -437,6 +445,12 @@ func (m *CrawlerModule) crawlWithKatana(target string, asset AssetHttp) {
 	for _, url := range result.URLs {
 		// 非 JS 静态资源不进结果；JS 保留，里面的接口/路由需要继续分析。
 		if scope.IsStaticAsset(url.URL) || scope.IsNoisyCrawlerURL(url.URL) {
+			skipped++
+			continue
+		}
+		// katana 的边界是注册域（-fs rdn），任务目标是子域时会爬出授权范围；
+		// 产出侧按任务 scope 再拦一道，不让越界 URL 流向下游模块。
+		if !m.allowsURL(url.URL) {
 			skipped++
 			continue
 		}
@@ -480,6 +494,10 @@ func (m *CrawlerModule) crawlWithRad(target string, asset AssetHttp) {
 
 	for _, url := range result.URLs {
 		if scope.IsStaticAsset(url.URL) || scope.IsNoisyCrawlerURL(url.URL) {
+			continue
+		}
+		// 同 katana：产出侧按任务 scope 再拦一道越界 URL。
+		if !m.allowsURL(url.URL) {
 			continue
 		}
 		urlResult := UrlResult{

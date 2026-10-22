@@ -184,7 +184,9 @@ func (h *HttpxScanner) ProbeMultiple(ctx context.Context, targets []string) []*H
 	for _, target := range targets {
 		select {
 		case <-ctx.Done():
-			break
+			// 取消后停止投递新目标（break 只能跳出 select，必须用标签跳出 for）
+			wg.Wait()
+			return results
 		default:
 		}
 

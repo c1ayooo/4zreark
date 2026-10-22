@@ -63,17 +63,23 @@ const riskSelect = `s.id, s.host, coalesce(s.title,''), s.tech, s.http_status, s
 	coalesce(rr.ports, '[]'::jsonb), coalesce(rr.server, '')`
 
 // riskFrom 把 raw_records 的端口与 Server 预聚合成一行，避免按站点逐行子查询。
-const riskFrom = `FROM sites s
+// 外层查询条件会同步下推进聚合子查询（子查询里的 s/p 别名即内层 sites/projects）：
+// 聚合会阻塞谓词下推，不过滤的话每次列表/详情查询都要全表 GROUP BY raw_records。
+func riskFrom(cond string) string {
+	return `FROM sites s
 	JOIN projects p ON p.id = s.project_id
 	LEFT JOIN (
-		SELECT site_id, jsonb_agg(DISTINCT port) AS ports, max(nullif(server, '')) AS server
-		  FROM raw_records
-		 WHERE site_id IS NOT NULL
-		 GROUP BY site_id
+		SELECT rr.site_id, jsonb_agg(DISTINCT rr.port) AS ports, max(nullif(rr.server, '')) AS server
+		  FROM raw_records rr
+		  JOIN sites s ON s.id = rr.site_id
+		  JOIN projects p ON p.id = s.project_id
+		 WHERE rr.site_id IS NOT NULL AND (` + cond + `)
+		 GROUP BY rr.site_id
 	) rr ON rr.site_id = s.id`
+}
 
 func (a *AssetRepo) queryRiskInputs(ctx context.Context, cond string, args []any) ([]riskInputRow, error) {
-	stmt := fmt.Sprintf("SELECT %s %s WHERE %s", riskSelect, riskFrom, cond)
+	stmt := fmt.Sprintf("SELECT %s %s WHERE %s", riskSelect, riskFrom(cond), cond)
 	rows, err := a.r.pool.Query(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("查询风险评分输入失败: %w", err)

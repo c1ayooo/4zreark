@@ -185,7 +185,9 @@ func (s *VulnScanner) ScanVuln(ctx context.Context, target string, templates []*
 	for _, template := range templates {
 		select {
 		case <-ctx.Done():
-			break
+			// 取消后停止投递新模板（break 只能跳出 select，等在跑的结束后返回）
+			wg.Wait()
+			return result
 		default:
 		}
 

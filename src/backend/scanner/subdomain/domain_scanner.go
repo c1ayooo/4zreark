@@ -161,7 +161,13 @@ func (s *DomainScanner) GetDomainInfo(ctx context.Context, domain string) *Domai
 
 // CheckSubdomain checks if a subdomain exists (DNS only for speed)
 func (s *DomainScanner) CheckSubdomain(ctx context.Context, subdomain, domain string) *SubdomainResult {
-	fullDomain := subdomain + "." + domain
+	return s.CheckFullDomain(ctx, subdomain+"."+domain)
+}
+
+// CheckFullDomain checks if a full domain (e.g. "api.example.com") exists (DNS only for speed)
+func (s *DomainScanner) CheckFullDomain(ctx context.Context, host string) *SubdomainResult {
+	fullDomain := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	subdomain, domain := splitSubdomain(fullDomain)
 	result := &SubdomainResult{
 		Subdomain:  subdomain,
 		Domain:     domain,
@@ -207,6 +213,7 @@ func (s *DomainScanner) CheckSubdomain(ctx context.Context, subdomain, domain st
 		result.Alive = false
 		return result
 	}
+
 
 	// Try to get CNAME (使用新的resolver)
 	cname, err := resolver.LookupCNAME(queryCtx, fullDomain)
@@ -277,6 +284,16 @@ func (s *DomainScanner) detectWildcardDNS(ctx context.Context, domain string) {
 	if wildcardCount < 2 {
 		s.WildcardIPs = make(map[string]bool) // 清空，不是泛解析
 	}
+}
+
+// splitSubdomain 把完整域名拆成（子域标签, 根域），仅供结果展示字段使用；
+// 拆不开时子域标签为空、根域为原名。
+func splitSubdomain(fullDomain string) (subdomain, domain string) {
+	parts := strings.SplitN(fullDomain, ".", 2)
+	if len(parts) != 2 {
+		return "", fullDomain
+	}
+	return parts[0], parts[1]
 }
 
 // generateRandomString generates a random string for wildcard detection

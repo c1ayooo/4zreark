@@ -41,6 +41,7 @@ type taskStore interface {
 type resultStore interface {
 	CreateResult(result *models.ScanResult) error
 	CreateResultWithDedup(result *models.ScanResult) error
+	BatchCreateResultPtrsWithDedup(results []*models.ScanResult) (int, int, error)
 	UpdateSubdomainCDN(taskID, domain, cdnProvider string) error
 }
 
@@ -372,16 +373,20 @@ func (e *TaskExecutor) checkRunningTasks() {
 
 	for _, taskID := range taskIDs {
 		task, err := e.taskService.GetTaskByID(taskID)
-		if err != nil || task == nil {
-			// 任务已被删除，取消执行
+		switch {
+		case err == nil && task != nil:
+			if task.Status == models.TaskStatusCancelled || task.Status == models.TaskStatusPaused {
+				log.Printf("[TaskExecutor] Task %s status changed to %s, cancelling", taskID, task.Status)
+				e.cancelRunningTask(taskID)
+			}
+		case errors.Is(err, repo.ErrNotFound) || (err == nil && task == nil):
+			// 任务确实已被删除，取消执行
 			log.Printf("[TaskExecutor] Task %s deleted, cancelling", taskID)
 			e.cancelRunningTask(taskID)
-			continue
-		}
-
-		if task.Status == models.TaskStatusCancelled || task.Status == models.TaskStatusPaused {
-			log.Printf("[TaskExecutor] Task %s status changed to %s, cancelling", taskID, task.Status)
-			e.cancelRunningTask(taskID)
+		default:
+			// 查询失败 ≠ 任务已删除：DB/HTTP 瞬时抖动时跳过本轮检查，
+			// 误取消会让 River 整个扫描从头重跑。
+			log.Printf("[TaskExecutor] checkRunningTasks: query task %s failed, skip this round: %v", taskID, err)
 		}
 	}
 }
@@ -953,11 +958,36 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 	progressTicker := time.NewTicker(3 * time.Second)
 	defer progressTicker.Stop()
 
+	// 结果攒批落库：单条一事务在爬虫大任务下是数万次 DB 往返，
+	// 复用已有的批量接口（去重类型在批内 upsert，其余普通插入）。
+	// 批量整体失败时退回逐条写入，避免一批失败连坐丢结果。
+	resultBatch := make([]*models.ScanResult, 0, 64)
+	flushResults := func(force bool) {
+		if len(resultBatch) == 0 {
+			return
+		}
+		if !force && len(resultBatch) < 50 {
+			return
+		}
+		if _, _, err := e.resultService.BatchCreateResultPtrsWithDedup(resultBatch); err != nil {
+			log.Printf("[TaskExecutor] 批量保存扫描结果失败，退回逐条写入: %v", err)
+			for _, res := range resultBatch {
+				if err := e.resultService.CreateResult(res); err != nil {
+					log.Printf("[TaskExecutor] Failed to save result: %v", err)
+				}
+			}
+		}
+		resultBatch = resultBatch[:0]
+	}
+
 	for result := range scanPipe.Results() {
 		// 检查上下文是否被取消
 		select {
 		case <-ctx.Done():
 			log.Printf("[TaskExecutor] Task %s cancelled during result collection", taskID)
+			// 取消前把攒批中的结果与资产写完，避免尾部数据丢在缓冲里。
+			flushResults(true)
+			flushAssets(true)
 			e.finishJob(jobID, "")
 			return
 		default:
@@ -1181,18 +1211,8 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 
 		// 保存结果
 		if scanResult != nil {
-			var err error
-			// 扫描期就去重：同一任务内重复发现的同类结果只保留最新一条，
-			// 既避免结果表膨胀，也减少任务完成后的归并压力。
-			switch scanResult.Type {
-			case models.ResultTypeSubdomain, models.ResultTypeService, models.ResultTypeURL, models.ResultTypeCrawler, models.ResultTypeDirScan:
-				err = e.resultService.CreateResultWithDedup(scanResult)
-			default:
-				err = e.resultService.CreateResult(scanResult)
-			}
-			if err != nil {
-				log.Printf("[TaskExecutor] Failed to save result: %v", err)
-			}
+			resultBatch = append(resultBatch, scanResult)
+			flushResults(false)
 		}
 
 		// 资产/路由发现到一小批就落库，任务列表和资产页不用等全量结束。
@@ -1207,8 +1227,9 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 		}
 	}
 
-	// 扫描结束：把最后不足一批的资产/路由补写。
+	// 扫描结束：把最后不足一批的资产/路由与结果补写。
 	flushAssets(true)
+	flushResults(true)
 
 	// 批量更新子域名的 CDN 信息
 	if len(cdnInfo) > 0 {

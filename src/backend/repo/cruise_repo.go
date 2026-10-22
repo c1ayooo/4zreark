@@ -23,6 +23,13 @@ type CruiseRepo interface {
 	Delete(ctx context.Context, id string) error
 
 	SetStatus(ctx context.Context, id, status string) error
+	// AcquireRun 原子地把巡航从非 running 置为 running，返回是否抢到。
+	// cron 触发与「立即执行」并发时只允许一个通过，替代先读后写的 TOCTOU 检查。
+	AcquireRun(ctx context.Context, id string) (bool, error)
+	// ResetStaleRunning 把所有 running 巡航复位为 enabled，返回复位条数。
+	// 只在服务启动时调用：进程刚启动不可能有在跑的巡航，卡在 running 的是
+	// 上次崩溃的残留——不回收的话 ListEnabled 查不到它，调度与「立即执行」都被永久拒绝。
+	ResetStaleRunning(ctx context.Context) (int64, error)
 	SetNextRun(ctx context.Context, id string, next time.Time) error
 	// MarkRun 记一次执行：run_count+1，同时更新最近执行时间与任务 ID。
 	MarkRun(ctx context.Context, id, taskID string, at time.Time) error
@@ -304,6 +311,25 @@ func (r *cruiseRepo) SetStatus(ctx context.Context, id, status string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (r *cruiseRepo) AcquireRun(ctx context.Context, id string) (bool, error) {
+	tag, err := r.r.pool.Exec(ctx,
+		`update cruise_tasks set status = 'running', updated_at = now()
+		  where id = $1 and status <> 'running'`, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (r *cruiseRepo) ResetStaleRunning(ctx context.Context) (int64, error) {
+	tag, err := r.r.pool.Exec(ctx,
+		`update cruise_tasks set status = 'enabled', updated_at = now() where status = 'running'`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (r *cruiseRepo) SetNextRun(ctx context.Context, id string, next time.Time) error {

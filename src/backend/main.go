@@ -128,6 +128,15 @@ func main() {
 	api.RestoreGostTunnels()
 
 	if cfg.Node.RunsControlPlane() {
+		// JWT 签名密钥是随仓库入库的默认值时拒绝启动：任何知道该值的人都能
+		// 伪造 role=admin 的 JWT 完全接管平台。确有内网隔离把握可用
+		// ZRE_ALLOW_DEFAULT_SECRET=1 显式放行，但正确做法是配置随机密钥。
+		if cfg.JWT.JWTSecretIsDefault() && os.Getenv("ZRE_ALLOW_DEFAULT_SECRET") != "1" {
+			log.Fatalf("[FATAL] jwt.secret 仍是随仓库分发的默认值，拒绝启动控制面。" +
+				"请设置随机密钥（环境变量 ZRE_JWT_SECRET 或配置文件 jwt.secret，" +
+				"如 $(openssl rand -hex 32)）；确要带默认密钥运行请显式设置 ZRE_ALLOW_DEFAULT_SECRET=1")
+		}
+
 		// Initialize default admin user
 		userService := service.NewUserService()
 		if err := userService.InitAdmin(); err != nil {

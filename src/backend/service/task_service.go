@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"time"
 
@@ -121,10 +122,12 @@ func (s *TaskService) GetTaskByID(taskID string) (*models.Task, error) {
 
 	task, err := tasks.GetByID(ctx, taskID)
 	if errors.Is(err, repo.ErrNotFound) {
-		return nil, errors.New("任务不存在")
+		// 包一层 ErrNotFound 哨兵：调用方（如 checkRunningTasks）要能区分
+		// 「任务已删除」和「查询失败」，后者绝不能当成删除处理。
+		return nil, fmt.Errorf("任务不存在: %w", repo.ErrNotFound)
 	}
 	if err != nil {
-		return nil, errors.New("查询任务失败: " + err.Error())
+		return nil, fmt.Errorf("查询任务失败: %w", err)
 	}
 	return task, nil
 }

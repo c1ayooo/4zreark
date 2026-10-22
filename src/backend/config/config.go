@@ -338,6 +338,18 @@ func applyPostgresEnv(c *Config) {
 	if v := os.Getenv("ZRE_PG_SCHEMA"); v != "" {
 		c.Postgres.Schema = v
 	}
+	if v := os.Getenv("ZRE_JWT_SECRET"); v != "" {
+		c.JWT.Secret = v
+	}
+}
+
+// DefaultJWTSecret 是 config.yaml 随仓库分发的默认签名密钥。
+// 入库的默认值等于任何人都能签出合法 admin JWT，控制面启动时必须检测。
+const DefaultJWTSecret = "4zreark-secret-key-change-in-production"
+
+// JWTSecretIsDefault 报告当前签名密钥是否还是随仓库分发的默认值。
+func (j *JWTConfig) JWTSecretIsDefault() bool {
+	return j.Secret == "" || j.Secret == DefaultJWTSecret
 }
 
 // DSN 拼装 PostgreSQL 连接串；search_path 走启动参数，SQL 里因此不用写 schema 前缀。

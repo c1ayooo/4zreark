@@ -36,8 +36,9 @@ func (m *PortScanModule) SetRate(ratePerSec, concurrency int, delay time.Duratio
 		m.concurrency = concurrency
 		// 外挂 gogo 的 -t 线程数必须一起收紧：它不读上面的 RatePerSec，
 		// 默认 1000 并发，不改的话纯 Go fallback 限了速也白限。
+		// gogo 是进程级单例，线程数走锁更新，避免与并发任务的扫描竞争。
 		if m.gogoScanner != nil {
-			m.gogoScanner.Threads = concurrency
+			m.gogoScanner.SetThreads(concurrency)
 		}
 	}
 	m.targetDelay = delay
@@ -72,6 +73,8 @@ func (m *PortScanModule) ModuleRun() error {
 	var allWg sync.WaitGroup
 	var resultWg sync.WaitGroup
 	var nextModuleRun sync.WaitGroup
+	// 同时在扫的主机数：聚合速率 = 并发数 × 单机令牌桶，必须收住。
+	hostSem := make(chan struct{}, 4)
 
 	// GoGo 不可用时不再整体透传：改用纯 Go TCP connect 扫描（见 scanPorts）。
 	if !m.gogoScanner.IsAvailable() {
@@ -183,7 +186,10 @@ func (m *PortScanModule) ModuleRun() error {
 
 			allWg.Add(1)
 			go func(ds DomainSkip) {
-				defer allWg.Done()
+				// 信号量限制同时扫描的主机数：无界 goroutine 下每主机各自持
+				// 令牌桶，聚合速率 = N × 单机速率，会乘法放大打挂同网段目标。
+				hostSem <- struct{}{}
+				defer func() { <-hostSem; allWg.Done() }()
 				if m.targetDelay > 0 {
 					select {
 					case <-m.ctx.Done():

@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/c1ayooo/4zreark/scanner/core"
 	"github.com/c1ayooo/4zreark/scanner/scope"
 	"github.com/c1ayooo/4zreark/scanner/subdomain"
 	"github.com/c1ayooo/4zreark/scanner/webscan"
@@ -17,7 +16,6 @@ import (
 // 使用综合扫描器：主动枚举（字典爆破）为主，第三方API为辅
 type SubdomainScanModule struct {
 	BaseModule
-	activeScanner   *subdomain.ActiveScanner
 	httpxScanner    *webscan.HttpxScanner // HTTP 探测器
 	resultChan      chan interface{}
 	config          *subdomain.ActiveScannerConfig
@@ -139,7 +137,6 @@ func NewSubdomainScanModuleWithConfig(ctx context.Context, nextModule ModuleRunn
 			nextModule: nextModule,
 			dupChecker: NewDuplicateChecker(),
 		},
-		activeScanner:   subdomain.NewActiveScanner(activeCfg),
 		httpxScanner:    httpxScanner,
 		resultChan:      make(chan interface{}, 2000), // 增大缓冲区
 		config:          activeCfg,
@@ -201,6 +198,7 @@ func (m *SubdomainScanModule) ModuleRun() error {
 
 	// 处理输入
 	var processedCount int
+	domainSem := make(chan struct{}, domainScanConcurrency)
 	for {
 		select {
 		case <-m.ctx.Done():
@@ -239,12 +237,18 @@ func (m *SubdomainScanModule) ModuleRun() error {
 
 			allWg.Add(1)
 			go func(d string) {
-				defer allWg.Done()
+				domainSem <- struct{}{}
+				defer func() { <-domainSem; allWg.Done() }()
 				m.scanSubdomains(d)
 			}(domain)
 		}
 	}
 }
+
+// domainScanConcurrency 同时枚举的域名数。每域名一个独立 ActiveScanner 实例
+//（ActiveScanner 每次 Run 会重置内部去重表和回调，共享实例并发 Run 会互相清掉
+// 结果），信号量只负责控制外层并发，避免目标多时 goroutine 失控。
+const domainScanConcurrency = 2
 
 // scanSubdomains 执行子域名扫描（使用综合扫描器）
 func (m *SubdomainScanModule) scanSubdomains(domain string) {
@@ -253,11 +257,26 @@ func (m *SubdomainScanModule) scanSubdomains(domain string) {
 		m.name, m.config.EnableBrute, m.config.EnableAPI, m.config.APISources, m.enableHTTPProbe)
 
 	// 收集所有子域名，如果启用了 HTTP 探测，需要批量处理
+	var collectMu sync.Mutex
 	var collectedSubdomains []string
 	var collectedResults []SubdomainResult
 
+	flushCollected := func() {
+		collectMu.Lock()
+		batch := collectedSubdomains
+		batchResults := collectedResults
+		collectedSubdomains = nil
+		collectedResults = nil
+		collectMu.Unlock()
+		m.enrichAndSend(batch, batchResults)
+	}
+
+	// 每域名独立扫描器实例：被动枚举、API 枚举、爆破三个内部 goroutine 会并发
+	// 调用回调，模块侧的批处理缓冲必须加锁（见 collectMu）。
+	scanner := subdomain.NewActiveScanner(m.config)
+
 	// 使用回调函数实时处理结果
-	err := m.activeScanner.ScanWithCallback(m.ctx, domain, func(subResult subdomain.SubdomainResult) {
+	err := scanner.ScanWithCallback(m.ctx, domain, func(subResult subdomain.SubdomainResult) {
 		if !m.allowsHost(subResult.FullDomain) {
 			return
 		}
@@ -282,12 +301,13 @@ func (m *SubdomainScanModule) scanSubdomains(domain string) {
 		if m.enableHTTPProbe && m.httpxScanner != nil {
 			// 小批探测：每攒够一批就探测并立即下发，页面不用等整轮枚举结束。
 			// 结果按子域逐条发送，扫描阶段不做去重，去重留给任务结束后的归一步骤。
+			collectMu.Lock()
 			collectedSubdomains = append(collectedSubdomains, subResult.FullDomain)
 			collectedResults = append(collectedResults, result)
-			if len(collectedSubdomains) >= subdomainProbeBatchSize {
-				m.enrichAndSend(collectedSubdomains, collectedResults)
-				collectedSubdomains = nil
-				collectedResults = nil
+			ready := len(collectedSubdomains) >= subdomainProbeBatchSize
+			collectMu.Unlock()
+			if ready {
+				flushCollected()
 			}
 		} else {
 			// 未启用 HTTP 探测时直接发送结果
@@ -304,8 +324,8 @@ func (m *SubdomainScanModule) scanSubdomains(domain string) {
 	}
 
 	// 处理最后不足一批的子域
-	if m.enableHTTPProbe && m.httpxScanner != nil && len(collectedSubdomains) > 0 {
-		m.enrichAndSend(collectedSubdomains, collectedResults)
+	if m.enableHTTPProbe && m.httpxScanner != nil {
+		flushCollected()
 	}
 
 	log.Printf("[%s] Subdomain scan completed for %s", m.name, domain)
@@ -429,6 +449,7 @@ func (m *DomainVerifyModule) ModuleRun() error {
 	var allWg sync.WaitGroup
 	var resultWg sync.WaitGroup
 	var nextModuleRun sync.WaitGroup
+	verifySem := make(chan struct{}, 10)
 
 	// 启动下一个模块
 	if m.nextModule != nil {
@@ -489,7 +510,10 @@ func (m *DomainVerifyModule) ModuleRun() error {
 
 			allWg.Add(1)
 			go func(sr SubdomainResult) {
-				defer allWg.Done()
+				// 信号量限制同时校验的子域数：每校验各挂 DNS + 接管检测，
+				// 无界 goroutine 下 targetDelay 的限速完全失效。
+				verifySem <- struct{}{}
+				defer func() { <-verifySem; allWg.Done() }()
 				if m.targetDelay > 0 {
 					select {
 					case <-m.ctx.Done():
@@ -522,9 +546,9 @@ func (m *DomainVerifyModule) checkSubdomain(sr SubdomainResult) {
 	ctx, cancel := context.WithTimeout(m.ctx, 30*time.Second)
 	defer cancel()
 
-	// 使用 DomainScanner 检查子域名
-	rootDomain := core.ExtractRootDomain(subdomain)
-	checkResult := m.domainScanner.CheckSubdomain(ctx, subdomain, rootDomain)
+	// 使用 DomainScanner 检查子域名。sr.Host 已经是完整域名（如 api.example.com），
+	// 直接按完整域查询；此前按（子域,根域）拼接会查出 api.example.com.example.com。
+	checkResult := m.domainScanner.CheckFullDomain(ctx, subdomain)
 
 	// 构建 DomainResolve 结果
 	result := DomainResolve{
@@ -545,13 +569,15 @@ func (m *DomainVerifyModule) checkSubdomain(sr SubdomainResult) {
 		}
 	}
 
-	// 子域名接管检测
-	takeoverResult, err := m.takeoverScanner.Scan(ctx, sr.Domain)
+	// 子域名接管检测：目标是被发现的子域本身，而不是根域。
+	// 传根域会导致真正的子域接管（子域 CNAME 指向失效云服务）漏检，
+	// 且每个子域结果都会对同一根域重复检测一次。
+	takeoverResult, err := m.takeoverScanner.Scan(ctx, subdomain)
 	if err != nil {
-		log.Printf("[%s] Takeover scan error for %s: %v", m.name, sr.Domain, err)
+		log.Printf("[%s] Takeover scan error for %s: %v", m.name, subdomain, err)
 	} else if takeoverResult != nil && takeoverResult.Vulnerable {
 		log.Printf("[%s] Potential subdomain takeover detected: %s (Service: %s, CNAME: %s)",
-			m.name, sr.Domain, takeoverResult.Service, takeoverResult.CNAME)
+			m.name, subdomain, takeoverResult.Service, takeoverResult.CNAME)
 		// 发送接管检测结果
 		takeoverRes := TakeoverResult{
 			Domain:       takeoverResult.Domain,
