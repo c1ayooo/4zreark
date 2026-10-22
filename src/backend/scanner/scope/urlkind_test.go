@@ -21,3 +21,21 @@ func TestIsStaticAssetKeepsJS(t *testing.T) {
 		}
 	}
 }
+
+func TestIsNoisyCrawlerURL(t *testing.T) {
+	noisy := []string{
+		"https://www.meituan.com/docker/opt/meituan/appdatas/nest/function/src/locales",
+		"https://www.meituan.com/%5Cu003e%5Cu003c/div%5Cu003e",
+		"https://www.meituan.com/" + string(make([]byte, 2100)),
+	}
+	for _, u := range noisy {
+		if !IsNoisyCrawlerURL(u) {
+			t.Errorf("应判为噪声: %s", u)
+		}
+	}
+	for _, u := range []string{"https://www.meituan.com/api/v1/order", "https://developer.meituan.com/en-US/docs/biz"} {
+		if IsNoisyCrawlerURL(u) {
+			t.Errorf("不应判为噪声: %s", u)
+		}
+	}
+}

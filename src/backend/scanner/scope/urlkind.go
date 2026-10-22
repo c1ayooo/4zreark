@@ -47,3 +47,27 @@ func IsStaticAsset(raw string) bool {
 	_, ok := staticExts[path[dot+1:]]
 	return ok
 }
+
+// IsNoisyCrawlerURL 过滤 jsluice/Katana 从 JS 字符串里抽出的明显噪声：
+// 转义 HTML、内部部署路径、超长查询串。真实 API 路径不会包含这些特征。
+func IsNoisyCrawlerURL(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	if len(raw) > 2048 {
+		return true
+	}
+	lower := strings.ToLower(raw)
+	for _, marker := range []string{"%5c", "\\u003", "%3c", "%3e", "%22", "%27"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	for _, marker := range []string{"/docker/", "/appdatas/", "/opt/meituan/"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}

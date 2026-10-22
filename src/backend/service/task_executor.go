@@ -1080,7 +1080,7 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 				continue
 			}
 			// 静态资源即使绕过爬虫侧过滤也不入库：这是最后一道闸。
-			if scope.IsStaticAsset(r.Output) {
+			if scope.IsStaticAsset(r.Output) || scope.IsNoisyCrawlerURL(r.Output) {
 				continue
 			}
 			urlCount++
