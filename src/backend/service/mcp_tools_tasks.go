@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"time"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -56,9 +57,31 @@ func (s *MCPService) taskTools() []mcpToolHandler {
 		},
 		{
 			Tool: mcpTool{
+				Name:        "wait_task",
+				Title:       "等待任务完成",
+				Description: "服务端轮询任务状态，直到终态（completed / failed / cancelled / paused）或本次调用超时。超时返回 finished=false 与当前进度，请再次调用本工具继续等待——本服务是无状态 JSON-RPC，没有任务完成推送，wait_task 是 agent 感知任务结束的唯一通道。只读。",
+				InputSchema: inputSchema(map[string]any{
+					"task_id": taskIDProp,
+					"timeout_seconds": map[string]any{
+						"type": "integer", "minimum": 1, "maximum": 90, "default": 30,
+						"description": "本次调用最长等待秒数；MCP 客户端 HTTP 超时通常 120s，不要设超过 90",
+					},
+					"poll_interval_seconds": map[string]any{
+						"type": "integer", "minimum": 1, "maximum": 10, "default": 2,
+					},
+				}, "task_id"),
+				Annotations: readOnlyAnnotations(),
+			},
+			Scopes: []string{ScopeTasksRead},
+			Run: func(ctx context.Context, key *repo.APIKey, args json.RawMessage) *mcpToolResult {
+				return s.waitTask(ctx, key, args)
+			},
+		},
+		{
+			Tool: mcpTool{
 				Name:        "create_task",
 				Title:       "创建扫描任务",
-				Description: "创建扫描任务（pending 状态并入队，需再调用 start_task 才会执行）。写操作。targets 非空；type 建议使用 full / asset_discovery / port_scan / subdomain / fingerprint / vuln_scan / dir_scan / crawler / takeover。",
+				Description: "创建扫描任务（pending 状态并入队，需再调用 start_task 才会执行）。写操作。targets 非空；type 建议使用 full / asset_discovery / port_scan / subdomain / fingerprint / vuln_scan / dir_scan / crawler / takeover。推荐链路：create_task → start_task → wait_task（超时就再调）→ get_task_results。",
 				InputSchema: inputSchema(map[string]any{
 					"project_id":   projectIDProp,
 					"name":         map[string]any{"type": "string"},
@@ -123,7 +146,7 @@ func (s *MCPService) taskTools() []mcpToolHandler {
 			Tool: mcpTool{
 				Name:        "start_task",
 				Title:       "启动任务",
-				Description: "把 pending/paused 任务置为 running 并交给后台 worker 执行。会发起真实扫描。",
+				Description: "把 pending/paused 任务置为 running 并交给后台 worker 执行。会发起真实扫描。启动后用 wait_task 等待终态。",
 				InputSchema: inputSchema(map[string]any{"task_id": taskIDProp}, "task_id"),
 				Annotations: writeAnnotations(false),
 			},
@@ -314,6 +337,73 @@ func (s *MCPService) getTask(ctx context.Context, key *repo.APIKey, raw json.Raw
 		return toolError(err.Error())
 	}
 	return toolOK(task)
+}
+
+// waitTask 服务端轮询任务状态直到终态或本次调用超时。
+// 平台 MCP 是无状态 JSON-RPC（无 SSE 推送），agent 感知任务完成只能靠它：
+// 终态返回 finished=true；超时返回 finished=false + 当前进度，agent 再调一次即可续等。
+// timeout_seconds 上限 90s：MCP 客户端的 HTTP 超时普遍是 120s，要留出余量。
+func (s *MCPService) waitTask(ctx context.Context, key *repo.APIKey, raw json.RawMessage) *mcpToolResult {
+	var args struct {
+		TaskID          string `json:"task_id"`
+		TimeoutSeconds  int    `json:"timeout_seconds"`
+		PollIntervalSec int    `json:"poll_interval_seconds"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return toolError(err.Error())
+	}
+	if args.TimeoutSeconds <= 0 {
+		args.TimeoutSeconds = 30
+	}
+	if args.TimeoutSeconds > 90 {
+		args.TimeoutSeconds = 90
+	}
+	if args.PollIntervalSec <= 0 {
+		args.PollIntervalSec = 2
+	}
+	if args.PollIntervalSec > 10 {
+		args.PollIntervalSec = 10
+	}
+
+	deadline := time.Now().Add(time.Duration(args.TimeoutSeconds) * time.Second)
+	started := time.Now()
+	for {
+		task, err := s.taskFor(ctx, key, args.TaskID)
+		if err != nil {
+			return toolError(err.Error())
+		}
+
+		out := map[string]any{
+			"task_id":        task.ID.Hex(),
+			"status":         task.Status,
+			"progress":       task.Progress,
+			"waited_seconds": int(time.Since(started).Seconds()),
+		}
+		switch task.Status {
+		case models.TaskStatusCompleted, models.TaskStatusFailed,
+			models.TaskStatusCancelled, models.TaskStatusPaused:
+			out["finished"] = true
+			if task.Status == models.TaskStatusFailed && strings.TrimSpace(task.LastError) != "" {
+				out["last_error"] = task.LastError
+			}
+			out["next"] = "用 get_task_results 读取结果"
+			return toolOK(out)
+		}
+
+		if !time.Now().Before(deadline) || ctx.Err() != nil {
+			out["finished"] = false
+			out["next"] = "任务尚未到终态，请再次调用 wait_task 继续等待"
+			return toolOK(out)
+		}
+
+		select {
+		case <-ctx.Done():
+			out["finished"] = false
+			out["next"] = "调用被中断，请再次调用 wait_task 继续等待"
+			return toolOK(out)
+		case <-time.After(time.Duration(args.PollIntervalSec) * time.Second):
+		}
+	}
 }
 
 func (s *MCPService) createTask(ctx context.Context, key *repo.APIKey, raw json.RawMessage) *mcpToolResult {
