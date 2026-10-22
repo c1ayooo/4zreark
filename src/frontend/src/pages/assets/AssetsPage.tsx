@@ -304,6 +304,9 @@ export default function AssetsPage() {
   const cursor = cursorStack[cursorStack.length - 1]
   const clusterView = view === 'icons' || view === 'technologies'
   const riskSort = sort === 'risk' && (kind === 'domain' || kind === 'ip' || (kind === 'site' && siteGroup))
+  // 排序适用于：站点归并 / 域名 / IP，且不在聚类视图。工具栏控件常驻渲染、
+  // 按需禁用——任何切换都不改变工具栏的几何形状（高度、位置零变化）。
+  const sortApplicable = !clusterView && (kind === 'domain' || kind === 'ip' || (kind === 'site' && siteGroup))
 
   // 聚类下钻：把图标/技术栈变成资产列表的过滤条件，回到站点粒度看命中的资产。
   const drillDown = (expr: string) => {
@@ -1020,21 +1023,26 @@ export default function AssetsPage() {
           <span className="text-[13px] text-muted-foreground">视图</span>
           <Segmented value={view} options={VIEWS} onChange={changeView} />
         </div>
-        {kind === 'site' && (
-          <label className="flex items-center gap-2 text-[13px] text-muted-foreground">
-            <Checkbox
-              checked={siteGroup}
-              onCheckedChange={(v) => { setSiteGroup(v === true); setPage(1) }}
-            />
-            按站点归并
-          </label>
-        )}
-        {(kind === 'domain' || kind === 'ip' || (kind === 'site' && siteGroup)) && (
-          <div className="flex items-center gap-2">
-            <span className="text-[13px] text-muted-foreground">排序</span>
-            <Segmented value={sort} options={SORTS} onChange={(v) => { setSort(v); setPage(1) }} />
-          </div>
-        )}
+        <label
+          className={
+            'flex items-center gap-2 text-[13px] ' +
+            (kind === 'site' ? 'text-muted-foreground' : 'text-muted-foreground/50')
+          }
+          title={kind === 'site' ? undefined : '仅站点粒度支持按站点归并'}
+        >
+          <Checkbox
+            checked={siteGroup}
+            disabled={kind !== 'site'}
+            onCheckedChange={(v) => { setSiteGroup(v === true); setPage(1) }}
+          />
+          按站点归并
+        </label>
+        <div className="flex items-center gap-2">
+          <span className={'text-[13px] ' + (sortApplicable ? 'text-muted-foreground' : 'text-muted-foreground/50')}>
+            排序
+          </span>
+          <Segmented value={sort} options={SORTS} disabled={!sortApplicable} onChange={(v) => { setSort(v); setPage(1) }} />
+        </div>
         <div className="flex items-center gap-2">
           <span className="text-[13px] text-muted-foreground">每页</span>
           <Select
