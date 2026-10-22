@@ -39,3 +39,28 @@ func TestIsNoisyCrawlerURL(t *testing.T) {
 		}
 	}
 }
+
+func TestInterfaceReason(t *testing.T) {
+	cases := []struct {
+		name        string
+		url         string
+		method      string
+		contentType string
+		attribute   string
+		want        string
+	}{
+		{"api prefix", "https://example.com/api/v1/users", "GET", "text/html", "href", "path"},
+		{"no api prefix path", "https://example.com/gateway/order/list", "GET", "", "", "path"},
+		{"query string", "https://example.com/category/allData?type=1", "GET", "", "", "query"},
+		{"post method", "https://example.com/submit", "POST", "", "", "method"},
+		{"json response", "https://example.com/report", "GET", "application/json; charset=utf-8", "", "content_type"},
+		{"jsluice fetch", "https://career.example.com/category/allData", "GET", "", "jsluice-fetch", "jsluice"},
+		{"plain page", "https://example.com/about", "GET", "text/html", "href", ""},
+		{"segment must be exact", "https://example.com/restaurant/1", "GET", "", "", ""},
+	}
+	for _, tc := range cases {
+		if got := InterfaceReason(tc.url, tc.method, tc.contentType, tc.attribute); got != tc.want {
+			t.Errorf("%s: InterfaceReason(%q) = %q，期望 %q", tc.name, tc.url, got, tc.want)
+		}
+	}
+}

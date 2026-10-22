@@ -1,6 +1,7 @@
 package webscan
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -37,6 +38,30 @@ func TestKatanaCommonArgsIncludeFieldScope(t *testing.T) {
 	}
 	if !jsCrawl || !jsluice {
 		t.Fatalf("katana 需要同时开启 -jc 和 -jsl: %v", args)
+	}
+}
+
+func TestKatanaCrawledURLKeepsDiscoverySource(t *testing.T) {
+	var out KatanaJSONOutput
+	line := `{"timestamp":"t","request":{"method":"get","endpoint":"https://career.example.com/category/allData","tag":"script","attribute":"jsluice-fetch","source":"https://example.com"},"response":{"status_code":200,"headers":{"content-type":"application/json; charset=utf-8"},"content_length":1234}}`
+	if err := json.Unmarshal([]byte(line), &out); err != nil {
+		t.Fatal(err)
+	}
+	got := katanaCrawledURL(out)
+	if got.Method != "GET" {
+		t.Errorf("method = %q，期望 GET", got.Method)
+	}
+	if got.Tag != "script" || got.Attribute != "jsluice-fetch" {
+		t.Errorf("发现来源丢失: tag=%q attribute=%q", got.Tag, got.Attribute)
+	}
+	if got.Source != "https://example.com" {
+		t.Errorf("来源页面 = %q", got.Source)
+	}
+	if got.ContentType != "application/json; charset=utf-8" {
+		t.Errorf("content-type = %q", got.ContentType)
+	}
+	if got.Length != 1234 {
+		t.Errorf("length = %d", got.Length)
 	}
 }
 

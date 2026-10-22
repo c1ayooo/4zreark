@@ -36,23 +36,56 @@ type KatanaResult struct {
 
 // KatanaCrawledURL 爬取到的URL
 type KatanaCrawledURL struct {
-	URL        string `json:"url"`
-	Method     string `json:"method,omitempty"`
-	StatusCode int    `json:"status_code,omitempty"`
-	Source     string `json:"source,omitempty"` // 来源：form, script, link, etc.
+	URL         string `json:"url"`
+	Method      string `json:"method,omitempty"`
+	StatusCode  int    `json:"status_code,omitempty"`
+	Source      string `json:"source,omitempty"` // 来源页面：form, script, link, etc.
+	Tag         string `json:"tag,omitempty"`    // 发现该 URL 的 HTML 标签
+	Attribute   string `json:"attribute,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	Length      int64  `json:"length,omitempty"`
 }
 
 // KatanaJSONOutput Katana JSON 输出格式
 type KatanaJSONOutput struct {
 	Timestamp string `json:"timestamp"`
 	Request   struct {
-		Method   string `json:"method"`
-		Endpoint string `json:"endpoint"`
-		Raw      string `json:"raw"`
+		Method    string `json:"method"`
+		Endpoint  string `json:"endpoint"`
+		Raw       string `json:"raw"`
+		Tag       string `json:"tag"`
+		Attribute string `json:"attribute"`
+		Source    string `json:"source"`
 	} `json:"request"`
 	Response struct {
-		StatusCode int `json:"status_code"`
+		StatusCode    int               `json:"status_code"`
+		Headers       map[string]string `json:"headers"`
+		ContentLength int64             `json:"content_length"`
 	} `json:"response"`
+}
+
+// katanaCrawledURL 把一行 JSON 输出转成内部结构。
+// tag/attribute 是接口判定的一部分：jsluice-fetch 这类来源比路径前缀可靠。
+func katanaCrawledURL(out KatanaJSONOutput) KatanaCrawledURL {
+	return KatanaCrawledURL{
+		URL:         strings.TrimSpace(out.Request.Endpoint),
+		Method:      strings.ToUpper(strings.TrimSpace(out.Request.Method)),
+		StatusCode:  out.Response.StatusCode,
+		Source:      out.Request.Source,
+		Tag:         out.Request.Tag,
+		Attribute:   out.Request.Attribute,
+		ContentType: headerValue(out.Response.Headers, "Content-Type"),
+		Length:      out.Response.ContentLength,
+	}
+}
+
+func headerValue(headers map[string]string, name string) string {
+	for k, v := range headers {
+		if strings.EqualFold(k, name) {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 // NewKatanaScanner 创建 Katana 扫描器
@@ -159,14 +192,10 @@ func (k *KatanaScanner) Crawl(ctx context.Context, target string) (*KatanaResult
 			// 尝试解析 JSON 格式
 			var jsonOutput KatanaJSONOutput
 			if err := json.Unmarshal([]byte(line), &jsonOutput); err == nil {
-				url := jsonOutput.Request.Endpoint
-				if url != "" && !seen[url] {
-					seen[url] = true
-					result.URLs = append(result.URLs, KatanaCrawledURL{
-						URL:        url,
-						Method:     jsonOutput.Request.Method,
-						StatusCode: jsonOutput.Response.StatusCode,
-					})
+				crawled := katanaCrawledURL(jsonOutput)
+				if crawled.URL != "" && !seen[crawled.URL] {
+					seen[crawled.URL] = true
+					result.URLs = append(result.URLs, crawled)
 				}
 			} else if !seen[line] {
 				// 纯文本格式（每行一个URL）
@@ -268,33 +297,28 @@ func (k *KatanaScanner) CrawlList(ctx context.Context, urls []string) (*KatanaRe
 	}
 	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
+	// 与单目标模式一致：jsonl 单行可能超过 bufio.Scanner 的 64KB 上限。
+	reader := bufio.NewReaderSize(file, 1<<20)
 	seen := make(map[string]bool)
 
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-
-		var jsonOutput KatanaJSONOutput
-		if err := json.Unmarshal([]byte(line), &jsonOutput); err == nil {
-			url := jsonOutput.Request.Endpoint
-			if url != "" && !seen[url] {
-				seen[url] = true
-				result.URLs = append(result.URLs, KatanaCrawledURL{
-					URL:        url,
-					Method:     jsonOutput.Request.Method,
-					StatusCode: jsonOutput.Response.StatusCode,
-				})
-			}
-		} else {
-			if !seen[line] {
+	for {
+		line, readErr := reader.ReadString('\n')
+		line = strings.TrimSpace(line)
+		if line != "" {
+			var jsonOutput KatanaJSONOutput
+			if err := json.Unmarshal([]byte(line), &jsonOutput); err == nil {
+				crawled := katanaCrawledURL(jsonOutput)
+				if crawled.URL != "" && !seen[crawled.URL] {
+					seen[crawled.URL] = true
+					result.URLs = append(result.URLs, crawled)
+				}
+			} else if !seen[line] {
 				seen[line] = true
-				result.URLs = append(result.URLs, KatanaCrawledURL{
-					URL: line,
-				})
+				result.URLs = append(result.URLs, KatanaCrawledURL{URL: line})
 			}
+		}
+		if readErr != nil {
+			break
 		}
 	}
 

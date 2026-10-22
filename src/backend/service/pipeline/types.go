@@ -97,7 +97,12 @@ type UrlResult struct {
 	StatusCode  int    `json:"status_code"`  // HTTP状态码
 	ContentType string `json:"content_type"` // 内容类型
 	Length      int64  `json:"length"`       // 响应长度
-	ResultId    string `json:"result_id"`    // 结果ID (用于去重)
+	// 发现位置：页面里的哪个标签/属性、来自哪个页面。
+	// jsluice-fetch / xhr 这类来源是接口判定最可靠的信号。
+	Tag       string `json:"tag,omitempty"`
+	Attribute string `json:"attribute,omitempty"`
+	Referrer  string `json:"referrer,omitempty"`
+	ResultId  string `json:"result_id"` // 结果ID (用于去重)
 }
 
 // SensitiveInfoResult 敏感信息检测结果

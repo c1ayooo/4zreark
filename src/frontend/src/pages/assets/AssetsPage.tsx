@@ -109,6 +109,7 @@ const VIEWS: { value: AssetView; label: string }[] = [
   { value: '', label: '缺省' },
   { value: 'clues', label: '线索' },
   { value: 'lost', label: '失联' },
+  { value: 'interfaces', label: '接口' },
   { value: 'icons', label: '图标' },
   { value: 'technologies', label: '技术栈' },
 ]
@@ -182,6 +183,7 @@ export default function AssetsPage() {
   const [detailSite, setDetailSite] = useState<Site | null>(null)
   const [detailTab, setDetailTab] = useState<'overview' | 'endpoints' | 'records' | 'fingerprints' | 'verifications'>('overview')
   const [recordsCursorStack, setRecordsCursorStack] = useState<Array<string | undefined>>([undefined])
+  const [recordsInterfaceOnly, setRecordsInterfaceOnly] = useState(false)
   const recordsCursor = recordsCursorStack[recordsCursorStack.length - 1]
   const cursor = cursorStack[cursorStack.length - 1]
   const clusterView = view === 'icons' || view === 'technologies'
@@ -253,8 +255,13 @@ export default function AssetsPage() {
   })
   const detail = detailQuery.data?.data
   const recordsQuery = useQuery({
-    queryKey: ['asset-records', detailSite?.id, recordsCursor],
-    queryFn: () => assetApi.records(detailSite!.id, { cursor: recordsCursor ?? '', limit: 50 }),
+    queryKey: ['asset-records', detailSite?.id, recordsCursor, recordsInterfaceOnly],
+    queryFn: () =>
+      assetApi.records(detailSite!.id, {
+        cursor: recordsCursor ?? '',
+        limit: 50,
+        ...(recordsInterfaceOnly ? { interface: 1 as const } : {}),
+      }),
     enabled: !!detailSite && detailTab === 'records',
     staleTime: 30_000,
   })
@@ -264,6 +271,7 @@ export default function AssetsPage() {
   useEffect(() => {
     setDetailTab('overview')
     setRecordsCursorStack([undefined])
+    setRecordsInterfaceOnly(false)
   }, [detailSite?.id])
 
   const iconClusters = useQuery({
@@ -634,6 +642,14 @@ export default function AssetsPage() {
         </div>
       )}
 
+      {view === 'interfaces' && (
+        <div className="rounded border bg-muted/40 px-3 py-2 text-[13px] text-muted-foreground">
+          接口候选不要求 <span className="font-mono">/api</span> 前缀：非 GET 方法、JSON 响应、
+          jsluice 来源、带查询串或接口路径段（graphql / gateway / rest 等）都会命中。
+          {kind === 'site' ? '当前列出含接口的站点，切换粒度到「原始记录」可看具体 URL。' : ''}
+        </div>
+      )}
+
       {view === 'icons' && (
         <div className="space-y-3">
           <p className="text-[13px] text-muted-foreground">
@@ -721,7 +737,7 @@ export default function AssetsPage() {
                   </TableHead>
                 )}
                 <TableHead>{expanded ? '入口' : kind === 'site' ? '资产' : kind === 'domain' ? '域名' : kind === 'record' ? '原始记录' : 'IP'}</TableHead>
-                {kind === 'record' && <TableHead className="w-[90px]">来源</TableHead>}
+                {kind === 'record' && <TableHead className="w-[110px]">来源 / 方法</TableHead>}
                 {kind === 'record' && <TableHead className="w-[90px] text-right">状态码</TableHead>}
                 {kind === 'record' && <TableHead>标题</TableHead>}
                 {kind === 'record' && <TableHead className="w-[150px]">IP / 服务</TableHead>}
@@ -867,14 +883,22 @@ export default function AssetsPage() {
                     onClick={() => r.site_id > 0 && navigate(`/assets/${r.site_id}`)}
                   >
                     <TableCell>
-                      <div className="break-all text-sm font-medium">
-                        {r.value || `${r.protocol}://${r.host}:${r.port}`}
+                      <div className="flex items-start gap-1.5">
+                        <div className="break-all text-sm font-medium">
+                          {r.value || `${r.protocol}://${r.host}:${r.port}`}
+                        </div>
+                        {r.is_interface && (
+                          <Badge variant="outline" className="shrink-0 text-[11px]">接口</Badge>
+                        )}
                       </div>
                       <div className="text-xs text-muted-foreground">
                         {r.host}:{r.port} · {r.protocol}
                       </div>
                     </TableCell>
-                    <TableCell className="text-[13px] text-muted-foreground">{r.source || '—'}</TableCell>
+                    <TableCell className="text-[13px] text-muted-foreground">
+                      <div>{r.source || '—'}</div>
+                      <div className="text-[11px]">{r.method || 'GET'}</div>
+                    </TableCell>
                     <TableCell className="text-right">
                       <Badge variant={r.status_code >= 200 && r.status_code < 400 ? 'default' : 'secondary'}>
                         {r.status_code || '—'}
@@ -1095,6 +1119,16 @@ export default function AssetsPage() {
 
                   {detailTab === 'records' && (
                     <div className="space-y-3">
+                      <label className="flex items-center gap-2 text-[13px] text-muted-foreground">
+                        <Checkbox
+                          checked={recordsInterfaceOnly}
+                          onCheckedChange={(v) => {
+                            setRecordsInterfaceOnly(v === true)
+                            setRecordsCursorStack([undefined])
+                          }}
+                        />
+                        只看接口
+                      </label>
                       {recordsQuery.isLoading ? (
                         <p className="text-sm text-muted-foreground">加载原始记录…</p>
                       ) : records.length === 0 ? (
@@ -1113,12 +1147,20 @@ export default function AssetsPage() {
                               {records.map((r) => (
                                 <TableRow key={r.id}>
                                   <TableCell className="max-w-[270px] break-all font-mono text-xs">
-                                    {r.value}
+                                    <div className="flex items-start gap-1">
+                                      <span>{r.value}</span>
+                                      {r.is_interface && (
+                                        <Badge variant="outline" className="shrink-0 text-[10px]">接口</Badge>
+                                      )}
+                                    </div>
                                     <div className="mt-0.5 text-[11px] text-muted-foreground">
                                       {formatDate(r.observed_at)}
                                     </div>
                                   </TableCell>
-                                  <TableCell className="text-xs text-muted-foreground">{r.source}</TableCell>
+                                  <TableCell className="text-xs text-muted-foreground">
+                                    <div>{r.source}</div>
+                                    <div>{r.method || 'GET'}</div>
+                                  </TableCell>
                                   <TableCell className="text-right text-xs tabular-nums">{r.status_code || '—'}</TableCell>
                                 </TableRow>
                               ))}

@@ -1089,7 +1089,7 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 			})
 			// 爬虫/目录扫描发现的 URL 也进资产：站点仍按 host 归并，路径作为原始记录。
 			if ingestURLs {
-				if rec, ok := rawRecordFromScan(r.Output, "", "https", r.StatusCode, "", "", nil); ok && taskScope.AllowsHost(rec.Host) {
+				if rec, ok := rawRecordFromCrawl(r); ok && taskScope.AllowsHost(rec.Host) {
 					assetRecords = append(assetRecords, rec)
 				}
 			}
@@ -1123,6 +1123,9 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 					"content_type": r.ContentType,
 					"length":       r.Length,
 					"size":         r.Length, // 兼容前端
+					"tag":          r.Tag,
+					"attribute":    r.Attribute,
+					"referrer":     r.Referrer,
 				},
 				CreatedAt: time.Now(),
 			}
@@ -1468,6 +1471,38 @@ func rawRecordFromScan(rawURL, host, defaultProto string, status int, title, ip 
 		Tech:       tech,
 		Evidence:   evidence,
 	}, true
+}
+
+// rawRecordFromCrawl 在原始 URL 记录上补采集来源（方法/标签/内容类型/上级页面），
+// 并给出接口候选标记。接口判定不要求 /api 前缀，历史记录也能靠查询串/路径段命中。
+func rawRecordFromCrawl(r pipeline.UrlResult) (repo.RawRecord, bool) {
+	rec, ok := rawRecordFromScan(r.Output, "", "https", r.StatusCode, "", "", nil)
+	if !ok {
+		return repo.RawRecord{}, false
+	}
+	if rec.Evidence == nil {
+		rec.Evidence = map[string]any{}
+	}
+	if method := strings.ToUpper(strings.TrimSpace(r.Method)); method != "" {
+		rec.Evidence["method"] = method
+	}
+	if r.ContentType != "" {
+		rec.Evidence["content_type"] = r.ContentType
+	}
+	if r.Tag != "" {
+		rec.Evidence["tag"] = r.Tag
+	}
+	if r.Attribute != "" {
+		rec.Evidence["attribute"] = r.Attribute
+	}
+	if r.Referrer != "" {
+		rec.Evidence["referrer"] = r.Referrer
+	}
+	if reason := scope.InterfaceReason(r.Output, r.Method, r.ContentType, r.Attribute); reason != "" {
+		rec.Evidence["is_interface"] = true
+		rec.Evidence["interface_reason"] = reason
+	}
+	return rec, true
 }
 
 // rawRecordFromPort 把开放端口转成资产原始记录。

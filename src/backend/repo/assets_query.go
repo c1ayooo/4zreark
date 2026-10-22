@@ -104,6 +104,8 @@ type RawRecordRow struct {
 	Title        string    `json:"title"`
 	IP           string    `json:"ip"`
 	Server       string    `json:"server"`
+	Method       string    `json:"method"`
+	IsInterface  bool      `json:"is_interface"`
 	Tech         []string  `json:"technology_stack"`
 	ObservedAt   time.Time `json:"observed_at"`
 	ResourceType string    `json:"resource_type"`
@@ -177,6 +179,21 @@ func (w *whereBuilder) String() string {
 	return strings.Join(w.parts, " AND ")
 }
 
+// interfacePredicateSQL 是接口候选的统一判定，别名由调用方替换。
+// 不依赖 /api 前缀：方法、JSON 内容类型、jsluice 来源、查询串和路径段都算信号。
+// 历史记录没有 evidence 时，查询串与路径段仍然有效。
+const interfacePredicateSQL = `(coalesce({{a}}.evidence->>'is_interface','') = 'true'
+	OR upper(coalesce({{a}}.evidence->>'method','GET')) NOT IN ('','GET','HEAD','OPTIONS')
+	OR lower(coalesce({{a}}.evidence->>'attribute','')) IN ('jsluice-fetch','jsluice-xhr','jsluice-ajax','jsluice-axios')
+	OR lower(coalesce({{a}}.evidence->>'content_type','')) LIKE 'application/json%'
+	OR lower(coalesce({{a}}.evidence->>'content_type','')) LIKE '%+json%'
+	OR {{a}}.value ~ '[?&][^=&#]+='
+	OR {{a}}.value ~* '/(api|ajax|graphql|gql|rest|rpc|json|openapi|swagger|gateway)(/|\?|$)')`
+
+func interfacePredicate(alias string) string {
+	return strings.ReplaceAll(interfacePredicateSQL, "{{a}}", alias)
+}
+
 // buildAssetWhere 把三层维度与 DSL 合成 WHERE（别名固定为 s）。
 func (a *AssetRepo) buildAssetWhere(q AssetQuery) (*whereBuilder, error) {
 	w := newWhereBuilder(1)
@@ -202,6 +219,9 @@ func (a *AssetRepo) buildAssetWhere(q AssetQuery) (*whereBuilder, error) {
 		w.parts = append(w.parts, "s.verification_status = 'pending' AND s.attempts = 0")
 	case "candidates":
 		w.parts = append(w.parts, "(s.state = 'pending' OR s.verification_status IN ('pending','failed'))")
+	case "interfaces":
+		w.parts = append(w.parts,
+			"EXISTS (SELECT 1 FROM raw_records rr WHERE rr.site_id = s.id AND "+interfacePredicate("rr")+")")
 	}
 
 	if strings.TrimSpace(q.Q) != "" {
@@ -413,7 +433,7 @@ func (a *AssetRepo) listSiteRowsCursor(ctx context.Context, w *whereBuilder, q A
 		return nil, "", false, err
 	}
 	next := ""
-	if len(out) > 0 {
+	if hasMore && len(out) > 0 {
 		last := out[len(out)-1]
 		next = encodeAssetCursor(strconv.FormatInt(last.FirstSeen.UnixNano(), 10), strconv.FormatInt(last.ID, 10))
 	}
@@ -474,7 +494,7 @@ func (a *AssetRepo) listDomainsCursor(ctx context.Context, w *whereBuilder, q As
 		out = out[:q.PageSize]
 	}
 	next := ""
-	if len(out) > 0 {
+	if hasMore && len(out) > 0 {
 		last := out[len(out)-1]
 		next = encodeAssetCursor(strconv.FormatInt(last.SiteCount, 10), last.Host)
 	}
@@ -532,7 +552,7 @@ func (a *AssetRepo) listIPsCursor(ctx context.Context, w *whereBuilder, q AssetQ
 		out = out[:q.PageSize]
 	}
 	next := ""
-	if len(out) > 0 {
+	if hasMore && len(out) > 0 {
 		last := out[len(out)-1]
 		next = encodeAssetCursor(strconv.FormatInt(last.SiteCount, 10), last.IP)
 	}
@@ -558,6 +578,8 @@ func (a *AssetRepo) buildRecordWhere(q AssetQuery) *whereBuilder {
 		w.parts = append(w.parts, "s.verification_status = 'pending' AND s.attempts = 0")
 	case "candidates":
 		w.parts = append(w.parts, "(s.state = 'pending' OR s.verification_status IN ('pending','failed'))")
+	case "interfaces":
+		w.parts = append(w.parts, interfacePredicate("r"))
 	}
 	if strings.TrimSpace(q.Q) != "" {
 		pattern := likePattern(q.Q)
@@ -569,9 +591,12 @@ func (a *AssetRepo) buildRecordWhere(q AssetQuery) *whereBuilder {
 	return w
 }
 
-const rawRecordColumns = `r.id, coalesce(r.site_id,0), r.project_id, coalesce(p.code,''), coalesce(p.name,''),
+func rawRecordColumns() string {
+	return `r.id, coalesce(r.site_id,0), r.project_id, coalesce(p.code,''), coalesce(p.name,''),
 	r.source, r.host, r.port, r.protocol, r.value, r.status_code, coalesce(r.title,''),
-	coalesce(r.ip::text,''), r.server, r.tech, r.observed_at`
+	coalesce(r.ip::text,''), r.server, r.tech, coalesce(r.evidence->>'method',''),
+	` + interfacePredicate("r") + `, r.observed_at`
+}
 
 func scanRawRecord(scan func(...any) error) (*RawRecordRow, error) {
 	var (
@@ -580,7 +605,7 @@ func scanRawRecord(scan func(...any) error) (*RawRecordRow, error) {
 	)
 	if err := scan(&row.ID, &row.SiteID, &row.ProjectID, &row.ProjectCode, &row.ProjectName,
 		&row.Source, &row.Host, &row.Port, &row.Protocol, &row.Value, &row.StatusCode,
-		&row.Title, &row.IP, &row.Server, &tech, &row.ObservedAt); err != nil {
+		&row.Title, &row.IP, &row.Server, &tech, &row.Method, &row.IsInterface, &row.ObservedAt); err != nil {
 		return nil, err
 	}
 	row.Tech = stringArrayFromJSON(tech)
@@ -604,7 +629,7 @@ func (a *AssetRepo) listRawRecords(ctx context.Context, q AssetQuery) ([]*RawRec
 		LEFT JOIN sites s ON s.id = r.site_id
 		JOIN projects p ON p.id = r.project_id
 		WHERE %s ORDER BY r.observed_at DESC, r.id DESC LIMIT $%d OFFSET $%d`,
-		rawRecordColumns, w.String(), len(args)-1, len(args))
+		rawRecordColumns(), w.String(), len(args)-1, len(args))
 	rows, err := a.r.pool.Query(ctx, stmt, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("查询原始记录失败: %w", err)
@@ -649,7 +674,7 @@ func (a *AssetRepo) listRawRecordsCursor(ctx context.Context, q AssetQuery) ([]*
 		LEFT JOIN sites s ON s.id = r.site_id
 		JOIN projects p ON p.id = r.project_id
 		WHERE %s ORDER BY r.observed_at DESC, r.id DESC LIMIT $%d`,
-		rawRecordColumns, where, len(args))
+		rawRecordColumns(), where, len(args))
 	rows, err := a.r.pool.Query(ctx, stmt, args...)
 	if err != nil {
 		return nil, "", false, fmt.Errorf("查询原始记录失败: %w", err)
@@ -671,7 +696,7 @@ func (a *AssetRepo) listRawRecordsCursor(ctx context.Context, q AssetQuery) ([]*
 		out = out[:q.PageSize]
 	}
 	next := ""
-	if len(out) > 0 {
+	if hasMore && len(out) > 0 {
 		last := out[len(out)-1]
 		next = encodeAssetCursor(strconv.FormatInt(last.ObservedAt.UnixNano(), 10), strconv.FormatInt(last.ID, 10))
 	}

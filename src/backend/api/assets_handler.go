@@ -234,7 +234,8 @@ func (h *AssetHandler) GetAsset(c *gin.Context) {
 	utils.Success(c, detail)
 }
 
-// ListSiteRecords 站点原始记录分页：GET /api/assets/:id/records?cursor=&limit=50
+// ListSiteRecords 站点原始记录分页：GET /api/assets/:id/records?cursor=&limit=50&interface=1
+// interface=1 只返回接口候选（方法/JSON/jsluice/查询串/路径段判定，不要求 /api 前缀）。
 func (h *AssetHandler) ListSiteRecords(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -242,7 +243,8 @@ func (h *AssetHandler) ListSiteRecords(c *gin.Context) {
 		return
 	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
-	items, next, more, err := h.assets.ListSiteRecords(c.Request.Context(), id, c.Query("cursor"), limit)
+	interfaceOnly := c.Query("interface") == "1" || c.Query("interface") == "true"
+	items, next, more, err := h.assets.ListSiteRecords(c.Request.Context(), id, c.Query("cursor"), limit, interfaceOnly)
 	if err != nil {
 		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
 		return

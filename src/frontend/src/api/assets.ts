@@ -115,7 +115,7 @@ export interface ConnectivityPolicy {
 
 export type AssetKind = 'site' | 'domain' | 'ip' | 'record'
 export type AssetCatalog = 'all' | 'verified' | 'candidates'
-export type AssetView = '' | 'clues' | 'candidates' | 'lost' | 'icons' | 'technologies' | 'apps' | 'media'
+export type AssetView = '' | 'clues' | 'candidates' | 'lost' | 'interfaces' | 'icons' | 'technologies' | 'apps' | 'media'
 
 export interface RawRecordRow {
   id: number
@@ -132,6 +132,8 @@ export interface RawRecordRow {
   title: string
   ip: string
   server: string
+  method: string
+  is_interface: boolean
   technology_stack: string[]
   observed_at: string
   resource_type: 'record'
@@ -253,7 +255,7 @@ export const assetApi = {
   /** 资产详情：站点 + 入口 + 证据链（验证/指纹/原始记录/事件/关系） */
   detail: (id: number) =>
     api.get<unknown, { code: number; message: string; data: AssetDetail }>(`/assets/${id}`),
-  records: (id: number, params: { cursor?: string; limit?: number } = {}) =>
+  records: (id: number, params: { cursor?: string; limit?: number; interface?: 1 } = {}) =>
     api.get<unknown, { code: number; data: AssetRecordsPage }>(`/assets/${id}/records`, { params }),
   checkQuery: (q: string) =>
     api.get<unknown, { code: number; data: { valid: boolean; compiled: string } }>('/assets/query-check', {
@@ -352,6 +354,8 @@ export interface AssetRawRecord {
   status_code: number
   title: string
   ip: string
+  method: string
+  is_interface: boolean
   evidence: Record<string, unknown>
   observed_at: string
 }

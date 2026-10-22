@@ -71,3 +71,48 @@ func IsNoisyCrawlerURL(raw string) bool {
 	}
 	return false
 }
+
+// interfaceSegments 是路径里常见的接口命名段。只认完整路径段，避免把
+// /restaurant、/apiary 这类普通页面误判成接口。
+var interfaceSegments = map[string]struct{}{
+	"api": {}, "ajax": {}, "graphql": {}, "gql": {}, "rest": {}, "rpc": {},
+	"json": {}, "openapi": {}, "swagger": {}, "gateway": {},
+}
+
+// InterfaceReason 判断一条 URL 是否像接口地址，返回命中原因；空字符串表示不像。
+//
+// 判定刻意不依赖 /api 前缀：很多站点的接口是 /gateway/...、/graphql、/data/...，
+// 或者只是一个带查询串的普通路径。缺少 content-type/tag 的历史记录，
+// 仅凭 URL 也能命中查询串与路径段。
+func InterfaceReason(rawURL, method, contentType, attribute string) string {
+	switch strings.ToUpper(strings.TrimSpace(method)) {
+	case "POST", "PUT", "PATCH", "DELETE":
+		return "method"
+	}
+	ct := strings.ToLower(contentType)
+	if strings.Contains(ct, "json") || strings.Contains(ct, "xml") {
+		return "content_type"
+	}
+	switch strings.ToLower(strings.TrimSpace(attribute)) {
+	case "jsluice-fetch", "jsluice-xhr", "jsluice-ajax", "jsluice-axios":
+		return "jsluice"
+	}
+
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return ""
+	}
+	if u.RawQuery != "" {
+		return "query"
+	}
+	path := strings.ToLower(u.Path)
+	if strings.HasSuffix(path, ".json") {
+		return "path"
+	}
+	for _, seg := range strings.Split(path, "/") {
+		if _, ok := interfaceSegments[seg]; ok {
+			return "path"
+		}
+	}
+	return ""
+}

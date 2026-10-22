@@ -276,11 +276,16 @@ func (m *CrawlerModule) batchCrawlWithKatana(urls []string) {
 	// 发送爬取结果
 	for _, url := range result.URLs {
 		urlResult := UrlResult{
-			Input:      url.Source,
-			Output:     url.URL,
-			Source:     "katana",
-			Method:     url.Method,
-			StatusCode: url.StatusCode,
+			Input:       url.Source,
+			Output:      url.URL,
+			Source:      "katana",
+			Method:      url.Method,
+			StatusCode:  url.StatusCode,
+			ContentType: url.ContentType,
+			Length:      url.Length,
+			Tag:         url.Tag,
+			Attribute:   url.Attribute,
+			Referrer:    url.Source,
 		}
 
 		// URL去重
@@ -436,11 +441,16 @@ func (m *CrawlerModule) crawlWithKatana(target string, asset AssetHttp) {
 			continue
 		}
 		urlResult := UrlResult{
-			Input:      target,
-			Output:     url.URL,
-			Source:     "katana",
-			Method:     url.Method,
-			StatusCode: url.StatusCode,
+			Input:       target,
+			Output:      url.URL,
+			Source:      "katana",
+			Method:      url.Method,
+			StatusCode:  url.StatusCode,
+			ContentType: url.ContentType,
+			Length:      url.Length,
+			Tag:         url.Tag,
+			Attribute:   url.Attribute,
+			Referrer:    url.Source,
 		}
 
 		select {
