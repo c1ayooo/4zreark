@@ -10,6 +10,7 @@ import {
   DomainRow,
   EndpointRow,
   IPRow,
+  RawRecordRow,
   Site,
 } from '@/api/assets'
 import { Button } from '@/components/ui/button'
@@ -91,6 +92,7 @@ const verdictLabel: Record<string, string> = {
 }
 
 const KINDS: { value: AssetKind; label: string }[] = [
+  { value: 'record', label: '原始记录' },
   { value: 'site', label: '站点' },
   { value: 'domain', label: '域名' },
   { value: 'ip', label: 'IP' },
@@ -161,7 +163,7 @@ export default function AssetsPage() {
   const [projectId, setProjectId] = useState<string>(() => searchParams.get('project_id') || '0')
   const [kind, setKind] = useState<AssetKind>(() => {
     const v = searchParams.get('kind')
-    return v === 'domain' || v === 'ip' ? v : 'site'
+    return v === 'domain' || v === 'ip' || v === 'record' ? v : 'record'
   })
   const [catalog, setCatalog] = useState<AssetCatalog>(() => {
     const v = searchParams.get('catalog')
@@ -217,7 +219,7 @@ export default function AssetsPage() {
   const overview = useQuery({ queryKey: ['asset-overview'], queryFn: () => assetApi.overview() })
   const projects = useQuery({ queryKey: ['asset-projects'], queryFn: () => assetApi.projects() })
 
-  const hasFilters = !!appliedQ || kind !== 'site' || catalog !== 'all' || !!view
+  const hasFilters = !!appliedQ || kind !== 'record' || catalog !== 'all' || !!view
 
   // 站点默认/域名/IP 用 keyset；风险排序、展开入口和聚类仍走 page。
   const list = useQuery({
@@ -356,7 +358,7 @@ export default function AssetsPage() {
   const busy = probe.isPending || verify.isPending || protect.isPending
   const expanded = kind === 'site' && !siteGroup
 
-  const colCount = expanded ? 7 : kind === 'site' ? 10 : 5
+  const colCount = expanded ? 7 : kind === 'site' ? 10 : kind === 'record' ? 7 : 5
 
   // 资产多选：选中后可直接对这些资产派新任务（选资产 → 选类型 → 起任务）
   const [selectedHosts, setSelectedHosts] = useState<Set<string>>(new Set())
@@ -510,7 +512,7 @@ export default function AssetsPage() {
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             className="pl-9 font-mono text-sm"
-            placeholder='status_code="200" && domain="example.com"'
+            placeholder={kind === 'record' ? '搜索主机 / URL / 标题' : 'status_code="200" && domain="example.com"'}
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && applyQuery()}
@@ -683,7 +685,13 @@ export default function AssetsPage() {
                     <Checkbox checked={allPageSelected} onCheckedChange={togglePageHosts} aria-label="选中本页资产" />
                   </TableHead>
                 )}
-                <TableHead>{expanded ? '入口' : kind === 'site' ? '资产' : kind === 'domain' ? '域名' : 'IP'}</TableHead>
+                <TableHead>{expanded ? '入口' : kind === 'site' ? '资产' : kind === 'domain' ? '域名' : kind === 'record' ? '原始记录' : 'IP'}</TableHead>
+                {kind === 'record' && <TableHead className="w-[90px]">来源</TableHead>}
+                {kind === 'record' && <TableHead className="w-[90px] text-right">状态码</TableHead>}
+                {kind === 'record' && <TableHead>标题</TableHead>}
+                {kind === 'record' && <TableHead className="w-[150px]">IP / 服务</TableHead>}
+                {kind === 'record' && <TableHead className="w-[170px] text-right">观察时间</TableHead>}
+                {kind === 'record' && <TableHead className="w-[120px]">项目</TableHead>}
                 {kind === 'site' && !expanded && <TableHead className="hidden w-[52px] sm:table-cell">图标</TableHead>}
                 {kind === 'site' && !expanded && <TableHead className="hidden w-[90px] text-right lg:table-cell">风险</TableHead>}
                 {kind === 'site' && !expanded && <TableHead className="hidden w-[90px] text-right sm:table-cell">状态码</TableHead>}
@@ -812,6 +820,39 @@ export default function AssetsPage() {
                     </TableCell>
                     <TableCell className="text-right text-[13px] tabular-nums text-muted-foreground">{e.last_seen?.slice(0, 10)}</TableCell>
                     <TableCell className="text-sm">{e.project_name}</TableCell>
+                  </TableRow>
+                ))}
+
+              {kind === 'record' &&
+                (items as RawRecordRow[]).map((r) => (
+                  <TableRow
+                    key={r.id}
+                    className={r.site_id > 0 ? 'cursor-pointer hover:bg-muted/40' : undefined}
+                    onClick={() => r.site_id > 0 && navigate(`/assets/${r.site_id}`)}
+                  >
+                    <TableCell>
+                      <div className="break-all text-sm font-medium">
+                        {r.value || `${r.protocol}://${r.host}:${r.port}`}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {r.host}:{r.port} · {r.protocol}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-[13px] text-muted-foreground">{r.source || '—'}</TableCell>
+                    <TableCell className="text-right">
+                      <Badge variant={r.status_code >= 200 && r.status_code < 400 ? 'default' : 'secondary'}>
+                        {r.status_code || '—'}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="max-w-[280px] truncate text-sm">{r.title || '—'}</TableCell>
+                    <TableCell className="text-[13px]">
+                      <div>{r.ip || '—'}</div>
+                      {r.server && <div className="text-muted-foreground">{r.server}</div>}
+                    </TableCell>
+                    <TableCell className="text-right text-[13px] tabular-nums text-muted-foreground">
+                      {r.observed_at?.replace('T', ' ').slice(0, 19)}
+                    </TableCell>
+                    <TableCell className="text-[13px]">{r.project_name || '—'}</TableCell>
                   </TableRow>
                 ))}
 

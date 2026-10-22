@@ -88,6 +88,27 @@ type IPRow struct {
 	ResourceType string    `json:"resource_type"`
 }
 
+// RawRecordRow 是「原始记录」粒度的一行：一次采集的证据，不归并。
+type RawRecordRow struct {
+	ID           int64     `json:"id"`
+	SiteID       int64     `json:"site_id"`
+	ProjectID    int64     `json:"project_id"`
+	ProjectCode  string    `json:"project_code"`
+	ProjectName  string    `json:"project_name"`
+	Source       string    `json:"source"`
+	Host         string    `json:"host"`
+	Port         int       `json:"port"`
+	Protocol     string    `json:"protocol"`
+	Value        string    `json:"value"`
+	StatusCode   int       `json:"status_code"`
+	Title        string    `json:"title"`
+	IP           string    `json:"ip"`
+	Server       string    `json:"server"`
+	Tech         []string  `json:"technology_stack"`
+	ObservedAt   time.Time `json:"observed_at"`
+	ResourceType string    `json:"resource_type"`
+}
+
 // EndpointRow 是展开到入口的一行（site_group=0）。
 type EndpointRow struct {
 	SiteID       int64     `json:"site_id"`
@@ -107,7 +128,7 @@ type EndpointRow struct {
 
 func normalizeKind(k string) string {
 	switch k {
-	case "domain", "ip", "site":
+	case "domain", "ip", "site", "record":
 		return k
 	}
 	return "site"
@@ -235,6 +256,25 @@ func (a *AssetRepo) ListAssets(ctx context.Context, q AssetQuery) (*AssetPage, e
 		page.Supported = false
 		page.Note = note
 		page.Items = []any{}
+		page.Policy, _ = a.ConnectivityPolicy(ctx)
+		return page, nil
+	}
+
+	if q.Kind == "record" {
+		page.SiteGroup = true
+		var err error
+		var items []*RawRecordRow
+		var next string
+		var more bool
+		if q.UseCursor {
+			items, next, more, err = a.listRawRecordsCursor(ctx, q)
+		} else {
+			items, page.Total, err = a.listRawRecords(ctx, q)
+		}
+		page.Items, page.NextCursor, page.HasMore = items, next, more
+		if err != nil {
+			return nil, err
+		}
 		page.Policy, _ = a.ConnectivityPolicy(ctx)
 		return page, nil
 	}
@@ -495,6 +535,145 @@ func (a *AssetRepo) listIPsCursor(ctx context.Context, w *whereBuilder, q AssetQ
 	if len(out) > 0 {
 		last := out[len(out)-1]
 		next = encodeAssetCursor(strconv.FormatInt(last.SiteCount, 10), last.IP)
+	}
+	return out, next, hasMore, nil
+}
+
+func (a *AssetRepo) buildRecordWhere(q AssetQuery) *whereBuilder {
+	w := newWhereBuilder(1)
+	if q.ProjectID > 0 {
+		w.parts = append(w.parts, "r.project_id = "+w.ph())
+		w.args = append(w.args, q.ProjectID)
+	}
+	switch normalizeCatalog(q.Catalog) {
+	case "verified":
+		w.parts = append(w.parts, "s.state = 'reachable'")
+	case "candidates":
+		w.parts = append(w.parts, "(s.state = 'pending' OR s.verification_status IN ('pending','failed'))")
+	}
+	switch q.View {
+	case "lost":
+		w.parts = append(w.parts, "s.state = 'lost'")
+	case "clues":
+		w.parts = append(w.parts, "s.verification_status = 'pending' AND s.attempts = 0")
+	case "candidates":
+		w.parts = append(w.parts, "(s.state = 'pending' OR s.verification_status IN ('pending','failed'))")
+	}
+	if strings.TrimSpace(q.Q) != "" {
+		pattern := likePattern(q.Q)
+		w.parts = append(w.parts,
+			"(r.host ILIKE "+w.ph()+" OR r.value ILIKE "+w.ph()+" OR coalesce(r.title,'') ILIKE "+w.ph()+" OR r.evidence::text ILIKE "+w.ph()+")")
+		w.args = append(w.args, pattern, pattern, pattern, pattern)
+		w.next += 4
+	}
+	return w
+}
+
+const rawRecordColumns = `r.id, coalesce(r.site_id,0), r.project_id, coalesce(p.code,''), coalesce(p.name,''),
+	r.source, r.host, r.port, r.protocol, r.value, r.status_code, coalesce(r.title,''),
+	coalesce(r.ip::text,''), r.server, r.tech, r.observed_at`
+
+func scanRawRecord(scan func(...any) error) (*RawRecordRow, error) {
+	var (
+		row  RawRecordRow
+		tech []byte
+	)
+	if err := scan(&row.ID, &row.SiteID, &row.ProjectID, &row.ProjectCode, &row.ProjectName,
+		&row.Source, &row.Host, &row.Port, &row.Protocol, &row.Value, &row.StatusCode,
+		&row.Title, &row.IP, &row.Server, &tech, &row.ObservedAt); err != nil {
+		return nil, err
+	}
+	row.Tech = stringArrayFromJSON(tech)
+	row.ResourceType = "record"
+	return &row, nil
+}
+
+func (a *AssetRepo) listRawRecords(ctx context.Context, q AssetQuery) ([]*RawRecordRow, int64, error) {
+	if q.PageSize < 1 || q.PageSize > 500 {
+		q.PageSize = 20
+	}
+	w := a.buildRecordWhere(q)
+	var total int64
+	if err := a.r.pool.QueryRow(ctx,
+		"SELECT count(*) FROM raw_records r LEFT JOIN sites s ON s.id = r.site_id WHERE "+w.String(),
+		w.args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("统计原始记录失败: %w", err)
+	}
+	args := append(append([]any{}, w.args...), q.PageSize, (q.Page-1)*q.PageSize)
+	stmt := fmt.Sprintf(`SELECT %s FROM raw_records r
+		LEFT JOIN sites s ON s.id = r.site_id
+		JOIN projects p ON p.id = r.project_id
+		WHERE %s ORDER BY r.observed_at DESC, r.id DESC LIMIT $%d OFFSET $%d`,
+		rawRecordColumns, w.String(), len(args)-1, len(args))
+	rows, err := a.r.pool.Query(ctx, stmt, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("查询原始记录失败: %w", err)
+	}
+	defer rows.Close()
+	out := make([]*RawRecordRow, 0, q.PageSize)
+	for rows.Next() {
+		row, err := scanRawRecord(rows.Scan)
+		if err != nil {
+			return nil, 0, fmt.Errorf("解析原始记录失败: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, total, rows.Err()
+}
+
+func (a *AssetRepo) listRawRecordsCursor(ctx context.Context, q AssetQuery) ([]*RawRecordRow, string, bool, error) {
+	if q.PageSize < 1 || q.PageSize > 500 {
+		q.PageSize = 20
+	}
+	w := a.buildRecordWhere(q)
+	where := w.String()
+	args := append([]any{}, w.args...)
+	if q.Cursor != "" {
+		parts, err := decodeAssetCursor(q.Cursor)
+		if err != nil {
+			return nil, "", false, err
+		}
+		nano, err := strconv.ParseInt(parts[0], 10, 64)
+		if err != nil {
+			return nil, "", false, err
+		}
+		id, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil {
+			return nil, "", false, err
+		}
+		args = append(args, time.Unix(0, nano).UTC(), id)
+		where += fmt.Sprintf(" AND (r.observed_at, r.id) < ($%d, $%d)", len(args)-1, len(args))
+	}
+	args = append(args, q.PageSize+1)
+	stmt := fmt.Sprintf(`SELECT %s FROM raw_records r
+		LEFT JOIN sites s ON s.id = r.site_id
+		JOIN projects p ON p.id = r.project_id
+		WHERE %s ORDER BY r.observed_at DESC, r.id DESC LIMIT $%d`,
+		rawRecordColumns, where, len(args))
+	rows, err := a.r.pool.Query(ctx, stmt, args...)
+	if err != nil {
+		return nil, "", false, fmt.Errorf("查询原始记录失败: %w", err)
+	}
+	defer rows.Close()
+	out := make([]*RawRecordRow, 0, q.PageSize+1)
+	for rows.Next() {
+		row, err := scanRawRecord(rows.Scan)
+		if err != nil {
+			return nil, "", false, fmt.Errorf("解析原始记录失败: %w", err)
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", false, err
+	}
+	hasMore := len(out) > q.PageSize
+	if hasMore {
+		out = out[:q.PageSize]
+	}
+	next := ""
+	if len(out) > 0 {
+		last := out[len(out)-1]
+		next = encodeAssetCursor(strconv.FormatInt(last.ObservedAt.UnixNano(), 10), strconv.FormatInt(last.ID, 10))
 	}
 	return out, next, hasMore, nil
 }

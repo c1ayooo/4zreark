@@ -109,12 +109,32 @@ export interface ConnectivityPolicy {
   auto_cleanup: boolean
 }
 
-export type AssetKind = 'site' | 'domain' | 'ip'
+export type AssetKind = 'site' | 'domain' | 'ip' | 'record'
 export type AssetCatalog = 'all' | 'verified' | 'candidates'
 export type AssetView = '' | 'clues' | 'candidates' | 'lost' | 'icons' | 'technologies' | 'apps' | 'media'
 
+export interface RawRecordRow {
+  id: number
+  site_id: number
+  project_id: number
+  project_code: string
+  project_name: string
+  source: string
+  host: string
+  port: number
+  protocol: string
+  value: string
+  status_code: number
+  title: string
+  ip: string
+  server: string
+  technology_stack: string[]
+  observed_at: string
+  resource_type: 'record'
+}
+
 export interface AssetPage {
-  items: (Site | DomainRow | IPRow | EndpointRow)[]
+  items: (Site | DomainRow | IPRow | EndpointRow | RawRecordRow)[]
   total: number
   page: number
   page_size: number
