@@ -173,6 +173,11 @@ func (c *RemoteClient) UpdateTask(ctx context.Context, taskID string, updates ma
 	return c.call(ctx, http.MethodPut, "/api/node/tasks/"+taskID, updates, nil)
 }
 
+// TouchTask 节点活性心跳：只推进任务 updated_at。
+func (c *RemoteClient) TouchTask(ctx context.Context, taskID string) error {
+	return c.call(ctx, http.MethodPut, "/api/node/tasks/"+taskID+"/touch", nil, nil)
+}
+
 func (c *RemoteClient) PostResults(ctx context.Context, taskID string, results []*models.ScanResult) error {
 	return c.call(ctx, http.MethodPost, "/api/node/tasks/"+taskID+"/results",
 		map[string]interface{}{"results": results}, nil)
@@ -228,6 +233,12 @@ func (s *remoteTaskStore) UpdateTask(taskID string, updates map[string]interface
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	return s.client.UpdateTask(ctx, taskID, updates)
+}
+
+func (s *remoteTaskStore) TouchTask(taskID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return s.client.TouchTask(ctx, taskID)
 }
 
 // remoteResultStore 缓存结果并按批上传，避免每条结果一次 HTTP。

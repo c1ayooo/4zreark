@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '@/store/auth'
 import { useAppStore } from '@/store/app'
 import { authApi } from '@/api/auth'
@@ -21,7 +22,11 @@ import { Moon, Sun, Monitor, Palette, User, Lock, Key, CheckCircle, XCircle, Plu
 export default function SettingsPage() {
   const confirm = useConfirm()
   const { toast } = useToast()
-  const { user } = useAuthStore()
+  const { user, logout } = useAuthStore()
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  // 登录接口/后端拦截器带过来的强制改密标记：admin 初始口令未改时为 true
+  const mustChangePassword = searchParams.get('must_change_password') === '1'
   const { theme, setTheme } = useAppStore()
   const isAdmin = user?.role === 'admin'
   const [passwordForm, setPasswordForm] = useState({
@@ -128,8 +133,11 @@ export default function SettingsPage() {
   const changePasswordMutation = useMutation({
     mutationFn: authApi.changePassword,
     onSuccess: () => {
-      toast({ title: '密码修改成功' })
+      toast({ title: '密码修改成功，请使用新密码重新登录' })
       setPasswordForm({ oldPassword: '', newPassword: '', confirmPassword: '' })
+      // 改密会 bump token_version，当前 token 已失效，直接回登录页
+      logout()
+      navigate('/login')
     },
     onError: () => {
       toast({ title: '密码修改失败', variant: 'destructive' })
@@ -196,7 +204,13 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">系统设置</h1>
 
-      <Tabs defaultValue="appearance" className="w-full">
+      {mustChangePassword && (
+        <div className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+          当前仍在使用默认密码，修改前无法使用其他功能。请在下方「修改密码」完成修改后重新登录。
+        </div>
+      )}
+
+      <Tabs defaultValue={mustChangePassword ? 'password' : 'appearance'} className="w-full">
         <TabsList
           className={
             isAdmin

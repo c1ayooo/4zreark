@@ -35,6 +35,7 @@ type NodeDispatcher interface {
 type taskStore interface {
 	GetTaskByID(taskID string) (*models.Task, error)
 	UpdateTask(taskID string, updates map[string]interface{}) error
+	TouchTask(taskID string) error
 }
 
 // resultStore 是执行器需要的结果落库能力：本地是 *ResultService，远程 worker 走 HTTP。
@@ -954,9 +955,25 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 		}
 	}
 
-	// 进度更新计时器
-	progressTicker := time.NewTicker(3 * time.Second)
-	defer progressTicker.Stop()
+	// 任务活性心跳：安静的大网段扫描可能几小时无任何产出事件，StaleReaper
+	// 以 updated_at 判 6 小时无推进即回收。定期 touch updated_at 防误杀。
+	//（原 progressTicker 从未被消费，属死代码，已由本协程取代。）
+	touchStop := make(chan struct{})
+	defer close(touchStop)
+	go func() {
+		touch := time.NewTicker(4 * time.Minute)
+		defer touch.Stop()
+		for {
+			select {
+			case <-touchStop:
+				return
+			case <-touch.C:
+				if err := e.taskService.TouchTask(taskID); err != nil {
+					log.Printf("[TaskExecutor] Task %s heartbeat: %v", taskID, err)
+				}
+			}
+		}
+	}()
 
 	// 结果攒批落库：单条一事务在爬虫大任务下是数万次 DB 往返，
 	// 复用已有的批量接口（去重类型在批内 upsert，其余普通插入）。

@@ -93,6 +93,8 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	utils.Success(c, gin.H{
 		"token": token,
+		// must_change_password=true 时前端应引导用户先去改密（后端已拦截其余接口）。
+		"must_change_password": user.MustChangePassword,
 		"user": gin.H{
 			"id":       user.ID.Hex(),
 			"username": user.Username,
@@ -134,15 +136,16 @@ func (h *AuthHandler) GetProfile(c *gin.Context) {
 	}
 
 	utils.Success(c, gin.H{
-		"id":         user.ID.Hex(),
-		"username":   user.Username,
-		"email":      user.Email,
-		"phone":      user.Phone,
-		"nickname":   user.Nickname,
-		"role":       user.Role,
-		"avatar":     user.Avatar,
-		"last_login": user.LastLogin,
-		"created_at": user.CreatedAt,
+		"id":                   user.ID.Hex(),
+		"username":             user.Username,
+		"email":                user.Email,
+		"phone":                user.Phone,
+		"nickname":             user.Nickname,
+		"role":                 user.Role,
+		"avatar":               user.Avatar,
+		"last_login":           user.LastLogin,
+		"created_at":           user.CreatedAt,
+		"must_change_password": user.MustChangePassword,
 	})
 }
 

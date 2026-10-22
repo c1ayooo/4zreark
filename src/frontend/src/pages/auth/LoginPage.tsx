@@ -26,6 +26,16 @@ export default function LoginPage() {
           title: '登录成功',
           description: `欢迎回来，${response.data.user.nickname || response.data.user.username}`,
         })
+        // 后端要求先改默认密码（admin 初始口令）：带标记跳设置页，其余接口已被拦截
+        if ((response.data as { must_change_password?: boolean }).must_change_password) {
+          toast({
+            title: '请先修改默认密码',
+            description: '当前使用默认口令，修改前无法使用其他功能。',
+            variant: 'destructive',
+          })
+          navigate('/settings?must_change_password=1')
+          return
+        }
         navigate('/dashboard')
       } else {
         toast({

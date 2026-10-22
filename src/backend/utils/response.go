@@ -113,10 +113,11 @@ const (
 	ErrCodeDatabaseError   = 1007
 	ErrCodeTokenExpired    = 1008
 	ErrCodeTokenInvalid    = 1009
-	ErrCodeUserDisabled    = 1010
-	ErrCodePasswordWrong   = 1011
-	ErrCodeTooManyRequests = 1012
-	ErrCodeTaskRunning     = 2001
+	ErrCodeUserDisabled     = 1010
+	ErrCodePasswordWrong    = 1011
+	ErrCodeTooManyRequests  = 1012
+	ErrCodeChangePwdNeeded  = 1013
+	ErrCodeTaskRunning      = 2001
 	ErrCodeNodeOffline     = 2002
 	ErrCodeScanFailed      = 2003
 	ErrCodeConfigError     = 3001
@@ -138,6 +139,7 @@ var ErrMessages = map[int]string{
 	ErrCodeUserDisabled:    "用户已禁用",
 	ErrCodePasswordWrong:   "密码错误",
 	ErrCodeTooManyRequests: "请求过于频繁",
+	ErrCodeChangePwdNeeded: "请先修改默认密码",
 	ErrCodeTaskRunning:     "任务正在运行",
 	ErrCodeNodeOffline:     "节点离线",
 	ErrCodeScanFailed:      "扫描失败",

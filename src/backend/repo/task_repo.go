@@ -25,6 +25,9 @@ type TaskRepo interface {
 	ListStaleRunning(ctx context.Context, nodeHeartbeatBefore, taskIdleBefore, hardBefore time.Time) ([]*models.Task, error)
 	ListStalePending(ctx context.Context, createdBefore time.Time) ([]*models.Task, error)
 	UpdateFields(ctx context.Context, id string, fields map[string]any) error
+	// TouchUpdated 只推进 updated_at：安静的大网段扫描长时间无产出，
+	// StaleReaper 以 updated_at 判 6 小时无推进即回收，靠心跳防误杀。
+	TouchUpdated(ctx context.Context, id string) error
 	Delete(ctx context.Context, id string) error
 	StatusCounts(ctx context.Context, workspaceID string) (map[string]int, error)
 
@@ -508,6 +511,21 @@ func (r *taskRepo) UpdateFields(ctx context.Context, id string, fields map[strin
 
 	stmt := "update tasks set " + strings.Join(sets, ", ") + fmt.Sprintf(" where id = $%d", i)
 	tag, err := r.r.pool.Exec(ctx, stmt, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *taskRepo) TouchUpdated(ctx context.Context, id string) error {
+	if _, err := idFromString(id); err != nil {
+		return ErrNotFound
+	}
+	tag, err := r.r.pool.Exec(ctx,
+		`update tasks set updated_at = now() where id = $1 and status = 'running'`, id)
 	if err != nil {
 		return err
 	}

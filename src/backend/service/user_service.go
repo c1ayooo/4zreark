@@ -156,7 +156,7 @@ func (s *UserService) Login(username, password string) (string, *models.User, er
 		return "", nil, errors.New("用户已被禁用")
 	}
 
-	token, err := utils.GenerateTokenWithVersion(user.ID.Hex(), user.Username, user.Role, user.TokenVersion)
+	token, err := utils.GenerateTokenClaims(user.ID.Hex(), user.Username, user.Role, user.TokenVersion, user.MustChangePassword)
 	if err != nil {
 		return "", nil, errors.New("生成Token失败")
 	}
@@ -314,19 +314,27 @@ func (s *UserService) InitAdmin() error {
 		Email:    "admin@localhost",
 		Role:     "admin",
 		Status:   1,
+		// 初始口令是公开的默认值：置强制改密标记，登录后只能改密直到完成。
+		MustChangePassword: true,
 	})
 	if err != nil {
 		return errors.New("创建管理员账户失败")
 	}
 	if created {
 		log.Printf("[InitAdmin] Admin user created successfully")
-		log.Printf("[InitAdmin] 警告：admin 使用默认口令 admin123，请立即登录修改！")
+		log.Printf("[InitAdmin] 警告：admin 使用默认口令 admin123，首次登录会被要求立即修改。")
 	} else {
 		log.Printf("[InitAdmin] Admin user already exists")
-		// 存量部署：默认口令未改则每次启动都提醒（一次 bcrypt 比对，成本可忽略）。
+		// 存量部署：默认口令未改则补上强制改密标记（迁移加列后这里兜底补数据）。
 		if admin, gerr := ur.GetByUsername(ctx, "admin"); gerr == nil && admin != nil &&
 			utils.CheckPassword("admin123", admin.Password) {
-			log.Printf("[InitAdmin] 警告：admin 账户仍在使用默认口令 admin123，请尽快修改！")
+			log.Printf("[InitAdmin] 警告：admin 账户仍在使用默认口令 admin123，已置强制改密标记。")
+			if !admin.MustChangePassword {
+				if uerr := ur.UpdateFields(ctx, admin.ID.Hex(),
+					map[string]any{"must_change_password": true}); uerr != nil {
+					log.Printf("[InitAdmin] 置强制改密标记失败: %v", uerr)
+				}
+			}
 		}
 	}
 	return nil

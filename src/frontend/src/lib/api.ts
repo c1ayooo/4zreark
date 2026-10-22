@@ -32,6 +32,14 @@ api.interceptors.response.use(
       localStorage.removeItem('token')
       localStorage.removeItem('user')
       window.location.href = '/login'
+      return Promise.reject(error.response?.data || error)
+    }
+    // 1013 = 强制改密：默认口令未改，除改密闭环外全部拒绝。
+    // 统一重定向到设置页的改密表单，避免每个调用点各自处理。
+    if (error.response?.data?.code === 1013) {
+      if (!window.location.pathname.startsWith('/settings')) {
+        window.location.href = '/settings?must_change_password=1'
+      }
     }
     return Promise.reject(error.response?.data || error)
   }

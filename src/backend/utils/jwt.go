@@ -15,6 +15,9 @@ type Claims struct {
 	Username string `json:"username"`
 	Role     string `json:"role"`
 	Ver      int    `json:"ver"` // 登录态版本号，对应 users.token_version
+	// MustChangePassword 强制改密标记随 token 走：中间件按 claims 拦截，
+	// 不用每请求查库；改密会 bump token_version，旧 token 全部失效。
+	MustChangePassword bool `json:"mcp,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -26,13 +29,19 @@ func GenerateToken(userID, username, role string) (string, error) {
 // GenerateTokenWithVersion 把 users.token_version 写进 claims，
 // 改密 / 禁用后旧 token 因版本号对不上而立即失效，不依赖外部存储。
 func GenerateTokenWithVersion(userID, username, role string, ver int) (string, error) {
+	return GenerateTokenClaims(userID, username, role, ver, false)
+}
+
+// GenerateTokenClaims 是完整的签发入口；mustChange=true 时中间件强制改密。
+func GenerateTokenClaims(userID, username, role string, ver int, mustChange bool) (string, error) {
 	cfg := config.GetConfig()
 
 	claims := Claims{
-		UserID:   userID,
-		Username: username,
-		Role:     role,
-		Ver:      ver,
+		UserID:             userID,
+		Username:           username,
+		Role:               role,
+		Ver:                ver,
+		MustChangePassword: mustChange,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(cfg.JWT.Expire) * time.Second)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -78,5 +87,5 @@ func RefreshToken(tokenString string) (string, error) {
 		return tokenString, nil // Token still valid, no need to refresh
 	}
 
-	return GenerateTokenWithVersion(claims.UserID, claims.Username, claims.Role, claims.Ver)
+	return GenerateTokenClaims(claims.UserID, claims.Username, claims.Role, claims.Ver, claims.MustChangePassword)
 }

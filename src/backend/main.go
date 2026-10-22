@@ -6,10 +6,12 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -191,11 +193,14 @@ func main() {
 		log.Fatalf("[FATAL] 准备节点网关 TLS 失败: %v", gerr)
 	}
 	gatewayRouter := router.SetupNodeGatewayRouter(nodeHub, nodeBinaryHandler)
+	// 网关挂了（起不来/监听器死亡）不能 log.Fatalf：那会绕过全部 defer 直接退进程，
+	// 在跑的扫描收不了尾。把错误送回主 goroutine，走统一的优雅关停链。
+	gatewayErr := make(chan error, 1)
 	go func() {
 		addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Node.GatewayPort)
 		log.Printf("[NodeGateway] HTTPS listening on %s", addr)
 		if err := gatewayRouter.RunTLS(addr, gatewayTLS.CertFile, gatewayTLS.KeyFile); err != nil {
-			log.Fatalf("[FATAL] 节点网关启动失败: %v", err)
+			gatewayErr <- fmt.Errorf("节点网关停止/失败: %w", err)
 		}
 	}()
 
@@ -330,14 +335,25 @@ func main() {
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	log.Printf("Server starting on %s", addr)
 
-	// Graceful shutdown
+	// Graceful shutdown：http.Server 才有 Shutdown；r.Run 裸起做不到。
+	srv := &http.Server{Addr: addr, Handler: r}
 	go func() {
-		if err := r.Run(addr); err != nil {
-			log.Fatalf("Failed to start server: %v", err)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("[FATAL] Failed to start server: %v", err)
+			os.Exit(1)
 		}
 	}()
 
-	waitForShutdown("server")
+	waitForShutdown("server", gatewayErr)
+
+	// 先给在跑的 HTTP 请求（建任务/写结果）最多 30 秒收尾，再进 defer 链
+	// 停队列/执行器/调度器/DB。
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("[Shutdown] HTTP server shutdown: %v", err)
+	}
+	log.Println("[Shutdown] HTTP server stopped")
 }
 
 // runRemoteWorker 启动不连接数据库的扫描节点：
@@ -366,12 +382,17 @@ func runRemoteWorker(cfg *config.Config, workerCount int) {
 	log.Println("[Node] remote worker 已停止")
 }
 
-// waitForShutdown 阻塞到 SIGINT/SIGTERM，defer 链负责停执行器、心跳与调度器。
-func waitForShutdown(kind string) {
+// waitForShutdown 阻塞到 SIGINT/SIGTERM，或 extra 里的组件致命错误（如节点网关
+// 监听器死亡）；返回后 defer 链负责停 HTTP、执行器、心跳与调度器。
+func waitForShutdown(kind string, extra <-chan error) {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-	log.Printf("Shutting down %s...", kind)
+	select {
+	case <-quit:
+		log.Printf("Shutting down %s...", kind)
+	case err := <-extra:
+		log.Printf("[FATAL] %v，触发优雅关停", err)
+	}
 }
 
 // loadConfig 读配置并返回原文。

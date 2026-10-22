@@ -50,7 +50,33 @@ func AuthMiddleware() gin.HandlerFunc {
 		c.Set("user_id", claims.UserID)
 		c.Set("username", claims.Username)
 		c.Set("role", claims.Role)
+		c.Set("must_change_password", claims.MustChangePassword)
 
+		c.Next()
+	}
+}
+
+// mustChangePwdAllowlist 是强制改密期间唯一放行的路径：
+// 看资料、改密码、登出。其余一律 403 + ErrCodeChangePwdNeeded。
+var mustChangePwdAllowlist = map[string]bool{
+	"/api/auth/profile":  true,
+	"/api/auth/password": true,
+	"/api/auth/logout":   true,
+}
+
+// MustChangePasswordGuard 强制改密：持有「默认口令未改」token 的用户只能
+// 走改密闭环。标记随 JWT claims 走，这里不查库；改密成功后 SetPassword
+// 清标记并 bump token_version，旧 token 全部失效，重新登录即恢复。
+func MustChangePasswordGuard() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		need, _ := c.Get("must_change_password")
+		if flagged, ok := need.(bool); ok && flagged && !mustChangePwdAllowlist[c.FullPath()] {
+			c.AbortWithStatusJSON(403, gin.H{
+				"code":    utils.ErrCodeChangePwdNeeded,
+				"message": "请先修改默认密码",
+			})
+			return
+		}
 		c.Next()
 	}
 }

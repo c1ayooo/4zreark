@@ -17,6 +17,9 @@ type User struct {
 	Avatar   string       `json:"avatar" bson:"avatar"`
 	Role     string       `json:"role" bson:"role"`     // admin, user, viewer
 	Status   int          `json:"status" bson:"status"` // 1: active, 0: disabled
+	// MustChangePassword 强制改密标记：admin 初始口令/默认口令未改时为 true，
+	// 中间件只放行 profile/password/logout，改密成功后清除。
+	MustChangePassword bool `json:"must_change_password" bson:"must_change_password"`
 	// TokenVersion 登录态版本号：改密 / 禁用 / 踢下线时 +1，旧 token 立即失效。
 	// json:"-" 保证响应体字段与改造前一致。
 	TokenVersion int       `json:"-" bson:"token_version"`

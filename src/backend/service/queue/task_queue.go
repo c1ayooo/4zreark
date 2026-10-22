@@ -457,8 +457,13 @@ func (q *TaskQueue) GetStats(ctx context.Context) (map[string]interface{}, error
 		return nil, err
 	}
 
+	// 两次独立查询拼统计，短暂窗口内可能 counts[JobQueued] < scheduled，钳到 0。
+	pending := counts[repo.JobQueued] - scheduled
+	if pending < 0 {
+		pending = 0
+	}
 	return map[string]interface{}{
-		"pending":     counts[repo.JobQueued] - scheduled,
+		"pending":     pending,
 		"scheduled":   scheduled,
 		"processing":  counts[repo.JobRunning],
 		"dead_letter": counts[repo.JobDead],

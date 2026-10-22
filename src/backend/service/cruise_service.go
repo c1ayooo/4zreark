@@ -364,6 +364,11 @@ func (s *CruiseService) executeCruiseWithMode(cruiseID oid.ObjectID, manual bool
 
 			case <-timeout:
 				log.Printf("[CruiseService] Cruise %s task timeout", cruise.Name)
+				// 只恢复巡航状态不取消任务的话，底层扫描会继续占并发槽
+				// 直到 River 的 24h 超时。超时即取消，让资源立刻释放。
+				if err := NewTaskService().CancelTask(taskObjID.Hex()); err != nil {
+					log.Printf("[CruiseService] Cancel timed-out cruise task %s: %v", taskObjID.Hex(), err)
+				}
 				s.updateCruiseLog(cruiseID, taskObjID, "timeout", time.Now(),
 					int64(24*time.Hour.Seconds()), 0, 0, "任务执行超时")
 				s.updateCruiseStatus(cruiseID, restoreStatus)

@@ -67,7 +67,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 
 		// Protected routes
 		protected := apiGroup.Group("")
-		protected.Use(middleware.AuthMiddleware(), middleware.IdempotencyMiddleware())
+		protected.Use(middleware.AuthMiddleware(), middleware.MustChangePasswordGuard(), middleware.IdempotencyMiddleware())
 		{
 			// Auth routes (auth required)
 			protected.POST("/auth/logout", authHandler.Logout)
@@ -697,6 +697,7 @@ func SetupNodeGatewayRouter(nodeHub *api.NodeHub, binaryHandler *api.NodeBinaryH
 		nodeAPI.GET("/binary", binaryHandler.Download)
 		nodeAPI.GET("/tasks/:id", nodeGateway.GetTask)
 		nodeAPI.PUT("/tasks/:id", nodeGateway.UpdateTask)
+		nodeAPI.PUT("/tasks/:id/touch", nodeGateway.TouchTask)
 		nodeAPI.POST("/tasks/:id/results", nodeGateway.PostResults)
 		nodeAPI.POST("/tasks/:id/assets", nodeGateway.PostAssets)
 		nodeAPI.POST("/tasks/:id/cdn", nodeGateway.PostCDN)

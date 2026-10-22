@@ -34,19 +34,20 @@ type UserRepo interface {
 type userRepo struct{ r *Repo }
 
 const userColumns = `id, username, password, email, phone, nickname, avatar,
-	role, status, token_version, last_login, created_at, updated_at`
+	role, status, must_change_password, token_version, last_login, created_at, updated_at`
 
 // userUpdatable 是允许被 UpdateFields 改动的列白名单：
 // 键来自调用方（可能是 HTTP 请求体），必须映射到固定列名，绝不拼原始键。
 var userUpdatable = map[string]string{
-	"username": "username",
-	"email":    "email",
-	"phone":    "phone",
-	"nickname": "nickname",
-	"avatar":   "avatar",
-	"role":     "role",
-	"status":   "status",
-	"password": "password",
+	"username":             "username",
+	"email":                "email",
+	"phone":                "phone",
+	"nickname":             "nickname",
+	"avatar":               "avatar",
+	"role":                 "role",
+	"status":               "status",
+	"password":             "password",
+	"must_change_password": "must_change_password",
 }
 
 func scanUser(row pgx.Row) (*models.User, error) {
@@ -58,7 +59,8 @@ func scanUser(row pgx.Row) (*models.User, error) {
 		updatedAt time.Time
 	)
 	err := row.Scan(&hexID, &u.Username, &u.Password, &u.Email, &u.Phone, &u.Nickname,
-		&u.Avatar, &u.Role, &u.Status, &u.TokenVersion, &lastLogin, &createdAt, &updatedAt)
+		&u.Avatar, &u.Role, &u.Status, &u.MustChangePassword, &u.TokenVersion,
+		&lastLogin, &createdAt, &updatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -79,10 +81,10 @@ func scanUser(row pgx.Row) (*models.User, error) {
 func (r *userRepo) Create(ctx context.Context, u *models.User) error {
 	_, err := r.r.pool.Exec(ctx,
 		`insert into users (id, username, password, email, phone, nickname, avatar,
-		                    role, status, token_version, last_login, created_at, updated_at)
-		 values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+		                    role, status, must_change_password, token_version, last_login, created_at, updated_at)
+		 values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 		u.ID.Hex(), u.Username, u.Password, u.Email, u.Phone, u.Nickname, u.Avatar,
-		u.Role, u.Status, u.TokenVersion, timeToPG(u.LastLogin),
+		u.Role, u.Status, u.MustChangePassword, u.TokenVersion, timeToPG(u.LastLogin),
 		timeToPG(u.CreatedAt), timeToPG(u.UpdatedAt))
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -157,10 +159,11 @@ func (r *userRepo) SetPassword(ctx context.Context, id, hashedPassword string, r
 	if _, err := idFromString(id); err != nil {
 		return ErrNotFound
 	}
-	stmt := `update users set password = $1, updated_at = now() where id = $2`
+	// 改密同时清除「必须改密」标记：强制改密流程到此闭环。
+	stmt := `update users set password = $1, must_change_password = false, updated_at = now() where id = $2`
 	if revokeTokens {
 		// 改密后旧 token 立即失效
-		stmt = `update users set password = $1, token_version = token_version + 1, updated_at = now() where id = $2`
+		stmt = `update users set password = $1, must_change_password = false, token_version = token_version + 1, updated_at = now() where id = $2`
 	}
 	tag, err := r.r.pool.Exec(ctx, stmt, hashedPassword, id)
 	if err != nil {
@@ -268,10 +271,10 @@ func (r *userRepo) TouchLastLogin(ctx context.Context, id string) error {
 
 func (r *userRepo) EnsureAdmin(ctx context.Context, u *models.User) (bool, error) {
 	tag, err := r.r.pool.Exec(ctx,
-		`insert into users (id, username, password, email, role, status, token_version, created_at, updated_at)
-		 values ($1,$2,$3,$4,$5,$6,0,now(),now())
+		`insert into users (id, username, password, email, role, status, must_change_password, token_version, created_at, updated_at)
+		 values ($1,$2,$3,$4,$5,$6,$7,0,now(),now())
 		 on conflict (username) do nothing`,
-		u.ID.Hex(), u.Username, u.Password, u.Email, u.Role, u.Status)
+		u.ID.Hex(), u.Username, u.Password, u.Email, u.Role, u.Status, u.MustChangePassword)
 	if err != nil {
 		return false, err
 	}

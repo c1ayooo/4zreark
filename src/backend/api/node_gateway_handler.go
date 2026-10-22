@@ -147,6 +147,28 @@ func (h *NodeGatewayHandler) UpdateTask(c *gin.Context) {
 	utils.SuccessWithMessage(c, "更新成功", nil)
 }
 
+// TouchTask 节点活性心跳：只推进任务的 updated_at，防止安静的大扫描被
+// StaleReaper 误判为无进展而回收。
+// PUT /api/node/tasks/:id/touch
+func (h *NodeGatewayHandler) TouchTask(c *gin.Context) {
+	node := nodeFromContext(c)
+	taskID := c.Param("id")
+	task, err := h.tasks.GetTaskByID(taskID)
+	if err != nil {
+		utils.NotFound(c, err.Error())
+		return
+	}
+	if task.NodeID != "" && task.NodeID != node.NodeID {
+		utils.Forbidden(c, "任务未分配给该节点")
+		return
+	}
+	if err := h.tasks.TouchTask(taskID); err != nil {
+		utils.Error(c, utils.ErrCodeInternalError, err.Error())
+		return
+	}
+	utils.Success(c, nil)
+}
+
 // PostResults 接收一批扫描结果，由平台去重后写 scan_results。
 func (h *NodeGatewayHandler) PostResults(c *gin.Context) {
 	node := nodeFromContext(c)

@@ -190,6 +190,24 @@ func (s *TaskService) UpdateTask(taskID string, updates map[string]interface{}) 
 	return nil
 }
 
+// TouchTask 只推进 updated_at（活性心跳）。仅对 running 任务生效。
+func (s *TaskService) TouchTask(taskID string) error {
+	ctx, cancel := dbCtx()
+	defer cancel()
+
+	tasks, _, err := s.stores()
+	if err != nil {
+		return err
+	}
+	if err := tasks.TouchUpdated(ctx, taskID); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return errors.New("任务不存在或已结束")
+		}
+		return errors.New("更新任务心跳失败: " + err.Error())
+	}
+	return nil
+}
+
 // normalizeTaskUpdates 把调用方传进来的松散 map 归一成 tasks 表的列键。
 // 旧版把 result_stats 当一个嵌套对象存，PG 里是拆开的列，所以这里要摊平。
 func normalizeTaskUpdates(in map[string]interface{}) (map[string]any, error) {
