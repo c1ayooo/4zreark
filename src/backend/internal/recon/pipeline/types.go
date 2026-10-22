@@ -20,8 +20,8 @@ type Options struct {
 	EnableHTTP      bool // stage 4: HTTP fingerprinting
 
 	PortsSet string // "top100" | "web" | custom list/range
-	QPS      int    // brute-force DNS queries per second
-	Rate     int    // port scan connections per second
+	QPS      int    // brute-force DNS queries per second（<=0 时按 DefaultQPS 兜底，0 不代表不限速）
+	Rate     int    // port scan connections per second（<=0 时按 DefaultRate 兜底）
 
 	Resolvers []string
 	// HTTPClient is injected for stage 4 (tests/proxy). A 10s direct client is

@@ -36,9 +36,24 @@ type liveName struct {
 
 // Run executes the pipeline. It returns partial results plus ctx.Err() when the
 // context is canceled. A nil Sink is allowed: findings are only returned.
+// DefaultQPS / DefaultRate 是 Options 未填时的兜底节奏。
+// QPS/Rate 的 0 值语义是「不限速」（brute 的 newLimiter、portscan 的令牌桶
+// 都对 <=0 直接放行），不能把调用方的漏填放大成无限速。
+const (
+	DefaultQPS  = 300
+	DefaultRate = 500
+)
+
+// Run 是 recon 管线的统一入口：先兜底节奏参数，再按 stage 推进。
 func Run(ctx context.Context, opts Options, progress Progress) (*Result, error) {
 	if len(opts.Domains) == 0 {
 		return nil, fmt.Errorf("domains 为空")
+	}
+	if opts.QPS <= 0 {
+		opts.QPS = DefaultQPS
+	}
+	if opts.Rate <= 0 {
+		opts.Rate = DefaultRate
 	}
 	res := &Result{Stats: Stats{Levels: map[string]int{}}}
 	stats := &res.Stats

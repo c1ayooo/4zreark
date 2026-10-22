@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -47,6 +48,25 @@ func NewScanHandler() *ScanHandler {
 	}
 }
 
+
+// maxScanTimeoutSeconds 是实时扫描入口允许的单次超时上限（24h）。
+// 入口参数不可信：10^9 秒的 timeout 会把 goroutine 占到进程退出。
+const maxScanTimeoutSeconds = 24 * 60 * 60
+
+// clampScanTimeout 收敛调用方传来的超时秒数。
+func clampScanTimeout(seconds int) time.Duration {
+	if seconds > maxScanTimeoutSeconds {
+		return time.Duration(maxScanTimeoutSeconds) * time.Second
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+// maxDirWordlist 是目录扫描自定义字典的条数上限。
+const maxDirWordlist = 20000
+
+// maxBatchTargets 是批量扫描接口的单次目标数上限（与接管批量对齐）。
+const maxBatchTargets = 1000
+
 // QuickPortScan performs a quick port scan on common ports
 // POST /api/scan/port/quick
 func (h *ScanHandler) QuickPortScan(c *gin.Context) {
@@ -69,7 +89,7 @@ func (h *ScanHandler) QuickPortScan(c *gin.Context) {
 	// Set timeout
 	timeout := 60 * time.Second
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -108,7 +128,7 @@ func (h *ScanHandler) CustomPortScan(c *gin.Context) {
 	// Set timeout
 	timeout := 120 * time.Second
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -237,7 +257,7 @@ func (h *ScanHandler) CSegmentScan(c *gin.Context) {
 	// Set timeout (default 5 minutes for C segment)
 	timeout := 5 * time.Minute
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -274,7 +294,7 @@ func (h *ScanHandler) QuickCSegmentScan(c *gin.Context) {
 
 	timeout := 3 * time.Minute
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -300,7 +320,7 @@ func (h *ScanHandler) FullCSegmentScan(c *gin.Context) {
 
 	timeout := 10 * time.Minute
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -348,7 +368,7 @@ func (h *ScanHandler) QuickSubdomainScan(c *gin.Context) {
 
 	timeout := 3 * time.Minute
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -373,7 +393,7 @@ func (h *ScanHandler) FullSubdomainScan(c *gin.Context) {
 
 	timeout := 10 * time.Minute
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -405,7 +425,7 @@ func (h *ScanHandler) CustomSubdomainScan(c *gin.Context) {
 
 	timeout := 10 * time.Minute
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -432,7 +452,7 @@ func (h *ScanHandler) CDNDetect(c *gin.Context) {
 
 	timeout := 30 * time.Second
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -465,10 +485,14 @@ func (h *ScanHandler) CDNBatchDetect(c *gin.Context) {
 		utils.BadRequest(c, "域名列表不能为空")
 		return
 	}
+	if len(req.Domains) > maxBatchTargets {
+		utils.BadRequest(c, fmt.Sprintf("域名列表过多（%d），单次最多 %d 个", len(req.Domains), maxBatchTargets))
+		return
+	}
 
 	timeout := 5 * time.Minute
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -495,7 +519,7 @@ func (h *ScanHandler) FingerprintScan(c *gin.Context) {
 
 	timeout := 30 * time.Second
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -522,10 +546,14 @@ func (h *ScanHandler) FingerprintBatchScan(c *gin.Context) {
 		utils.BadRequest(c, "目标列表不能为空")
 		return
 	}
+	if len(req.Targets) > maxBatchTargets {
+		utils.BadRequest(c, fmt.Sprintf("目标列表过多（%d），单次最多 %d 个", len(req.Targets), maxBatchTargets))
+		return
+	}
 
 	timeout := 10 * time.Minute
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -553,7 +581,7 @@ func (h *ScanHandler) VulnScan(c *gin.Context) {
 
 	timeout := 10 * time.Minute
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -583,7 +611,7 @@ func (h *ScanHandler) VulnQuickScan(c *gin.Context) {
 
 	timeout := 5 * time.Minute
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -659,7 +687,7 @@ func (h *ScanHandler) DirScan(c *gin.Context) {
 
 	timeout := 10 * time.Minute
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -668,6 +696,10 @@ func (h *ScanHandler) DirScan(c *gin.Context) {
 	var result *webscan.SprayResult
 	var err error
 
+	if len(req.Wordlist) > maxDirWordlist {
+		utils.BadRequest(c, fmt.Sprintf("字典过大（%d 条），最多 %d 条", len(req.Wordlist), maxDirWordlist))
+		return
+	}
 	if len(req.Wordlist) > 0 {
 		result, err = h.sprayScanner.ScanWithWordlist(ctx, req.Target, req.Wordlist)
 	} else {
@@ -701,7 +733,7 @@ func (h *ScanHandler) QuickDirScan(c *gin.Context) {
 
 	timeout := 3 * time.Minute
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -730,7 +762,7 @@ func (h *ScanHandler) SensitiveScan(c *gin.Context) {
 
 	timeout := 30 * time.Second
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -757,10 +789,14 @@ func (h *ScanHandler) SensitiveBatchScan(c *gin.Context) {
 		utils.BadRequest(c, "目标列表不能为空")
 		return
 	}
+	if len(req.Targets) > maxBatchTargets {
+		utils.BadRequest(c, fmt.Sprintf("目标列表过多（%d），单次最多 %d 个", len(req.Targets), maxBatchTargets))
+		return
+	}
 
 	timeout := 10 * time.Minute
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -795,7 +831,7 @@ func (h *ScanHandler) CrawlerScan(c *gin.Context) {
 
 	timeout := 10 * time.Minute
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -825,7 +861,7 @@ func (h *ScanHandler) WeakPwdScan(c *gin.Context) {
 
 	timeout := 10 * time.Minute
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -866,7 +902,7 @@ func (h *ScanHandler) TakeoverScan(c *gin.Context) {
 
 	timeout := 30 * time.Second
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -901,7 +937,7 @@ func (h *ScanHandler) TakeoverBatchScan(c *gin.Context) {
 
 	timeout := 5 * time.Minute
 	if req.Timeout > 0 {
-		timeout = time.Duration(req.Timeout) * time.Second
+		timeout = clampScanTimeout(req.Timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)

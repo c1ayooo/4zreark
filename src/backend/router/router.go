@@ -24,6 +24,15 @@ func SetupRouter() *gin.Engine {
 func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 	r := gin.Default()
 
+	// 审计日志的 ClientIP 默认可被 X-Forwarded-For 伪造（gin 默认信任所有代理）。
+	// 默认不信任任何代理头，ClientIP 取直连地址；反向代理部署用
+	// ZRE_TRUSTED_PROXIES（逗号分隔 IP/CIDR）声明可信代理。
+	if tp := os.Getenv("ZRE_TRUSTED_PROXIES"); strings.TrimSpace(tp) != "" {
+		_ = r.SetTrustedProxies(strings.Split(tp, ","))
+	} else {
+		_ = r.SetTrustedProxies(nil)
+	}
+
 	// Middleware
 	r.Use(middleware.CORSMiddleware())
 	// 请求体上限：未单独设限的 JSON 端点统一封顶，防超大 body 撑爆内存。
@@ -263,15 +272,15 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 			{
 				vulnGroup.GET("", vulnHandler.ListVulnerabilities)
 				vulnGroup.GET("/stats", vulnHandler.GetVulnStats)
-				vulnGroup.GET("/review-stats", vulnHandler.ReviewStats)            // 复核分布
-				vulnGroup.GET("/statistics", vulnHandler.GetVulnStatistics)        // 详细统计
+				vulnGroup.GET("/review-stats", vulnHandler.ReviewStats)                                                        // 复核分布
+				vulnGroup.GET("/statistics", vulnHandler.GetVulnStatistics)                                                    // 详细统计
 				vulnGroup.POST("/batch-update", middleware.RequirePermission("vuln:write"), vulnHandler.BatchUpdateVulnStatus) // 批量更新
 				vulnGroup.GET("/:id", vulnHandler.GetVulnerability)
 				vulnGroup.POST("", middleware.RequirePermission("vuln:write"), vulnHandler.CreateVulnerability)
 				vulnGroup.PUT("/:id", middleware.RequirePermission("vuln:write"), vulnHandler.UpdateVulnerability)
 				vulnGroup.DELETE("/:id", middleware.RequirePermission("vuln:delete"), vulnHandler.DeleteVulnerability)
-				vulnGroup.POST("/:id/review", middleware.RequirePermission("vuln:write"), vulnHandler.ReviewVuln)      // 复核（流转 + 记录）
-				vulnGroup.GET("/:id/reviews", vulnHandler.ListVulnReviews) // 复核历史
+				vulnGroup.POST("/:id/review", middleware.RequirePermission("vuln:write"), vulnHandler.ReviewVuln) // 复核（流转 + 记录）
+				vulnGroup.GET("/:id/reviews", vulnHandler.ListVulnReviews)                                        // 复核历史
 				vulnGroup.PUT("/:id/fixed", middleware.RequirePermission("vuln:write"), vulnHandler.MarkVulnAsFixed)
 				vulnGroup.PUT("/:id/ignore", middleware.RequirePermission("vuln:write"), vulnHandler.MarkVulnAsIgnored)
 				vulnGroup.PUT("/:id/false-positive", middleware.RequirePermission("vuln:write"), vulnHandler.MarkVulnAsFalsePositive)

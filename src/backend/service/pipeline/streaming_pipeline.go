@@ -561,10 +561,12 @@ func RunPortOnlyScan(ctx context.Context, targets []string, portMode string) ([]
 		}
 		select {
 		case <-pipeCtx.Done():
-			break
+			// 取消后停止注入（break 只能跳出 select，须用标签跳出 for）
+			goto injectDone
 		case portScanModule.GetInput() <- ds:
 		}
 	}
+injectDone:
 	portScanModule.CloseInput()
 
 	// 收集结果

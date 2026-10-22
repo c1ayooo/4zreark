@@ -1,6 +1,8 @@
 package subdomain
 
 import (
+	"crypto/rand"
+	"math/big"
 	"bufio"
 	"context"
 	"crypto/tls"
@@ -296,13 +298,21 @@ func splitSubdomain(fullDomain string) (subdomain, domain string) {
 	return parts[0], parts[1]
 }
 
-// generateRandomString generates a random string for wildcard detection
+// generateRandomString generates a random string for wildcard detection.
+// 用 crypto/rand：此前取 UnixNano 取模 + 睡纳秒，8 位串大概率是同一字符
+// 重复，泛解析判定被削弱。
 func generateRandomString(length int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, length)
+	total := big.NewInt(int64(len(charset)))
 	for i := range b {
-		b[i] = charset[time.Now().UnixNano()%int64(len(charset))]
-		time.Sleep(time.Nanosecond) // 确保随机性
+		n, err := rand.Int(rand.Reader, total)
+		if err != nil {
+			// 系统熵源不可用是严重异常；退化为固定模式至少可预测地失败
+			b[i] = charset[i%len(charset)]
+			continue
+		}
+		b[i] = charset[n.Int64()]
 	}
 	return string(b)
 }

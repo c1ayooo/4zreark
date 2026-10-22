@@ -3,6 +3,7 @@ package pipeline
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -23,6 +24,9 @@ type ProgressTracker struct {
 
 	// 进度回调
 	callback ProgressCallback
+	// callbackInFlight 合并在飞回调：逐条结果都起 goroutine 写库会在大任务下
+	// 产生数万个并发 UPDATE，丢中间帧没有信息损失（下一帧总是更新）。
+	callbackInFlight atomic.Bool
 }
 
 // ModuleProgress 模块进度
@@ -260,12 +264,17 @@ func (pt *ProgressTracker) notifyProgress() {
 	if pt.callback == nil {
 		return
 	}
+	if !pt.callbackInFlight.CompareAndSwap(false, true) {
+		return
+	}
 
 	// 创建报告（注意：此时已持有锁，需要释放后再调用回调）
 	report := pt.getReportUnsafe()
 
-	// 异步调用回调，避免阻塞
-	go pt.callback(report)
+	go func() {
+		defer pt.callbackInFlight.Store(false)
+		pt.callback(report)
+	}()
 }
 
 // getReportUnsafe 获取进度报告（不加锁版本，内部使用）
