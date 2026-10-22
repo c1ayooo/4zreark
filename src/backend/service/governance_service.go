@@ -36,7 +36,7 @@ func (s *GovernanceService) stores() (repo.SeedRepo, repo.RunRepo, error) {
 }
 
 var seedKinds = map[string]bool{
-	"domain": true, "cidr": true, "company": true, "repo": true, "app": true, "dict": true,
+	"domain": true, "cidr": true, "company": true, "cert": true, "repo": true, "app": true, "dict": true,
 }
 
 func (s *GovernanceService) ListSeeds(ctx context.Context, projectID int64) ([]*repo.Seed, error) {
@@ -62,7 +62,7 @@ func (s *GovernanceService) CreateSeed(ctx context.Context, projectID int64, kin
 		return nil, errors.New("project_id 必填")
 	}
 	if !seedKinds[kind] {
-		return nil, errors.New("kind 只支持 domain / cidr / company / repo / app / dict")
+		return nil, errors.New("kind 只支持 domain / cidr / company / cert / repo / app / dict")
 	}
 	if value == "" {
 		return nil, errors.New("种子值不能为空")

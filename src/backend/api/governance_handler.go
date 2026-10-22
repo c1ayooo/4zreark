@@ -96,9 +96,9 @@ func (h *GovernanceHandler) CreateSeed(c *gin.Context) {
 		return
 	}
 	switch body.Kind {
-	case "domain", "cidr", "company", "repo", "app", "dict":
+	case "domain", "cidr", "company", "cert", "repo", "app", "dict":
 	default:
-		utils.BadRequest(c, "kind 只支持 domain / cidr / company / repo / app / dict")
+		utils.BadRequest(c, "kind 只支持 domain / cidr / company / cert / repo / app / dict")
 		return
 	}
 

@@ -64,6 +64,13 @@ func (s *SeedCatalogService) Capabilities() *SeedCapabilities {
 				Note:        "静态预览返回空态与 warning；live 需要已配置 ICP/ENScan",
 			},
 			{
+				Kind: "cert", Label: "证书组织", Static: false, Live: true, Supported: true,
+				Requires:    []string{"capability.live=true"},
+				DataSources: []string{"spacemap/certquery"},
+				Defaults:    map[string]any{"max_domains": 200},
+				Note:        "按证书 Subject O= 反查资产；默认只用精确引擎（fofa/hunter/shodan），quake/zoomeye 为全文匹配需显式指定",
+			},
+			{
 				Kind: "repo", Label: "代码仓库", Static: false, Live: true, Supported: true,
 				Requires:    []string{"capability.live=true"},
 				DataSources: []string{"GitHub"},

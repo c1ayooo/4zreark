@@ -86,7 +86,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate, formatNumber } from '@/lib/utils'
 
 // app（商店）暂无展开数据源，先不暴露创建入口，避免建出永远空跑的计划。
-const SEED_KINDS: SeedKind[] = ['domain', 'cidr', 'company', 'repo', 'dict']
+const SEED_KINDS: SeedKind[] = ['domain', 'cidr', 'company', 'cert', 'repo', 'dict']
 
 const regionLabel = (region: string) => {
   if (!region) return '—'
@@ -415,9 +415,11 @@ function AddSeedDialog({
                     ? 'example.com（基础域名）'
                     : kind === 'company'
                       ? '公司名称'
-                      : kind === 'repo'
-                        ? 'https://github.com/org/repo'
-                        : 'example.com'
+                      : kind === 'cert'
+                        ? '证书组织名，如 Meituan Software System'
+                        : kind === 'repo'
+                          ? 'https://github.com/org/repo'
+                          : 'example.com'
               }
               onChange={(e) => {
                 setValue(e.target.value)
@@ -463,7 +465,7 @@ function AddSeedDialog({
             </div>
           )}
 
-          {(kind === 'company' || kind === 'repo' || kind === 'app') && (
+          {(kind === 'company' || kind === 'cert' || kind === 'repo' || kind === 'app') && (
             <div className="flex items-start justify-between gap-3 rounded-md border p-3">
               <div>
                 <Label>使用 live 数据源</Label>

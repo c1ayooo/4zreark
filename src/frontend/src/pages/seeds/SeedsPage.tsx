@@ -29,6 +29,7 @@ const KIND_LABEL: Record<SeedKind, string> = {
   domain: '域名',
   cidr: '网段',
   company: '企业',
+  cert: '证书组织',
   repo: '仓库',
   app: '应用',
   dict: '字典',

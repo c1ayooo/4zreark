@@ -29,7 +29,7 @@ export interface ProjectInput {
   cycle_interval_days: number
 }
 
-export type SeedKind = 'domain' | 'cidr' | 'company' | 'repo' | 'app' | 'dict'
+export type SeedKind = 'domain' | 'cidr' | 'company' | 'cert' | 'repo' | 'app' | 'dict'
 
 export interface Seed {
   id: number
@@ -177,6 +177,7 @@ export const projectApi = {
 export const seedKindLabel: Record<SeedKind, string> = {
   domain: '域名',
   cidr: '网段',
+  cert: '证书组织',
   company: '公司',
   repo: '代码仓库',
   app: '应用',

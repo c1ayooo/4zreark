@@ -3,7 +3,7 @@ import type { ApiResponse } from '@/lib/api'
 
 // 种子（seed）是资产治理的入口对象：项目下声明「要盯什么」，
 // 由计划（plan）与批次（run）负责展开与采集。与 ScopesHub 的种子页同构。
-export type SeedKind = 'domain' | 'cidr' | 'company' | 'repo' | 'app' | 'dict'
+export type SeedKind = 'domain' | 'cidr' | 'company' | 'cert' | 'repo' | 'app' | 'dict'
 
 export interface Seed {
   id: number

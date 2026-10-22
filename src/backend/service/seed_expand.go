@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/c1ayooo/4zreark/internal/recon/spacemap"
+	"github.com/c1ayooo/4zreark/internal/recon/spacemap/certquery"
 	"github.com/c1ayooo/4zreark/internal/recon/spacemap/icpquery"
 	"github.com/c1ayooo/4zreark/repo"
 
@@ -40,7 +41,7 @@ func invalidSeed(format string, args ...any) error {
 }
 
 var validSeedKinds = map[string]bool{
-	"domain": true, "cidr": true, "company": true,
+	"domain": true, "cidr": true, "company": true, "cert": true,
 	"repo": true, "app": true, "dict": true,
 }
 
@@ -72,7 +73,7 @@ func (s *CycleService) PreviewSeed(ctx context.Context, req SeedPreviewRequest) 
 	}
 	kind := strings.ToLower(strings.TrimSpace(req.Kind))
 	if !validSeedKinds[kind] {
-		return nil, invalidSeed("kind 只支持 domain / cidr / company / repo / app / dict")
+		return nil, invalidSeed("kind 只支持 domain / cidr / company / cert / repo / app / dict")
 	}
 	if strings.TrimSpace(req.Value) == "" {
 		return nil, invalidSeed("种子值必填")
@@ -101,7 +102,7 @@ func (s *CycleService) ExpandSeed(ctx context.Context, seed *repo.Seed, live boo
 
 	kind := strings.ToLower(strings.TrimSpace(seed.Kind))
 	if !validSeedKinds[kind] {
-		return nil, invalidSeed("kind 只支持 domain / cidr / company / repo / app / dict")
+		return nil, invalidSeed("kind 只支持 domain / cidr / company / cert / repo / app / dict")
 	}
 	value := strings.TrimSpace(seed.Value)
 	if value == "" {
@@ -173,6 +174,22 @@ func (s *CycleService) ExpandSeed(ctx context.Context, seed *repo.Seed, live boo
 		targets, warnings, err = s.expandCompanyLive(ctx, seed.ProjectID, normalized, seed.Capability, maxTargets)
 		if len(targets) == 0 && err == nil {
 			emptyWhy = "company_no_domains"
+		}
+
+	case "cert":
+		normalized := certquery.NormalizeOrg(value)
+		if normalized == "" {
+			return nil, invalidSeed("证书组织名过短或为空（至少 3 个字符）")
+		}
+		result.NormalizedValue = normalized
+		if !live {
+			warnings = append(warnings, "cert 种子的展开需要外部 live 数据源；请打开 live 后再试")
+			emptyWhy = "cert_live_source_required"
+			break
+		}
+		targets, warnings, err = s.expandCertLive(ctx, seed.ProjectID, normalized, seed.Capability, maxTargets)
+		if len(targets) == 0 && err == nil {
+			emptyWhy = "cert_no_domains"
 		}
 
 	case "repo":
@@ -711,6 +728,84 @@ func (s *CycleService) expandCompanyLive(ctx context.Context, projectID int64, c
 }
 
 // expandDomainList 把一组域名逐个展开成目标，统一打上 via 标记。
+// expandCertLive 按证书组织名（O=）反查资产：certquery 注册表适配五引擎语法，
+// 行内域名提取复用 icpquery 的引擎行适配（cert→icp→company 三角互证设计）。
+// 默认只用精确匹配引擎（fofa/hunter/shodan）；quake/zoomeye 是证书全文匹配、
+// 噪音高，仅在 capability.engines 显式指定时启用。
+func (s *CycleService) expandCertLive(ctx context.Context, projectID int64, org string, capability map[string]any, maxTargets int) ([]repo.TargetInput, []string, error) {
+	if org == "" {
+		return nil, nil, invalidSeed("证书组织名必填")
+	}
+	keys := companyEngineKeys(ctx)
+
+	engines := capabilityStrings(capability["engines"])
+	if len(engines) == 0 {
+		engines = certquery.ExactEngines()
+	}
+	limit := capabilityInt(capability["max_domains"])
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	warnings := []string{}
+	domains := map[string]bool{}
+	usedEngines := []string{}
+	for _, raw := range engines {
+		engine := strings.ToLower(strings.TrimSpace(raw))
+		query, ok := certquery.QueryFor(engine, org)
+		if !ok {
+			warnings = append(warnings, fmt.Sprintf("引擎 %s 不支持按证书组织反查，已跳过", engine))
+			continue
+		}
+		if strings.TrimSpace(keys[engine]) == "" {
+			warnings = append(warnings, fmt.Sprintf("引擎 %s 未配置 API Key，已跳过", engine))
+			continue
+		}
+		rows, err := companySearchRows(ctx, keys, engine, query, 100)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("引擎 %s 查询失败：%v", engine, err))
+			continue
+		}
+		usedEngines = append(usedEngines, engine)
+		for _, row := range rows {
+			for _, d := range icpquery.DomainsFromRow(engine, row) {
+				domains[d] = true
+			}
+		}
+	}
+	if len(usedEngines) == 0 {
+		warnings = append(warnings, "没有可用的 live 数据源，未产生目标")
+		return nil, warnings, nil
+	}
+	if len(domains) == 0 {
+		warnings = append(warnings, "引擎没有返回域名，请检查组织名（需与证书 Subject O= 完全一致）、API Key 与配额")
+		return nil, warnings, nil
+	}
+
+	list := make([]string, 0, len(domains))
+	for d := range domains {
+		list = append(list, d)
+	}
+	sort.Strings(list)
+	if len(list) > limit {
+		warnings = append(warnings, fmt.Sprintf(
+			"引擎返回 %d 个域名，超过上限 %d，已截断", len(list), limit))
+		list = list[:limit]
+	}
+
+	out, targetWarnings := s.expandDomainList(ctx, projectID, list, "cert", maxTargets)
+	warnings = append(warnings, targetWarnings...)
+	warnings = append(warnings, fmt.Sprintf(
+		"从 %s 按证书组织展开 %d 个域名", strings.Join(usedEngines, ", "), len(list)))
+	return out, warnings, nil
+}
+
 func (s *CycleService) expandDomainList(ctx context.Context, projectID int64, domains []string, via string, maxTargets int) ([]repo.TargetInput, []string) {
 	warnings := []string{}
 	out := make([]repo.TargetInput, 0, len(domains))
