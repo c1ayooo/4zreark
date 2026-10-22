@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import {
   assetApi,
@@ -47,6 +47,7 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
 import {
+  Loader2,
   RefreshCw,
   Search,
   Radar,
@@ -359,6 +360,8 @@ export default function AssetsPage() {
     queryKey: ['assets', cursorMode ? `c:${cursor ?? ''}` : `p:${page}`, pageSize, appliedQ, projectId, kind, catalog, view, siteGroup, riskSort, recentLoaded ? 'recent' : 'plain'],
     enabled: !clusterView,
     staleTime: 30_000,
+    // 切粒度/视图/排序时保留上一份数据渲染，列表不塌陷成加载态（消除按钮点击时的页面闪烁）。
+    placeholderData: keepPreviousData,
     queryFn: () =>
       assetApi.list({
         ...(cursorMode ? { cursor: cursor ?? '' } : { page }),
@@ -405,6 +408,7 @@ export default function AssetsPage() {
     queryKey: ['asset-icons', projectId, appliedQ, page],
     enabled: view === 'icons',
     staleTime: 30_000,
+    placeholderData: keepPreviousData,
     queryFn: () =>
       assetApi.icons({
         project_id: Number(projectId) || undefined,
@@ -418,6 +422,7 @@ export default function AssetsPage() {
     queryKey: ['asset-technologies', projectId, appliedQ, page],
     enabled: view === 'technologies',
     staleTime: 30_000,
+    placeholderData: keepPreviousData,
     queryFn: () =>
       assetApi.technologies({
         project_id: Number(projectId) || undefined,
@@ -1046,7 +1051,8 @@ export default function AssetsPage() {
             </SelectContent>
           </Select>
         </div>
-        <span className="ml-auto text-sm text-muted-foreground">
+        <span className="ml-auto flex items-center gap-2 text-sm text-muted-foreground">
+          {list.isFetching && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-label="加载中" />}
           {cursorMode ? `已加载 ${items.length} 条` : `共 ${total.toLocaleString()} 条`}
         </span>
       </div>
@@ -1162,7 +1168,14 @@ export default function AssetsPage() {
       )}
 
       {!clusterView && (!data || data.view_supported !== false) && (
-        <div ref={scrollRef} className={virtualize ? 'max-h-[70vh] overflow-auto rounded-md border [&>div]:overflow-visible' : 'rounded-md border'}>
+        <div
+          ref={scrollRef}
+          className={
+            (virtualize ? 'max-h-[70vh] overflow-auto rounded-md border [&>div]:overflow-visible' : 'rounded-md border') +
+            // 后台取新数据时整表弱化，代替「塌陷成加载态」的硬切换
+            (list.isFetching && !list.isLoading ? ' opacity-60 transition-opacity' : ' transition-opacity')
+          }
+        >
           <Table>
             <TableHeader className={virtualize ? 'sticky top-0 z-10 bg-background' : undefined}>
               <TableRow>
