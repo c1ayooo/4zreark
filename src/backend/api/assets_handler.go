@@ -234,6 +234,22 @@ func (h *AssetHandler) GetAsset(c *gin.Context) {
 	utils.Success(c, detail)
 }
 
+// ListSiteRecords 站点原始记录分页：GET /api/assets/:id/records?cursor=&limit=50
+func (h *AssetHandler) ListSiteRecords(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		utils.BadRequest(c, "非法资产 ID")
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	items, next, more, err := h.assets.ListSiteRecords(c.Request.Context(), id, c.Query("cursor"), limit)
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"items": items, "next_cursor": next, "has_more": more})
+}
+
 // ListEvents 变更时间线。
 // GET /api/events
 func (h *AssetHandler) ListEvents(c *gin.Context) {

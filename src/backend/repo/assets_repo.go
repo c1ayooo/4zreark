@@ -56,6 +56,11 @@ type Site struct {
 	Priority  string `json:"priority"`
 	// RiskFactors 是评分因子明细（为什么是 P2），与 RiskScore 同时计算。
 	RiskFactors []RiskFactor `json:"risk_factors,omitempty"`
+	// 列表页需要的聚合计数，避免前端为每个站点再发一次详情请求。
+	EndpointCount    int        `json:"endpoint_count"`
+	RecordCount      int        `json:"record_count"`
+	FingerprintCount int        `json:"fingerprint_count"`
+	LastRecordAt     *time.Time `json:"last_record_at,omitempty"`
 }
 
 // RiskFactor 是一条评分因子：加分/减分的来源与原因。
@@ -113,7 +118,11 @@ const siteColumns = `s.id, s.project_id, p.code, p.name, s.host, s.port, s.proto
 	s.first_seen, s.last_seen, s.verified_at, s.next_verification_at, s.last_http_verified_at,
 	coalesce((SELECT jsonb_agg(jsonb_build_object('scheme', e.scheme, 'port', e.port,
 	                                             'status_code', e.status_code) ORDER BY e.port, e.scheme)
-	            FROM site_endpoints e WHERE e.site_id = s.id), '[]'::jsonb)`
+	            FROM site_endpoints e WHERE e.site_id = s.id), '[]'::jsonb),
+	(SELECT count(*) FROM site_endpoints e WHERE e.site_id = s.id),
+	(SELECT count(*) FROM raw_records rr WHERE rr.site_id = s.id),
+	(SELECT count(*) FROM fingerprint_hits fh WHERE fh.site_id = s.id),
+	(SELECT max(rr.observed_at) FROM raw_records rr WHERE rr.site_id = s.id)`
 
 func scanSite(scan func(...any) error) (*Site, error) {
 	var s Site
@@ -122,7 +131,8 @@ func scanSite(scan func(...any) error) (*Site, error) {
 		&s.Protocol, &s.Value, &s.IP, &s.HTTPStatus, &s.Title, &s.IconSHA256, &tech,
 		&s.DiscoveryType, &s.State, &s.ConsecutiveFailures, &s.RetryStep, &s.CleanupEligible,
 		&s.VerificationStatus, &s.VerificationReason, &s.Attempts, &s.MaxAttempts,
-		&s.FirstSeen, &s.LastSeen, &s.VerifiedAt, &s.NextVerificationAt, &s.LastHTTPVerifiedAt, &eps)
+		&s.FirstSeen, &s.LastSeen, &s.VerifiedAt, &s.NextVerificationAt, &s.LastHTTPVerifiedAt, &eps,
+		&s.EndpointCount, &s.RecordCount, &s.FingerprintCount, &s.LastRecordAt)
 	if err != nil {
 		return nil, err
 	}

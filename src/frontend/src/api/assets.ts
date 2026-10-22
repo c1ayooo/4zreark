@@ -40,6 +40,10 @@ export interface Site {
   priority: string
   /** 评分因子明细：为什么是这个档位 */
   risk_factors?: RiskFactor[]
+  endpoint_count: number
+  record_count: number
+  fingerprint_count: number
+  last_record_at?: string
 }
 
 export interface RiskFactor {
@@ -249,6 +253,8 @@ export const assetApi = {
   /** 资产详情：站点 + 入口 + 证据链（验证/指纹/原始记录/事件/关系） */
   detail: (id: number) =>
     api.get<unknown, { code: number; message: string; data: AssetDetail }>(`/assets/${id}`),
+  records: (id: number, params: { cursor?: string; limit?: number } = {}) =>
+    api.get<unknown, { code: number; data: AssetRecordsPage }>(`/assets/${id}/records`, { params }),
   checkQuery: (q: string) =>
     api.get<unknown, { code: number; data: { valid: boolean; compiled: string } }>('/assets/query-check', {
       params: { q },
@@ -390,5 +396,11 @@ export interface AssetDetail {
   records: AssetRawRecord[]
   events: AssetEvent[]
   relations: AssetRelation[]
+}
+
+export interface AssetRecordsPage {
+  items: AssetRawRecord[]
+  next_cursor?: string
+  has_more: boolean
 }
 

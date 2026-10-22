@@ -127,6 +127,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				protected.POST("/verifications/batches/preview", middleware.RequirePermission("asset:write"), verificationHandler.PreviewBatch)
 				protected.POST("/verifications/batches", middleware.RequirePermission("asset:write"), verificationHandler.ExecuteBatch)
 				protected.GET("/assets/:id", middleware.RequirePermission("asset:read"), assetHandler.GetAsset)
+				protected.GET("/assets/:id/records", middleware.RequirePermission("asset:read"), assetHandler.ListSiteRecords)
 				protected.POST("/assets/:id/verify", assetHandler.VerifyAsset)
 				protected.GET("/events", middleware.RequirePermission("asset:read"), assetHandler.ListEvents)
 				protected.GET("/changes", compatHandler.Changes)

@@ -144,6 +144,14 @@ func (s *AssetService) GetAssetDetail(ctx context.Context, id int64) (*repo.Asse
 	return a.GetAssetDetail(ctx, id)
 }
 
+func (s *AssetService) ListSiteRecords(ctx context.Context, siteID int64, cursor string, limit int) ([]*repo.AssetRecord, string, bool, error) {
+	a, err := s.repo()
+	if err != nil {
+		return nil, "", false, err
+	}
+	return a.ListSiteRecords(ctx, siteID, cursor, limit)
+}
+
 // ListAssets 是资产列表：view × kind × catalog 三层正交维度 + DSL 查询串。
 // DSL 语法错误会带上出错位置返回；结构化参数非法则静默回落缺省（v4 §11.4 的容错边界）。
 func (s *AssetService) ListAssets(ctx context.Context, q repo.AssetQuery) (*repo.AssetPage, error) {

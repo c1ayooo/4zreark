@@ -35,12 +35,6 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
 import { RefreshCw, Search, Radar, MoreHorizontal, ShieldCheck, ShieldAlert, Lock, Globe, Rocket, X, Eye } from 'lucide-react'
 
 const stateLabel: Record<string, string> = {
@@ -186,6 +180,9 @@ export default function AssetsPage() {
   })
   const [cursorStack, setCursorStack] = useState<Array<string | undefined>>([undefined])
   const [detailSite, setDetailSite] = useState<Site | null>(null)
+  const [detailTab, setDetailTab] = useState<'overview' | 'endpoints' | 'records' | 'fingerprints' | 'verifications'>('overview')
+  const [recordsCursorStack, setRecordsCursorStack] = useState<Array<string | undefined>>([undefined])
+  const recordsCursor = recordsCursorStack[recordsCursorStack.length - 1]
   const cursor = cursorStack[cursorStack.length - 1]
   const clusterView = view === 'icons' || view === 'technologies'
   const riskSort = kind === 'site' && siteGroup && sort === 'risk'
@@ -255,6 +252,19 @@ export default function AssetsPage() {
     staleTime: 30_000,
   })
   const detail = detailQuery.data?.data
+  const recordsQuery = useQuery({
+    queryKey: ['asset-records', detailSite?.id, recordsCursor],
+    queryFn: () => assetApi.records(detailSite!.id, { cursor: recordsCursor ?? '', limit: 50 }),
+    enabled: !!detailSite && detailTab === 'records',
+    staleTime: 30_000,
+  })
+  const recordsPage = recordsQuery.data?.data
+  const records = recordsPage?.items ?? []
+
+  useEffect(() => {
+    setDetailTab('overview')
+    setRecordsCursorStack([undefined])
+  }, [detailSite?.id])
 
   const iconClusters = useQuery({
     queryKey: ['asset-icons', projectId, appliedQ, page],
@@ -374,7 +384,7 @@ export default function AssetsPage() {
   const busy = probe.isPending || verify.isPending || protect.isPending
   const expanded = kind === 'site' && !siteGroup
 
-  const colCount = expanded ? 7 : kind === 'site' ? 10 : kind === 'record' ? 7 : 5
+  const colCount = expanded ? 7 : kind === 'site' ? 11 : kind === 'record' ? 7 : 5
 
   // 资产多选：选中后可直接对这些资产派新任务（选资产 → 选类型 → 起任务）
   const [selectedHosts, setSelectedHosts] = useState<Set<string>>(new Set())
@@ -463,6 +473,12 @@ export default function AssetsPage() {
         </Badge>
       </TableCell>
       <TableCell className="hidden max-w-[260px] truncate text-sm md:table-cell">{s.title || '—'}</TableCell>
+      <TableCell
+        className="hidden text-right text-sm tabular-nums lg:table-cell"
+        title={`入口 ${s.endpoint_count} · 原始记录 ${s.record_count} · 指纹 ${s.fingerprint_count}`}
+      >
+        {s.record_count}
+      </TableCell>
       <TableCell className="hidden text-sm lg:table-cell">{s.project_name}</TableCell>
       <TableCell className="hidden text-right text-[13px] tabular-nums text-muted-foreground xl:table-cell">{s.first_seen?.slice(0, 10)}</TableCell>
       <TableCell>
@@ -715,6 +731,7 @@ export default function AssetsPage() {
                 {kind === 'site' && !expanded && <TableHead className="hidden w-[90px] text-right lg:table-cell">风险</TableHead>}
                 {kind === 'site' && !expanded && <TableHead className="hidden w-[90px] text-right sm:table-cell">状态码</TableHead>}
                 {kind === 'site' && !expanded && <TableHead className="hidden md:table-cell">标题</TableHead>}
+                {kind === 'site' && !expanded && <TableHead className="hidden w-[82px] text-right lg:table-cell">记录</TableHead>}
                 {kind === 'site' && !expanded && <TableHead className="hidden w-[120px] lg:table-cell">项目</TableHead>}
                 {kind === 'site' && !expanded && <TableHead className="hidden w-[110px] text-right xl:table-cell">发现时间</TableHead>}
                 {kind === 'site' && !expanded && <TableHead className="w-[110px]">连通</TableHead>}
@@ -959,96 +976,231 @@ export default function AssetsPage() {
         </div>
       )}
 
-      <Dialog open={!!detailSite} onOpenChange={(open) => { if (!open) setDetailSite(null) }}>
-        <DialogContent className="max-h-[85vh] max-w-4xl overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 pr-8">
-              <span className="truncate font-mono text-base">{detailSite?.value || detailSite?.host}</span>
-              {detailSite && <Badge variant={stateVariant(detailSite.state)}>{stateLabel[detailSite.state] ?? detailSite.state}</Badge>}
-            </DialogTitle>
-          </DialogHeader>
-          {detailQuery.isLoading ? (
-            <div className="py-10 text-center text-sm text-muted-foreground">加载全部信息…</div>
-          ) : !detail ? (
-            <div className="py-10 text-center text-sm text-muted-foreground">详情加载失败</div>
-          ) : (
-            <div className="space-y-5">
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                {[
-                  ['入口', detail.site.endpoints?.length ?? 0],
-                  ['原始记录', detail.records.length],
-                  ['指纹命中', detail.fingerprints.length],
-                  ['验证记录', detail.verifications.length],
-                ].map(([label, value]) => (
-                  <div key={String(label)} className="rounded-md border px-3 py-2">
-                    <div className="text-[13px] text-muted-foreground">{label}</div>
-                    <div className="mt-1 text-xl font-semibold tabular-nums">{value}</div>
-                  </div>
-                ))}
-              </div>
-
-              <div>
-                <div className="mb-2 text-sm font-semibold">入口</div>
-                <div className="flex flex-wrap gap-1.5">
-                  {(detail.site.endpoints ?? []).length === 0 ? (
-                    <span className="text-sm text-muted-foreground">—</span>
-                  ) : detail.site.endpoints.map((e) => (
-                    <Badge key={`${e.scheme}-${e.port}`} variant="outline" className="font-mono text-xs">
-                      {e.scheme}:{e.port}{e.status_code ? ` · ${e.status_code}` : ''}
-                    </Badge>
-                  ))}
+      {detailSite && (
+        <>
+          <button
+            type="button"
+            aria-label="关闭资产详情"
+            className="fixed inset-0 z-40 bg-foreground/20 xl:hidden"
+            onClick={() => setDetailSite(null)}
+          />
+          <aside className="fixed right-0 top-16 bottom-0 z-50 flex w-full max-w-[460px] flex-col border-l bg-background shadow-xl">
+            <div className="flex items-start justify-between gap-3 border-b p-4">
+              <div className="min-w-0">
+                <div className="truncate font-mono text-sm font-semibold">
+                  {detailSite.value || detailSite.host}
+                </div>
+                <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                  <Badge variant={stateVariant(detailSite.state)}>
+                    {stateLabel[detailSite.state] ?? detailSite.state}
+                  </Badge>
+                  <span>{detailSite.project_name}</span>
+                  <span>·</span>
+                  <span className="tabular-nums">P{detailSite.priority?.replace(/^p/i, '') || '—'} · {detailSite.risk_score}</span>
                 </div>
               </div>
-
-              <div>
-                <div className="mb-2 text-sm font-semibold">指纹</div>
-                <div className="flex flex-wrap gap-1.5">
-                  {(detail.site.technology_stack ?? []).length === 0 ? (
-                    <span className="text-sm text-muted-foreground">—</span>
-                  ) : detail.site.technology_stack.map((t) => (
-                    <Badge key={t} variant="secondary" className="text-xs">{t}</Badge>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <div className="mb-2 text-sm font-semibold">原始记录（{detail.records.length}）</div>
-                <div className="max-h-64 overflow-auto rounded-md border">
-                  <Table>
-                    <TableHeader className="sticky top-0 bg-background">
-                      <TableRow>
-                        <TableHead>记录</TableHead>
-                        <TableHead className="w-[70px]">来源</TableHead>
-                        <TableHead className="w-[70px] text-right">状态</TableHead>
-                        <TableHead className="w-[150px] text-right">观测时间</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {detail.records.length === 0 ? (
-                        <TableRow><TableCell colSpan={4} className="py-6 text-center text-muted-foreground">暂无原始记录</TableCell></TableRow>
-                      ) : detail.records.map((r) => (
-                        <TableRow key={r.id}>
-                          <TableCell className="max-w-[420px] break-all font-mono text-xs">{r.value}</TableCell>
-                          <TableCell className="text-xs text-muted-foreground">{r.source}</TableCell>
-                          <TableCell className="text-right text-xs tabular-nums">{r.status_code || '—'}</TableCell>
-                          <TableCell className="text-right text-xs tabular-nums text-muted-foreground">{formatDate(r.observed_at)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-2 border-t pt-3">
-                <Button variant="outline" onClick={() => setDetailSite(null)}>关闭</Button>
-                <Button onClick={() => { const id = detailSite?.id; setDetailSite(null); if (id) navigate(`/assets/${id}`) }}>
-                  打开完整详情页
-                </Button>
-              </div>
+              <Button variant="ghost" size="icon" aria-label="关闭详情" onClick={() => setDetailSite(null)}>
+                <X className="h-4 w-4" />
+              </Button>
             </div>
-          )}
-        </DialogContent>
-      </Dialog>
+
+            <div className="flex gap-1 overflow-x-auto border-b px-3 py-2">
+              {([
+                ['overview', '概览'],
+                ['endpoints', '入口'],
+                ['records', '原始记录'],
+                ['fingerprints', '指纹'],
+                ['verifications', '验证'],
+              ] as const).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setDetailTab(id)}
+                  className={
+                    'shrink-0 rounded-sm px-2.5 py-1.5 text-[13px] transition-colors ' +
+                    (detailTab === id
+                      ? 'bg-foreground text-background'
+                      : 'text-muted-foreground hover:bg-muted')
+                  }
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4">
+              {detailQuery.isLoading ? (
+                <div className="py-10 text-center text-sm text-muted-foreground">加载资产档案…</div>
+              ) : !detail ? (
+                <div className="py-10 text-center text-sm text-muted-foreground">详情加载失败</div>
+              ) : (
+                <>
+                  {detailTab === 'overview' && (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 gap-2">
+                        {[
+                          ['入口', detailSite.endpoint_count ?? 0],
+                          ['原始记录', detailSite.record_count ?? 0],
+                          ['指纹命中', detailSite.fingerprint_count ?? 0],
+                          ['验证记录', detail.verifications.length],
+                        ].map(([label, value]) => (
+                          <div key={String(label)} className="rounded-md border px-3 py-2">
+                            <div className="text-xs text-muted-foreground">{label}</div>
+                            <div className="mt-1 text-xl font-semibold tabular-nums">{value}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="divide-y text-sm">
+                        {[
+                          ['状态', stateLabel[detailSite.state] ?? detailSite.state],
+                          ['标题', detailSite.title || '—'],
+                          ['IP', detailSite.ip || '—'],
+                          ['协议 / 端口', `${detailSite.protocol}:${detailSite.port}`],
+                          ['首次发现', formatDate(detailSite.first_seen)],
+                          ['最近发现', formatDate(detailSite.last_record_at || detailSite.last_seen)],
+                        ].map(([label, value]) => (
+                          <div key={label} className="flex items-start justify-between gap-3 py-2">
+                            <span className="shrink-0 text-muted-foreground">{label}</span>
+                            <span className="min-w-0 break-all text-right">{value}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div>
+                        <div className="mb-1.5 text-xs text-muted-foreground">技术栈</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {(detailSite.technology_stack ?? []).length === 0 ? (
+                            <span className="text-sm text-muted-foreground">—</span>
+                          ) : detailSite.technology_stack.map((t) => (
+                            <Badge key={t} variant="secondary" className="text-xs">{t}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {detailTab === 'endpoints' && (
+                    <div className="space-y-2">
+                      {(detailSite.endpoints ?? []).length === 0 ? (
+                        <p className="text-sm text-muted-foreground">暂无入口。</p>
+                      ) : detailSite.endpoints.map((e) => (
+                        <div key={`${e.scheme}-${e.port}`} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                          <span className="font-mono">{e.scheme}:{e.port}</span>
+                          <Badge variant={e.status_code >= 200 && e.status_code < 400 ? 'default' : 'secondary'}>
+                            {e.status_code || '—'}
+                          </Badge>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {detailTab === 'records' && (
+                    <div className="space-y-3">
+                      {recordsQuery.isLoading ? (
+                        <p className="text-sm text-muted-foreground">加载原始记录…</p>
+                      ) : records.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">暂无原始记录。</p>
+                      ) : (
+                        <div className="rounded-md border">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>记录</TableHead>
+                                <TableHead className="w-[54px]">来源</TableHead>
+                                <TableHead className="w-[54px] text-right">状态</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {records.map((r) => (
+                                <TableRow key={r.id}>
+                                  <TableCell className="max-w-[270px] break-all font-mono text-xs">
+                                    {r.value}
+                                    <div className="mt-0.5 text-[11px] text-muted-foreground">
+                                      {formatDate(r.observed_at)}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell className="text-xs text-muted-foreground">{r.source}</TableCell>
+                                  <TableCell className="text-right text-xs tabular-nums">{r.status_code || '—'}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between text-xs text-muted-foreground">
+                        <span>已加载 {records.length} 条</span>
+                        <div className="flex gap-1">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={recordsCursorStack.length <= 1}
+                            onClick={() => setRecordsCursorStack((stack) => stack.slice(0, -1))}
+                          >
+                            上一页
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={!recordsPage?.has_more || !recordsPage?.next_cursor}
+                            onClick={() => setRecordsCursorStack((stack) => [...stack, recordsPage?.next_cursor])}
+                          >
+                            下一页
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {detailTab === 'fingerprints' && (
+                    <div className="space-y-2">
+                      {detail.fingerprints.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">暂无指纹命中。</p>
+                      ) : detail.fingerprints.map((f) => (
+                        <div key={`${f.rule_id}-${f.observed_at}`} className="rounded-md border px-3 py-2 text-sm">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-medium">{f.rule_name || f.rule_id}</span>
+                            <span className="text-xs text-muted-foreground">{formatDate(f.observed_at)}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {detailTab === 'verifications' && (
+                    <div className="space-y-2">
+                      {detail.verifications.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">暂无验证记录。</p>
+                      ) : detail.verifications.map((v) => (
+                        <div key={v.id} className="rounded-md border px-3 py-2 text-sm">
+                          <div className="flex items-center justify-between gap-2">
+                            <Badge variant={v.status === 'reachable' ? 'success' : 'secondary'}>{v.status}</Badge>
+                            <span className="text-xs text-muted-foreground">{formatDate(v.observed_at)}</span>
+                          </div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            状态码 {v.http_status || '—'} · 尝试 {v.attempts || 0}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div className="border-t p-3">
+              <Button
+                className="w-full"
+                onClick={() => {
+                  const id = detailSite.id
+                  setDetailSite(null)
+                  navigate(`/assets/${id}`)
+                }}
+              >
+                打开完整详情页
+              </Button>
+            </div>
+          </aside>
+        </>
+      )}
 
       <CreateTaskFromAssetsDialog
         open={createOpen}

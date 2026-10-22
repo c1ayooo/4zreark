@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -260,4 +261,68 @@ func (a *AssetRepo) siteRelations(ctx context.Context, siteID int64) ([]*AssetRe
 		out = append(out, &r)
 	}
 	return out, rows.Err()
+}
+
+// ListSiteRecords 是详情页原始记录的分页版本：按 (observed_at,id) keyset，
+// 避免一个证据很多的站点把全部记录塞进一次响应。
+func (a *AssetRepo) ListSiteRecords(ctx context.Context, siteID int64, cursor string, limit int) ([]*AssetRecord, string, bool, error) {
+	if limit < 1 || limit > 200 {
+		limit = 50
+	}
+	where := "site_id = $1"
+	args := []any{siteID}
+	if cursor != "" {
+		parts, err := decodeAssetCursor(cursor)
+		if err != nil {
+			return nil, "", false, err
+		}
+		nano, err := strconv.ParseInt(parts[0], 10, 64)
+		if err != nil {
+			return nil, "", false, err
+		}
+		id, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil {
+			return nil, "", false, err
+		}
+		args = append(args, time.Unix(0, nano).UTC(), id)
+		where += " AND (observed_at, id) < ($2, $3)"
+	}
+	args = append(args, limit+1)
+	stmt := fmt.Sprintf(`SELECT id, source, host, port, protocol, value, status_code, coalesce(title,''),
+		coalesce(ip::text,''), evidence, observed_at
+		FROM raw_records WHERE %s ORDER BY observed_at DESC, id DESC LIMIT $%d`, where, len(args))
+	rows, err := a.r.pool.Query(ctx, stmt, args...)
+	if err != nil {
+		return nil, "", false, err
+	}
+	defer rows.Close()
+	out := make([]*AssetRecord, 0, limit+1)
+	for rows.Next() {
+		var r AssetRecord
+		var evidence []byte
+		if err := rows.Scan(&r.ID, &r.Source, &r.Host, &r.Port, &r.Protocol, &r.Value,
+			&r.StatusCode, &r.Title, &r.IP, &evidence, &r.ObservedAt); err != nil {
+			return nil, "", false, err
+		}
+		if len(evidence) > 0 {
+			_ = json.Unmarshal(evidence, &r.Evidence)
+		}
+		if r.Evidence == nil {
+			r.Evidence = map[string]any{}
+		}
+		out = append(out, &r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", false, err
+	}
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	next := ""
+	if hasMore && len(out) > 0 {
+		last := out[len(out)-1]
+		next = encodeAssetCursor(strconv.FormatInt(last.ObservedAt.UnixNano(), 10), strconv.FormatInt(last.ID, 10))
+	}
+	return out, next, hasMore, nil
 }
