@@ -27,3 +27,7 @@ backup_*.sql
 src/backend/.sock.lock
 src/backend/project:read
 src/backend/cmd/tmptls/
+
+# ZCode 本地会话与测试运行时文件
+.zcode/
+src/backend/test/.sock.lock
