@@ -332,7 +332,17 @@ func main() {
 		siteWatchService.Start()
 		defer siteWatchService.Stop()
 		log.Println("Asset cruise v2 started (discovery + site watch)")
+
+		// 内置词表自动同步（embed + 磁盘 config/dicts/txt → dictionaries 表）
+		dictSyncService := service.GetDictSyncService()
+		dictSyncService.Start()
+		defer dictSyncService.Stop()
+		log.Println("Dict sync service started (builtin dictionaries)")
 	}
+
+	// nuclei 运行时后台同步：每小时 Ensure(auto)，auto_update 开启且到期时
+	// 自动拉上游模板快照与二进制（在 GetNucleiRuntimeService 单例里自启动）
+	_ = service.GetNucleiRuntimeService()
 
 	// Start vuln intel poller（9 个公开漏洞源 → vuln_intel）
 	// 设置里 vulnintel.enabled=false 时不轮询，但仍可手动触发。

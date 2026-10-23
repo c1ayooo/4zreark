@@ -43,6 +43,9 @@ type DictRepo interface {
 
 	// G4：词表条目 + 引用保护
 	CreateWithEntries(ctx context.Context, d *models.Dictionary, segmentSize int, values []string) (int64, error)
+	// UpsertBuiltin 内置词表同步：按 (type,name) 建行或更新元数据，
+	// contentMarker（内容 sha 指纹）与行数都没变时跳过词表重写。
+	UpsertBuiltin(ctx context.Context, d *models.Dictionary, contentMarker string, segmentSize int, values []string) (inserted int64, rewrote bool, err error)
 	ListEntries(ctx context.Context, dictID string, segment, page, pageSize int) ([]string, int64, error)
 	// ListEntriesForExpand 供种子展开一次取前 limit 条，不分页。
 	ListEntriesForExpand(ctx context.Context, dictID string, limit int) ([]string, error)
@@ -425,6 +428,85 @@ on conflict do nothing`, d.ID.Hex(), seg+1, values[seg*segmentSize:end])
 		return 0, err
 	}
 	return inserted, nil
+}
+
+// UpsertBuiltin 内置词表同步。与 CreateWithEntries 的差异：
+//   - 目标行按 (type,name) 定位，存在则更新元数据而不是报重复；
+//   - file_path 存内容指纹（builtin:<file>@<sha12>），指纹与行数都没变时
+//     跳过条目重写——每日同步循环对两万行词表做全量替换太浪费。
+//
+// 条目重写用「先删后插」，dict id 不变，按 id/name 引用它的种子不受影响。
+func (r *dictRepo) UpsertBuiltin(ctx context.Context, d *models.Dictionary, contentMarker string, segmentSize int, values []string) (int64, bool, error) {
+	if segmentSize <= 0 {
+		segmentSize = 50000
+	}
+	tx, err := r.r.pool.Begin(ctx)
+	if err != nil {
+		return 0, false, err
+	}
+	defer tx.Rollback(ctx)
+
+	var id string
+	var oldMarker string
+	var oldCount int
+	err = tx.QueryRow(ctx,
+		`select id, coalesce(file_path, ''), line_count from dictionaries
+		  where type = $1 and name = $2 for update`,
+		d.Type, d.Name).Scan(&id, &oldMarker, &oldCount)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		if d.ID.IsZero() {
+			d.ID = oid.NewObjectID()
+		}
+		now := time.Now()
+		d.CreatedAt, d.UpdatedAt = now, now
+		id = d.ID.Hex()
+		if _, err := tx.Exec(ctx,
+			`insert into dictionaries (`+dictColumns+`) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+			id, d.Name, d.Type, d.Description, contentMarker, len(values), true,
+			objectIDOrNil(d.CreatedBy), now.UTC(), now.UTC()); err != nil {
+			if isUniqueViolation(err) {
+				return 0, false, ErrDuplicate
+			}
+			return 0, false, err
+		}
+		oldMarker, oldCount = "", -1
+	case err != nil:
+		return 0, false, err
+	default:
+		if parsed, perr := oid.ObjectIDFromHex(id); perr == nil {
+			d.ID = parsed
+		}
+	}
+
+	if oldMarker == contentMarker && oldCount == len(values) {
+		return 0, false, tx.Commit(ctx)
+	}
+
+	if _, err := tx.Exec(ctx,
+		`update dictionaries set file_path = $2, line_count = $3, is_builtin = true, updated_at = now()
+		  where id = $1`, id, contentMarker, len(values)); err != nil {
+		return 0, false, err
+	}
+	if _, err := tx.Exec(ctx, `delete from dict_entries where dict_id = $1`, id); err != nil {
+		return 0, false, err
+	}
+	var inserted int64
+	for seg := 0; seg*segmentSize < len(values); seg++ {
+		end := (seg + 1) * segmentSize
+		if end > len(values) {
+			end = len(values)
+		}
+		tag, err := tx.Exec(ctx, `
+insert into dict_entries (dict_id, segment, value)
+select $1, $2, v from unnest($3::text[]) as v
+on conflict do nothing`, id, seg+1, values[seg*segmentSize:end])
+		if err != nil {
+			return 0, false, err
+		}
+		inserted += tag.RowsAffected()
+	}
+	return inserted, true, tx.Commit(ctx)
 }
 
 func (r *dictRepo) ListEntries(ctx context.Context, dictID string, segment, page, pageSize int) ([]string, int64, error) {

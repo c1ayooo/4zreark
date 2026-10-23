@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/c1ayooo/4zreark/internal/nucleiruntime"
 )
@@ -17,7 +19,9 @@ import (
 // 模板库的事实源仍是 PG；本服务只负责「可执行文件 + 上游模板快照」的
 // 下载、更新与状态查询，供 POC/自动验证链路取二进制路径。
 type NucleiRuntimeService struct {
-	mgr *nucleiruntime.Manager
+	mgr      *nucleiruntime.Manager
+	stopOnce sync.Once
+	stopCh   chan struct{}
 }
 
 var (
@@ -35,9 +39,55 @@ func GetNucleiRuntimeService() *NucleiRuntimeService {
 		settings := newFileSettings(filepath.Join(root, "settings.json"))
 		mgr := nucleiruntime.New(root, settings)
 		mgr.SetContext(context.Background())
-		nucleiRuntimeSvc = &NucleiRuntimeService{mgr: mgr}
+		nucleiRuntimeSvc = &NucleiRuntimeService{mgr: mgr, stopCh: make(chan struct{})}
+		nucleiRuntimeSvc.Start()
 	})
 	return nucleiRuntimeSvc
+}
+
+// Start 后台同步循环：每小时 Ensure(auto=true)——缺失的二进制/模板补装，
+// auto_update 开启且到期时自动同步上游（模板快照 + 二进制），失败不阻断扫描
+// （Ensure 内部已把失败降级为警告，继续用现有版本）。
+func (s *NucleiRuntimeService) Start() {
+	go func() {
+		select {
+		case <-time.After(5 * time.Minute):
+		case <-s.stopCh:
+			return
+		}
+		for {
+			if s.mgr == nil || !s.mgr.Enabled() {
+				// nuclei 运行时被显式关闭：不跑网络同步，保留补缺语义由扫描路径兜底
+				select {
+				case <-s.stopCh:
+					return
+				case <-time.After(time.Hour):
+				}
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+			res, err := s.mgr.Ensure(ctx, true)
+			cancel()
+			if err != nil {
+				log.Printf("[nuclei] 后台同步失败（沿用现有运行时）: %v", err)
+			} else if res != nil && (res.Installed || res.Updated) {
+				log.Printf("[nuclei] 后台同步完成: installed=%v updated=%v", res.Installed, res.Updated)
+			}
+			select {
+			case <-s.stopCh:
+				return
+			case <-time.After(time.Hour):
+			}
+		}
+	}()
+}
+
+// Stop 停止后台同步循环。
+func (s *NucleiRuntimeService) Stop() {
+	if s == nil {
+		return
+	}
+	s.stopOnce.Do(func() { close(s.stopCh) })
 }
 
 func NewNucleiRuntimeService() *NucleiRuntimeService { return GetNucleiRuntimeService() }
