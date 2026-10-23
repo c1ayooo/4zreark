@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {keepPreviousData, useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import { RefreshCw, RotateCcw, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
 import { Button, Card, Input, Select, Table, Tag } from 'antd'
@@ -10,6 +10,7 @@ import EmptyState from '@/components/common/EmptyState'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
+import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 
 const STATUS_OPTIONS = [
   { value: 'all', label: '全部状态' },
@@ -49,6 +50,8 @@ export default function VerificationsPage() {
   const [projectId, setProjectId] = useState('0')
   const [status, setStatus] = useState('all')
   const [reason, setReason] = useState('')
+  const debouncedReason = useDebouncedValue(reason)
+  useEffect(() => { setPage(1) }, [debouncedReason])
   const [page, setPage] = useState(1)
   const pageSize = 30
 
@@ -58,14 +61,14 @@ export default function VerificationsPage() {
     queryFn: () => verificationApi.stats(Number(projectId) || undefined),
   })
   const list = useQuery({
-    queryKey: ['verifications', projectId, status, reason, page],
+    queryKey: ['verifications', projectId, status, debouncedReason, page],
     // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
     placeholderData: keepPreviousData,
     queryFn: () =>
       verificationApi.list({
         project_id: Number(projectId) || undefined,
         status: status === 'all' ? undefined : status,
-        reason_code: reason.trim() || undefined,
+        reason_code: debouncedReason.trim() || undefined,
         page,
         page_size: pageSize,
       }),

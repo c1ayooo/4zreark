@@ -108,7 +108,8 @@ export default function TaskDetailPage() {
   }, [statsData?.data, activeTab])
 
   // 确保 activeTab 有值后再查询结果
-  const currentTab = activeTab || 'domain'
+  // 回落值必须是 tabConfig 里存在的页签：'domain' 不在其中，初载时 Tabs 会短暂无选中项
+  const currentTab = activeTab || 'assets'
 
   // 获取当前Tab的结果数据（dirscan时支持状态码筛选）
   const statusCodeNum = statusCodeFilter !== 'all' ? parseInt(statusCodeFilter) : undefined
@@ -1123,9 +1124,11 @@ export default function TaskDetailPage() {
   }
 
   return (
-    <div className="h-full flex flex-col -m-6">
-      {/* Header - 固定在顶部 */}
-      <div className="border-b bg-background px-6 py-4">
+    // 常规流式布局：此前用 -m-6 抵消 MainLayout 内边距做「满出血」页头，
+    // md 以下布局 padding 是 16px 时会多抵 8px 导致内容贴边破版
+    <div className="flex flex-col">
+      {/* Header */}
+      <div className="border-b bg-background px-1 py-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             <Button

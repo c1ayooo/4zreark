@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {keepPreviousData, useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import { Plus, RefreshCw, Trash2, Undo2 } from 'lucide-react'
 import { Button, Input, Modal, Select, Table, Tag } from 'antd'
@@ -14,6 +14,7 @@ import {
 import { useConfirm } from '@/components/common/confirm-provider'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
+import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 
 const PAGE_SIZE = 50
 
@@ -30,6 +31,8 @@ export default function DigitalAssetsPage() {
   const [projectId, setProjectId] = useState('0')
   const [kind, setKind] = useState('')
   const [q, setQ] = useState('')
+  const debouncedQ = useDebouncedValue(q)
+  useEffect(() => { setPage(1) }, [debouncedQ])
   const [page, setPage] = useState(1)
 
   const [importOpen, setImportOpen] = useState(false)
@@ -48,7 +51,7 @@ export default function DigitalAssetsPage() {
       digitalApi.list({
         project_id: Number(projectId) || undefined,
         kind: kind || undefined,
-        q: q || undefined,
+        q: debouncedQ || undefined,
         page,
         page_size: PAGE_SIZE,
       }),

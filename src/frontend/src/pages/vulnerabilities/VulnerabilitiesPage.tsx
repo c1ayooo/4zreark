@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {keepPreviousData, useQuery, useMutation, useQueryClient} from '@tanstack/react-query'
 import { vulnApi } from '@/api/vulnerabilities'
 import { reportApi, type ReportProfile } from '@/api/reports'
@@ -14,6 +14,7 @@ import { getErrorMessage } from '@/lib/errors'
 import { Search, Eye, Download, RefreshCw, CheckCircle, MoreHorizontal, BarChart3, List, Shield } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import VulnDashboard from '@/components/vulnerabilities/VulnDashboard'
+import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 
 interface VulnRow {
   id: string
@@ -233,6 +234,8 @@ export default function VulnerabilitiesPage() {
   const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState('dashboard')
   const [search, setSearch] = useState('')
+  const debouncedSearch = useDebouncedValue(search)
+  useEffect(() => { setPage(1) }, [debouncedSearch])
   const [severityFilter, setSeverityFilter] = useState<string>('all')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [page, setPage] = useState(1)
@@ -247,14 +250,14 @@ export default function VulnerabilitiesPage() {
   const reportTemplates: ReportProfile[] = reportTemplatesQuery.data ?? []
 
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ['vulnerabilities', page, search, severityFilter, statusFilter],
+    queryKey: ['vulnerabilities', page, debouncedSearch, severityFilter, statusFilter],
     // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
     placeholderData: keepPreviousData,
     queryFn: () =>
       vulnApi.getVulnerabilities({
         page,
         pageSize: 10,
-        search,
+        search: debouncedSearch,
         severity: severityFilter === 'all' ? undefined : severityFilter,
         status: statusFilter === 'all' ? undefined : statusFilter,
       }),

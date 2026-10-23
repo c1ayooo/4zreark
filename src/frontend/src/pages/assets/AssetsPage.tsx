@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
-import { Button, Checkbox, Dropdown, Input, Modal, Pagination, Select, Table, Tag } from 'antd'
+import { Button, Checkbox, Drawer, Dropdown, Input, Modal, Pagination, Select, Table, Tag } from 'antd'
 import type { MenuProps, TableProps } from 'antd'
 import {
   assetApi,
@@ -819,7 +819,7 @@ export default function AssetsPage() {
           const isOpen = expandedSiteIDs.has(s.id)
           return (
             <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-              <Button size="small" onClick={() => setDetailSite(s)} disabled={busy}>
+              <Button size="small" onClick={() => navigate(`/assets/${s.id}`)} disabled={busy}>
                 <Eye className="mr-1 h-3.5 w-3.5" /> 详情
               </Button>
               <Button size="small" onClick={() => probe.mutate(s)} disabled={busy}>
@@ -873,9 +873,10 @@ export default function AssetsPage() {
     onRow = (s) => ({
       className: 'cursor-pointer',
       onClick: (e) => {
-        // 勾选列的点击不触发行跳转
+        // 勾选列的点击不触发
         if ((e.target as HTMLElement).closest('.ant-table-selection-column')) return
-        navigate(`/assets/${(s as Site).id}`)
+        // 详情双轨统一：点行 = 抽屉快速预览；整页档案走操作列的「详情」按钮
+        setDetailSite(s as Site)
       },
     })
   } else if (expanded) {
@@ -1638,33 +1639,34 @@ export default function AssetsPage() {
         </div>
       )}
 
-      {detailSite && (
-        <>
-          <button
-            type="button"
-            aria-label="关闭资产详情"
-            className="fixed inset-0 z-40 bg-foreground/20 xl:hidden"
-            onClick={() => setDetailSite(null)}
-          />
-          <aside className="fixed right-0 top-16 bottom-0 z-50 flex w-full max-w-[460px] flex-col border-l bg-background shadow-xl">
-            <div className="flex items-start justify-between gap-3 border-b p-4">
-              <div className="min-w-0">
-                <div className="truncate font-mono text-sm font-semibold">
-                  {detailSite.value || detailSite.host}
-                </div>
-                <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                  <Tag className={badgeCls(stateVariant(detailSite.state))}>
-                    {stateLabel[detailSite.state] ?? detailSite.state}
-                  </Tag>
-                  <span>{detailSite.project_name}</span>
-                  <span>·</span>
-                  <span className="tabular-nums">P{detailSite.priority?.replace(/^p/i, '') || '—'} · {detailSite.risk_score}</span>
-                </div>
+      <Drawer
+        open={!!detailSite}
+        onClose={() => setDetailSite(null)}
+        width={460}
+        // antd Drawer 自带遮罩/ESC/焦点管理，替代手写面板——此前大屏遮罩被
+        // xl:hidden 隐藏，点外部关不掉，只能找右上角 X
+        title={
+          detailSite && (
+            <div className="min-w-0">
+              <div className="truncate font-mono text-sm font-semibold">
+                {detailSite.value || detailSite.host}
               </div>
-              <Button type="text" aria-label="关闭详情" onClick={() => setDetailSite(null)} icon={<X className="h-4 w-4" />} />
+              <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                <Tag className={badgeCls(stateVariant(detailSite.state))}>
+                  {stateLabel[detailSite.state] ?? detailSite.state}
+                </Tag>
+                <span>{detailSite.project_name}</span>
+                <span>·</span>
+                <span className="tabular-nums">P{detailSite.priority?.replace(/^p/i, '') || '—'} · {detailSite.risk_score}</span>
+              </div>
             </div>
-
-            <div className="flex gap-1 overflow-x-auto border-b px-3 py-2">
+          )
+        }
+        styles={{ body: { padding: 16, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }}
+      >
+            {detailSite && (
+            <>
+            <div className="flex gap-1 overflow-x-auto border-b px-1 pb-2">
               {([
                 ['overview', '概览'],
                 ['endpoints', '入口'],
@@ -1871,12 +1873,15 @@ export default function AssetsPage() {
                 </>
               )}
             </div>
+            </>
+            )}
 
             <div className="border-t p-3">
               <Button
                 type="primary"
                 className="w-full"
                 onClick={() => {
+                  if (!detailSite) return
                   const id = detailSite.id
                   setDetailSite(null)
                   navigate(`/assets/${id}`)
@@ -1885,9 +1890,7 @@ export default function AssetsPage() {
                 打开完整详情页
               </Button>
             </div>
-          </aside>
-        </>
-      )}
+      </Drawer>
 
       <Modal
         open={saveViewOpen}

@@ -25,7 +25,7 @@ import {
   Trash2,
   Zap,
 } from 'lucide-react'
-import { Badge, Button, Card, Input, Modal, Progress, Select, Skeleton, Switch, Table, Tag } from 'antd'
+import { Badge, Button, Card, Dropdown, Input, Modal, Progress, Select, Skeleton, Switch, Table, Tag } from 'antd'
 import type { TableProps } from 'antd'
 
 import {
@@ -232,6 +232,7 @@ function AddSeedDialog({
   const [preview, setPreview] = useState<SeedPreviewResult | null>(null)
   const [previewing, setPreviewing] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState('')
 
   const dictionaries = useQuery({
     queryKey: ['dictionaries', 'subdomain', 'seed-picker'],
@@ -280,12 +281,19 @@ function AddSeedDialog({
   const submit = async (e?: FormEvent) => {
     e?.preventDefault()
     if (!value.trim() || !preview || preview.total === 0) return
+    // 间隔必填：清空静默建「无计划种子」+ 成功提示谎称已启用，是既定修复项
+    const intervalNum = Number(interval) || 0
+    if (intervalNum < 1 || intervalNum > 720) {
+      setSubmitError('检查间隔需为 1-720 小时')
+      return
+    }
+    setSubmitError('')
     setSubmitting(true)
     try {
       await onSubmit(
         kind,
         value.trim(),
-        Number(interval) || 0,
+        intervalNum,
         capability(),
         triggerMode,
         Number(cooldown) || 10
@@ -351,8 +359,11 @@ function AddSeedDialog({
               min={1}
               max={720}
               value={interval}
-              onChange={(e) => setInterval(Number(e.target.value))}
+              onChange={(e) => { setInterval(Number(e.target.value)); setSubmitError('') }}
             />
+            {submitError && (
+              <p className="text-xs text-destructive">{submitError}</p>
+            )}
           </div>
         </div>
         <div className="space-y-1.5">
@@ -617,16 +628,9 @@ export default function ProjectDetailPage() {
     }
   }, [searchParams, project, deleteOpen, setSearchParams])
 
-  const handleDeleteProject = async () => {
+  const handleDeleteProject = () => {
     if (!project) return
-    const ok = await confirm({
-      title: `永久删除项目「${project.name}」`,
-      description: `将删除项目编码 ${project.code} 归属的全部数据：站点、原始记录、种子、巡航计划、任务（含扫描结果与队列作业）、巡航任务、关系图谱、企业身份、ICP 备案。此操作不可恢复。`,
-      confirmText: '删除项目',
-      cancelText: '取消',
-      destructive: true,
-    })
-    if (!ok) return
+    // 输码弹窗内已含完整范围警告与强确认（输项目编码），不再叠加一道 confirm
     setConfirmCode('')
     pendingCodeRef.current = project.code
     setDeleteOpen(true)
@@ -727,18 +731,37 @@ export default function ProjectDetailPage() {
         value,
         capability,
       })
+      // 种子与计划分离记账：计划失败不算整体失败（种子已落库，重试会撞唯一键），
+      // 由 onSuccess 如实播报，稍后可在计划列表手动补启
+      let planEnabled = false
+      let planError = ''
       if (intervalHours > 0) {
-        await projectApi.createPlan({
-          seed_id: seedRes.data.id,
-          interval_hours: intervalHours,
-          trigger_mode: triggerMode,
-          change_cooldown_minutes: changeCooldownMinutes,
-        })
+        try {
+          await projectApi.createPlan({
+            seed_id: seedRes.data.id,
+            interval_hours: intervalHours,
+            trigger_mode: triggerMode,
+            change_cooldown_minutes: changeCooldownMinutes,
+          })
+          planEnabled = true
+        } catch (e) {
+          planError = (e as { message?: string })?.message || '未知原因'
+        }
       }
-      return seedRes.data
+      return { seed: seedRes.data, planEnabled, planError, planRequested: intervalHours > 0 }
     },
-    onSuccess: () => {
-      toast({ title: '种子已添加，监控计划已启用' })
+    onSuccess: ({ planEnabled, planError, planRequested }) => {
+      if (planEnabled) {
+        toast({ title: '种子已添加，监控计划已启用' })
+      } else if (planRequested) {
+        toast({
+          title: '种子已添加，但监控计划启用失败',
+          description: `${planError}。可稍后在「监控计划」列表手动补启。`,
+          variant: 'destructive',
+        })
+      } else {
+        toast({ title: '种子已添加（未启用监控计划）' })
+      }
       invalidateMonitoring()
     },
     onError: fail('添加种子失败'),
@@ -1260,16 +1283,6 @@ export default function ProjectDetailPage() {
               项目资产
             </Button>
           </Link>
-          <Link to={topologyPath}>
-            <Button size="small">
-              <Radio className="mr-2 h-4 w-4" />
-              资产星图
-            </Button>
-          </Link>
-          <Button size="small" onClick={() => setReportOpen(true)}>
-            <FileText className="mr-2 h-4 w-4" />
-            信息收集报告
-          </Button>
           <Button size="small" onClick={() => setEditOpen(true)}>
             <Pencil className="mr-2 h-4 w-4" />
             编辑资料
@@ -1319,6 +1332,25 @@ export default function ProjectDetailPage() {
               </>
             )}
           </Button>
+          <Dropdown
+            trigger={['click']}
+            menu={{ items: [
+              { key: 'report', icon: <FileText className="h-4 w-4" />, label: '信息收集报告', onClick: () => setReportOpen(true) },
+              { key: 'topology', icon: <Radio className="h-4 w-4" />, label: '资产星图', onClick: () => navigate(topologyPath) },
+              { key: 'icon', icon: <ImagePlus className="h-4 w-4" />, label: '上传图标', onClick: () => iconInputRef.current?.click() },
+              ...(project.icon_sha256 ? [{
+                key: 'icon-remove',
+                icon: <ImageOff className="h-4 w-4" />,
+                label: '移除图标',
+                onClick: () => clearIconMutation.mutate(),
+              }] : []),
+            ] }}
+          >
+            <Button size="small">
+              <ChevronDown className="mr-1 h-4 w-4" />
+              更多
+            </Button>
+          </Dropdown>
           <Button danger type="text" size="small" onClick={handleDeleteProject}>
             <Trash2 className="mr-2 h-4 w-4" />
             删除项目
@@ -1430,7 +1462,7 @@ export default function ProjectDetailPage() {
                     columns={taskColumns}
                     dataSource={tasks}
                     rowKey="id"
-                    pagination={false}
+                    pagination={{ pageSize: 10, hideOnSinglePage: true, showSizeChanger: false }}
                   />
                   {tasksTotal > tasks.length && (
                     <p className="text-muted-foreground pt-3 text-xs">
@@ -1492,7 +1524,7 @@ export default function ProjectDetailPage() {
                     dataSource={seeds}
                     rowKey="id"
                     rowSelection={seedRowSelection}
-                    pagination={false}
+                    pagination={{ pageSize: 10, hideOnSinglePage: true, showSizeChanger: false }}
                   />
                   <div className="mt-4 border-t pt-3">
                     <button
@@ -1520,7 +1552,7 @@ export default function ProjectDetailPage() {
                         rowKey="id"
                         loading={collectJobsQuery.isLoading}
                         size="small"
-                        pagination={false}
+                        pagination={{ pageSize: 10, hideOnSinglePage: true, showSizeChanger: false }}
                       />
                     )}
                   </div>
@@ -1544,7 +1576,7 @@ export default function ProjectDetailPage() {
                   columns={planColumns}
                   dataSource={plans}
                   rowKey="id"
-                  pagination={false}
+                  pagination={{ pageSize: 10, hideOnSinglePage: true, showSizeChanger: false }}
                 />
               )}
             </div>
@@ -1580,7 +1612,7 @@ export default function ProjectDetailPage() {
                   columns={runColumns}
                   dataSource={runs}
                   rowKey="id"
-                  pagination={false}
+                  pagination={{ pageSize: 10, hideOnSinglePage: true, showSizeChanger: false }}
                 />
               )}
             </div>
@@ -1630,23 +1662,6 @@ export default function ProjectDetailPage() {
             </div>
           </Card>
 
-          <Card>
-            <SectionHeader title="数据入口" description="按项目筛选资产或查看星图。" />
-            <div className="mt-4 grid gap-2">
-              <Link to={projectPath}>
-                <Button className="justify-start">
-                  <Database className="mr-2 h-4 w-4" />
-                  资产探索 · 按本项目筛选
-                </Button>
-              </Link>
-              <Link to={topologyPath}>
-                <Button className="justify-start">
-                  <Radio className="mr-2 h-4 w-4" />
-                  资产星图 · 按本项目筛选
-                </Button>
-              </Link>
-            </div>
-          </Card>
         </div>
       </div>
 

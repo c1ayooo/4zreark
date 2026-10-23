@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import {keepPreviousData, useQuery, useMutation, useQueryClient} from '@tanstack/react-query'
 import { pocApi, POC, CreatePOCRequest } from '@/api/pocs'
 import { Button, Dropdown, Input, Modal, Select, Switch, Table, Tag } from 'antd'
@@ -8,6 +8,7 @@ import EmptyState from '@/components/common/EmptyState'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate, getSeverityColor } from '@/lib/utils'
 import { Search, Plus, Eye, Upload, RefreshCw, Trash2, FileArchive, FileText, ChevronDown } from 'lucide-react'
+import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 
 // shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
 const badgeCls = (variant: 'default' | 'secondary' | 'destructive' | 'outline') =>
@@ -26,6 +27,8 @@ export default function POCsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const zipInputRef = useRef<HTMLInputElement>(null)
   const [search, setSearch] = useState('')
+  const debouncedSearch = useDebouncedValue(search)
+  useEffect(() => { setPage(1) }, [debouncedSearch])
   const [page, setPage] = useState(1)
   const [selectedPOC, setSelectedPOC] = useState<POC | null>(null)
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
@@ -44,14 +47,14 @@ export default function POCsPage() {
   })
 
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['pocs', page, search],
+    queryKey: ['pocs', page, debouncedSearch],
     // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
     placeholderData: keepPreviousData,
     queryFn: () =>
       pocApi.list({
         page,
         pageSize: 10,
-        search,
+        search: debouncedSearch,
       }),
   })
 

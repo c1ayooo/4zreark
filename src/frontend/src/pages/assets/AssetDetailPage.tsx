@@ -512,9 +512,16 @@ export default function AssetDetailPage() {
         <div className="text-muted-foreground flex flex-col items-center gap-3 py-16">
           <AlertTriangle className="text-destructive h-8 w-8" />
           {detailQuery.isError ? '资产详情加载失败' : '资产不存在'}
-          <Link to="/assets">
-            <Button size="small">返回资产列表</Button>
-          </Link>
+          <div className="flex gap-2">
+            {detailQuery.isError && (
+              <Button size="small" type="primary" onClick={() => detailQuery.refetch()}>
+                重试
+              </Button>
+            )}
+            <Link to="/assets">
+              <Button size="small">返回资产列表</Button>
+            </Link>
+          </div>
         </div>
       </Card>
     )
