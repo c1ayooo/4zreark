@@ -20,6 +20,7 @@ import TaskTopologyView from '@/components/tasks/TaskTopologyView'
 import TaskAssetsView from '@/components/tasks/TaskAssetsView'
 import { useToast } from '@/components/ui/use-toast'
 import { useConfirm } from '@/components/common/confirm-provider'
+import { getErrorMessage } from '@/lib/errors'
 import { cn, formatDate, getSeverityColor, getStatusColor } from '@/lib/utils'
 import { 
   ArrowLeft, Play, Pause, Square, Trash2, RotateCcw, 
@@ -71,7 +72,6 @@ export default function TaskDetailPage() {
   const [editDelay, setEditDelay] = useState('500')
   const [editSubDict, setEditSubDict] = useState('')
   const [editDirDict, setEditDirDict] = useState('')
-  const [projectFilter, setProjectFilter] = useState<string>('all')
   const [statusCodeFilter, setStatusCodeFilter] = useState<string>('all')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
@@ -87,11 +87,15 @@ export default function TaskDetailPage() {
     },
   })
 
+  // 任务运行中时结果页签跟随刷新（此前运行期间结果是「死」的，只能切页签重挂刷新）
+  const taskRunning = data?.data?.status === 'running'
+
   // 获取结果统计
   const { data: statsData } = useQuery({
     queryKey: ['task-results-stats', id],
     queryFn: () => resultApi.getResultStats(id!),
     enabled: !!id,
+    refetchInterval: taskRunning ? 5000 : false,
   })
 
   // 默认落在「本次任务资产」：任务详情的第一诉求是这个任务产出了什么，而不是某个结果类型的原始流水。
@@ -116,6 +120,7 @@ export default function TaskDetailPage() {
     placeholderData: keepPreviousData,
     queryFn: () => resultApi.getPortResults(id!, { page, pageSize, search }),
     enabled: !!id && currentTab === 'port',
+    refetchInterval: taskRunning ? 5000 : false,
   })
 
   // 其他类型使用通用 API
@@ -131,6 +136,7 @@ export default function TaskDetailPage() {
       statusCode: currentTab === 'dirscan' ? statusCodeNum : undefined
     }),
     enabled: !!id && !!activeTab && currentTab !== 'port' && currentTab !== 'assets' && currentTab !== 'topology',
+    refetchInterval: taskRunning ? 5000 : false,
   })
 
   // 任务操作 mutations
@@ -1309,13 +1315,18 @@ export default function TaskDetailPage() {
             <Download className="h-4 w-4 mr-2" />
             导出
           </Button>
-          <Select
-            value={projectFilter}
-            onChange={(v) => setProjectFilter(v)}
-            className="w-32"
-            placeholder="项目筛选"
-            options={[{ value: 'all', label: '全部项目' }]}
-          />
+          <Button
+            size="small"
+            icon={<RefreshCw className="h-4 w-4" />}
+            onClick={() => {
+              queryClient.invalidateQueries({ queryKey: ['task-results-stats', id] })
+              queryClient.invalidateQueries({ queryKey: ['task-results', id] })
+              queryClient.invalidateQueries({ queryKey: ['task-port-results', id] })
+            }}
+            title="刷新结果"
+          >
+            刷新结果
+          </Button>
           {(() => {
             // 常驻渲染按需禁用：切 Tab 时工具栏几何形状不变
             const statusApplicable = currentTab === 'dirscan'
@@ -1323,7 +1334,7 @@ export default function TaskDetailPage() {
             <div className="flex items-center gap-1" title={statusApplicable ? undefined : '仅目录扫描结果支持按状态码筛选'}>
               <Select
                 value={statusCodeFilter}
-                onChange={(v) => setStatusCodeFilter(v)}
+                onChange={(v) => { setStatusCodeFilter(v); setPage(1) }}
                 className="w-28"
                 placeholder="状态码"
                 disabled={!statusApplicable}
@@ -1347,6 +1358,7 @@ export default function TaskDetailPage() {
                 className="w-20 h-9"
                 onChange={(e) => {
                   const val = e.target.value
+                  setPage(1)
                   if (val === '' || val === '0') {
                     setStatusCodeFilter('all')
                   } else {
@@ -1364,16 +1376,24 @@ export default function TaskDetailPage() {
                 {
                   key: 'batch-delete',
                   label: '批量删除',
-                  onClick: () => {
-                    resultApi.batchDelete(selectedRows).then(() => {
+                  danger: true,
+                  onClick: async () => {
+                    const ok = await confirm({
+                      title: `删除选中的 ${selectedRows.length} 条结果？`,
+                      description: '删除后不可恢复。',
+                      destructive: true,
+                    })
+                    if (!ok) return
+                    try {
+                      await resultApi.batchDelete(selectedRows)
                       toast({ title: '删除成功' })
                       setSelectedRows([])
                       queryClient.invalidateQueries({ queryKey: ['task-results', id] })
-                    })
+                    } catch (e) {
+                      toast({ title: getErrorMessage(e, '删除失败'), variant: 'destructive' })
+                    }
                   },
                 },
-                { key: 'batch-export', label: '批量导出' },
-                { key: 'batch-mark', label: '批量标记' },
               ],
             }}
           >

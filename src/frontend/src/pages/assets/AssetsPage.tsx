@@ -479,7 +479,8 @@ export default function AssetsPage() {
     mutationFn: ({ site, reachable }: { site: Site; reachable: boolean }) =>
       assetApi.verify(site.id, {
         reachable,
-        status_code: reachable ? site.http_status || 200 : 0,
+        // 只记录真实采到的状态码：人工判定不该伪造 200 污染验证历史
+        status_code: reachable ? site.http_status || undefined : 0,
         reason: reachable ? '' : 'manual_failed',
       }),
     onSuccess: () => {
@@ -1315,9 +1316,6 @@ export default function AssetsPage() {
               <SlidersHorizontal className="mr-2 h-4 w-4" /> 列
             </Button>
           </Dropdown>
-          <Button onClick={() => list.refetch()}>
-            <RefreshCw className="mr-2 h-4 w-4" /> 刷新
-          </Button>
         </div>
       </div>
 
@@ -1407,7 +1405,9 @@ export default function AssetsPage() {
           <span className="text-[13px] text-muted-foreground">每页</span>
           <Select
             className="w-[76px]"
-            value={String(pageSize)}
+            value={String(clusterView ? 60 : pageSize)}
+            disabled={clusterView}
+            title={clusterView ? '图标/技术栈聚类视图固定每页 60' : undefined}
             onChange={(v) => { setPageSize(Number(v)); setPage(1) }}
             options={[20, 50, 100, 200, 500].map((n) => ({ value: String(n), label: String(n) }))}
           />
@@ -1443,7 +1443,7 @@ export default function AssetsPage() {
                 key={ic.icon_sha256}
                 role="button"
                 tabIndex={0}
-                title={`下钻：icon_hash=&quot;${ic.icon_sha256.slice(0, 12)}…&quot;`}
+                title={`下钻：icon_hash="${ic.icon_sha256.slice(0, 12)}…"`}
                 onClick={() => drillDown(`icon_hash="${ic.icon_sha256}"`)}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') drillDown(`icon_hash="${ic.icon_sha256}"`) }}
                 className="flex cursor-pointer flex-col items-center gap-2 rounded-md border p-3 transition-colors hover:border-foreground/30 hover:bg-muted/50"
@@ -1483,7 +1483,7 @@ export default function AssetsPage() {
                 onClick={() => drillDown(`app="${t.name.replace(/"/g, '')}"`)}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') drillDown(`app="${t.name.replace(/"/g, '')}"`) }}
                 className="cursor-pointer rounded-full border px-3 py-1 text-sm transition-colors hover:border-foreground/30 hover:bg-muted/50"
-                title={`下钻：app=&quot;${t.name}&quot;（${t.site_count} 个站点）`}
+                title={`下钻：app="${t.name}"（${t.site_count} 个站点）`}
               >
                 {t.name}
                 <span className="ml-1 text-[13px] text-muted-foreground">{t.site_count}</span>

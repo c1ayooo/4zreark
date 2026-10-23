@@ -137,7 +137,7 @@ function CountUp({ value, className }: { value: number; className?: string }) {
 }
 
 export default function DashboardPage() {
-  const { data: statsData, isLoading: statsLoading } = useQuery({
+  const { data: statsData, isLoading: statsLoading, isError: statsError, refetch: refetchStats } = useQuery({
     queryKey: ['dashboard-stats'],
     queryFn: () => dashboardApi.getStats(),
   })
@@ -207,12 +207,21 @@ export default function DashboardPage() {
           <h1 className="text-2xl font-semibold tracking-tight">仪表盘</h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">{finding}。</p>
         </div>
-        <Link to="/tasks/new">
-          <Button type="primary">
-            新建侦察任务
-            <ArrowUpRight className="ml-1.5 h-4 w-4" />
-          </Button>
-        </Link>
+        <div className="flex items-center gap-3">
+          {/* 统计接口失败时数字全为 0：必须显式告警，不能让「挂了」看起来像「没有」 */}
+          {statsError && (
+            <span className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-1.5 text-sm text-destructive">
+              统计加载失败，数字不可信
+              <Button type="link" size="small" onClick={() => refetchStats()}>重试</Button>
+            </span>
+          )}
+          <Link to="/tasks/new">
+            <Button type="primary">
+              新建侦察任务
+              <ArrowUpRight className="ml-1.5 h-4 w-4" />
+            </Button>
+          </Link>
+        </div>
       </div>
 
       <section

@@ -171,7 +171,15 @@ export default function AuditPage() {
           rowKey="id"
           loading={list.isLoading}
           locale={{
-            emptyText: (
+            emptyText: list.isError ? (
+              <div className="py-10 text-center text-destructive">
+                <ScrollText className="mx-auto mb-2 h-6 w-6 opacity-60" />
+                审计日志加载失败
+                <div>
+                  <Button type="link" size="small" onClick={() => list.refetch()}>重试</Button>
+                </div>
+              </div>
+            ) : (
               <div className="py-10 text-center text-muted-foreground">
                 <ScrollText className="mx-auto mb-2 h-6 w-6 opacity-40" />
                 没有匹配的审计日志
