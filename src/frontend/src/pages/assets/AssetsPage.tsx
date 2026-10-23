@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
-import { Button, Checkbox, Drawer, Dropdown, Input, Modal, Pagination, Select, Table, Tag } from 'antd'
+import { Button, Checkbox, Dropdown, Input, Modal, Pagination, Select, Table, Tag } from 'antd'
 import type { MenuProps, TableProps } from 'antd'
 import {
   assetApi,
@@ -41,13 +41,8 @@ import {
   RotateCcw,
 } from 'lucide-react'
 import { statusTagClass } from '@/components/ui/StatusTag'
+import AssetDetailDrawer, { stateLabel } from './components/AssetDetailDrawer'
 
-const stateLabel: Record<string, string> = {
-  reachable: '可访问',
-  lost: '失联',
-  archived: '已归档',
-  pending: '待验证',
-}
 
 type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline' | 'success'
 
@@ -273,14 +268,11 @@ export default function AssetsPage() {
   const [cursorStack, setCursorStack] = useState<Array<string | undefined>>([undefined])
   const [detailSite, setDetailSite] = useState<Site | null>(null)
   const [detailTab, setDetailTab] = useState<'overview' | 'endpoints' | 'records' | 'fingerprints' | 'verifications'>('overview')
-  const [recordsCursorStack, setRecordsCursorStack] = useState<Array<string | undefined>>([undefined])
-  const [recordsInterfaceOnly, setRecordsInterfaceOnly] = useState(false)
   const [savedViews, setSavedViews] = useState<SavedAssetView[]>(loadSavedViews)
   const [saveViewOpen, setSaveViewOpen] = useState(false)
   const [viewName, setViewName] = useState('')
   const [siteCols, setSiteCols] = useState<Record<SiteColumn, boolean>>(loadSiteColumns)
   const [expandedSiteIDs, setExpandedSiteIDs] = useState<Set<number>>(new Set())
-  const recordsCursor = recordsCursorStack[recordsCursorStack.length - 1]
   const cursor = cursorStack[cursorStack.length - 1]
   const clusterView = view === 'icons' || view === 'technologies'
   const riskSort = sort === 'risk' && (kind === 'domain' || kind === 'ip' || (kind === 'site' && siteGroup))
@@ -360,31 +352,9 @@ export default function AssetsPage() {
       }),
   })
 
-  const detailQuery = useQuery({
-    queryKey: ['asset-detail', detailSite?.id],
-    queryFn: () => assetApi.detail(detailSite!.id),
-    enabled: !!detailSite,
-    staleTime: 30_000,
-  })
-  const detail = detailQuery.data?.data
-  const recordsQuery = useQuery({
-    queryKey: ['asset-records', detailSite?.id, recordsCursor, recordsInterfaceOnly],
-    queryFn: () =>
-      assetApi.records(detailSite!.id, {
-        cursor: recordsCursor ?? '',
-        limit: 50,
-        ...(recordsInterfaceOnly ? { interface: 1 as const } : {}),
-      }),
-    enabled: !!detailSite && detailTab === 'records',
-    staleTime: 30_000,
-  })
-  const recordsPage = recordsQuery.data?.data
-  const records = recordsPage?.items ?? []
 
   useEffect(() => {
     setDetailTab('overview')
-    setRecordsCursorStack([undefined])
-    setRecordsInterfaceOnly(false)
   }, [detailSite?.id])
 
   const iconClusters = useQuery({
@@ -1632,258 +1602,16 @@ export default function AssetsPage() {
         </div>
       )}
 
-      <Drawer
-        open={!!detailSite}
-        onClose={() => setDetailSite(null)}
-        width={460}
-        // antd Drawer 自带遮罩/ESC/焦点管理，替代手写面板——此前大屏遮罩被
-        // xl:hidden 隐藏，点外部关不掉，只能找右上角 X
-        title={
-          detailSite && (
-            <div className="min-w-0">
-              <div className="truncate font-mono text-sm font-semibold">
-                {detailSite.value || detailSite.host}
-              </div>
-              <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                <Tag className={badgeCls(stateVariant(detailSite.state))}>
-                  {stateLabel[detailSite.state] ?? detailSite.state}
-                </Tag>
-                <span>{detailSite.project_name}</span>
-                <span>·</span>
-                <span className="tabular-nums">P{detailSite.priority?.replace(/^p/i, '') || '—'} · {detailSite.risk_score}</span>
-              </div>
-            </div>
-          )
-        }
-        styles={{ body: { padding: 16, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }}
-      >
-            {detailSite && (
-            <>
-            <div className="flex gap-1 overflow-x-auto border-b px-1 pb-2">
-              {([
-                ['overview', '概览'],
-                ['endpoints', '入口'],
-                ['records', '原始记录'],
-                ['fingerprints', '指纹'],
-                ['verifications', '验证'],
-              ] as const).map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setDetailTab(id)}
-                  className={
-                    'shrink-0 rounded-sm px-2.5 py-1.5 text-[13px] transition-colors ' +
-                    (detailTab === id
-                      ? 'bg-foreground text-background'
-                      : 'text-muted-foreground hover:bg-muted')
-                  }
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+      {detailSite && (
+        <AssetDetailDrawer
+          site={detailSite}
+          tab={detailTab}
+          onTabChange={setDetailTab}
+          onClose={() => setDetailSite(null)}
+          onOpenFullPage={(id) => navigate(`/assets/${id}`)}
+        />
+      )}
 
-            <div className="flex-1 overflow-y-auto p-4">
-              {detailQuery.isLoading ? (
-                <div className="py-10 text-center text-sm text-muted-foreground">加载资产档案…</div>
-              ) : !detail ? (
-                <div className="py-10 text-center text-sm text-muted-foreground">详情加载失败</div>
-              ) : (
-                <>
-                  {detailTab === 'overview' && (
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-2 gap-2">
-                        {[
-                          ['入口', detailSite.endpoint_count ?? 0],
-                          ['原始记录', detailSite.record_count ?? 0],
-                          ['指纹命中', detailSite.fingerprint_count ?? 0],
-                          ['验证记录', detail.verifications.length],
-                        ].map(([label, value]) => (
-                          <div key={String(label)} className="rounded-md border px-3 py-2">
-                            <div className="text-xs text-muted-foreground">{label}</div>
-                            <div className="mt-1 text-xl font-semibold tabular-nums">{value}</div>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="divide-y text-sm">
-                        {[
-                          ['状态', stateLabel[detailSite.state] ?? detailSite.state],
-                          ['标题', detailSite.title || '—'],
-                          ['IP', detailSite.ip || '—'],
-                          ['协议 / 端口', `${detailSite.protocol}:${detailSite.port}`],
-                          ['首次发现', formatDate(detailSite.first_seen)],
-                          ['最近发现', formatDate(detailSite.last_record_at || detailSite.last_seen)],
-                        ].map(([label, value]) => (
-                          <div key={label} className="flex items-start justify-between gap-3 py-2">
-                            <span className="shrink-0 text-muted-foreground">{label}</span>
-                            <span className="min-w-0 break-all text-right">{value}</span>
-                          </div>
-                        ))}
-                      </div>
-                      <div>
-                        <div className="mb-1.5 text-xs text-muted-foreground">技术栈</div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {(detailSite.technology_stack ?? []).length === 0 ? (
-                            <span className="text-sm text-muted-foreground">—</span>
-                          ) : detailSite.technology_stack.map((t) => (
-                            <Tag key={t} className={`${badgeCls('secondary')} text-xs`}>{t}</Tag>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {detailTab === 'endpoints' && (
-                    <div className="space-y-2">
-                      {(detailSite.endpoints ?? []).length === 0 ? (
-                        <p className="text-sm text-muted-foreground">暂无入口。</p>
-                      ) : detailSite.endpoints.map((e) => (
-                        <div key={`${e.scheme}-${e.port}`} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-                          <span className="font-mono">{e.scheme}:{e.port}</span>
-                          <Tag className={badgeCls(e.status_code >= 200 && e.status_code < 400 ? 'default' : 'secondary')}>
-                            {e.status_code || '—'}
-                          </Tag>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {detailTab === 'records' && (
-                    <div className="space-y-3">
-                      <span className="flex items-center gap-2 text-[13px] text-muted-foreground">
-                        <Checkbox
-                          checked={recordsInterfaceOnly}
-                          onChange={(e) => {
-                            setRecordsInterfaceOnly(e.target.checked)
-                            setRecordsCursorStack([undefined])
-                          }}
-                        >
-                          只看接口
-                        </Checkbox>
-                      </span>
-                      {recordsQuery.isLoading ? (
-                        <p className="text-sm text-muted-foreground">加载原始记录…</p>
-                      ) : records.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">暂无原始记录。</p>
-                      ) : (
-                        <div className="rounded-md border">
-                          <Table
-                            size="small"
-                            pagination={false}
-                            rowKey={(r) => String(r.id)}
-                            dataSource={records}
-                            columns={[
-                              {
-                                title: '记录',
-                                render: (_, r) => (
-                                  <div className="max-w-[270px] break-all font-mono text-xs">
-                                    <div className="flex items-start gap-1">
-                                      <span>{r.value}</span>
-                                      {r.is_interface && (
-                                        <Tag className={`${badgeCls('outline')} shrink-0 text-[10px]`}>接口</Tag>
-                                      )}
-                                    </div>
-                                    <div className="mt-0.5 text-[11px] text-muted-foreground">
-                                      {formatDate(r.observed_at)}
-                                    </div>
-                                  </div>
-                                ),
-                              },
-                              {
-                                title: '来源',
-                                width: 54,
-                                render: (_, r) => (
-                                  <div className="text-xs text-muted-foreground">
-                                    <div>{r.source}</div>
-                                    <div>{r.method || 'GET'}</div>
-                                  </div>
-                                ),
-                              },
-                              {
-                                title: '状态',
-                                width: 54,
-                                align: 'right',
-                                render: (_, r) => <span className="text-xs tabular-nums">{r.status_code || '—'}</span>,
-                              },
-                            ]}
-                          />
-                        </div>
-                      )}
-                      <div className="flex items-center justify-between text-xs text-muted-foreground">
-                        <span>已加载 {records.length} 条</span>
-                        <div className="flex gap-1">
-                          <Button
-                            size="small"
-                            disabled={recordsCursorStack.length <= 1}
-                            onClick={() => setRecordsCursorStack((stack) => stack.slice(0, -1))}
-                          >
-                            上一页
-                          </Button>
-                          <Button
-                            size="small"
-                            disabled={!recordsPage?.has_more || !recordsPage?.next_cursor}
-                            onClick={() => setRecordsCursorStack((stack) => [...stack, recordsPage?.next_cursor])}
-                          >
-                            下一页
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {detailTab === 'fingerprints' && (
-                    <div className="space-y-2">
-                      {detail.fingerprints.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">暂无指纹命中。</p>
-                      ) : detail.fingerprints.map((f) => (
-                        <div key={`${f.rule_id}-${f.observed_at}`} className="rounded-md border px-3 py-2 text-sm">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-medium">{f.rule_name || f.rule_id}</span>
-                            <span className="text-xs text-muted-foreground">{formatDate(f.observed_at)}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {detailTab === 'verifications' && (
-                    <div className="space-y-2">
-                      {detail.verifications.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">暂无验证记录。</p>
-                      ) : detail.verifications.map((v) => (
-                        <div key={v.id} className="rounded-md border px-3 py-2 text-sm">
-                          <div className="flex items-center justify-between gap-2">
-                            <Tag className={badgeCls(v.status === 'reachable' ? 'success' : 'secondary')}>{v.status}</Tag>
-                            <span className="text-xs text-muted-foreground">{formatDate(v.observed_at)}</span>
-                          </div>
-                          <div className="mt-1 text-xs text-muted-foreground">
-                            状态码 {v.http_status || '—'} · 尝试 {v.attempts || 0}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-            </>
-            )}
-
-            <div className="border-t p-3">
-              <Button
-                type="primary"
-                className="w-full"
-                onClick={() => {
-                  if (!detailSite) return
-                  const id = detailSite.id
-                  setDetailSite(null)
-                  navigate(`/assets/${id}`)
-                }}
-              >
-                打开完整详情页
-              </Button>
-            </div>
-      </Drawer>
 
       <Modal
         open={saveViewOpen}
