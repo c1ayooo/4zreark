@@ -614,6 +614,7 @@ func (e *TaskExecutor) processTask(ctx context.Context, task *models.Task, jobID
 			WebCrawler:             true,
 			DirScan:                true,
 			SensitiveScan:          true,
+			ApiProbe:               true,
 		})
 
 	case models.TaskTypeSubdomain:
@@ -678,6 +679,17 @@ func (e *TaskExecutor) processTask(ctx context.Context, task *models.Task, jobID
 		})
 
 	case models.TaskTypeCrawler:
+		if task.Config.WatchCrawl {
+			// 站点巡检的「变更慢爬」：只爬不改，最轻配置——
+			// 不带端口扫描/指纹，速率与页数在任务配置里已是保守值。
+			e.executeStreamingPipeline(ctx, task, jobID, &pipeline.PipelineConfig{
+				SubdomainScan: false,
+				PortScan:      false,
+				Fingerprint:   false,
+				WebCrawler:    true,
+			})
+			break
+		}
 		e.executeStreamingPipeline(ctx, task, jobID, &pipeline.PipelineConfig{
 			SubdomainScan: false,
 			PortScan:      true,
@@ -775,6 +787,10 @@ func (e *TaskExecutor) buildCustomConfig(task *models.Task) *pipeline.PipelineCo
 		config.SensitiveScan = true
 	}
 
+	if scanTypes["api_probe"] || scanTypes["wih"] {
+		config.ApiProbe = true
+	}
+
 	log.Printf("[TaskExecutor] Built custom config for task %s: subdomain=%v, port=%v, fingerprint=%v, crawler=%v, dirscan=%v, vuln=%v, sensitive=%v",
 		task.ID.Hex(), config.SubdomainScan, config.PortScan, config.Fingerprint, config.WebCrawler, config.DirScan, config.VulnScan, config.SensitiveScan)
 
@@ -813,6 +829,8 @@ func applyScanTypes(cfg *pipeline.PipelineConfig, scanTypes []string) {
 			cfg.DirScan = true
 		case "sensitive":
 			cfg.SensitiveScan = true
+		case "api_probe", "wih":
+			cfg.ApiProbe = true
 		}
 	}
 
@@ -840,6 +858,22 @@ func applyScanTypes(cfg *pipeline.PipelineConfig, scanTypes []string) {
 	}
 }
 
+// pipelinePortMode 解析任务配置里用户显式选择的端口扫描档位。
+// 返回空串表示任务未选择（沿用调用方各分支的预设档）；
+// custom 档必须带端口范围，否则视为未选择。
+func pipelinePortMode(task *models.Task) (mode, portRange string) {
+	mode = strings.TrimSpace(task.Config.PortScanMode)
+	switch mode {
+	case "quick", "top1000", "full":
+		return mode, ""
+	case "custom":
+		if pr := strings.TrimSpace(task.Config.PortRange); pr != "" {
+			return mode, pr
+		}
+	}
+	return "", ""
+}
+
 func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *models.Task, jobID int64, config *pipeline.PipelineConfig) {
 	// 任务下发的引擎查询上限（master 建任务时按当日余额收紧）
 	if task.Config.EngineQueryMaxPerEngine > 0 {
@@ -861,6 +895,24 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 	// 让「信息收集（不含漏洞）」「全量扫描」这类模板能自由组合模块，
 	// 而不是被任务类型对应的硬编码开关锁死。
 	applyScanTypes(config, task.Config.ScanTypes)
+
+	// 端口扫描档位：用户建任务时选择的模式/范围优先，
+	// 覆盖各任务类型分支与 buildCustomConfig 的预设档。
+	if mode, portRange := pipelinePortMode(task); mode != "" {
+		config.PortScanMode = mode
+		config.PortRange = portRange
+	}
+
+	// 爬虫深度/页数上限：此前从未从任务配置传进流水线，一直是摆设
+	//（站点巡检慢爬的 depth2/30页 口径也依赖这里生效）。
+	if config.WebCrawler {
+		if task.Config.MaxDepth > 0 {
+			config.MaxDepth = task.Config.MaxDepth
+		}
+		if task.Config.MaxPages > 0 {
+			config.MaxPages = task.Config.MaxPages
+		}
+	}
 
 	log.Printf("[TaskExecutor] Starting StreamingPipeline for task %s, type: %s, rate=%d/s delay=%dms",
 		taskID, task.Type, config.Rate(), config.TargetDelayMs)
@@ -1120,6 +1172,26 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 				CreatedAt: time.Now(),
 			}
 
+		case pipeline.AssetOther:
+			// 非 HTTP 服务指纹（SSH/FTP/MySQL 等 banner）：此前没有消费方，
+			// 识别结果被整体丢弃。落结果页供端口/服务视图查看。
+			scanResult = &models.ScanResult{
+				TaskID:      task.ID,
+				WorkspaceID: task.WorkspaceID,
+				Type:        models.ResultTypeService,
+				Source:      "fingerprint",
+				Data: map[string]interface{}{
+					"host":    r.Host,
+					"ip":      r.IP,
+					"port":    r.Port,
+					"service": r.Service,
+					"banner":  r.Banner,
+					"version": r.Version,
+					"type":    "other",
+				},
+				CreatedAt: time.Now(),
+			}
+
 		case pipeline.VulnResult:
 			vulnCount++
 			scanResult = &models.ScanResult{
@@ -1214,6 +1286,48 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 				},
 				CreatedAt: time.Now(),
 			}
+
+		case pipeline.WihResult:
+			// WIH 接口候选探测：结论落 URL 结果（source=wih），验证过的
+			// 同时并入站点路由，接口面在资产详情可见。unverified 的只进
+			// 结果页供人工甄别，不污染资产域。
+			for _, ep := range r.Endpoints {
+				if !taskScope.AllowsURL(ep.URL) {
+					continue
+				}
+				if scope.IsStaticAsset(ep.URL) || scope.IsNoisyCrawlerURL(ep.URL) {
+					continue
+				}
+				epURL := normalizeURL(ep.URL)
+				targetURL := normalizeURL(r.Target)
+				urlCount++
+				crawledRoutes = append(crawledRoutes, CrawledEndpoint{
+					URL: epURL, Method: ep.Method, StatusCode: ep.StatusCode,
+				})
+				resultBatch = append(resultBatch, &models.ScanResult{
+					TaskID:      task.ID,
+					WorkspaceID: task.WorkspaceID,
+					Type:        models.ResultTypeURL,
+					Source:      "wih",
+					Data: map[string]interface{}{
+						"url":          epURL,
+						"input":        targetURL,
+						"target":       targetURL,
+						"method":       ep.Method,
+						"source":       "wih",
+						"status_code":  ep.StatusCode,
+						"status":       ep.StatusCode,
+						"content_type": ep.ContentType,
+						"length":       ep.ContentLength,
+						"size":         ep.ContentLength,
+						"verified":     ep.Verified,
+						"server":       ep.Server,
+						"allow":        ep.Allow,
+					},
+					CreatedAt: time.Now(),
+				})
+			}
+			flushResults(false)
 
 		case pipeline.TakeoverResult:
 			// 接管检测结果：只处理 vulnerable。安全的域名不落结果——

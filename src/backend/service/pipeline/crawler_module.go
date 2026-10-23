@@ -3,9 +3,14 @@ package pipeline
 import (
 	"context"
 	"log"
+	neturl "net/url"
+	"os/exec"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/httpprobe"
 	"github.com/c1ayooo/4zreark/scanner/scope"
 	"github.com/c1ayooo/4zreark/scanner/webscan"
 )
@@ -20,21 +25,35 @@ type CrawlerModule struct {
 	concurrency   int
 	useKatana     bool
 	crawlDepth    int
-	batchMode     bool          // 是否使用批量模式
-	batchSize     int           // 批量大小
-	batchTimeout  time.Duration // 批量收集超时
+	maxPages      int // 单目标爬取结果上限；0=不限
 	scope         *scope.Scope
 }
 
+// katana 并发钳制边界：模块并发会被任务模板压到 1（moduleConcurrency(8)
+// 对 rate_per_sec=10 算出 1），原样透传就是 -c 1 单目标全串行。
+const (
+	katanaMinConcurrency = 3
+	katanaMaxConcurrency = 10
+)
+
 // SetScope 设置任务授权边界。
 // SetRate 收紧 katana 的并发与速率，跟随任务级节奏。
+// katana 的并发与扫描模块并发解耦：钳制在 3..10，总速率仍由 -rl 兜底，
+// 不会突破任务级上限。
 func (m *CrawlerModule) SetRate(ratePerSec, concurrency int) {
 	if m.katanaScanner == nil {
 		return
 	}
 	if concurrency > 0 {
 		m.concurrency = concurrency
-		m.katanaScanner.Concurrency = concurrency
+		kc := concurrency
+		if kc < katanaMinConcurrency {
+			kc = katanaMinConcurrency
+		}
+		if kc > katanaMaxConcurrency {
+			kc = katanaMaxConcurrency
+		}
+		m.katanaScanner.Concurrency = kc
 	}
 	if ratePerSec > 0 {
 		m.katanaScanner.RateLimit = ratePerSec
@@ -65,9 +84,6 @@ func NewCrawlerModule(ctx context.Context, nextModule ModuleRunner, concurrency 
 		concurrency:   concurrency,
 		useKatana:     useKatana,
 		crawlDepth:    3,
-		batchMode:     true,             // 默认启用批量模式
-		batchSize:     100,              // 默认每批100个URL
-		batchTimeout:  30 * time.Second, // 批量收集等待30秒
 	}
 	return m
 }
@@ -80,15 +96,16 @@ func (m *CrawlerModule) SetCrawlDepth(depth int) {
 	}
 }
 
-// SetBatchMode 设置批量模式
-func (m *CrawlerModule) SetBatchMode(enabled bool, batchSize int) {
-	m.batchMode = enabled
-	if batchSize > 0 {
-		m.batchSize = batchSize
+// SetMaxPages 设置单目标爬取结果上限（0=不限）。
+func (m *CrawlerModule) SetMaxPages(n int) {
+	if n > 0 {
+		m.maxPages = n
 	}
 }
 
-// ModuleRun 运行模块
+// ModuleRun 运行模块：流式模式，拿到一个可爬 URL 就开爬，结果边产出边落库。
+// （旧的批量模式已删：流水线唯一接线恒走流式，批量路径十年未开无测试，
+// 留着只会让读者误以为存在第二种执行语义。）
 func (m *CrawlerModule) ModuleRun() error {
 	// 检查爬虫工具是否可用
 	katanaAvailable := m.useKatana && m.katanaScanner.IsAvailable()
@@ -98,186 +115,8 @@ func (m *CrawlerModule) ModuleRun() error {
 		return m.RunPassThrough()
 	}
 
-	log.Printf("[%s] Starting with Katana=%v, BatchMode=%v", m.name, katanaAvailable, m.batchMode)
-
-	// 如果启用批量模式且Katana可用，使用批量处理
-	if m.batchMode && katanaAvailable {
-		return m.runBatchMode()
-	}
-
-	// 否则使用流式处理（逐个URL爬取）
+	log.Printf("[%s] Starting with Katana=%v", m.name, katanaAvailable)
 	return m.runStreamMode()
-}
-
-// runBatchMode 批量模式：收集所有URL后批量调用Katana -list
-func (m *CrawlerModule) runBatchMode() error {
-	var nextModuleRun sync.WaitGroup
-
-	// 启动下一个模块
-	if m.nextModule != nil {
-		nextModuleRun.Add(1)
-		go func() {
-			defer nextModuleRun.Done()
-			if err := m.nextModule.ModuleRun(); err != nil {
-				log.Printf("[%s] Next module error: %v", m.name, err)
-			}
-		}()
-	}
-
-	// 收集所有URL
-	var urlsToScan []string
-	urlSet := make(map[string]bool)
-
-	log.Printf("[%s] Collecting URLs for batch crawling...", m.name)
-
-	// 收集阶段：等待所有输入
-	for {
-		select {
-		case <-m.ctx.Done():
-			log.Printf("[%s] Context cancelled during collection", m.name)
-			if m.nextModule != nil {
-				m.nextModule.CloseInput()
-			}
-			nextModuleRun.Wait()
-			return nil
-
-		case data, ok := <-m.input:
-			if !ok {
-				// 输入通道关闭，开始处理收集的URL
-				log.Printf("[%s] Input closed, collected %d URLs to crawl", m.name, len(urlsToScan))
-				goto processBatch
-			}
-
-			// 子域扫描的 HTTP 探测结果本身就是可爬入口
-			if sub, ok := data.(SubdomainResult); ok {
-				if m.nextModule != nil {
-					select {
-					case <-m.ctx.Done():
-					case m.nextModule.GetInput() <- sub:
-					}
-				}
-				if sub.URL != "" && m.allowsURL(sub.URL) && !urlSet[sub.URL] {
-					urlSet[sub.URL] = true
-					urlsToScan = append(urlsToScan, sub.URL)
-				}
-				continue
-			}
-
-			// 处理 AssetHttp 类型
-			asset, ok := data.(AssetHttp)
-			if !ok {
-				// 非预期类型，直接传递给下一个模块
-				if m.nextModule != nil {
-					select {
-					case <-m.ctx.Done():
-					case m.nextModule.GetInput() <- data:
-					}
-				}
-				continue
-			}
-
-			// 先传递 AssetHttp 结果（确保 Web 服务数据被收集）
-			if m.nextModule != nil {
-				select {
-				case <-m.ctx.Done():
-				case m.nextModule.GetInput() <- asset:
-				}
-			}
-
-			// 收集有效的HTTP URL
-			if asset.URL != "" && m.allowsURL(asset.URL) && !urlSet[asset.URL] {
-				urlSet[asset.URL] = true
-				urlsToScan = append(urlsToScan, asset.URL)
-			}
-		}
-	}
-
-processBatch:
-	if len(urlsToScan) == 0 {
-		log.Printf("[%s] No URLs to crawl", m.name)
-		if m.nextModule != nil {
-			m.nextModule.CloseInput()
-		}
-		nextModuleRun.Wait()
-		return nil
-	}
-
-	// 批量爬取
-	log.Printf("[%s] Starting batch crawl for %d URLs", m.name, len(urlsToScan))
-
-	m.batchCrawlWithKatana(urlsToScan)
-
-	// 关闭下一个模块的输入
-	if m.nextModule != nil {
-		m.nextModule.CloseInput()
-	}
-
-	log.Printf("[%s] Batch crawl completed, waiting for next module", m.name)
-	nextModuleRun.Wait()
-	return nil
-}
-
-// batchCrawlWithKatana 使用Katana批量爬取
-func (m *CrawlerModule) batchCrawlWithKatana(urls []string) {
-	// 根据URL数量动态设置超时（每个URL最多3分钟）
-	timeout := time.Duration(len(urls)*3) * time.Minute
-	if timeout < 5*time.Minute {
-		timeout = 5 * time.Minute
-	}
-	if timeout > 30*time.Minute {
-		timeout = 30 * time.Minute
-	}
-
-	ctx, cancel := context.WithTimeout(m.ctx, timeout)
-	defer cancel()
-
-	log.Printf("[%s] Calling Katana.CrawlList with %d URLs (timeout: %v)", m.name, len(urls), timeout)
-
-	result, err := m.katanaScanner.CrawlList(ctx, urls)
-	if err != nil {
-		// 超时/取消时 katana 已把部分结果写进输出文件并解析进 result，不能整批丢弃。
-		if result == nil || len(result.URLs) == 0 {
-			log.Printf("[%s] Katana batch crawl error: %v", m.name, err)
-			return
-		}
-		log.Printf("[%s] Katana batch crawl error: %v（采用部分结果 %d 条）", m.name, err, len(result.URLs))
-	}
-
-	if result == nil {
-		log.Printf("[%s] Katana batch crawl returned nil", m.name)
-		return
-	}
-
-	log.Printf("[%s] Katana batch found %d URLs", m.name, len(result.URLs))
-
-	// 发送爬取结果
-	for _, url := range result.URLs {
-		urlResult := UrlResult{
-			Input:       url.Source,
-			Output:      url.URL,
-			Source:      "katana",
-			Method:      url.Method,
-			StatusCode:  url.StatusCode,
-			ContentType: url.ContentType,
-			Length:      url.Length,
-			Tag:         url.Tag,
-			Attribute:   url.Attribute,
-			Referrer:    url.Source,
-		}
-
-		// URL去重
-		if m.dupChecker.IsURLDuplicate(urlResult.Output) {
-			continue
-		}
-
-		if m.nextModule != nil {
-			select {
-			case <-m.ctx.Done():
-				return
-			case m.nextModule.GetInput() <- urlResult:
-			}
-		}
-	}
 }
 
 // runStreamMode 流式模式：逐个URL爬取（原有逻辑）
@@ -346,9 +185,20 @@ func (m *CrawlerModule) runStreamMode() error {
 				return nil
 			}
 
-			// 处理 AssetHttp 类型
-			asset, ok := data.(AssetHttp)
-			if !ok {
+			// 处理 AssetHttp 类型；纯爬流水线（无端口/指纹阶段，如站点巡检
+			// 慢爬）的入口目标是裸字符串，按 URL 处理，否则任务空转零结果。
+			var asset AssetHttp
+			switch v := data.(type) {
+			case AssetHttp:
+				asset = v
+			case string:
+				converted, ok := assetHttpFromTarget(v)
+				if !ok {
+					m.resultChan <- data
+					continue
+				}
+				asset = converted
+			default:
 				// 非预期类型，直接传递
 				m.resultChan <- data
 				continue
@@ -373,6 +223,58 @@ func (m *CrawlerModule) runStreamMode() error {
 	}
 }
 
+// SPA 特征：前端框架挂载点 / 框架运行时全局变量
+var spaMarkers = []string{
+	`<div id="app">`, `<div id="root">`,
+	`__NEXT_DATA__`, `__NUXT__`, `ng-version=`, `data-reactroot`, `v-app`,
+}
+
+// hashedJSRe 指向带内容哈希的 JS 构建产物。Vite 的 hash 是 base64 字母表
+// （如 index-Bq3Ft1Wn.js），Webpack 默认 hex（main.a1b2c3d4.js），统一放宽为
+// 「分隔符 + 8 位以上字母数字」；配合 <2KB 的体量门槛，误判面足够小。
+var hashedJSRe = regexp.MustCompile(`(?i)<script[^>]+src="[^"]*[.-][0-9a-zA-Z_-]{8,}\.js`)
+
+var (
+	headlessBrowserOnce sync.Once
+	headlessBrowserOK   bool
+)
+
+// headlessBrowserAvailable 环境里是否找得到系统 Chrome/Chromium。
+// katana -headless 没有浏览器就直接失败（比普通爬取更糟），没有就降级普通爬取。
+func headlessBrowserAvailable() bool {
+	headlessBrowserOnce.Do(func() {
+		for _, bin := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {
+			if _, err := exec.LookPath(bin); err == nil {
+				headlessBrowserOK = true
+				return
+			}
+		}
+		log.Printf("[Crawler] 未检测到系统 Chrome/Chromium，SPA 分流降级为普通爬取")
+	})
+	return headlessBrowserOK
+}
+
+// looksLikeSPA 只读 GET 探测目标是否 SPA：命中框架挂载点/运行时特征，
+// 或「极小首页 + 带 hash 的 JS 产物」。探测失败按非 SPA 处理，不阻断流程。
+func looksLikeSPA(ctx context.Context, target string) bool {
+	pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	snap, err := httpprobe.DoRequest(pctx, httpprobe.Request{URL: target, TimeoutSeconds: 8})
+	if err != nil || snap == nil || snap.StatusCode >= 400 {
+		return false
+	}
+	body := snap.RespBody
+	for _, marker := range spaMarkers {
+		if strings.Contains(body, marker) {
+			return true
+		}
+	}
+	if len(body) < 2*1024 && hashedJSRe.MatchString(body) {
+		return true
+	}
+	return false
+}
+
 // crawlTarget 爬取目标
 func (m *CrawlerModule) crawlTarget(asset AssetHttp) {
 	if !m.allowsURL(asset.URL) {
@@ -384,16 +286,27 @@ func (m *CrawlerModule) crawlTarget(asset AssetHttp) {
 
 	// 使用 Katana 爬取
 	if m.useKatana {
-		m.crawlWithKatana(target, asset)
+		// SPA 分流：只有确认是 SPA（且环境里有浏览器）才付出 headless 的
+		// 渲染开销（慢 5-10 倍、每目标约 200MB 内存）。用浅拷贝携带
+		// per-target 开关——共享 scanner 上直接改字段会与并发爬取互相污染。
+		scanner := m.katanaScanner
+		if looksLikeSPA(m.ctx, target) && headlessBrowserAvailable() {
+			cp := *m.katanaScanner
+			cp.Headless = true
+			scanner = &cp
+			log.Printf("[%s] SPA detected, headless crawl: %s", m.name, target)
+		}
+		m.crawlWithKatana(scanner, asset)
 	}
 }
 
 // crawlWithKatana 使用Katana爬取
-func (m *CrawlerModule) crawlWithKatana(target string, asset AssetHttp) {
+func (m *CrawlerModule) crawlWithKatana(scanner *webscan.KatanaScanner, asset AssetHttp) {
+	target := asset.URL
 	ctx, cancel := context.WithTimeout(m.ctx, 10*time.Minute)
 	defer cancel()
 
-	result, err := m.katanaScanner.Crawl(ctx, target)
+	result, err := scanner.Crawl(ctx, target)
 	if err != nil {
 		// 超时/取消时保留已解析出的部分结果。
 		if result == nil || len(result.URLs) == 0 {
@@ -410,7 +323,12 @@ func (m *CrawlerModule) crawlWithKatana(target string, asset AssetHttp) {
 	log.Printf("[%s] Katana found %d URLs for %s", m.name, len(result.URLs), target)
 
 	skipped := 0
+	emitted := 0
 	for _, url := range result.URLs {
+		// 单目标页数上限：到量即停（站点巡检慢爬的「30 页」口径在这里生效）
+		if m.maxPages > 0 && emitted >= m.maxPages {
+			break
+		}
 		// 非 JS 静态资源不进结果；JS 保留，里面的接口/路由需要继续分析。
 		if scope.IsStaticAsset(url.URL) || scope.IsNoisyCrawlerURL(url.URL) {
 			skipped++
@@ -434,6 +352,7 @@ func (m *CrawlerModule) crawlWithKatana(target string, asset AssetHttp) {
 			Attribute:   url.Attribute,
 			Referrer:    url.Source,
 		}
+		emitted++
 
 		select {
 		case <-m.ctx.Done():
@@ -441,6 +360,24 @@ func (m *CrawlerModule) crawlWithKatana(target string, asset AssetHttp) {
 		case m.resultChan <- urlResult:
 		}
 	}
+}
+
+// assetHttpFromTarget 把裸目标字符串转成爬虫入口的 AssetHttp。
+// 只接受带 http/https scheme 的 URL；解析失败返回 false 由调用方透传。
+func assetHttpFromTarget(raw string) (AssetHttp, bool) {
+	u, err := neturl.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return AssetHttp{}, false
+	}
+	port := u.Port()
+	if port == "" {
+		if u.Scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	return AssetHttp{URL: raw, Host: u.Hostname(), Port: port}, true
 }
 
 // DirScanModule 目录扫描模块

@@ -88,3 +88,68 @@ func TestKatanaExtensionFilterKeepsJS(t *testing.T) {
 		}
 	}
 }
+
+func TestKatanaHeadlessArgs(t *testing.T) {
+	plain := &KatanaScanner{Depth: 3, Concurrency: 5, Timeout: 30, RateLimit: 10}
+	headless := &KatanaScanner{Depth: 3, Concurrency: 5, Timeout: 30, RateLimit: 10, Headless: true}
+
+	plainArgs := plain.commonArgs("/tmp/katana.json")
+	headlessArgs := headless.commonArgs("/tmp/katana.json")
+
+	// 验收口径：headless 关闭时参数与旧行为一致（不带任何 headless 系参数）
+	t.Logf("headless=off: katana %s", strings.Join(plainArgs, " "))
+	t.Logf("headless=on : katana -u <target> %s", strings.Join(headlessArgs, " "))
+	for _, a := range plainArgs {
+		if a == "-headless" || a == "-no-sandbox" || a == "-xhr" || a == "-sc" {
+			t.Fatalf("非 headless 模式不应出现 %s: %v", a, plainArgs)
+		}
+	}
+
+	has := func(args []string, flag string) bool {
+		for _, a := range args {
+			if a == flag {
+				return true
+			}
+		}
+		return false
+	}
+	for _, flag := range []string{"-headless", "-no-sandbox", "-xhr", "-sc"} {
+		if !has(headlessArgs, flag) {
+			t.Fatalf("headless 模式缺少 %s: %v", flag, headlessArgs)
+		}
+	}
+
+	// headless 下 timeout 抬到下限 60，但不改结构体默认值
+	timeoutOf := func(args []string) int {
+		for i, a := range args {
+			if a == "-timeout" && i+1 < len(args) {
+				n := 0
+				for _, c := range args[i+1] {
+					if c < '0' || c > '9' {
+						t.Fatalf("非法 timeout: %v", args)
+					}
+					n = n*10 + int(c-'0')
+				}
+				return n
+			}
+		}
+		t.Fatalf("缺少 -timeout: %v", args)
+		return 0
+	}
+	if got := timeoutOf(headlessArgs); got < 60 {
+		t.Fatalf("headless timeout 应 >= 60, got %d", got)
+	}
+	if headless.Timeout != 30 {
+		t.Fatalf("headless 不应改写结构体默认 Timeout, got %d", headless.Timeout)
+	}
+	if got := timeoutOf(plainArgs); got != 30 {
+		t.Fatalf("非 headless timeout 应保持 30, got %d", got)
+	}
+
+	// 红线：-fs rdn / -ob -or 在两种模式下都必须还在
+	for _, args := range [][]string{plainArgs, headlessArgs} {
+		if !has(args, "-fs") || !has(args, "-ob") || !has(args, "-or") {
+			t.Fatalf("红线参数丢失: %v", args)
+		}
+	}
+}

@@ -134,6 +134,17 @@ func (c *WebCrawler) Crawl(ctx context.Context, startURL string) *CrawlerResult 
 	queue := make(chan CrawledURL, c.MaxURLs*2)
 	var wg sync.WaitGroup
 
+	// 可取消的爬取级 ctx：兜底超时只停爬取，不影响调用方 ctx。
+	crawlCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// 在途任务计数：入队 +1、处理完 -1，归零即整站爬完。
+	// 替代旧的「MaxURLs×100ms 粗暴定时器 close(queue)」——定时器关闭通道
+	// 与 worker 的入队 send 竞争，向已关闭 channel 发送会 panic 崩掉进程；
+	// 且旧实现就算站点 1 秒爬完也要等满定时器才返回。
+	var pending sync.WaitGroup
+	pending.Add(1)
+
 	// Add initial URL
 	queue <- CrawledURL{URL: startURL, Depth: 0, Source: "start"}
 
@@ -145,7 +156,7 @@ func (c *WebCrawler) Crawl(ctx context.Context, startURL string) *CrawlerResult 
 
 			for {
 				select {
-				case <-ctx.Done():
+				case <-crawlCtx.Done():
 					return
 				case crawled, ok := <-queue:
 					if !ok {
@@ -155,6 +166,7 @@ func (c *WebCrawler) Crawl(ctx context.Context, startURL string) *CrawlerResult 
 					mu.Lock()
 					if visited[crawled.URL] || len(result.URLs) >= c.MaxURLs {
 						mu.Unlock()
+						pending.Done()
 						continue
 					}
 					visited[crawled.URL] = true
@@ -162,23 +174,27 @@ func (c *WebCrawler) Crawl(ctx context.Context, startURL string) *CrawlerResult 
 					mu.Unlock()
 
 					if crawled.Depth >= c.MaxDepth {
+						pending.Done()
 						continue
 					}
 
 					// Fetch and parse page
-					links, forms, extras := c.fetchAndParse(ctx, crawled.URL, baseDomain)
+					links, forms, extras := c.fetchAndParse(crawlCtx, crawled.URL, baseDomain)
 
-					// Add new links to queue
+					// Add new links to queue（+1 必须先于本项的 -1，保证计数归零时确实无剩余工作）
 					for _, link := range links {
 						mu.Lock()
 						if !visited[link] && len(result.URLs) < c.MaxURLs {
+							pending.Add(1)
 							select {
 							case queue <- CrawledURL{URL: link, Depth: crawled.Depth + 1, Source: "link"}:
 							default:
+								pending.Done() // 队列满，丢弃
 							}
 						}
 						mu.Unlock()
 					}
+					pending.Done()
 
 					// Add forms
 					mu.Lock()
@@ -192,16 +208,19 @@ func (c *WebCrawler) Crawl(ctx context.Context, startURL string) *CrawlerResult 
 		}()
 	}
 
-	// Wait for crawling to complete with timeout
+	// 排空监测：在途计数归零即自然完成
 	done := make(chan struct{})
 	go func() {
-		time.Sleep(time.Duration(c.MaxURLs) * 100 * time.Millisecond) // Rough timeout
-		close(queue)
+		pending.Wait()
 		close(done)
 	}()
 
+	// 兜底硬上限：正常情况下排空即返回，这里只防意外挂死
+	backstop := time.AfterFunc(10*time.Minute, cancel)
+	defer backstop.Stop()
+
 	select {
-	case <-ctx.Done():
+	case <-crawlCtx.Done():
 	case <-done:
 	}
 

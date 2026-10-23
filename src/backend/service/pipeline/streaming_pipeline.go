@@ -46,6 +46,9 @@ type PipelineConfig struct {
 
 	// 爬虫
 	WebCrawler bool `json:"web_crawler"`
+	// 爬取深度与单目标结果上限；0 = 用模块默认（深度 3、不限页）。
+	MaxDepth int `json:"max_depth,omitempty"`
+	MaxPages int `json:"max_pages,omitempty"`
 
 	// 目录扫描
 	DirScan bool `json:"dir_scan"`
@@ -54,6 +57,9 @@ type PipelineConfig struct {
 
 	// 敏感信息检测
 	SensitiveScan bool `json:"sensitive_scan"`
+
+	// WIH 接口候选探测：从页面/JS 词法提取接口候选，同源受控探测后落档
+	ApiProbe bool `json:"api_probe"`
 
 	// 节奏控制：除漏洞扫描外，所有会主动发请求的模块都受这两个参数约束。
 	// 默认值刻意保守，宁可慢，也不要因为高频请求把出口 IP 打进黑名单。
@@ -133,6 +139,7 @@ type StreamingPipeline struct {
 	crawlerModule     *CrawlerModule
 	dirScanModule     *DirScanModule
 	sensitiveModule   *SensitiveModule
+	wihModule         *WihProbeModule
 
 	// 进度追踪
 	progressTracker *ProgressTracker
@@ -207,6 +214,9 @@ func (p *StreamingPipeline) getEnabledModules() []string {
 	}
 	if p.config.SensitiveScan {
 		modules = append(modules, "Sensitive")
+	}
+	if p.config.ApiProbe {
+		modules = append(modules, "WihProbe")
 	}
 	return modules
 }
@@ -346,13 +356,29 @@ func (p *StreamingPipeline) buildModuleChain() error {
 		lastModule = p.dirScanModule
 	}
 
+	// WIH 接口候选探测模块：链位置在目录扫描与爬虫之间——爬虫发现的
+	// 页面/JS URL 顺路完成接口面刻画，结论随链流到收集器。
+	// out 直接指向下游输入；nextModule 仅用于链式拉起下游 ModuleRun。
+	if p.config.ApiProbe {
+		wihCfg := DefaultWihConfig()
+		p.wihModule = NewWihProbeModule(p.ctx, make(chan interface{}, 500), lastModule.GetInput(), wihCfg)
+		p.wihModule.SetProgressTracker(p.progressTracker)
+		p.wihModule.nextModule = lastModule
+		lastModule = p.wihModule
+	}
+
 	// 爬虫模块
 	if p.config.WebCrawler {
 		p.crawlerModule = NewCrawlerModule(p.ctx, lastModule, p.config.moduleConcurrency(8), true) // 默认使用Katana
-		// 流式模式：拿到一个可爬 URL 就开爬，结果边产出边落库；
-		// 批量模式会等上游全部结束才启动 Katana，页面长时间空白。
-		p.crawlerModule.SetBatchMode(false, 0)
+		// 流式模式：拿到一个可爬 URL 就开爬，结果边产出边落库
 		p.crawlerModule.SetRate(p.config.rate(), p.config.moduleConcurrency(8))
+		// 深度/页数上限此前从未接线，任务配置的值一直是摆设
+		if p.config.MaxDepth > 0 {
+			p.crawlerModule.SetCrawlDepth(p.config.MaxDepth)
+		}
+		if p.config.MaxPages > 0 {
+			p.crawlerModule.SetMaxPages(p.config.MaxPages)
+		}
 		p.crawlerModule.SetScope(p.scope)
 		p.crawlerModule.SetInput(make(chan interface{}, 500))
 		p.crawlerModule.SetProgressTracker(p.progressTracker)
@@ -461,15 +487,6 @@ func (p *StreamingPipeline) Stop() {
 	p.cancel()
 }
 
-// Wait 等待流水线完成并返回所有结果
-func (p *StreamingPipeline) Wait() []interface{} {
-	var results []interface{}
-	for result := range p.resultChan {
-		results = append(results, result)
-	}
-	return results
-}
-
 // ResultCollectorModule 结果收集模块
 // 作为流水线的最后一个模块，收集所有结果
 type ResultCollectorModule struct {
@@ -509,106 +526,4 @@ func (m *ResultCollectorModule) ModuleRun() error {
 			}
 		}
 	}
-}
-
-// RunPipelineScan 便捷函数：运行流水线扫描
-func RunPipelineScan(ctx context.Context, targets []string, config *PipelineConfig) ([]interface{}, error) {
-	pipeline := NewStreamingPipeline(ctx, nil, config)
-
-	if err := pipeline.Start(targets); err != nil {
-		return nil, err
-	}
-
-	// 等待完成并收集结果
-	results := pipeline.Wait()
-	return results, nil
-}
-
-// RunQuickScan 快速扫描（子域名 + 快速端口扫描）
-func RunQuickScan(ctx context.Context, targets []string) ([]interface{}, error) {
-	config := &PipelineConfig{
-		SubdomainScan:        true,
-		SubdomainMaxEnumTime: 5,
-		SubdomainResolveIP:   true,
-		PortScan:             true,
-		PortScanMode:         "quick",
-		SkipCDN:              true,
-	}
-	return RunPipelineScan(ctx, targets, config)
-}
-
-// RunFullScan 完整扫描（子域名 + 全端口扫描）
-func RunFullScan(ctx context.Context, targets []string) ([]interface{}, error) {
-	config := &PipelineConfig{
-		SubdomainScan:        true,
-		SubdomainMaxEnumTime: 15,
-		SubdomainResolveIP:   true,
-		PortScan:             true,
-		PortScanMode:         "full",
-		SkipCDN:              true,
-	}
-	return RunPipelineScan(ctx, targets, config)
-}
-
-// RunPortOnlyScan 仅端口扫描（不进行子域名枚举）
-func RunPortOnlyScan(ctx context.Context, targets []string, portMode string) ([]interface{}, error) {
-	// 对于纯端口扫描，需要构建特殊的流水线
-	pipeCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	resultChan := make(chan interface{}, 1000)
-	resultCollector := NewResultCollectorModule(pipeCtx, resultChan)
-	resultCollector.SetInput(make(chan interface{}, 500)) // 初始化输入通道
-
-	portScanModule := NewPortScanModule(pipeCtx, resultCollector, "", portMode)
-	portScanModule.SetInput(make(chan interface{}, 500)) // 初始化输入通道
-
-	// 启动模块
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if err := portScanModule.ModuleRun(); err != nil {
-			log.Printf("[PortOnlyScan] Module error: %v", err)
-		}
-	}()
-
-	// 注入目标（转换为 DomainSkip 格式）
-	for _, target := range targets {
-		ds := DomainSkip{
-			Domain: target,
-			Skip:   false,
-		}
-		select {
-		case <-pipeCtx.Done():
-			// 取消后停止注入（break 只能跳出 select，须用标签跳出 for）
-			goto injectDone
-		case portScanModule.GetInput() <- ds:
-		}
-	}
-injectDone:
-	portScanModule.CloseInput()
-
-	// 收集结果
-	go func() {
-		wg.Wait()
-		close(resultChan)
-	}()
-
-	var results []interface{}
-	for result := range resultChan {
-		results = append(results, result)
-	}
-
-	return results, nil
-}
-
-// PipelineProgress 流水线进度
-type PipelineProgress struct {
-	CurrentModule string    `json:"current_module"`
-	TotalTargets  int       `json:"total_targets"`
-	Processed     int       `json:"processed"`
-	ResultCount   int       `json:"result_count"`
-	StartTime     time.Time `json:"start_time"`
-	Elapsed       string    `json:"elapsed"`
 }

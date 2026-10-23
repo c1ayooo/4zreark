@@ -28,7 +28,6 @@ type ScanHandler struct {
 	contentScanner     *webscan.ContentScanner
 	sprayScanner       *webscan.SprayScanner
 	weakPwdScanner     *vulnscan.WeakPasswordScanner
-	webCrawler         *webscan.WebCrawler
 	takeoverScanner    *subdomain.TakeoverScanner
 }
 
@@ -43,7 +42,6 @@ func NewScanHandler() *ScanHandler {
 		contentScanner:     webscan.NewContentScanner(30),
 		sprayScanner:       webscan.NewSprayScanner(),
 		weakPwdScanner:     vulnscan.NewWeakPasswordScanner(5),
-		webCrawler:         webscan.NewWebCrawler(3, 100, 10),
 		takeoverScanner:    subdomain.NewTakeoverScanner(30),
 	}
 }

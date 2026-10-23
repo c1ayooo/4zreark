@@ -25,6 +25,9 @@ type KatanaScanner struct {
 	RateLimit        int // 每秒请求数
 	TempDir          string
 	ExecutionTimeout int // 执行超时时间（分钟）
+	// Headless 起无头浏览器执行 JS 路由，SPA 场景才有实质产出；
+	// 渲染开销是普通模式的 5-10 倍，调用方按目标特征分流（见 crawler_module）。
+	Headless bool
 }
 
 // KatanaResult Katana 爬虫结果
@@ -107,14 +110,22 @@ func NewKatanaScanner() *KatanaScanner {
 	}
 }
 
+// headlessMinTimeoutSeconds headless 模式的单请求超时下限：无头浏览器要真渲染
+// 页面，非 headless 的默认 30s 会大片超时。只抬升传给 katana 的值，不动结构体默认。
+const headlessMinTimeoutSeconds = 60
+
 // commonArgs 是单目标与列表模式共用的参数。
 // -fs rdn 把 katana 的爬取范围显式限制在注册域内，避免工具自身跟随站外链接；
 // 结果层还有一次 scope 过滤，这里是工具层的第一道边界。
 func (k *KatanaScanner) commonArgs(outputPath string) []string {
-	return []string{
+	timeout := k.Timeout
+	if k.Headless && timeout < headlessMinTimeoutSeconds {
+		timeout = headlessMinTimeoutSeconds
+	}
+	args := []string{
 		"-d", fmt.Sprintf("%d", k.Depth),
 		"-c", fmt.Sprintf("%d", k.Concurrency),
-		"-timeout", fmt.Sprintf("%d", k.Timeout),
+		"-timeout", fmt.Sprintf("%d", timeout),
 		"-rl", fmt.Sprintf("%d", k.RateLimit),
 		"-fs", "rdn",
 		"-H", "User-Agent: " + useragent.Pick(),
@@ -126,8 +137,14 @@ func (k *KatanaScanner) commonArgs(outputPath string) []string {
 		"-jc",  // 解析 JS 里的链接与接口
 		"-jsl", // jsluice：从 JS 内容里提取 API/端点（内存占用高，流式单目标可接受）
 		"-kf", "all",
-		"-o", outputPath,
 	}
+	if k.Headless {
+		// -no-sandbox：worker 跑在 WSL/rootless，浏览器沙箱起不来；
+		// -xhr：SPA 的接口路径大多由 XHR 产生，渲染后直接抓出来（仅 headless 有意义）；
+		// -sc：用环境里已装的系统 Chrome，免去 katana 自带 chrome 的下载与版本漂移
+		args = append(args, "-headless", "-no-sandbox", "-xhr", "-sc")
+	}
+	return append(args, "-o", outputPath)
 }
 
 // IsAvailable 检查是否可用

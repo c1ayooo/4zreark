@@ -144,6 +144,10 @@ type TaskConfig struct {
 
 	// Crawler Config
 	MaxDepth       int  `json:"max_depth,omitempty" bson:"max_depth,omitempty"`
+	// WatchCrawl 标记任务来自站点巡检的「变更慢爬」：executor 按最轻配置执行
+	//（不带端口扫描/指纹/子域），配合 RatePerSec/MaxPages 的保守值把对目标
+	// 的压力压到最低。
+	WatchCrawl     bool `json:"watch_crawl,omitempty" bson:"watch_crawl,omitempty"`
 	MaxPages       int  `json:"max_pages,omitempty" bson:"max_pages,omitempty"`
 	FollowRedirect bool `json:"follow_redirect,omitempty" bson:"follow_redirect,omitempty"`
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -210,6 +211,13 @@ func (m *PortScanModule) scanPorts(ds DomainSkip) {
 	ctx, cancel := context.WithTimeout(m.ctx, 10*time.Minute)
 	defer cancel()
 
+	// gogo 不做 DNS：无子域阶段的流水线入口是裸域名，这里补一次解析，
+	// 否则端口结果的 IP 恒为空，端口页签按 ip 聚合会把多主机并成一行。
+	ips := ds.IP
+	if len(ips) == 0 && ds.Domain != "" && !strings.Contains(ds.Domain, "://") {
+		ips = resolveHostIPs(ctx, ds.Domain)
+	}
+
 	if !m.gogoScanner.IsAvailable() {
 		m.scanPortsFallback(ctx, ds)
 		return
@@ -246,8 +254,8 @@ func (m *PortScanModule) scanPorts(ds DomainSkip) {
 		}
 
 		ip := ""
-		if len(ds.IP) > 0 {
-			ip = ds.IP[0]
+		if len(ips) > 0 {
+			ip = ips[0]
 		}
 
 		result := PortAlive{
