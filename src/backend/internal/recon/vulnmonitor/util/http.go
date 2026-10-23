@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/outbound"
 	"github.com/imroc/req/v3"
 )
 
@@ -40,6 +41,10 @@ func NewHttpClient() *req.Client {
 		})
 	if os.Getenv("GO_SKIP_TLS_CHECK") != "" {
 		client.EnableInsecureSkipVerify()
+	}
+	// 情报模块走代理设置页的 intel 配置（每次构造时取，热生效）。
+	if u, err := outbound.ProxyFor("intel"); err == nil && u != nil {
+		client.SetProxyURL(u.String())
 	}
 	return client
 }

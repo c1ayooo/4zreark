@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/outbound"
 	"github.com/c1ayooo/4zreark/internal/useragent"
 )
 
@@ -193,6 +194,8 @@ func parseChecksums(data []byte) map[string]string {
 // TLS 握手不兼容，沿 nucleiruntime 的经验只对资产 CDN 直连。
 // 下载 Transport 显式禁用 HTTP/2（TLSNextProto 置空表）：
 // 实测部分 gh 镜像的 h2 流会被对端中途打断（INTERNAL_ERROR）。
+//
+// 代理优先级：代理设置页 DB 配置 > ZRE_TOOL_PROXY > 环境变量 HTTP(S)_PROXY。
 func (m *Manager) httpClient() *http.Client {
 	c := *m.client
 	tr := &http.Transport{
@@ -200,17 +203,26 @@ func (m *Manager) httpClient() *http.Client {
 		ResponseHeaderTimeout: 60 * time.Second,
 		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
 	}
-	if p := strings.TrimSpace(os.Getenv(ghProxyEnv)); p != "" {
+	if u, err := outbound.ProxyFor("tool_download"); err == nil && u != nil {
+		tr.Proxy = assetCDNDirectProxy(u)
+	} else if outbound.ModeFor("tool_download") == outbound.ModeDirect {
+		tr.Proxy = nil // 设置页显式直连，压过 ZRE_TOOL_PROXY / HTTP(S)_PROXY
+	} else if p := strings.TrimSpace(os.Getenv(ghProxyEnv)); p != "" {
 		if u, err := url.Parse(p); err == nil && u.Host != "" {
-			tr.Proxy = func(req *http.Request) (*url.URL, error) {
-				switch strings.ToLower(req.URL.Hostname()) {
-				case "release-assets.githubusercontent.com", "objects.githubusercontent.com":
-					return nil, nil
-				}
-				return u, nil
-			}
+			tr.Proxy = assetCDNDirectProxy(u)
 		}
 	}
 	c.Transport = tr
 	return &c
+}
+
+// assetCDNDirectProxy 对 GitHub release 资产 CDN 绕过代理直连。
+func assetCDNDirectProxy(u *url.URL) func(*http.Request) (*url.URL, error) {
+	return func(req *http.Request) (*url.URL, error) {
+		switch strings.ToLower(req.URL.Hostname()) {
+		case "release-assets.githubusercontent.com", "objects.githubusercontent.com":
+			return nil, nil
+		}
+		return u, nil
+	}
 }

@@ -384,6 +384,16 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				intelGroup.GET("/:unique_key/enrich", intelHandler.EnrichStatus)
 			}
 
+			// 平台出网代理设置：规则库同步/工具下载/情报/被动收集/通知等出网走代理。
+			// 修改直接改全局出网行为，只给管理员。
+			networkProxyHandler := api.NewNetworkProxyHandler()
+			proxyGroup := protected.Group("/network/proxy", middleware.AdminMiddleware())
+			{
+				proxyGroup.GET("", networkProxyHandler.GetConfig)
+				proxyGroup.PUT("", networkProxyHandler.UpdateConfig)
+				proxyGroup.POST("/test", networkProxyHandler.TestProxy)
+			}
+
 			// Node routes
 			nodeHandler := api.NewNodeHandler(nodeHub)
 			nodeGroup := protected.Group("/nodes")

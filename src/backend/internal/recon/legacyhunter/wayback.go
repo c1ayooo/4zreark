@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/outbound"
 	"github.com/c1ayooo/4zreark/internal/useragent"
 	"io"
 	"net/http"
@@ -55,7 +56,8 @@ func QueryCDX(ctx context.Context, domain string, opts CDXOptions) ([]CDXEntry, 
 	}
 	client := opts.Client
 	if client == nil {
-		client = &http.Client{Timeout: timeout}
+		// 被动收集源走代理设置页的 recon 配置（每次查询时取，热生效）。
+		client = outbound.HTTPClient("recon", timeout)
 	}
 	q := url.Values{}
 	q.Set("url", domain+"/*")

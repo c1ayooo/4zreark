@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/outbound"
 	"github.com/c1ayooo/4zreark/internal/recon/collect"
 )
 
@@ -42,8 +43,9 @@ type Client struct {
 }
 
 // NewClient 构造引擎客户端。60s 超时与 4zreco 对齐(引擎偶发慢查询)。
+// 代理走设置页的 recon 配置（每次查询新建客户端时取，热生效）。
 func NewClient() *Client {
-	return &Client{httpClient: &http.Client{Timeout: 60 * time.Second}}
+	return &Client{httpClient: outbound.HTTPClient("recon", 60*time.Second)}
 }
 
 // SearchRequest 引擎查询入参(engine 归一化名之外的原始形态)。

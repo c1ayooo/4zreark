@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/c1ayooo/4zreark/internal/outbound"
 )
 
 // NotifyType 通知类型
@@ -102,7 +104,7 @@ func NewDingTalkNotifier(webhook, secret string) *DingTalkNotifier {
 	return &DingTalkNotifier{
 		webhook: webhook,
 		secret:  secret,
-		client:  &http.Client{Timeout: 10 * time.Second},
+		client:  outbound.HTTPClient("notify", 10*time.Second),
 	}
 }
 
@@ -176,7 +178,7 @@ func NewFeishuNotifier(webhook, secret string) *FeishuNotifier {
 	return &FeishuNotifier{
 		webhook: webhook,
 		secret:  secret,
-		client:  &http.Client{Timeout: 10 * time.Second},
+		client:  outbound.HTTPClient("notify", 10*time.Second),
 	}
 }
 
@@ -331,7 +333,7 @@ func NewFeishuAppNotifier(appID, appSecret, receiveIDType, receiveID string) *Fe
 		receiveIDType: receiveIDType,
 		receiveID:     receiveID,
 		baseURL:       base,
-		client:        &http.Client{Timeout: 10 * time.Second},
+		client:        outbound.HTTPClient("notify", 10*time.Second),
 	}
 }
 
@@ -450,7 +452,7 @@ type WechatNotifier struct {
 func NewWechatNotifier(webhook string) *WechatNotifier {
 	return &WechatNotifier{
 		webhook: webhook,
-		client:  &http.Client{Timeout: 10 * time.Second},
+		client:  outbound.HTTPClient("notify", 10*time.Second),
 	}
 }
 
@@ -528,6 +530,8 @@ func NewWebhookNotifier(webhookURL, method string, headers map[string]string) *W
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return fmt.Errorf("webhook 不允许重定向")
 			},
+			// 通知推送走代理设置页的 notify 配置（每次构造时取，热生效）。
+			Transport: &http.Transport{Proxy: outbound.ProxyFuncFor("notify")},
 		},
 	}
 }

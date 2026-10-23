@@ -25,6 +25,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/c1ayooo/4zreark/internal/outbound"
 )
 
 const (
@@ -148,6 +150,19 @@ func (m *Manager) Proxy() string { return m.setting(SettingProxy, "") }
 // SetProxy 设置 nuclei 下载/更新代理；支持 http/https/socks5。
 func (m *Manager) SetProxy(v string) { m.setSetting(SettingProxy, strings.TrimSpace(v)) }
 
+// effectiveProxy 返回 nuclei 下载/更新应使用的代理与来源模式。
+// 优先级：代理设置页 DB 配置 > 遗留 settings.json 的 nuclei.proxy。
+// mode=direct 表示设置页显式直连（应压过一切代理环境变量）。
+func (m *Manager) effectiveProxy() (proxy string, direct bool) {
+	if u, err := outbound.ProxyFor("nuclei"); err == nil && u != nil {
+		return u.String(), false
+	}
+	if outbound.ModeFor("nuclei") == outbound.ModeDirect {
+		return "", true
+	}
+	return strings.TrimSpace(m.Proxy()), false
+}
+
 // httpClient 每次按当前代理设置构造客户端，设置改动无需重启。
 func (m *Manager) httpClient() *http.Client {
 	c := *m.client
@@ -155,19 +170,21 @@ func (m *Manager) httpClient() *http.Client {
 		Proxy:                 http.ProxyFromEnvironment,
 		ResponseHeaderTimeout: 30 * time.Second,
 	}
-	if p := m.Proxy(); p != "" {
-		if u, err := url.Parse(p); err == nil && u.Host != "" {
-			tr.Proxy = func(req *http.Request) (*url.URL, error) {
-				// GitHub release 的资产会 302 到 release-assets.githubusercontent.com。
-				// 部分代理节点对该 CDN 的 TLS 握手不兼容，直连反而可用；这里只对
-				// 资产 CDN 绕过代理，初始 github.com 请求仍走代理。
-				switch strings.ToLower(req.URL.Hostname()) {
-				case "release-assets.githubusercontent.com", "objects.githubusercontent.com":
-					return nil, nil
-				}
-				return u, nil
+	proxy, direct := m.effectiveProxy()
+	u, _ := url.Parse(proxy)
+	if proxy != "" && u != nil && u.Host != "" {
+		tr.Proxy = func(req *http.Request) (*url.URL, error) {
+			// GitHub release 的资产会 302 到 release-assets.githubusercontent.com。
+			// 部分代理节点对该 CDN 的 TLS 握手不兼容，直连反而可用；这里只对
+			// 资产 CDN 绕过代理，初始 github.com 请求仍走代理。
+			switch strings.ToLower(req.URL.Hostname()) {
+			case "release-assets.githubusercontent.com", "objects.githubusercontent.com":
+				return nil, nil
 			}
+			return u, nil
 		}
+	} else if direct {
+		tr.Proxy = nil
 	}
 	c.Transport = tr
 	return &c
@@ -635,13 +652,15 @@ func (m *Manager) invalidateIndex() {
 }
 
 // env 把 nuclei 的 HOME/XDG/TMPDIR 全部收敛到项目目录，避免写宿主用户目录。
-// 设置了 nuclei.proxy 时，同时覆盖 HTTP(S)_PROXY/ALL_PROXY，确保
-// nuclei -update / -update-templates 也走同一个代理。
+// 设置了代理时，同时覆盖 HTTP(S)_PROXY/ALL_PROXY，确保
+// nuclei -update / -update-templates 也走同一个代理；设置页显式直连时
+// 反向剥离代理环境变量（NO_PROXY=*），保证不走系统代理。
 func (m *Manager) env() []string {
 	home := m.homeDir()
 	_ = os.MkdirAll(home, 0o700)
 	_ = os.MkdirAll(m.tmpDir(), 0o700)
-	proxy := m.Proxy()
+	proxy, direct := m.effectiveProxy()
+	stripProxyEnv := proxy != "" || direct
 	keep := make([]string, 0, len(os.Environ())+10)
 	for _, e := range os.Environ() {
 		switch {
@@ -651,7 +670,7 @@ func (m *Manager) env() []string {
 			strings.HasPrefix(e, "XDG_DATA_HOME="),
 			strings.HasPrefix(e, "TMPDIR="):
 			continue
-		case proxy != "" && isProxyEnv(e):
+		case stripProxyEnv && isProxyEnv(e):
 			continue
 		}
 		keep = append(keep, e)
@@ -663,7 +682,8 @@ func (m *Manager) env() []string {
 		"XDG_DATA_HOME="+filepath.Join(home, ".local", "share"),
 		"TMPDIR="+m.tmpDir(),
 	)
-	if proxy != "" {
+	switch {
+	case proxy != "":
 		keep = append(keep,
 			"HTTP_PROXY="+proxy, "HTTPS_PROXY="+proxy, "ALL_PROXY="+proxy,
 			"http_proxy="+proxy, "https_proxy="+proxy, "all_proxy="+proxy,
@@ -671,6 +691,8 @@ func (m *Manager) env() []string {
 			"NO_PROXY=release-assets.githubusercontent.com,objects.githubusercontent.com",
 			"no_proxy=release-assets.githubusercontent.com,objects.githubusercontent.com",
 		)
+	case direct:
+		keep = append(keep, "NO_PROXY=*", "no_proxy=*")
 	}
 	return keep
 }

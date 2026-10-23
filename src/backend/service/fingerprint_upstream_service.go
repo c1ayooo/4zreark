@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"github.com/c1ayooo/4zreark/internal/useragent"
 	"io"
 	"log"
 	"net/http"
@@ -13,7 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/outbound"
 	reconfp "github.com/c1ayooo/4zreark/internal/recon/fingerprint"
+	"github.com/c1ayooo/4zreark/internal/useragent"
 	"github.com/c1ayooo/4zreark/repo"
 )
 
@@ -179,6 +180,10 @@ func (s *FingerprintUpstreamService) runSource(ctx context.Context, syncRepo rep
 	client := s.client
 	if client == nil {
 		client = &http.Client{Timeout: fpUpstreamTimeout}
+	}
+	// 代理设置页给指纹同步单独配了代理时按其构造（每轮取，配置热生效）。
+	if pu, perr := outbound.ProxyFor("fingerprint_sync"); perr == nil && pu != nil {
+		client = outbound.HTTPClient("fingerprint_sync", fpUpstreamTimeout)
 	}
 
 	var lastErr error

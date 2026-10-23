@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/outbound"
 	"github.com/c1ayooo/4zreark/internal/useragent"
 )
 
@@ -63,7 +64,8 @@ func fetchOnce(ctx context.Context, url, domain string) ([]string, error) {
 	req.Header.Set("User-Agent", useragent.Pick())
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	// 被动收集源走代理设置页的 recon 配置（每次请求时取，热生效）。
+	resp, err := outbound.HTTPClient("recon", 90*time.Second).Do(req)
 	if err != nil {
 		return nil, err
 	}

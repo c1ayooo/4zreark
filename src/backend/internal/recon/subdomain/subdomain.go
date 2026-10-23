@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/c1ayooo/4zreark/internal/outbound"
 )
 
 // Hit 单条被动发现结果。
@@ -58,7 +60,8 @@ func Enumerate(ctx context.Context, domain string, opts Options) (*Result, error
 	}
 	client := opts.Client
 	if client == nil {
-		client = &http.Client{Timeout: opts.Timeout}
+		// 被动收集源走代理设置页的 recon 配置（每次枚举时取，热生效）。
+		client = outbound.HTTPClient("recon", opts.Timeout)
 	}
 
 	type srcResult struct {

@@ -24,6 +24,7 @@ import (
 
 	"github.com/c1ayooo/4zreark/api"
 	"github.com/c1ayooo/4zreark/config"
+	"github.com/c1ayooo/4zreark/internal/outbound"
 	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/router"
 	"github.com/c1ayooo/4zreark/service"
@@ -128,6 +129,9 @@ func main() {
 	}
 	defer pg.Close()
 	log.Println("PostgreSQL 就绪，启动自检通过")
+
+	// 出网代理解析的数据源：规则同步/工具下载/情报等出网点从这里取代理设置。
+	outbound.SetStore(repo.Default().Settings())
 
 	// 恢复上次部署的 rem 反连隧道：进程还活着则跳过，死了就按记录重新拉起。
 	api.RestoreRemTunnels()

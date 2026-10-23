@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/c1ayooo/4zreark/internal/githubleak"
+	"github.com/c1ayooo/4zreark/internal/outbound"
 	"github.com/c1ayooo/4zreark/internal/recon/githubsearch"
 )
 
@@ -74,7 +75,8 @@ func (s *GithubLeakService) Scan(ctx context.Context, in LeakScanInput) (*LeakSc
 		maxResults = 300
 	}
 
-	client := githubsearch.NewClientFromEnv()
+	// 代理走设置页 recon 模块配置（每次请求时取，热生效）。
+	client := githubsearch.NewClientFromEnv(func() string { return outbound.ProxyURLFor("recon") })
 	detector, err := githubleak.NewDetector(githubleak.Settings{
 		Enabled:              true,
 		FingerprintKey:       leakFingerprintKey(),

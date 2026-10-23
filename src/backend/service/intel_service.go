@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/outbound"
 	"github.com/c1ayooo/4zreark/internal/recon/githubpoc"
 	"github.com/c1ayooo/4zreark/internal/recon/triage"
 	"github.com/c1ayooo/4zreark/internal/recon/vulnmonitor"
@@ -543,6 +544,7 @@ func (s *IntelService) EnrichIntel(uniqueKey string) (*githubpoc.Result, error) 
 		return nil, errors.New("未配置 GitHub Token（环境变量 GITHUB_TOKEN 或数据源 github 凭据），GitHub 检索能力不可用")
 	}
 	client := githubpoc.NewClient(func() string { return token })
+	client.Proxy = func() string { return outbound.ProxyURLFor("intel") }
 
 	meta := triage.CVEMeta{
 		CVEID:       cve,
