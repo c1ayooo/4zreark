@@ -42,6 +42,7 @@ import {
 } from 'lucide-react'
 import { statusTagClass } from '@/components/ui/StatusTag'
 import AssetDetailDrawer, { stateLabel } from './components/AssetDetailDrawer'
+import ClusterView from './components/ClusterView'
 
 
 type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline' | 'success'
@@ -1396,71 +1397,16 @@ export default function AssetsPage() {
         </div>
       )}
 
-      {view === 'icons' && (
-        <div className="space-y-3">
-          <p className="text-[13px] text-muted-foreground">
-            共 {iconClusters.data?.data.total ?? 0} 组图标 · 点击图标下钻看对应站点（按内容哈希去重）
-          </p>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-            {(iconClusters.data?.data.items ?? []).map((ic) => (
-              <div
-                key={ic.icon_sha256}
-                role="button"
-                tabIndex={0}
-                title={`下钻：icon_hash="${ic.icon_sha256.slice(0, 12)}…"`}
-                onClick={() => drillDown(`icon_hash="${ic.icon_sha256}"`)}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') drillDown(`icon_hash="${ic.icon_sha256}"`) }}
-                className="flex cursor-pointer flex-col items-center gap-2 rounded-md border p-3 transition-colors hover:border-foreground/30 hover:bg-muted/50"
-              >
-                <img
-                  src={assetApi.iconURL(ic.icon_sha256)}
-                  alt={ic.sample_host}
-                  className="h-10 w-10 rounded"
-                  onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden' }}
-                />
-                <div className="w-full truncate text-center text-[13px]" title={ic.sample_title || ic.sample_host}>
-                  {ic.sample_title || ic.sample_host}
-                </div>
-                <div className="text-[13px] text-muted-foreground">{ic.site_count} 个站点</div>
-              </div>
-            ))}
-            {!iconClusters.isLoading && (iconClusters.data?.data.items ?? []).length === 0 && (
-              <div className="col-span-full rounded border border-dashed py-8 text-center text-sm text-muted-foreground">
-                还没有采集到图标（探测站点时会顺手抓 favicon）
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {view === 'technologies' && (
-        <div className="space-y-3">
-          <p className="text-[13px] text-muted-foreground">
-            共 {techClusters.data?.data.total ?? 0} 种技术 · 点击技术名下钻看对应站点
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {(techClusters.data?.data.items ?? []).map((t) => (
-              <span
-                key={t.name}
-                role="button"
-                tabIndex={0}
-                onClick={() => drillDown(`app="${t.name.replace(/"/g, '')}"`)}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') drillDown(`app="${t.name.replace(/"/g, '')}"`) }}
-                className="cursor-pointer rounded-full border px-3 py-1 text-sm transition-colors hover:border-foreground/30 hover:bg-muted/50"
-                title={`下钻：app="${t.name}"（${t.site_count} 个站点）`}
-              >
-                {t.name}
-                <span className="ml-1 text-[13px] text-muted-foreground">{t.site_count}</span>
-              </span>
-            ))}
-            {!techClusters.isLoading && (techClusters.data?.data.items ?? []).length === 0 && (
-              <div className="w-full rounded border border-dashed py-8 text-center text-sm text-muted-foreground">
-                还没有技术栈数据（需要先有指纹规则并探测过站点）
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      <ClusterView
+        view={view === 'icons' ? 'icons' : 'technologies'}
+        iconItems={iconClusters.data?.data.items ?? []}
+        iconTotal={iconClusters.data?.data.total ?? 0}
+        iconLoading={iconClusters.isLoading}
+        techItems={techClusters.data?.data.items ?? []}
+        techTotal={techClusters.data?.data.total ?? 0}
+        techLoading={techClusters.isLoading}
+        drillDown={drillDown}
+      />
 
       {!clusterView && data && data.view_supported === false && (
         <div className="rounded border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
