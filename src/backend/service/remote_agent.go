@@ -6,24 +6,30 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/c1ayooo/4zreark/config"
+	"github.com/c1ayooo/4zreark/internal/toolruntime"
 	"github.com/c1ayooo/4zreark/models"
+	"github.com/c1ayooo/4zreark/scanner/subdomain"
 
 	"github.com/gorilla/websocket"
 )
 
 type agentCommand struct {
-	Type          string `json:"type"`
-	RequestID     string `json:"request_id,omitempty"`
-	TaskID        string `json:"task_id,omitempty"`
-	Status        string `json:"status,omitempty"`
-	NodeID        string `json:"node_id,omitempty"`
-	ServerVersion string `json:"server_version,omitempty"`
-	BinaryURL     string `json:"binary_url,omitempty"`
+	Type          string         `json:"type"`
+	RequestID     string         `json:"request_id,omitempty"`
+	TaskID        string         `json:"task_id,omitempty"`
+	Status        string         `json:"status,omitempty"`
+	NodeID        string         `json:"node_id,omitempty"`
+	ServerVersion string         `json:"server_version,omitempty"`
+	BinaryURL     string         `json:"binary_url,omitempty"`
+	ToolsHash     string         `json:"tools_hash,omitempty"`
+	ToolsURL      string         `json:"tools_url,omitempty"`
+	EngineUsage   map[string]int `json:"engine_usage,omitempty"`
 }
 
 type agentMessage struct {
@@ -38,6 +44,7 @@ type agentMessage struct {
 	Capabilities []string              `json:"capabilities,omitempty"`
 	Tags         []string              `json:"tags,omitempty"`
 	SystemInfo   models.NodeSystemInfo `json:"system_info,omitempty"`
+	EngineUsage  map[string]int        `json:"engine_usage,omitempty"`
 }
 
 // RemoteAgent 是 worker 侧的长连接客户端：主动连平台，收 scan 指令，回报心跳。
@@ -51,6 +58,9 @@ type RemoteAgent struct {
 	ws          *websocket.Conn
 	cancels     map[string]context.CancelFunc // request_id → cancel
 	taskCancels map[string]context.CancelFunc // task_id → cancel（平台 pause/cancel 用）
+
+	toolsMu       sync.Mutex // TryLock：同步工具时阻止并发同步
+	lastToolsHash string
 }
 
 func NewRemoteAgent(cfg *config.NodeConfig, client *RemoteClient, executor *TaskExecutor) *RemoteAgent {
@@ -169,6 +179,7 @@ func (a *RemoteAgent) connectAndServe(ctx context.Context) error {
 				a.executor.SetIdentity(msg.NodeID, a.cfg.Name)
 				log.Printf("[RemoteAgent] 平台节点 ID=%s", msg.NodeID)
 			}
+			a.maybeSyncTools(msg.ToolsHash)
 		case "heartbeat_ack":
 			if msg.Status == string(models.NodeStatusDisabled) {
 				a.executor.SetPaused(true)
@@ -184,8 +195,62 @@ func (a *RemoteAgent) connectAndServe(ctx context.Context) error {
 					}
 				}(msg.ServerVersion, msg.BinaryURL)
 			}
+			a.maybeSyncTools(msg.ToolsHash)
 		}
 	}
+}
+
+// maybeSyncTools 平台工具清单哈希变化时拉清单，缺的/过期的工具按 sha256
+// 比对后下载替换。下载失败不重试等待下次心跳；本地已有旧版时继续用旧版
+// （「更新永不阻断扫描」），本地完全没有的工具任务会走原生兜底或明确报缺。
+func (a *RemoteAgent) maybeSyncTools(hash string) {
+	if hash == "" {
+		return
+	}
+	a.mu.Lock()
+	unchanged := hash == a.lastToolsHash
+	a.mu.Unlock()
+	if unchanged {
+		return
+	}
+	if !a.toolsMu.TryLock() {
+		return
+	}
+	go func() {
+		defer a.toolsMu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		manifest, err := a.client.FetchToolsManifest(ctx)
+		if err != nil {
+			log.Printf("[RemoteAgent] 拉取工具清单失败: %v", err)
+			return
+		}
+		mgr := toolruntime.Default()
+		for _, e := range manifest.Tools {
+			if e.GOOS != runtime.GOOS || e.GOARCH != runtime.GOARCH {
+				continue
+			}
+			if mgr.LocalSHA256(e.Name) == e.SHA256 {
+				continue
+			}
+			data, sha, err := a.client.DownloadTool(ctx, e.Name)
+			if err != nil {
+				log.Printf("[RemoteAgent] 下载工具 %s 失败（继续用本地版本）: %v", e.Name, err)
+				continue
+			}
+			if sha == "" {
+				sha = e.SHA256
+			}
+			if err := mgr.InstallFromBytes(e.Name, sha, data); err != nil {
+				log.Printf("[RemoteAgent] 安装工具 %s 失败: %v", e.Name, err)
+				continue
+			}
+			log.Printf("[RemoteAgent] 工具 %s 已同步到 %s", e.Name, e.Version)
+		}
+		a.mu.Lock()
+		a.lastToolsHash = hash
+		a.mu.Unlock()
+	}()
 }
 
 func (a *RemoteAgent) heartbeatLoop(ctx context.Context, ws *websocket.Conn, done <-chan struct{}) {
@@ -239,6 +304,9 @@ func (a *RemoteAgent) startScan(parent context.Context, ws *websocket.Conn, msg 
 		if err != nil {
 			reply.Error = err.Error()
 		}
+		// 本任务实际消耗的引擎查询随完成上报，master 按天落账。
+		// master 本地执行路径在 runLocalScan 里直接落账，不会走到这里。
+		reply.EngineUsage = subdomain.TakeEngineUsage()
 		a.sendTo(ws, reply)
 	}()
 }

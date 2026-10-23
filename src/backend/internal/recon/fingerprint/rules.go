@@ -12,6 +12,10 @@ const (
 	SourceWebanalyze   = "webanalyze"
 	SourceDddd         = "dddd"
 	SourceCustom       = "custom"
+	// fingers 生态（chainreactors/fingers resources/ 的规范化数据翻译）
+	SourceEHole   = "ehole"
+	SourceGoby    = "goby"
+	SourceFingers = "fingers"
 )
 
 // Rule 一条指纹规则(未编译形态,来源解析/种子的产物)。

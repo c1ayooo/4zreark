@@ -17,6 +17,7 @@ import (
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/scanner/scope"
+	"github.com/c1ayooo/4zreark/scanner/subdomain"
 	"github.com/c1ayooo/4zreark/service/notify"
 	"github.com/c1ayooo/4zreark/service/pipeline"
 
@@ -459,6 +460,10 @@ func (e *TaskExecutor) runLocalScan(ctx context.Context, taskID string, riverJob
 	log.Printf("[%s] Processing task %s (river job %d)", e.nodeName, task.ID.Hex(), riverJobID)
 	e.processTask(ctx, task, 0)
 
+	// 本地执行（master/all）的引擎用量直接落账；worker 进程 sink 未注入，
+	// 量留给 scan_done 上报，两边互不重复。
+	ReportLocalEngineUsage(subdomain.TakeEngineUsage())
+
 	updated, err := e.taskService.GetTaskByID(taskID)
 	if err != nil || updated == nil {
 		return nil
@@ -836,6 +841,10 @@ func applyScanTypes(cfg *pipeline.PipelineConfig, scanTypes []string) {
 }
 
 func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *models.Task, jobID int64, config *pipeline.PipelineConfig) {
+	// 任务下发的引擎查询上限（master 建任务时按当日余额收紧）
+	if task.Config.EngineQueryMaxPerEngine > 0 {
+		config.SubdomainEngineQueryMax = task.Config.EngineQueryMaxPerEngine
+	}
 	ctx, cancel := context.WithTimeout(parent, 24*time.Hour)
 	taskID := task.ID.Hex()
 
@@ -1155,7 +1164,7 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 			switch r.Source {
 			case "dirscan":
 				resultType = models.ResultTypeDirScan
-			case "katana", "rad":
+			case "katana":
 				resultType = models.ResultTypeCrawler
 			default:
 				resultType = models.ResultTypeURL

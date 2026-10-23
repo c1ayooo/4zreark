@@ -36,7 +36,7 @@ func terminateProcess(pid int) error {
 	return p.Signal(syscall.SIGTERM)
 }
 
-// processMatches 用 /proc/<pid>/cmdline 判断 PID 是否仍是那条 gost 隧道，避免 PID 复用误判。
+// processMatches 用 /proc/<pid>/cmdline 判断 PID 是否仍是那条 rem 隧道，避免 PID 复用误判。
 func processMatches(pid int, marker string) bool {
 	if pid <= 0 || marker == "" {
 		return false

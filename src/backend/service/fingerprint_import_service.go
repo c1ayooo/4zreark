@@ -108,7 +108,7 @@ func normalizeFpImportSource(source string) (string, error) {
 		source = "custom"
 	}
 	switch source {
-	case "dddd", "seed":
+	case "dddd", "seed", "ehole", "goby", "fingers", "wappalyzergo", "webanalyze":
 		return "", fmt.Errorf("%w: %s 是同步保留来源，手工导入请使用 custom / legacy / import", ErrFpImportInput, source)
 	}
 	return source, nil

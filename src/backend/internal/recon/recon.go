@@ -1,4 +1,4 @@
-// Package recon is the integration facade for reconkit.
+// Package recon 是侦察能力包（原 reconkit 并入后的唯一正本）。
 //
 // It exposes a single, database- and agent-free entry point for the four-stage
 // reconnaissance pipeline. Lower-level capabilities live in subpackages

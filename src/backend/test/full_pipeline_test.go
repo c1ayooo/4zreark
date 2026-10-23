@@ -99,7 +99,7 @@ func TestFullScanPipeline(t *testing.T) {
 	startTime := time.Now()
 
 	// ========== 阶段1: 子域名扫描 ==========
-	printSubSeparator("阶段1: 子域名扫描 (ksubdomain)")
+	printSubSeparator("阶段1: 子域名扫描 (原生 DNS)")
 
 	ctx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Minute)
 	scanResult := domainScanner.QuickSubdomainScan(ctx1, targetDomain)

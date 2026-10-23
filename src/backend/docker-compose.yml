@@ -33,14 +33,14 @@ services:
       start_period: 10s
 
   app:
-    image: moon-app
-    container_name: moongazing_app
+    image: zreark-app
+    container_name: zreark_app
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
     ports:
-      - "5003:8080"
+      - "8080:8080"
       - "9443:9443"
     depends_on:
       postgres:
@@ -48,9 +48,10 @@ services:
     volumes:
       - ./config:/app/config:ro
       - ./tools:/app/tools:ro
-      - ./web:/app/web:ro
+      - ../frontend/dist:/app/frontend/dist:ro
     environment:
       - CONFIG_PATH=/app/config/config.yaml
+      - ZRE_FRONTEND_DIST=/app/frontend/dist
       - ZRE_PG_HOST=postgres
       - ZRE_PG_PORT=5432
       - ZRE_PG_USER=zre

@@ -57,7 +57,7 @@ Web UI/管理 API 仍然在 `server.port`（默认 8080）；节点数据面走
   `node.tls_cert` / `node.tls_key` / `node.tls_ca` 使用自己的证书。
 - worker 通过 `node.platform_ca` 信任该证书；一键部署会把证书上传到 worker 并自动写入。
 - 直连部署时 `platform_url = https://<平台主机>:9443`；
-  gost 反连时 `platform_url = https://127.0.0.1:<隧道端口>`，隧道目标为
+  rem 反连时 `platform_url = https://127.0.0.1:<隧道端口>`，隧道目标为
   `127.0.0.1:9443`（不是 8080）。
 - 如果证书是自签的，平台重启会复用同一张证书；删除 `tls_dir` 会重新生成，已有 worker
   需要重新部署或更新 `platform_ca`。
@@ -94,39 +94,48 @@ node:
 
 目标 Windows 需要启用 OpenSSH Server（带 SFTP 子系统）和 PowerShell。
 
-### 自动 gost 反连（推荐）
+### 自动 rem 反连（推荐）
 
-部署页默认开启“自动 gost 反连”。只需要填 SSH 主机/端口/用户名，以及密码或私钥，
+部署页默认开启“自动 rem 反连”。只需要填 SSH 主机/端口/用户名，以及密码或私钥，
 平台会自动完成：
 
-1. 检查目标机是否有 gost；没有就把 Master 侧 gost 上传到 `/usr/local/bin/gost`
-   （Master 侧可用 `node.gost_binary` 指定路径，或放在 `/tmp/gost` / server 同目录）。
-2. 在目标机启动 gost relay（默认 `18421`，自动生成认证凭据）。
-3. 在 Master 本机启动 gost `rtcp` 客户端（默认隧道端口 `18080`），把目标机的
-   `127.0.0.1:18080` 反连到 Master 的 `127.0.0.1:9443`（节点网关 TLS 端口）。
-4. 从目标机探测 `https://127.0.0.1:18080/health`，确认隧道真的通到节点网关。
-5. 部署 worker，并自动把 `platform_url` 设为 `https://127.0.0.1:18080`。
+1. 检查目标机是否有 rem；没有就把 Master 侧 rem 上传到 `/usr/local/bin/rem`
+   （约 3MB；Master 侧由工具运行时管理，也可用 `node.rem_binary` 指定路径）。
+2. 在目标机启动 rem 服务端（默认 relay 端口 `18421`，`-k` 通道密钥自动生成）。
+3. 从目标机 rem 日志提取带 wrapper 加密参数的完整 LINK。
+4. 在 Master 本机启动 rem 反向转发客户端（默认隧道端口 `18080`）：
+   `rem -c <LINK> -r port://127.0.0.1:18080/127.0.0.1:9443`，
+   目标机 `127.0.0.1:18080` 的流量经隧道回到 Master 并进入 `127.0.0.1:9443`（节点网关 TLS 端口）。
+5. 从目标机探测 `https://127.0.0.1:18080/health`，确认隧道真的通到节点网关。
+6. 部署 worker，并自动把 `platform_url` 设为 `https://127.0.0.1:18080`。
 
 要点：
 
 - relay 端口必须允许 Master 访问（云安全组/防火墙）；隧道端口只绑定目标机
   `127.0.0.1`，不会暴露到公网。
-- relay 认证默认自动生成，记录在 Master 的 `/tmp/4zreark-tunnels/<node_id>.json`（0600）。
-- 删除/吊销节点会停止 Master 侧的 rtcp 客户端；目标机上的 relay 进程会保留，需要手动停止
-  或重启目标机（它只监听 relay 端口，且需要认证）。
-- **平台启动时会自动恢复已有隧道**：进程还活着则跳过；进程已死就用记录里的参数重新拉起；
-  节点已删除/吊销则清理记录。隧道记录默认在 `/tmp/4zreark-tunnels`；如果希望主机重启后
-  也能恢复，把 `node.tunnel_dir` 指到持久目录（例如 `/var/lib/4zreark/gost-tunnels`）。
-- gost 反连目前只支持 Linux 目标机；Windows 目标机关掉该开关走直接部署。
+- 通道密钥与 LINK 记录在 Master 的 `/tmp/4zreark-tunnels/<node_id>.json`（0600）。
+  rem 的链路认证是 `-k` 共享密钥 + wrapper 加密，没有 gost 那种 relay URL 级
+  user:pass；relay 端口暴露面应尽量收窄（安全组只放行 Master IP）。
+- 删除/吊销节点会停止 Master 侧客户端；目标机上的 rem 服务端进程会保留，需要手动停止
+  或重启目标机。
+- **平台启动时会自动恢复已有隧道**：进程还活着则跳过；进程已死就用记录里的 LINK 重新拉起。
+  注意 LINK 里的 wrapper 参数由目标机 rem 服务端每次启动时生成——目标机重启过服务端的，
+  记录里的 LINK 失效，需要重新部署。隧道记录默认在 `/tmp/4zreark-tunnels`；如果希望主机
+  重启后也能恢复，把 `node.tunnel_dir` 指到持久目录（例如 `/var/lib/4zreark/rem-tunnels`）。
+- **rem 二进制必须是含反向转发修复的构建**：官方 v0.3.0 的反向端口转发数据面不通
+  （fork 补丁见 `~/rem` 仓 commit “fix: 反向端口转发数据面不通”，判定测试
+  `ZRE_REM_VERDICT=1 go test ./internal/toolruntime/ -run TestRemReverseForwardVerdict`）。
+  官方发布修复后可换回官方 release。
+- rem 反连目前只支持 Linux 目标机；Windows 目标机关掉该开关走直接部署。
 - 目标机 sshd 如果禁用了密码认证，请在部署页改用私钥登录。
 
-### 网络与代理（gost）
+### 网络与代理
 
 如果不使用自动反连，worker 仍然只需要**出站**访问平台（WebSocket + HTTP）：
 
 - 平台有公网地址/端口映射：直接填平台地址，不需要中继。
 - 目标机只能通过现成代理访问平台：在部署页“代理”里填 `socks5://...` 或 `http://...`。
-- 平台在 NAT 后面、目标机也访问不到平台：必须有公网中继；自动 gost 反连就是为此设计的。
+- 平台在 NAT 后面、目标机也访问不到平台：必须有公网中继；自动 rem 反连就是为此设计的。
 
 worker 配置对应字段：
 

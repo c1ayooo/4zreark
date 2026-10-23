@@ -13,7 +13,7 @@ type SubdomainResult struct {
 	IPs        []string `json:"ips"`         // 解析的IP地址列表
 	CNAMEs     []string `json:"cnames"`      // CNAME记录
 	Type       string   `json:"type"`        // 记录类型: A, AAAA, CNAME
-	Source     string   `json:"source"`      // 来源: fofa, hunter, ksubdomain, httpx
+	Source     string   `json:"source"`      // 来源: fofa, hunter, brute, httpx
 	TaskID     string   `json:"task_id"`     // 任务ID
 	TaskName   string   `json:"task_name"`   // 任务名称
 	RootDomain string   `json:"root_domain"` // 根域名

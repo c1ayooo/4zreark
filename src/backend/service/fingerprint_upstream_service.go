@@ -105,6 +105,29 @@ func defaultFpUpstreamSources() []FpUpstreamSource {
 			},
 			Snapshot: embeddedDdddRules(),
 		},
+		// fingers 生态三源：数据钉在固定 commit 的 resources/*.json.gz，
+		// 变更走手动升级（改 fingersPinnedCommit）。
+		{
+			Name: reconfp.SourceEHole,
+			URLs: reconfp.FingersResourceURLs("ehole.json.gz"),
+			Parse: func(data []byte, _ map[string]string) ([]reconfp.Rule, reconfp.WappalyzerImportStats, error) {
+				return reconfp.ParseEHoleFinger(data)
+			},
+		},
+		{
+			Name: reconfp.SourceGoby,
+			URLs: reconfp.FingersResourceURLs("goby.json.gz"),
+			Parse: func(data []byte, _ map[string]string) ([]reconfp.Rule, reconfp.WappalyzerImportStats, error) {
+				return reconfp.ParseGobyFinger(data)
+			},
+		},
+		{
+			Name: reconfp.SourceFingers,
+			URLs: reconfp.FingersResourceURLs("fingers_http.json.gz"),
+			Parse: func(data []byte, _ map[string]string) ([]reconfp.Rule, reconfp.WappalyzerImportStats, error) {
+				return reconfp.ParseFingersHTTP(data)
+			},
+		},
 	}
 }
 

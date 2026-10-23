@@ -1,64 +1,42 @@
 # 外部工具目录
 
-`scanner/core.ToolsManager` 按 `tools/<os>/<name>` 查找外部二进制（linux 为 `tools/linux/`）。
-本目录只提交说明与 `.gitignore`，二进制不入库。
+二进制查找由 **toolruntime** 统一管理（`internal/toolruntime`），解析序：
 
-## 当前已安装（本机 linux/amd64）
+1. `ZRE_TOOL_<NAME>_PATH` 环境变量
+2. `data/tools/<os>/<name>` —— toolruntime 托管（**首选，更新落点**）
+3. `tools/<os>/<name>` —— 本目录 vendored（兜底）
+4. `PATH`
+
+本目录只提交说明与 `.gitignore`，二进制不入库。完整设计见
+`docs/方案-toolruntime-20261022.md`。
+
+## 受管工具（toolruntime 自动下载 / 校验 / 更新 / 回滚）
 
 | 工具 | 用途 | 来源 |
 |---|---|---|
-| `nuclei` | 漏洞模板执行 / 自动验证 | `~/.local/bin/nuclei`（symlink） |
-| `katana` | 爬虫（主） | `~/.local/bin/katana`（symlink） |
-| `enscan` | 企业信息（可选） | `~/.local/bin/enscan`（symlink） |
-| `gogo` | 端口 / 协议识别 | v2.15.0 release |
-| `spray` | 目录扫描 / 1000 词爆破 | v1.3.2 源码构建（Go proxy） |
-| `rad` | 浏览器爬虫（可选） | **未安装**：上游 `chainreactors/rad` 已 404，Katana 可完整替代 |
+| `gogo` | 端口 / 协议 / 内置 poc | chainreactors/gogo releases（checksums 校验 + flag 探针门） |
+| `spray` | 目录扫描 / 1000 词爆破 | chainreactors/spray releases |
+| `katana` | 爬虫 | projectdiscovery/katana releases |
+| `rem` | 节点部署反向隧道 | **必须用本仓 fork 构建**（~/rem，官方 v0.3.0 反向转发不通） |
 
-## 安装/更新命令
+状态/更新/回滚：Web 设置页「工具运行时」，或
+`GET|POST /api/tools[/{name}/check|update|rollback]`。
+worker 节点经节点网关按清单自动同步（心跳携带 tools_hash），无需手工安装。
 
-```bash
-cd src/backend
-mkdir -p tools/linux
+## 独立运行时 / 非受管
 
-# 已在 PATH 的工具直接软链
-ln -sf "$(command -v nuclei)" tools/linux/nuclei
-ln -sf "$(command -v katana)" tools/linux/katana
-ln -sf "$(command -v enscan)" tools/linux/enscan 2>/dev/null || true
+| 工具 | 用途 | 说明 |
+|---|---|---|
+| `nuclei` | 漏洞模板执行 / 自动验证 | 独立 nucleiruntime 自动下载 v3.11.1 + 模板并小时级自更新 |
+| `enscan` | 企业信息（可选，生产默认用原生 internal/enterprise） | 需手工放置 |
+| `chromium` | 报告 PDF / headless | 需手工安装 |
 
-# gogo（GitHub 直连不通时用镜像）
-curl -fL --max-time 300 \
-  https://ghproxy.net/https://github.com/chainreactors/gogo/releases/download/v2.15.0/gogo_linux_amd64 \
-  -o tools/linux/gogo && chmod +x tools/linux/gogo
-
-# spray：Go proxy 下载模块 zip，用 go1.26.3 工具链构建
-curl -fL --max-time 120 \
-  https://goproxy.cn/github.com/chainreactors/spray/@v/v1.3.2.zip -o /tmp/spray.zip
-mkdir -p /tmp/spraybuild && unzip -qo /tmp/spray.zip -d /tmp/spraybuild
-cd /tmp/spraybuild/github.com/chainreactors/spray@v1.3.2
-GOTOOLCHAIN=go1.26.3 GOPROXY=https://goproxy.cn GOSUMDB=sum.golang.org \
-  go build -o /home/c1ay/4zreark/src/backend/tools/linux/spray .
-```
-
-MongoDB 导出工具（迁移器可选）：
+## rem 的 fork 构建（官方修复反向转发前）
 
 ```bash
-curl -fL --max-time 300 \
-  https://fastdl.mongodb.org/tools/db/mongodb-database-tools-ubuntu2204-x86_64-100.9.4.tgz \
-  -o /tmp/mongo-tools.tgz
-tar -xzf /tmp/mongo-tools.tgz -C /tmp
-cp /tmp/mongodb-database-tools-*/bin/{mongodump,mongoexport,mongorestore,mongoimport} ~/.local/bin/
+cd ~/rem   # fork 仓，补丁 commit「fix: 反向端口转发数据面不通」
+GOPROXY=https://goproxy.cn go build -tags "forceposix osusergo netgo" \
+  -o /home/c1ay/4zreark/src/backend/data/tools/linux/rem . && chmod 755 $_
+# 换装判定（上游发新版后跑，绿了可换回官方 release）：
+cd ../.. && ZRE_REM_VERDICT=1 go test ./internal/toolruntime/ -run TestRemReverseForwardVerdict -v
 ```
-
-## 验收
-
-```bash
-cd src/backend
-ZRE_PG_PASSWORD=... go test ./test/ -run 'TestSpray1000WordlistSoft404|TestGogoLocalPort' -v
-
-# 公网 / 外部工具用例默认跳过，需要显式打开：
-ZRE_NETWORK_LIVE=1 ZRE_PG_PASSWORD=... go test ./test/ -v
-```
-
-- `TestSpray1000WordlistSoft404`：本机靶场 1002 个词、200 req/s，实测约 6.8s、
-  1012 次请求、2 条真实命中，软 404 路径被过滤。
-- `TestGogoLocalPort`：本地 HTTP 端口识别，返回 service=http 与页面标题。

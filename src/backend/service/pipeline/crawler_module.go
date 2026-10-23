@@ -16,11 +16,9 @@ import (
 type CrawlerModule struct {
 	BaseModule
 	katanaScanner *webscan.KatanaScanner
-	radScanner    *webscan.RadScanner
 	resultChan    chan interface{}
 	concurrency   int
 	useKatana     bool
-	useRad        bool
 	crawlDepth    int
 	batchMode     bool          // 是否使用批量模式
 	batchSize     int           // 批量大小
@@ -50,7 +48,7 @@ func (m *CrawlerModule) allowsURL(raw string) bool {
 }
 
 // NewCrawlerModule 创建爬虫模块
-func NewCrawlerModule(ctx context.Context, nextModule ModuleRunner, concurrency int, useKatana, useRad bool) *CrawlerModule {
+func NewCrawlerModule(ctx context.Context, nextModule ModuleRunner, concurrency int, useKatana bool) *CrawlerModule {
 	if concurrency <= 0 {
 		concurrency = 5
 	}
@@ -63,25 +61,13 @@ func NewCrawlerModule(ctx context.Context, nextModule ModuleRunner, concurrency 
 			dupChecker: NewDuplicateChecker(),
 		},
 		katanaScanner: webscan.NewKatanaScanner(),
-		radScanner:    webscan.NewRadScanner(),
 		resultChan:    make(chan interface{}, 1000),
 		concurrency:   concurrency,
 		useKatana:     useKatana,
-		useRad:        useRad,
 		crawlDepth:    3,
 		batchMode:     true,             // 默认启用批量模式
 		batchSize:     100,              // 默认每批100个URL
 		batchTimeout:  30 * time.Second, // 批量收集等待30秒
-	}
-	return m
-}
-
-// NewCrawlerModuleWithBatch 创建支持批量模式的爬虫模块
-func NewCrawlerModuleWithBatch(ctx context.Context, nextModule ModuleRunner, concurrency int, useKatana, useRad bool, batchSize int) *CrawlerModule {
-	m := NewCrawlerModule(ctx, nextModule, concurrency, useKatana, useRad)
-	m.batchMode = true
-	if batchSize > 0 {
-		m.batchSize = batchSize
 	}
 	return m
 }
@@ -106,26 +92,25 @@ func (m *CrawlerModule) SetBatchMode(enabled bool, batchSize int) {
 func (m *CrawlerModule) ModuleRun() error {
 	// 检查爬虫工具是否可用
 	katanaAvailable := m.useKatana && m.katanaScanner.IsAvailable()
-	radAvailable := m.useRad && m.radScanner.IsAvailable()
 
-	if !katanaAvailable && !radAvailable {
+	if !katanaAvailable {
 		log.Printf("[%s] No crawler available, passing through", m.name)
 		return m.RunPassThrough()
 	}
 
-	log.Printf("[%s] Starting with Katana=%v, Rad=%v, BatchMode=%v", m.name, katanaAvailable, radAvailable, m.batchMode)
+	log.Printf("[%s] Starting with Katana=%v, BatchMode=%v", m.name, katanaAvailable, m.batchMode)
 
 	// 如果启用批量模式且Katana可用，使用批量处理
 	if m.batchMode && katanaAvailable {
-		return m.runBatchMode(katanaAvailable, radAvailable)
+		return m.runBatchMode()
 	}
 
 	// 否则使用流式处理（逐个URL爬取）
-	return m.runStreamMode(katanaAvailable, radAvailable)
+	return m.runStreamMode()
 }
 
 // runBatchMode 批量模式：收集所有URL后批量调用Katana -list
-func (m *CrawlerModule) runBatchMode(useKatana, useRad bool) error {
+func (m *CrawlerModule) runBatchMode() error {
 	var nextModuleRun sync.WaitGroup
 
 	// 启动下一个模块
@@ -142,7 +127,6 @@ func (m *CrawlerModule) runBatchMode(useKatana, useRad bool) error {
 	// 收集所有URL
 	var urlsToScan []string
 	urlSet := make(map[string]bool)
-	var pendingAssets []AssetHttp
 
 	log.Printf("[%s] Collecting URLs for batch crawling...", m.name)
 
@@ -204,7 +188,6 @@ func (m *CrawlerModule) runBatchMode(useKatana, useRad bool) error {
 			if asset.URL != "" && m.allowsURL(asset.URL) && !urlSet[asset.URL] {
 				urlSet[asset.URL] = true
 				urlsToScan = append(urlsToScan, asset.URL)
-				pendingAssets = append(pendingAssets, asset)
 			}
 		}
 	}
@@ -222,17 +205,7 @@ processBatch:
 	// 批量爬取
 	log.Printf("[%s] Starting batch crawl for %d URLs", m.name, len(urlsToScan))
 
-	// 使用 Katana 批量爬取
-	if useKatana {
-		m.batchCrawlWithKatana(urlsToScan)
-	}
-
-	// 使用 Rad 补充爬取（逐个处理，因为Rad不支持批量）
-	if useRad {
-		for _, asset := range pendingAssets {
-			m.crawlWithRad(asset.URL, asset)
-		}
-	}
+	m.batchCrawlWithKatana(urlsToScan)
 
 	// 关闭下一个模块的输入
 	if m.nextModule != nil {
@@ -308,7 +281,7 @@ func (m *CrawlerModule) batchCrawlWithKatana(urls []string) {
 }
 
 // runStreamMode 流式模式：逐个URL爬取（原有逻辑）
-func (m *CrawlerModule) runStreamMode(useKatana, useRad bool) error {
+func (m *CrawlerModule) runStreamMode() error {
 	var allWg sync.WaitGroup
 	var resultWg sync.WaitGroup
 	var nextModuleRun sync.WaitGroup
@@ -394,14 +367,14 @@ func (m *CrawlerModule) runStreamMode(useKatana, useRad bool) error {
 				defer allWg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				m.crawlTarget(a, useKatana, useRad)
+				m.crawlTarget(a)
 			}(asset)
 		}
 	}
 }
 
 // crawlTarget 爬取目标
-func (m *CrawlerModule) crawlTarget(asset AssetHttp, useKatana, useRad bool) {
+func (m *CrawlerModule) crawlTarget(asset AssetHttp) {
 	if !m.allowsURL(asset.URL) {
 		return
 	}
@@ -410,13 +383,8 @@ func (m *CrawlerModule) crawlTarget(asset AssetHttp, useKatana, useRad bool) {
 	log.Printf("[%s] Crawling %s", m.name, target)
 
 	// 使用 Katana 爬取
-	if useKatana {
+	if m.useKatana {
 		m.crawlWithKatana(target, asset)
-	}
-
-	// 使用 Rad 爬取（可以同时使用，发现不同URL）
-	if useRad {
-		m.crawlWithRad(target, asset)
 	}
 }
 
@@ -465,46 +433,6 @@ func (m *CrawlerModule) crawlWithKatana(target string, asset AssetHttp) {
 			Tag:         url.Tag,
 			Attribute:   url.Attribute,
 			Referrer:    url.Source,
-		}
-
-		select {
-		case <-m.ctx.Done():
-			return
-		case m.resultChan <- urlResult:
-		}
-	}
-}
-
-// crawlWithRad 使用Rad爬取
-func (m *CrawlerModule) crawlWithRad(target string, asset AssetHttp) {
-	ctx, cancel := context.WithTimeout(m.ctx, 10*time.Minute)
-	defer cancel()
-
-	result, err := m.radScanner.Crawl(ctx, target)
-	if err != nil {
-		log.Printf("[%s] Rad error for %s: %v", m.name, target, err)
-		return
-	}
-
-	if result == nil {
-		return
-	}
-
-	log.Printf("[%s] Rad found %d URLs for %s", m.name, len(result.URLs), target)
-
-	for _, url := range result.URLs {
-		if scope.IsStaticAsset(url.URL) || scope.IsNoisyCrawlerURL(url.URL) {
-			continue
-		}
-		// 同 katana：产出侧按任务 scope 再拦一道越界 URL。
-		if !m.allowsURL(url.URL) {
-			continue
-		}
-		urlResult := UrlResult{
-			Input:  target,
-			Output: url.URL,
-			Source: "rad",
-			Method: url.Method,
 		}
 
 		select {

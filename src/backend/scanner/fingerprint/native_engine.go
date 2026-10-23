@@ -21,7 +21,7 @@ import (
 
 // DSLEngine 指纹识别引擎。
 //
-// T10 起内部直接使用 reconkit 的表达式解析器与 AST（支持 && / || / ! / 括号），
+// T10 起内部直接使用 internal/recon/fingerprint 的表达式解析器与 AST（支持 && / || / ! / 括号），
 // 不再保留旧的逐函数 dispatch 求值器。两套规则并存于同一个规则表：
 //   - 内置规则（dddd 快照 + 种子）：表达式原样编译；
 //   - 旧 YAML 规则（finger.yaml / sensitive.yaml）：加载时把
@@ -253,7 +253,7 @@ func regexNodeLiterals(re *syntax.Regexp) ([]string, bool) {
 	}
 }
 
-// LoadBuiltinRules 加载 reconkit 内置规则集（dddd 快照 + 种子）。
+// LoadBuiltinRules 加载内置规则集（dddd 快照 + 种子）。
 // 返回成功编译的条数。YAML 规则随后加载时按 name 覆盖同名内置规则。
 func (e *DSLEngine) LoadBuiltinRules() int {
 	e.mu.Lock()
@@ -430,7 +430,7 @@ func (e *DSLEngine) candidateRules(obs *reconfp.Observation) []string {
 }
 
 // observationTexts 返回参与 gram 预筛的小写字段文本。
-// 与 reconkit getValue 的字段集合保持一致，避免索引漏字段造成假阴性。
+// 与 internal/recon/fingerprint getValue 的字段集合保持一致，避免索引漏字段造成假阴性。
 func observationTexts(o *reconfp.Observation) []string {
 	return []string{
 		strings.ToLower(o.Body),

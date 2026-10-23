@@ -5,12 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/c1ayooo/4zreark/scanner/core"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/c1ayooo/4zreark/internal/toolruntime"
+	"github.com/c1ayooo/4zreark/scanner/core"
 )
 
 // SprayScanner 使用 Spray 进行目录爆破
@@ -88,8 +91,8 @@ func NewSprayScanner() *SprayScanner {
 
 	return &SprayScanner{
 		BinPath:           binPath,
-		Concurrency:       50, // 并发数
-		Timeout:           10, // 每个请求超时（秒）
+		Concurrency:       50,  // 并发数
+		Timeout:           10,  // 每个请求超时（秒）
 		RateLimit:         100, // 速率限制（req/s）。默认非零：0=不限速，50 并发字典爆破最容易打挂目标；流水线会按任务节奏收紧
 		TempDir:           os.TempDir(),
 		ExecutionTimeout:  30,   // 执行超时（分钟）
@@ -262,83 +265,6 @@ func (s *SprayScanner) ScanBatchWithWordlist(ctx context.Context, targets []stri
 	return result, nil
 }
 
-// CheckOnly 仅进行指纹识别（类似 httpx）
-func (s *SprayScanner) CheckOnly(ctx context.Context, targets []string) (*SprayResult, error) {
-	if !s.IsAvailable() {
-		return nil, fmt.Errorf("spray not available")
-	}
-
-	result := &SprayResult{
-		Target:    fmt.Sprintf("check_%d_targets", len(targets)),
-		StartTime: time.Now(),
-		Results:   make([]SprayEntry, 0),
-	}
-
-	// 创建目标列表文件
-	targetFile, err := os.CreateTemp(s.TempDir, "spray_check_*.txt")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create target file: %v", err)
-	}
-	targetPath := targetFile.Name()
-	defer os.Remove(targetPath)
-
-	for _, t := range targets {
-		if !strings.HasPrefix(t, "http://") && !strings.HasPrefix(t, "https://") {
-			t = "https://" + t
-		}
-		targetFile.WriteString(t + "\n")
-	}
-	targetFile.Close()
-
-	// 创建输出文件
-	outputFile, err := os.CreateTemp(s.TempDir, "spray_check_output_*.json")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create output file: %v", err)
-	}
-	outputPath := outputFile.Name()
-	outputFile.Close()
-	defer os.Remove(outputPath)
-
-	// check-only 模式参数
-	args := []string{
-		"-l", targetPath,
-		"--check-only",
-		"-t", fmt.Sprintf("%d", s.Concurrency),
-		"-j",             // JSON 输出
-		"-f", outputPath, // 输出文件
-		"--no-color",
-		"--no-bar",
-	}
-
-	if s.EnableFingerprint {
-		args = append(args, "--finger")
-	}
-
-	execCtx, cancel := context.WithTimeout(ctx, time.Duration(s.ExecutionTimeout)*time.Minute)
-	defer cancel()
-
-	cmd := exec.CommandContext(execCtx, s.BinPath, args...)
-
-	fmt.Printf("[*] Running Spray check-only: %s %s\n", s.BinPath, strings.Join(args, " "))
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		fmt.Printf("[!] Spray check error: %v, output: %s\n", err, string(output))
-	}
-
-	entries, err := s.parseOutput(outputPath)
-	if err != nil {
-		fmt.Printf("[!] Failed to parse spray check output: %v\n", err)
-	}
-	result.Results = entries
-	result.Total = len(entries)
-
-	result.EndTime = time.Now()
-	result.Duration = result.EndTime.Sub(result.StartTime).String()
-
-	return result, nil
-}
-
 // buildArgs 构建单目标扫描参数
 func (s *SprayScanner) buildArgs(target, outputPath string, wordlists []string) []string {
 	args := []string{
@@ -458,19 +384,23 @@ func (s *SprayScanner) parseOutput(outputPath string) ([]SprayEntry, error) {
 	scanner.Buffer(buf, 1024*1024)
 
 	seen := make(map[string]bool)
+	lines, parsed, parseErrs := 0, 0, 0
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
+		lines++
 
 		// 尝试解析 JSON
 		var jsonOutput SprayJSONOutput
 		if err := json.Unmarshal([]byte(line), &jsonOutput); err != nil {
 			// 可能是普通文本输出，跳过
+			parseErrs++
 			continue
 		}
+		parsed++
 
 		// spray 自己标记为 fuzzy 的条目是软 404/WAF 挑战页，直接丢弃
 		if jsonOutput.Fuzzy {
@@ -506,6 +436,14 @@ func (s *SprayScanner) parseOutput(outputPath string) ([]SprayEntry, error) {
 
 	if err := scanner.Err(); err != nil {
 		return entries, fmt.Errorf("error reading output: %v", err)
+	}
+
+	if lines > 0 {
+		log.Printf("[Spray] 输出解析: %d lines, %d parsed, %d parse-errors (spray %s)",
+			lines, parsed, parseErrs, toolruntime.Default().ToolVersion("spray"))
+		if float64(parsed)/float64(lines) < 0.8 {
+			log.Printf("[Spray] 警告: 解析成功率低于 80%%，疑似上游版本不兼容，请在工具运行时面板检查")
+		}
 	}
 
 	return entries, nil

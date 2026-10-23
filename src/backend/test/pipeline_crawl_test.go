@@ -55,7 +55,7 @@ func TestSubdomainToKatanaPipeline(t *testing.T) {
 
 	// ========== 阶段1: 子域名扫描 ==========
 	fmt.Println("\n" + strings.Repeat("-", 50))
-	fmt.Println("[阶段1] 子域名扫描 (使用 ksubdomain)")
+	fmt.Println("[阶段1] 子域名扫描 (原生 DNS)")
 	fmt.Println(strings.Repeat("-", 50))
 
 	domainScanner := subdomain.NewDomainScanner(10)

@@ -1,14 +1,14 @@
 package subdomain
 
 import (
-	"crypto/rand"
-	"math/big"
 	"bufio"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"fmt"
 	"github.com/c1ayooo/4zreark/internal/useragent"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"sort"
@@ -215,7 +215,6 @@ func (s *DomainScanner) CheckFullDomain(ctx context.Context, host string) *Subdo
 		result.Alive = false
 		return result
 	}
-
 
 	// Try to get CNAME (使用新的resolver)
 	cname, err := resolver.LookupCNAME(queryCtx, fullDomain)

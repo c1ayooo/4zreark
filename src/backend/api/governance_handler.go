@@ -734,3 +734,29 @@ func (h *GovernanceHandler) SiteFingerprints(c *gin.Context) {
 	}
 	utils.Success(c, gin.H{"items": hits, "total": len(hits)})
 }
+
+// EngineUsageStatus 引擎查询额度面板（今日用量 + 近 7 天 + 限额）。
+// @Router /api/governance/engine-usage [get]
+func (h *GovernanceHandler) EngineUsageStatus(c *gin.Context) {
+	utils.Success(c, service.GetEngineBudgetService().Status(c.Request.Context()))
+}
+
+// EngineUsageSetLimits 更新每引擎日限额（<=0 表示不限）。
+// @Router /api/governance/engine-usage/limits [put]
+func (h *GovernanceHandler) EngineUsageSetLimits(c *gin.Context) {
+	var limits map[string]int
+	if err := c.ShouldBindJSON(&limits); err != nil {
+		utils.BadRequest(c, "请求体不是合法 JSON")
+		return
+	}
+	budget := service.GetEngineBudgetService()
+	if !budget.CanAccount() {
+		utils.InternalError(c, "需要控制面（worker 无数据库）")
+		return
+	}
+	if err := budget.SetLimits(c.Request.Context(), limits); err != nil {
+		utils.InternalError(c, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "限额已保存", budget.Status(c.Request.Context()))
+}

@@ -94,7 +94,7 @@ type NodeConfig struct {
 	TLSCA             string   `mapstructure:"tls_ca"`
 	TLSDir            string   `mapstructure:"tls_dir"`
 	WindowsBinary     string   `mapstructure:"windows_binary"`
-	GostBinary        string   `mapstructure:"gost_binary"`
+	RemBinary         string   `mapstructure:"rem_binary"`
 	TunnelDir         string   `mapstructure:"tunnel_dir"`
 	MaxTasks          int      `mapstructure:"max_tasks"`
 	HeartbeatInterval int      `mapstructure:"heartbeat_interval"`
@@ -275,8 +275,8 @@ func applyNodeEnv(c *Config) {
 	if v := os.Getenv("ZRE_NODE_WINDOWS_BINARY"); v != "" {
 		c.Node.WindowsBinary = v
 	}
-	if v := os.Getenv("ZRE_NODE_GOST_BINARY"); v != "" {
-		c.Node.GostBinary = v
+	if v := os.Getenv("ZRE_NODE_REM_BINARY"); v != "" {
+		c.Node.RemBinary = v
 	}
 	if v := os.Getenv("ZRE_NODE_TUNNEL_DIR"); v != "" {
 		c.Node.TunnelDir = v

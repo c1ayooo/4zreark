@@ -129,8 +129,8 @@ func main() {
 	defer pg.Close()
 	log.Println("PostgreSQL 就绪，启动自检通过")
 
-	// 恢复上次部署的 gost 反连隧道：进程还活着则跳过，死了就按记录重新拉起。
-	api.RestoreGostTunnels()
+	// 恢复上次部署的 rem 反连隧道：进程还活着则跳过，死了就按记录重新拉起。
+	api.RestoreRemTunnels()
 
 	if cfg.Node.RunsControlPlane() {
 		// JWT 签名密钥是随仓库入库的默认值时拒绝启动：任何知道该值的人都能
@@ -172,6 +172,16 @@ func main() {
 
 	// 节点网关：worker 通过 WebSocket 连上来，master 通过它派单。
 	nodeHub := api.NewNodeHub()
+
+	// 引擎查询额度落账：worker 的 scan_done 上报与本地执行（all 角色）共用。
+	engineBudget := service.GetEngineBudgetService()
+	engineUsageReport := func(m map[string]int) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		engineBudget.ConsumeMany(ctx, m)
+	}
+	nodeHub.SetEngineUsageSink(engineUsageReport)
+	service.SetEngineUsageSink(engineUsageReport)
 	service.SetTaskCancelNotifier(func(taskID string) {
 		nodeHub.CancelTask(taskID)
 	})
@@ -183,6 +193,9 @@ func main() {
 	}
 	nodeBinaryHandler := api.NewNodeBinaryHandler(workerBinaryPath)
 	nodeHub.SetBinaryVersionFn(nodeBinaryHandler.Version)
+	// 托管工具清单哈希：worker 心跳比对，不一致时拉清单同步工具。
+	nodeToolsHandler := api.NewNodeToolsHandler()
+	nodeHub.SetToolsHashFn(nodeToolsHandler.ManifestHash)
 
 	// 节点专用 HTTPS 网关：独立端口 + TLS，只暴露 /api/node/*，不复用 Web 端口。
 	if cfg.Node.GatewayPort == cfg.Server.Port {
@@ -303,6 +316,14 @@ func main() {
 	fpUpstreamService.Start()
 	defer fpUpstreamService.Stop()
 	log.Println("Fingerprint upstream sync started")
+
+	// 工具运行时（gogo/spray/katana/rem）：定时检查上游版本，staged 安装+可回滚。
+	// worker 不启动（无库，工具由节点网关按清单分发）。
+	if cfg.Node.RunsControlPlane() {
+		toolRuntimeService := service.GetToolRuntimeService()
+		defer toolRuntimeService.Stop()
+		log.Println("Tool runtime service started (gogo/spray/katana/rem)")
+	}
 
 	// Start vuln intel poller（9 个公开漏洞源 → vuln_intel）
 	// 设置里 vulnintel.enabled=false 时不轮询，但仍可手动触发。

@@ -28,6 +28,9 @@ type PipelineConfig struct {
 	SubdomainEnableAPI  bool              `json:"subdomain_enable_api,omitempty"`
 	SubdomainAPISources []string          `json:"subdomain_api_sources,omitempty"`
 	SubdomainEngineKeys map[string]string `json:"subdomain_engine_keys,omitempty"`
+	// SubdomainEngineQueryMax 单任务内每引擎查询上限（0=默认）；
+	// master 按当日引擎余额收紧后随任务下发。
+	SubdomainEngineQueryMax int `json:"subdomain_engine_query_max,omitempty"`
 
 	// 端口扫描
 	PortScan     bool   `json:"port_scan"`
@@ -345,7 +348,7 @@ func (p *StreamingPipeline) buildModuleChain() error {
 
 	// 爬虫模块
 	if p.config.WebCrawler {
-		p.crawlerModule = NewCrawlerModule(p.ctx, lastModule, p.config.moduleConcurrency(8), true, false) // 默认使用Katana
+		p.crawlerModule = NewCrawlerModule(p.ctx, lastModule, p.config.moduleConcurrency(8), true) // 默认使用Katana
 		// 流式模式：拿到一个可爬 URL 就开爬，结果边产出边落库；
 		// 批量模式会等上游全部结束才启动 Katana，页面长时间空白。
 		p.crawlerModule.SetBatchMode(false, 0)
@@ -413,6 +416,9 @@ func (p *StreamingPipeline) buildModuleChain() error {
 		scanCfg.HunterKey = p.config.SubdomainEngineKeys["hunter"]
 		scanCfg.QuakeKey = p.config.SubdomainEngineKeys["quake"]
 		scanCfg.SecurityTrailsKey = p.config.SubdomainEngineKeys["securitytrails"]
+		if p.config.SubdomainEngineQueryMax > 0 {
+			scanCfg.EngineQueryMaxPerEngine = p.config.SubdomainEngineQueryMax
+		}
 		// 爆破并发跟随任务级速率，默认 20，避免 500 并发把权威 DNS 和出口 IP 一起打爆。
 		scanCfg.BruteConcurrency = p.config.rate()
 		p.subdomainModule = NewSubdomainScanModuleWithConfig(p.ctx, lastModule, scanCfg)

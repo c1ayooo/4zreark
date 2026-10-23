@@ -48,7 +48,6 @@ func NewScanHandler() *ScanHandler {
 	}
 }
 
-
 // maxScanTimeoutSeconds 是实时扫描入口允许的单次超时上限（24h）。
 // 入口参数不可信：10^9 秒的 timeout 会把 goroutine 占到进程退出。
 const maxScanTimeoutSeconds = 24 * 60 * 60

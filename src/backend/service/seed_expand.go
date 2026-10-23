@@ -611,11 +611,17 @@ var (
 		return NewSourceService().EngineKeys(ctx)
 	}
 	companySearchRows = func(ctx context.Context, keys map[string]string, engine, query string, limit int) ([]map[string]any, error) {
+		// 按天额度闸门（master 侧调用点统一在这里把关：公司反查与证书反查共用）
+		if budget := GetEngineBudgetService(); budget.CanAccount() && !budget.AllowMasterQuery(ctx, engine) {
+			return nil, fmt.Errorf("引擎 %s 今日查询额度已用尽（治理面板可调整限额）", engine)
+		}
 		client := spacemap.NewClient()
 		client.KeyResolver = func(provider string) string {
 			return keys[strings.ToLower(strings.TrimSpace(provider))]
 		}
 		_, rows, _, err := client.SearchEngineAssets(ctx, engine, query, limit, 1)
+		// 无论成败都消耗一次额度（上游按请求计费）
+		GetEngineBudgetService().Consume(ctx, engine, 1)
 		return rows, err
 	}
 )

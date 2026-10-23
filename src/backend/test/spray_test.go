@@ -63,30 +63,6 @@ func TestSprayScan(t *testing.T) {
 	}
 }
 
-// TestSprayCheckOnly 测试仅检查模式
-func TestSprayCheckOnly(t *testing.T) {
-	requireLiveNetwork(t)
-	scanner := webscan.NewSprayScanner()
-
-	if !scanner.IsAvailable() {
-		t.Skip("Spray is not available, skipping test")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	result, err := scanner.CheckOnly(ctx, []string{"https://example.com"})
-	if err != nil {
-		t.Logf("CheckOnly error: %v", err)
-	}
-
-	if result != nil && len(result.Results) > 0 {
-		entry := result.Results[0]
-		t.Logf("CheckOnly result: URL=%s, Status=%d, Title=%s",
-			entry.URL, entry.StatusCode, entry.Title)
-	}
-}
-
 // TestSprayBatchScan 测试批量扫描
 func TestSprayBatchScan(t *testing.T) {
 	requireLiveNetwork(t)

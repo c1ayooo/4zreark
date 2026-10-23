@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/c1ayooo/4zreark/internal/toolruntime"
 )
 
 // getToolsDir 获取工具目录路径
@@ -52,28 +54,11 @@ func NewToolsManager() *ToolsManager {
 	}
 }
 
-// GetToolPath 获取工具路径
+// GetToolPath 获取工具路径。委托 toolruntime 统一解析：
+// 环境变量覆盖 → data/tools 托管目录（toolruntime 安装/更新落点）→
+// tools/<os>/ vendored → PATH。每次调用都重新解析，工具更新即时生效。
 func (t *ToolsManager) GetToolPath(toolName string) string {
-	var osDir string
-	switch runtime.GOOS {
-	case "darwin":
-		osDir = "darwin"
-	case "linux":
-		osDir = "linux"
-	case "windows":
-		osDir = "win"
-		if toolName != "" && filepath.Ext(toolName) != ".exe" {
-			toolName = toolName + ".exe"
-		}
-	default:
-		return ""
-	}
-
-	toolPath := filepath.Join(t.ToolsDir, osDir, toolName)
-	if FileExists(toolPath) {
-		return toolPath
-	}
-	return ""
+	return toolruntime.Default().ResolveToolPath(toolName)
 }
 
 // IsToolAvailable 检查工具是否可用
@@ -108,15 +93,4 @@ func (t *ToolsManager) ListAvailableTools() []string {
 		}
 	}
 	return tools
-}
-
-// GetToolsInfo 获取工具信息
-func (t *ToolsManager) GetToolsInfo() map[string]bool {
-	info := make(map[string]bool)
-	toolNames := []string{"gogo", "katana", "rad"}
-
-	for _, name := range toolNames {
-		info[name] = t.IsToolAvailable(name)
-	}
-	return info
 }

@@ -19,7 +19,7 @@ func TestModuleScopeGuards(t *testing.T) {
 		t.Fatal("目录扫描应接收授权子域")
 	}
 
-	c := NewCrawlerModule(context.Background(), nil, 1, true, false)
+	c := NewCrawlerModule(context.Background(), nil, 1, true)
 	c.SetScope(s)
 	if c.allowsURL("http://10.0.0.9/") != true {
 		t.Fatal("CIDR 内地址应放行")

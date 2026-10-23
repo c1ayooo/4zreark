@@ -128,12 +128,13 @@
 **前端**
 
 - React 18、TypeScript、Vite 5
-- Tailwind CSS、Radix UI、shadcn 风格组件、TanStack Query
-- Recharts、React Flow、d3-force
+- Ant Design v6（主题 token 与 Tailwind CSS 变量同源桥接，明暗双主题）、TanStack Query
+- framer-motion（路由过渡/微动效，尊重 prefers-reduced-motion）
+- Recharts、React Flow
 
 **外部扫描工具**
 
-后端会按需调用 `gogo`、`spray`、`katana`、`rad`、`nuclei`、`ksubdomain` 等二进制。它们不随仓库提交，需要在 worker 主机安装并确保在 `PATH` 或配置路径中。
+后端会按需调用 `gogo`（端口/协议/内置 poc）、`spray`（目录）、`katana`（爬虫）、`nuclei`（漏洞）、`rem`（节点部署反向隧道）、`enscan`（企业信息，可选）、`chromium`（报告渲染）等外部二进制。子域枚举、测绘引擎、指纹识别、存活验证等能力均为纯 Go 原生实现。`gogo`/`spray`/`katana`/`rem` 由工具运行时（toolruntime）自动下载、checksums 校验、更新与回滚，worker 节点按清单自动同步；`nuclei` 由独立运行时自更新——均无需手工安装。设计与运维见 [`docs/方案-toolruntime-20261022.md`](docs/方案-toolruntime-20261022.md)。
 
 ---
 
@@ -153,10 +154,12 @@
 │   └── docs/             后端使用文档
 ├── src/frontend/         React 前端
 ├── docs/                 设计、交接、SQL 迁移与现场记录
-├── reconkit/             侦察能力源码（独立 Go module）
 ├── scripts/              节点打包等运维脚本
 └── src/backend/configs/  验证 playbook
 ```
+
+> 侦察能力源码原以独立的 `reconkit/` module 存在，2026-10 已并入
+> `src/backend/internal/recon/` 并确认无差异后删除；`internal/recon` 是唯一正本。
 
 ---
 
@@ -167,7 +170,6 @@
 - Go **1.26.3+**
 - Node.js 20+（建议 22）
 - PostgreSQL **16**
-- `libpcap-dev`（扫描器构建依赖）
 - Linux 建议安装 `ca-certificates`、`tzdata`
 
 ### 2. 初始化数据库

@@ -18,7 +18,7 @@ import (
 
 // TestStreamingPipelineFullFlow 完整流程测试
 // 测试: 子域名 → CDN检测 → 端口扫描 → 指纹识别 → URL爬虫
-// 注意：子域名爆破需要 sudo 权限（ksubdomain需要raw socket）
+// 注意：子域名爆破基于原生 DNS 解析器，无需 raw socket
 func TestStreamingPipelineFullFlow(t *testing.T) {
 	requireLiveNetwork(t)
 	printSeparator("StreamingPipeline 完整流程测试")
@@ -243,8 +243,8 @@ func TestStreamingPipelinePortScanOnly(t *testing.T) {
 // TestStreamingPipelineCrawlerBatch 测试爬虫批量模式
 func TestStreamingPipelineCrawlerBatch(t *testing.T) {
 	requireLiveNetwork(t)
-	if !webscan.NewKatanaScanner().IsAvailable() && !webscan.NewRadScanner().IsAvailable() {
-		t.Skip("katana/rad 均不可用，跳过爬虫集成测试")
+	if !webscan.NewKatanaScanner().IsAvailable() {
+		t.Skip("katana 不可用，跳过爬虫集成测试")
 	}
 	printSeparator("StreamingPipeline 爬虫批量模式测试")
 

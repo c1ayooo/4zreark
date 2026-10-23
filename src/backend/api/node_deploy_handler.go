@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/c1ayooo/4zreark/config"
+	"github.com/c1ayooo/4zreark/internal/toolruntime"
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/service"
 	"github.com/c1ayooo/4zreark/utils"
@@ -35,26 +36,24 @@ import (
 // POST /api/nodes/deploy
 func (h *NodeHandler) DeployNode(c *gin.Context) {
 	var req struct {
-		Host           string   `json:"host" binding:"required"`
-		Port           int      `json:"port"`
-		OS             string   `json:"os"`
-		Username       string   `json:"username" binding:"required"`
-		Password       string   `json:"password"`
-		PrivateKey     string   `json:"private_key"`
-		KeyPassphrase  string   `json:"key_passphrase"`
-		Name           string   `json:"name"`
-		MaxTasks       int      `json:"max_tasks"`
-		Capabilities   []string `json:"capabilities"`
-		Tags           []string `json:"tags"`
-		PlatformURL    string   `json:"platform_url" binding:"required"`
-		Proxy          string   `json:"proxy"`
-		Dir            string   `json:"dir"`
-		GostReverse    bool     `json:"gost_reverse"`
-		GostRelayPort  int      `json:"gost_relay_port"`
-		GostTunnelPort int      `json:"gost_tunnel_port"`
-		GostUser       string   `json:"gost_user"`
-		GostPass       string   `json:"gost_pass"`
-		PlatformPort   int      `json:"platform_port"`
+		Host          string   `json:"host" binding:"required"`
+		Port          int      `json:"port"`
+		OS            string   `json:"os"`
+		Username      string   `json:"username" binding:"required"`
+		Password      string   `json:"password"`
+		PrivateKey    string   `json:"private_key"`
+		KeyPassphrase string   `json:"key_passphrase"`
+		Name          string   `json:"name"`
+		MaxTasks      int      `json:"max_tasks"`
+		Capabilities  []string `json:"capabilities"`
+		Tags          []string `json:"tags"`
+		PlatformURL   string   `json:"platform_url" binding:"required"`
+		Proxy         string   `json:"proxy"`
+		Dir           string   `json:"dir"`
+		ReverseTunnel bool     `json:"reverse_tunnel"`
+		RelayPort     int      `json:"relay_port"`
+		TunnelPort    int      `json:"tunnel_port"`
+		PlatformPort  int      `json:"platform_port"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.BadRequest(c, "参数错误: "+err.Error())
@@ -127,26 +126,25 @@ func (h *NodeHandler) DeployNode(c *gin.Context) {
 		return
 	}
 
-	gostReverse := req.GostReverse
-	gostRelayPort := req.GostRelayPort
-	gostTunnelPort := req.GostTunnelPort
+	reverseTunnel := req.ReverseTunnel
+	relayPort := req.RelayPort
+	tunnelPort := req.TunnelPort
 	platformPort := req.PlatformPort
-	gostUser := strings.TrimSpace(req.GostUser)
-	gostPass := req.GostPass
-	if gostReverse {
+	var remKey string
+	if reverseTunnel {
 		if targetOS != "linux" {
-			utils.BadRequest(c, "gost 反连目前只支持 Linux 目标机")
+			utils.BadRequest(c, "rem 反连目前只支持 Linux 目标机")
 			return
 		}
 		if runtime.GOOS != "linux" {
-			utils.BadRequest(c, "gost 反连自动化要求 Master 运行在 Linux 上")
+			utils.BadRequest(c, "rem 反连自动化要求 Master 运行在 Linux 上")
 			return
 		}
-		if gostRelayPort <= 0 {
-			gostRelayPort = 18421
+		if relayPort <= 0 {
+			relayPort = 18421
 		}
-		if gostTunnelPort <= 0 {
-			gostTunnelPort = 18080
+		if tunnelPort <= 0 {
+			tunnelPort = 18080
 		}
 		if platformPort <= 0 {
 			if cfg := config.Loaded(); cfg != nil && cfg.Server.Port > 0 {
@@ -155,18 +153,15 @@ func (h *NodeHandler) DeployNode(c *gin.Context) {
 				platformPort = 8080
 			}
 		}
-		if gostRelayPort > 65535 || gostTunnelPort > 65535 || platformPort > 65535 {
-			utils.BadRequest(c, "gost/平台端口不合法")
+		if relayPort > 65535 || tunnelPort > 65535 || platformPort > 65535 {
+			utils.BadRequest(c, "rem/平台端口不合法")
 			return
 		}
-		if gostRelayPort == gostTunnelPort {
+		if relayPort == tunnelPort {
 			utils.BadRequest(c, "relay 端口和隧道端口不能相同")
 			return
 		}
-		if gostUser == "" || gostPass == "" {
-			gostUser = "gost-" + randomGostHex(4)
-			gostPass = randomGostHex(16)
-		}
+		remKey = "rem-" + randomHex(16)
 	}
 
 	// 节点网关走独立 TLS 端口，不复用 Web 端口。
@@ -184,9 +179,9 @@ func (h *NodeHandler) DeployNode(c *gin.Context) {
 		utils.Error(c, utils.ErrCodeInternalError, "准备节点网关 TLS 失败: "+terr.Error())
 		return
 	}
-	if gostReverse {
+	if reverseTunnel {
 		platformPort = gatewayPort
-		platformURL = fmt.Sprintf("https://127.0.0.1:%d", gostTunnelPort)
+		platformURL = fmt.Sprintf("https://127.0.0.1:%d", tunnelPort)
 	} else {
 		gatewayHost := strings.TrimSpace(serverCfg.Node.GatewayHost)
 		if u, perr := url.Parse(platformURL); perr == nil && gatewayHost == "" {
@@ -282,41 +277,41 @@ func (h *NodeHandler) DeployNode(c *gin.Context) {
 
 	relayStarted := false
 	cleanupTunnel := func() {}
-	if gostReverse {
-		gostPath, gerr := ensureTargetGost(client)
+	if reverseTunnel {
+		remPath, gerr := ensureTargetRem(client)
 		if gerr != nil {
 			cleanup()
-			utils.Error(c, utils.ErrCodeInternalError, "准备 gost 失败: "+gerr.Error())
+			utils.Error(c, utils.ErrCodeInternalError, "准备 rem 失败: "+gerr.Error())
 			return
 		}
-		started, rerr := startTargetRelay(client, host, gostPath, gostRelayPort, gostUser, gostPass)
+		link, rerr := startTargetRelay(client, host, remPath, relayPort, remKey)
 		if rerr != nil {
 			cleanup()
 			utils.Error(c, utils.ErrCodeInternalError, rerr.Error())
 			return
 		}
-		relayStarted = started
-		if terr := startLocalGostTunnel(node.NodeID, platformPort, gostTunnelPort, gostRelayPort, host, gostUser, gostPass); terr != nil {
+		relayStarted = true
+		if terr := startLocalRemTunnel(node.NodeID, platformPort, tunnelPort, relayPort, host, remKey, link); terr != nil {
 			if relayStarted {
-				stopTargetRelay(client, gostRelayPort)
+				stopTargetRelay(client, relayPort)
 			}
 			cleanup()
-			utils.Error(c, utils.ErrCodeInternalError, "启动 gost 反连失败: "+terr.Error())
+			utils.Error(c, utils.ErrCodeInternalError, "启动 rem 反连失败: "+terr.Error())
 			return
 		}
-		if verr := verifyTargetTunnel(client, gostTunnelPort); verr != nil {
-			stopLocalGostTunnel(node.NodeID)
+		if verr := verifyTargetTunnel(client, tunnelPort); verr != nil {
+			stopLocalRemTunnel(node.NodeID)
 			if relayStarted {
-				stopTargetRelay(client, gostRelayPort)
+				stopTargetRelay(client, relayPort)
 			}
 			cleanup()
 			utils.Error(c, utils.ErrCodeInternalError, verr.Error())
 			return
 		}
 		cleanupTunnel = func() {
-			stopLocalGostTunnel(node.NodeID)
+			stopLocalRemTunnel(node.NodeID)
 			if relayStarted {
-				stopTargetRelay(client, gostRelayPort)
+				stopTargetRelay(client, relayPort)
 			}
 		}
 	}
@@ -351,12 +346,12 @@ func (h *NodeHandler) DeployNode(c *gin.Context) {
 		"install_dir": dir,
 		"output":      trimOutput(output, 8000),
 	}
-	if gostReverse {
-		data["gost"] = gin.H{
+	if reverseTunnel {
+		data["tunnel"] = gin.H{
+			"backend":      "rem",
 			"relay_host":   host,
-			"relay_port":   gostRelayPort,
-			"tunnel_port":  gostTunnelPort,
-			"user":         gostUser,
+			"relay_port":   relayPort,
+			"tunnel_port":  tunnelPort,
 			"platform_via": platformURL,
 		}
 	}
@@ -442,6 +437,45 @@ func uploadNodeFiles(client *ssh.Client, dir, fileName string, binary, configYAM
 	// 字典不是启动必需，但子域/目录爆破依赖它；失败只记日志，不阻断部署。
 	if err := uploadLocalDicts(sc, dir); err != nil {
 		log.Printf("[Deploy] 上传字典失败（扫描仍可运行）: %v", err)
+	}
+	// 托管工具（gogo/spray/katana/rem）一并推送，部署完即可跑全量模块；
+	// 失败只记日志——worker 之后还能经节点网关按清单自行同步。
+	if err := uploadManagedTools(sc, dir, targetOS); err != nil {
+		log.Printf("[Deploy] 上传扫描工具失败（worker 将按清单自行同步）: %v", err)
+	}
+	return nil
+}
+
+// uploadManagedTools 把 master 托管目录里的工具二进制推到 worker 的
+// tools/<os>/ 下。平台上没装的工具跳过（worker 会回退 vendored/PATH，
+// 或等清单同步）。
+func uploadManagedTools(sc *sftp.Client, remoteDir, targetOS string) error {
+	osDir := "linux"
+	if targetOS == "windows" {
+		osDir = "win"
+	}
+	remoteRoot := strings.ReplaceAll(remoteDir, "\\", "/") + "/tools/" + osDir
+	if err := sc.MkdirAll(remoteRoot); err != nil {
+		return err
+	}
+	mgr := toolruntime.Default()
+	for _, name := range toolruntime.SpecNames() {
+		path := mgr.BinaryPath(name)
+		if path == "" {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		bin := name
+		if osDir == "win" {
+			bin += ".exe"
+		}
+		if err := writeSFTPFile(sc, remoteRoot+"/"+bin, data, 0o755, osDir == "linux"); err != nil {
+			return fmt.Errorf("上传 %s 失败: %w", name, err)
+		}
+		log.Printf("[Deploy] 已推送工具 %s（%d 字节）", name, len(data))
 	}
 	return nil
 }
@@ -677,7 +711,7 @@ func trimOutput(s string, max int) string {
 	return s[len(s)-max:]
 }
 
-func randomGostHex(n int) string {
+func randomHex(n int) string {
 	buf := make([]byte, n)
 	if _, err := rand.Read(buf); err != nil {
 		return strconv.FormatInt(time.Now().UnixNano(), 16)

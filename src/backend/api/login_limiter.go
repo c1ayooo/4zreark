@@ -8,10 +8,10 @@ import (
 // failureLimiter 是极简的失败计数锁定器：窗口内失败满 max 失败即锁定到窗口结束。
 // 并发安全；条目在窗口过期后惰性清理。
 type failureLimiter struct {
-	mu      sync.Mutex
-	max     int
-	window  time.Duration
-	fails   map[string]*failureRecord
+	mu     sync.Mutex
+	max    int
+	window time.Duration
+	fails  map[string]*failureRecord
 }
 
 type failureRecord struct {

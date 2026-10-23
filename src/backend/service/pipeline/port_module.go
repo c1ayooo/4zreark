@@ -266,7 +266,44 @@ func (m *PortScanModule) scanPorts(ds DomainSkip) {
 		}
 	}
 
+	// gogo 内置 poc 命中：走统一漏洞结果通道（Source=gogo），severity 按
+	// fingers 口径映射。gogo 的 poc 集是粗筛，进漏洞清单后仍走人工复核。
+	for _, v := range scanResult.Vulns {
+		target := v.Target
+		if target == "" {
+			target = net.JoinHostPort(ds.Domain, "0")
+		}
+		select {
+		case <-m.ctx.Done():
+			return
+		case m.resultChan <- VulnResult{
+			Target:    target,
+			Name:      v.Name,
+			Severity:  gogoSeverity(v.SeverityLevel),
+			Source:    "gogo",
+			MatchedAt: target,
+			Timestamp: time.Now(),
+		}:
+		}
+	}
+
 	log.Printf("[%s] Port scan completed for %s, found %d ports", m.name, ds.Domain, len(scanResult.Ports))
+}
+
+// gogoSeverity 把 gogo/fingers 的数字严重度映射为平台口径。
+func gogoSeverity(level int) string {
+	switch level {
+	case 1:
+		return "info"
+	case 2:
+		return "medium"
+	case 3:
+		return "high"
+	case 4:
+		return "critical"
+	default:
+		return "info"
+	}
 }
 
 // intToString 整数转字符串

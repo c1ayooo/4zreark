@@ -189,6 +189,8 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				protected.POST("/governance/retention/run", middleware.RequirePermission("settings:write"), retentionHandler.Run)
 				protected.POST("/assets/:id/protect", middleware.RequirePermission("asset:write"), govHandler.ProtectAsset)
 				protected.GET("/assets/:id/fingerprints", middleware.RequirePermission("fingerprint:read"), govHandler.SiteFingerprints)
+				protected.GET("/governance/engine-usage", middleware.RequirePermission("governance:read"), govHandler.EngineUsageStatus)
+				protected.PUT("/governance/engine-usage/limits", middleware.RequirePermission("governance:write"), govHandler.EngineUsageSetLimits)
 				protected.GET("/governance/fingerprints", middleware.RequirePermission("fingerprint:read"), govHandler.ListFingerprints)
 				protected.GET("/governance/fingerprints/sources", middleware.RequirePermission("fingerprint:read"), govHandler.FingerprintSources)
 				protected.POST("/governance/fingerprints/sync", middleware.RequirePermission("fingerprint:write"), govHandler.SyncFingerprints)
@@ -604,6 +606,18 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				nucleiGroup.PUT("/runtime/settings", middleware.AdminMiddleware(), nucleiRuntimeHandler.UpdateSettings)
 			}
 
+			// 工具运行时（gogo/spray/katana/rem 的版本与更新管理）
+			toolHandler := api.NewToolRuntimeHandler()
+			toolsGroup := protected.Group("/tools")
+			{
+				toolsGroup.GET("", toolHandler.List)
+				toolsGroup.POST("/:name/check", middleware.AdminMiddleware(), toolHandler.Check)
+				toolsGroup.POST("/:name/update", middleware.AdminMiddleware(), toolHandler.Update)
+				toolsGroup.POST("/:name/rollback", middleware.AdminMiddleware(), toolHandler.Rollback)
+				toolsGroup.GET("/:name/history", toolHandler.History)
+				toolsGroup.PUT("/:name/settings", middleware.AdminMiddleware(), toolHandler.UpdateSettings)
+			}
+
 			// 页面变化监控
 			monitorHandler := api.NewMonitorHandler(notifyHandler.GetManager())
 			monitorGroup := protected.Group("/monitor")
@@ -699,11 +713,14 @@ func SetupNodeGatewayRouter(nodeHub *api.NodeHub, binaryHandler *api.NodeBinaryH
 	})
 
 	nodeGateway := api.NewNodeGatewayHandler(nodeHub)
+	toolsHandler := api.NewNodeToolsHandler()
 	nodeAPI := r.Group("/api/node")
 	nodeAPI.Use(api.NodeAuthMiddleware(service.NewNodeService()))
 	{
 		nodeAPI.GET("/ws", nodeGateway.WS)
 		nodeAPI.GET("/binary", binaryHandler.Download)
+		nodeAPI.GET("/tools", toolsHandler.List)
+		nodeAPI.GET("/tools/:name", toolsHandler.Download)
 		nodeAPI.GET("/tasks/:id", nodeGateway.GetTask)
 		nodeAPI.PUT("/tasks/:id", nodeGateway.UpdateTask)
 		nodeAPI.PUT("/tasks/:id/touch", nodeGateway.TouchTask)

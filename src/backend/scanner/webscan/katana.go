@@ -5,12 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/c1ayooo/4zreark/internal/useragent"
-	"github.com/c1ayooo/4zreark/scanner/core"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/c1ayooo/4zreark/internal/toolruntime"
+	"github.com/c1ayooo/4zreark/internal/useragent"
+	"github.com/c1ayooo/4zreark/scanner/core"
 )
 
 // KatanaScanner 使用 Katana 进行网页爬虫
@@ -188,14 +191,17 @@ func (k *KatanaScanner) Crawl(ctx context.Context, target string) (*KatanaResult
 	// 可能几百 KB（带了 body），一旦超限就读断，后面所有 URL 全部丢失。
 	reader := bufio.NewReaderSize(file, 1<<20)
 	seen := make(map[string]bool)
+	lines, jsonParsed := 0, 0
 
 	for {
 		line, readErr := reader.ReadString('\n')
 		line = strings.TrimSpace(line)
 		if line != "" {
+			lines++
 			// 尝试解析 JSON 格式
 			var jsonOutput KatanaJSONOutput
 			if err := json.Unmarshal([]byte(line), &jsonOutput); err == nil {
+				jsonParsed++
 				crawled := katanaCrawledURL(jsonOutput)
 				if crawled.URL != "" && !seen[crawled.URL] {
 					seen[crawled.URL] = true
@@ -211,6 +217,15 @@ func (k *KatanaScanner) Crawl(ctx context.Context, target string) (*KatanaResult
 		}
 		if readErr != nil {
 			break
+		}
+	}
+
+	if lines > 0 {
+		plainFallback := lines - jsonParsed
+		log.Printf("[Katana] 输出解析: %d lines, %d json, %d plain-fallback (katana %s)",
+			lines, jsonParsed, plainFallback, toolruntime.Default().ToolVersion("katana"))
+		if jsonParsed == 0 && plainFallback > 50 {
+			log.Printf("[Katana] 警告: 全部行都不是 JSON，疑似 -jsonl 输出失效（上游改版？），请在工具运行时面板检查")
 		}
 	}
 

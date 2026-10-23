@@ -73,6 +73,11 @@ type WappalyzerImportStats struct {
 	TechnologiesSkipped int      `json:"technologies_skipped"`
 	PatternsSkipped     int      `json:"patterns_skipped"`
 	SkipSamples         []string `json:"skip_samples,omitempty"` // 前 5 条跳过原因（技术名+原因）
+
+	// fingers 生态适配器使用的通用计数（同名合并后的口径）
+	Imported int `json:"imported"`
+	Skipped  int `json:"skipped"`
+	Invalid  int `json:"invalid"`
 }
 
 // ParseWappalyzerTechnologies 解析并翻译 technologies.json 为本地规则。

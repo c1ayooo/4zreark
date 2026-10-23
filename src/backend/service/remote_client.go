@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -167,6 +168,63 @@ func (c *RemoteClient) GetTask(ctx context.Context, taskID string) (*models.Task
 		return nil, err
 	}
 	return &task, nil
+}
+
+// ToolsManifestEntry 平台工具清单条目。
+type ToolsManifestEntry struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	SHA256  string `json:"sha256"`
+	Size    int64  `json:"size"`
+	GOOS    string `json:"goos"`
+	GOARCH  string `json:"goarch"`
+}
+
+// ToolsManifest 平台托管工具清单。
+type ToolsManifest struct {
+	Hash  string               `json:"hash"`
+	Tools []ToolsManifestEntry `json:"tools"`
+}
+
+// FetchToolsManifest 拉取平台工具清单（含每个工具的 sha256）。
+func (c *RemoteClient) FetchToolsManifest(ctx context.Context) (*ToolsManifest, error) {
+	var m ToolsManifest
+	if err := c.call(ctx, http.MethodGet, "/api/node/tools", nil, &m); err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// DownloadTool 下载平台托管的工具二进制（gzip 流），返回解压后的原始字节
+// 和响应头里的 sha256。不走 envelope，是原始字节流。
+func (c *RemoteClient) DownloadTool(ctx context.Context, name string) (data []byte, sha string, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/node/tools/"+name, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, "", ErrNodeRevoked
+	}
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, "", fmt.Errorf("平台返回 HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	zr, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("工具流不是合法 gzip: %w", err)
+	}
+	defer zr.Close()
+	raw, err := io.ReadAll(io.LimitReader(zr, 512<<20))
+	if err != nil {
+		return nil, "", err
+	}
+	return raw, resp.Header.Get("X-Tool-Sha256"), nil
 }
 
 func (c *RemoteClient) UpdateTask(ctx context.Context, taskID string, updates map[string]interface{}) error {

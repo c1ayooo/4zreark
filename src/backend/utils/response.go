@@ -113,11 +113,11 @@ const (
 	ErrCodeDatabaseError   = 1007
 	ErrCodeTokenExpired    = 1008
 	ErrCodeTokenInvalid    = 1009
-	ErrCodeUserDisabled     = 1010
-	ErrCodePasswordWrong    = 1011
-	ErrCodeTooManyRequests  = 1012
-	ErrCodeChangePwdNeeded  = 1013
-	ErrCodeTaskRunning      = 2001
+	ErrCodeUserDisabled    = 1010
+	ErrCodePasswordWrong   = 1011
+	ErrCodeTooManyRequests = 1012
+	ErrCodeChangePwdNeeded = 1013
+	ErrCodeTaskRunning     = 2001
 	ErrCodeNodeOffline     = 2002
 	ErrCodeScanFailed      = 2003
 	ErrCodeConfigError     = 3001

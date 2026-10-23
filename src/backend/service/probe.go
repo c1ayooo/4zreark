@@ -1,13 +1,13 @@
 package service
 
 import (
-	"github.com/c1ayooo/4zreark/internal/extractor"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/extractor"
 	"io"
 	"net"
 	"net/http"
@@ -44,8 +44,8 @@ type ProbeResult struct {
 	// 关系层用的三个观测值（都来自同一次探测，不额外发包）：
 	//   FinalURL   跟随跳转后的最终 URL（redirect 关系）
 	//   CertSHA256 服务端证书 DER 的 SHA-256（same_cert 关系）
-	FinalURL    string `json:"final_url,omitempty"`
-	CertSHA256  string `json:"cert_sha256,omitempty"`
+	FinalURL   string `json:"final_url,omitempty"`
+	CertSHA256 string `json:"cert_sha256,omitempty"`
 
 	// 指纹匹配用的快照，不进 API 响应（正文可能几百 KB）
 	Title   string            `json:"title,omitempty"`

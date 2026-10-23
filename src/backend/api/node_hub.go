@@ -31,6 +31,10 @@ type NodeHub struct {
 
 	// binaryVersion 返回平台托管的 worker 二进制版本；为空表示不提供自更新。
 	binaryVersion func() string
+	// toolsHash 返回托管工具清单哈希；为空表示不提供工具分发。
+	toolsHash func() string
+	// engineUsageSink 接收 worker 上报的引擎查询量（main 注入预算服务）。
+	engineUsageSink func(map[string]int)
 }
 
 // SetBinaryVersionFn 注入 worker 二进制版本来源，供心跳回包下发给节点比对。
@@ -40,10 +44,35 @@ func (h *NodeHub) SetBinaryVersionFn(fn func() string) {
 	h.mu.Unlock()
 }
 
+// SetToolsHashFn 注入托管工具清单哈希来源，供心跳回包下发给节点同步工具。
+func (h *NodeHub) SetToolsHashFn(fn func() string) {
+	h.mu.Lock()
+	h.toolsHash = fn
+	h.mu.Unlock()
+}
+
+// SetEngineUsageSink 注入引擎用量落账函数（worker scan_done 上报的消费端）。
+func (h *NodeHub) SetEngineUsageSink(fn func(map[string]int)) {
+	h.mu.Lock()
+	h.engineUsageSink = fn
+	h.mu.Unlock()
+}
+
 // workerBinaryVersion 读取当前托管的 worker 版本，未配置时返回空串。
 func (h *NodeHub) workerBinaryVersion() string {
 	h.mu.RLock()
 	fn := h.binaryVersion
+	h.mu.RUnlock()
+	if fn == nil {
+		return ""
+	}
+	return fn()
+}
+
+// managedToolsHash 读取托管工具清单哈希，未配置时返回空串。
+func (h *NodeHub) managedToolsHash() string {
+	h.mu.RLock()
+	fn := h.toolsHash
 	h.mu.RUnlock()
 	if fn == nil {
 		return ""
@@ -76,6 +105,8 @@ type wsCommand struct {
 	NodeID        string `json:"node_id,omitempty"`
 	ServerVersion string `json:"server_version,omitempty"`
 	BinaryURL     string `json:"binary_url,omitempty"`
+	ToolsHash     string `json:"tools_hash,omitempty"`
+	ToolsURL      string `json:"tools_url,omitempty"`
 }
 
 type wsNodeMessage struct {
@@ -90,6 +121,7 @@ type wsNodeMessage struct {
 	Capabilities []string              `json:"capabilities,omitempty"`
 	Tags         []string              `json:"tags,omitempty"`
 	SystemInfo   models.NodeSystemInfo `json:"system_info,omitempty"`
+	EngineUsage  map[string]int        `json:"engine_usage,omitempty"`
 }
 
 func NewNodeHub() *NodeHub {
@@ -345,6 +377,10 @@ func (c *nodeConn) readPump(h *NodeHub) {
 				helloAck.ServerVersion = v
 				helloAck.BinaryURL = "/api/node/binary"
 			}
+			if v := h.managedToolsHash(); v != "" {
+				helloAck.ToolsHash = v
+				helloAck.ToolsURL = "/api/node/tools"
+			}
 			_ = c.sendJSON(helloAck)
 			log.Printf("[NodeHub] 节点 %s hello: max_tasks=%d caps=%v", c.nodeID, msg.MaxTasks, msg.Capabilities)
 
@@ -371,9 +407,17 @@ func (c *nodeConn) readPump(h *NodeHub) {
 				ack.ServerVersion = v
 				ack.BinaryURL = "/api/node/binary"
 			}
+			if v := h.managedToolsHash(); v != "" {
+				ack.ToolsHash = v
+				ack.ToolsURL = "/api/node/tools"
+			}
 			_ = c.sendJSON(ack)
 
 		case "scan_done":
+			// worker 上报的引擎查询量按天落账（异步，不阻塞回包）
+			if len(msg.EngineUsage) > 0 && h.engineUsageSink != nil {
+				go h.engineUsageSink(msg.EngineUsage)
+			}
 			h.mu.RLock()
 			ch := h.pending[c.nodeID][msg.RequestID]
 			h.mu.RUnlock()

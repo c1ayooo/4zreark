@@ -49,8 +49,8 @@ node:
   tls_ca: ""                # 自定义 CA；留空时用 tls_cert/自签证书作为 worker 信任根
   tls_dir: "data/node-tls"  # 自签证书存放目录
   windows_binary: ""        # 一键部署 Windows 时使用的 worker.exe 路径，留空则在 server 同目录找 worker-windows-amd64.exe
-  gost_binary: ""           # 一键部署 gost 反连时使用的本地 gost 路径，留空则找 PATH / ./gost / /tmp/gost
-  tunnel_dir: ""            # gost 隧道记录目录，留空用 /tmp/4zreark-tunnels；主机重启后要恢复请改成持久目录
+  rem_binary: ""            # rem 反连隧道二进制路径，留空用工具运行时托管版本（data/tools）
+  tunnel_dir: ""            # rem 隧道记录目录，留空用 /tmp/4zreark-tunnels；主机重启后要恢复请改成持久目录
   max_tasks: 5              # 单节点同时执行的任务数（River MaxWorkers，启动时生效）
   heartbeat_interval: 30    # 心跳秒数
   tags: []                  # 例如 ["overseas", "high-performance"]

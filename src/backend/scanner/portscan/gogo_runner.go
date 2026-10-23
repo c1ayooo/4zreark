@@ -5,12 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/toolruntime"
 	"github.com/c1ayooo/4zreark/scanner/core"
 	"log"
-	"os"
+	"net"
 	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,10 +18,9 @@ import (
 
 // GoGoScanner 使用 GoGo 进行高速端口扫描
 type GoGoScanner struct {
-	toolPath string
-	mu       sync.Mutex
-	Threads  int // 并发数
-	Timeout  int // 超时时间(秒)
+	mu      sync.Mutex
+	Threads int // 并发数
+	Timeout int // 超时时间(秒)
 }
 
 // GoGoConfig GoGo 扫描配置
@@ -32,15 +30,52 @@ type GoGoConfig struct {
 	RateLimit int // 速率限制（暂不使用）
 }
 
-// GoGoResult GoGo JSON 输出结构
+// GoGoResult GoGo JSON 输出结构（字段表对照 gogo v2.15.0 实测输出）。
+// frameworks 的版本藏在 attributes.version；vul 是 name → Vuln 的对象。
 type GoGoResult struct {
-	IP         string                 `json:"ip"`
-	Port       string                 `json:"port"`
-	Protocol   string                 `json:"protocol"`
-	Status     string                 `json:"status"`
-	Title      string                 `json:"title"`
-	Midware    string                 `json:"midware"`
-	Frameworks map[string]interface{} `json:"frameworks"`
+	IP         string                   `json:"ip"`
+	Port       string                   `json:"port"`
+	Protocol   string                   `json:"protocol"`
+	Status     string                   `json:"status"`
+	Title      string                   `json:"title"`
+	Midware    string                   `json:"midware"`
+	Host       string                   `json:"host"`
+	Uri        string                   `json:"uri"`
+	Frameworks map[string]GoGoFramework `json:"frameworks"`
+	Vul        map[string]GoGoVul       `json:"vul"`
+}
+
+// GoGoFramework gogo 指纹条目（tags 含 language 的即语言识别）。
+type GoGoFramework struct {
+	Name       string            `json:"name"`
+	Tags       []string          `json:"tags"`
+	Attributes GoGoFrameworkAttr `json:"attributes"`
+}
+
+type GoGoFrameworkAttr struct {
+	Version string `json:"version"`
+}
+
+// GoGoVul gogo 内置 poc 命中（fingers/common.Vuln 的 JSON 形态）。
+type GoGoVul struct {
+	Name          string                 `json:"name"`
+	Tags          []string               `json:"tags"`
+	SeverityLevel int                    `json:"severity"`
+	Payload       map[string]interface{} `json:"payload"`
+	Detail        map[string][]string    `json:"detail"`
+}
+
+// parseStats 记录一次 gogo 输出的解析健康度：上游改 schema 时在这里先暴露，
+// 而不是静默丢数据。成功率过低应对照 tool_runtime 的 needs_review 状态排查。
+type parseStats struct {
+	lines      int
+	parsed     int
+	parseErrs  int
+	missingKey int
+}
+
+func (s parseStats) summary() string {
+	return fmt.Sprintf("%d lines, %d parsed, %d parse-errors, %d missing-critical-field", s.lines, s.parsed, s.parseErrs, s.missingKey)
 }
 
 var (
@@ -55,7 +90,6 @@ func GetGoGoScanner() *GoGoScanner {
 			Threads: 1000, // 默认 1000 并发
 			Timeout: 10,   // 默认 10 秒超时
 		}
-		globalGoGoScanner.findToolPath()
 	})
 	return globalGoGoScanner
 }
@@ -107,77 +141,22 @@ func (g *GoGoScanner) snapshot() (threads, timeout int) {
 	return g.Threads, g.Timeout
 }
 
-// findToolPath 查找 GoGo 工具路径
-func (g *GoGoScanner) findToolPath() {
-	// 根据操作系统选择工具目录
-	var osDir string
-	switch runtime.GOOS {
-	case "darwin":
-		osDir = "darwin"
-	case "linux":
-		osDir = "linux"
-	case "windows":
-		osDir = "win"
-	default:
-		osDir = "linux"
-	}
-
-	// 获取可执行文件目录
-	execPath, err := os.Executable()
-	if err != nil {
-		log.Printf("[GoGoScanner] Failed to get executable path: %v", err)
-		return
-	}
-	execDir := filepath.Dir(execPath)
-
-	// 可能的工具路径
-	possiblePaths := []string{
-		filepath.Join(execDir, "tools", osDir, "gogo"),
-		filepath.Join("tools", osDir, "gogo"),
-		filepath.Join("..", "tools", osDir, "gogo"),
-		"gogo", // 系统 PATH
-	}
-
-	for _, path := range possiblePaths {
-		if _, err := os.Stat(path); err == nil {
-			g.toolPath = path
-			log.Printf("[GoGoScanner] Found gogo at: %s", path)
-			return
-		}
-		// 检查带扩展名的版本（Windows）
-		if runtime.GOOS == "windows" {
-			pathWithExt := path + ".exe"
-			if _, err := os.Stat(pathWithExt); err == nil {
-				g.toolPath = pathWithExt
-				log.Printf("[GoGoScanner] Found gogo at: %s", pathWithExt)
-				return
-			}
-		}
-	}
-
-	// 尝试从 PATH 查找
-	if path, err := exec.LookPath("gogo"); err == nil {
-		g.toolPath = path
-		log.Printf("[GoGoScanner] Found gogo in PATH: %s", path)
-		return
-	}
-
-	log.Printf("[GoGoScanner] gogo not found in any expected location")
+// resolveTool 每次扫描时解析 gogo 路径：托管目录更新或 vendored 变化即时生效。
+func (g *GoGoScanner) resolveTool() string {
+	return toolruntime.Default().ResolveToolPath("gogo")
 }
 
 // IsAvailable 检查是否可用
 func (g *GoGoScanner) IsAvailable() bool {
-	if g.toolPath == "" {
-		g.findToolPath()
-	}
-	return g.toolPath != ""
+	return g.resolveTool() != ""
 }
 
 // ScanPorts 扫描端口
 // target: 目标 IP 或域名
 // ports: 端口配置，如 "80,443,8080" 或 "1-1000" 或 "top1000"
 func (g *GoGoScanner) ScanPorts(ctx context.Context, target string, ports string) (*core.ScanResult, error) {
-	if !g.IsAvailable() {
+	toolPath := g.resolveTool()
+	if toolPath == "" {
 		return nil, fmt.Errorf("gogo tool not found")
 	}
 
@@ -200,7 +179,7 @@ func (g *GoGoScanner) ScanPorts(ctx context.Context, target string, ports string
 	}
 
 	// 创建命令
-	cmd := exec.CommandContext(ctx, g.toolPath, args...)
+	cmd := exec.CommandContext(ctx, toolPath, args...)
 
 	// 获取输出管道
 	stdout, err := cmd.StdoutPipe()
@@ -215,9 +194,11 @@ func (g *GoGoScanner) ScanPorts(ctx context.Context, target string, ports string
 
 	// 使用 map 去重
 	portMap := make(map[string]bool)
+	var stats parseStats
 
 	// 逐行读取输出
 	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 
@@ -225,12 +206,20 @@ func (g *GoGoScanner) ScanPorts(ctx context.Context, target string, ports string
 		if strings.HasPrefix(line, "[") || line == "" {
 			continue
 		}
+		stats.lines++
 
 		// 尝试解析 JSON
 		var gogoResult GoGoResult
 		if err := json.Unmarshal([]byte(line), &gogoResult); err != nil {
+			stats.parseErrs++
 			continue
 		}
+		if gogoResult.IP == "" || gogoResult.Port == "" {
+			// 关键字段缺失通常是上游改了 schema，单独计数
+			stats.missingKey++
+			continue
+		}
+		stats.parsed++
 
 		portResult := g.convertResult(&gogoResult)
 		if portResult != nil {
@@ -239,6 +228,19 @@ func (g *GoGoScanner) ScanPorts(ctx context.Context, target string, ports string
 				portMap[key] = true
 				result.Ports = append(result.Ports, *portResult)
 			}
+		}
+		// gogo 内置 poc 命中：作为漏洞发现单独收集，由端口模块下发
+		for _, v := range gogoResult.Vul {
+			if v.Name == "" {
+				continue
+			}
+			result.Vulns = append(result.Vulns, core.VulFinding{
+				Target:        net.JoinHostPort(gogoResult.IP, gogoResult.Port),
+				Name:          v.Name,
+				SeverityLevel: v.SeverityLevel,
+				Tags:          v.Tags,
+				Payload:       v.Payload,
+			})
 		}
 	}
 
@@ -255,9 +257,18 @@ func (g *GoGoScanner) ScanPorts(ctx context.Context, target string, ports string
 	}
 
 	result.EndTime = time.Now()
-	log.Printf("[GoGoScanner] Found %d open ports on %s", len(result.Ports), target)
+	log.Printf("[GoGoScanner] Found %d open ports, %d vul hits on %s (gogo %s; parse: %s)",
+		len(result.Ports), len(result.Vulns), target, gogoVersion(), stats.summary())
+	if stats.lines > 0 && float64(stats.parsed)/float64(stats.lines) < 0.8 {
+		log.Printf("[GoGoScanner] 警告: gogo 输出解析成功率低于 80%%（%s），疑似上游版本不兼容，请在工具运行时面板检查", stats.summary())
+	}
 
 	return result, nil
+}
+
+// gogoVersion 返回 toolruntime 记录的 gogo 版本（可能为空），用于结果归因。
+func gogoVersion() string {
+	return toolruntime.Default().ToolVersion("gogo")
 }
 
 // convertResult 将 GoGo 结果转换为通用格式
@@ -285,14 +296,31 @@ func (g *GoGoScanner) convertResult(gogoResult *GoGoResult) *core.PortResult {
 	// 提取版本信息
 	version := gogoResult.Midware
 
-	// 提取指纹信息
+	// 提取指纹：带版本的写 name/version（gogo 把版本放 attributes.version）
 	var fingerprints []string
-	for name := range gogoResult.Frameworks {
+	for _, fw := range gogoResult.Frameworks {
+		name := fw.Name
+		if name == "" {
+			continue
+		}
+		if v := strings.TrimSpace(fw.Attributes.Version); v != "" {
+			name = name + "/" + v
+		}
 		fingerprints = append(fingerprints, name)
 	}
 
-	// 提取 Banner（使用 Title）
+	// Banner：标题为主，host/uri 可用时补在后面（vhost 与入口线索）
 	banner := gogoResult.Title
+	if gogoResult.Host != "" && gogoResult.Host != gogoResult.IP {
+		if banner == "" {
+			banner = "host: " + gogoResult.Host
+		} else {
+			banner = banner + " | host: " + gogoResult.Host
+		}
+	}
+	if gogoResult.Uri != "" {
+		banner = banner + " | " + gogoResult.Uri
+	}
 
 	return &core.PortResult{
 		Port:        port,

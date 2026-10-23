@@ -64,5 +64,33 @@ func (g *EngineQueryGuard) Allow(engine, host string) (bool, string) {
 	}
 	g.queried[key] = true
 	g.count[engine]++
+	AddEngineUsage(engine, 1)
 	return true, ""
+}
+
+// ---------------------------------------------------------------------------
+// 进程级用量收集：worker 把守卫放行的查询累加到这里，任务结束时随
+// scan_done 上报 master 落账（master 本地执行则直接落账）。
+// ---------------------------------------------------------------------------
+
+var engineUsageMu sync.Mutex
+var engineUsage = map[string]int{}
+
+// AddEngineUsage 累加一次引擎查询（worker/master 通用，放行即计数）。
+func AddEngineUsage(engine string, n int) {
+	engineUsageMu.Lock()
+	engineUsage[engine] += n
+	engineUsageMu.Unlock()
+}
+
+// TakeEngineUsage 取出并清零当前累计的引擎用量。
+func TakeEngineUsage() map[string]int {
+	engineUsageMu.Lock()
+	out := engineUsage
+	engineUsage = map[string]int{}
+	engineUsageMu.Unlock()
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

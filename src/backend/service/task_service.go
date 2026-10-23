@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/c1ayooo/4zreark/models"
@@ -84,6 +85,30 @@ func (s *TaskService) CreateTask(task *models.Task) error {
 		}
 		if err := CheckNodeUsable(node); err != nil {
 			return errors.New("指定的扫描节点不可用: " + err.Error())
+		}
+	}
+
+	// 引擎查询额度收紧：按当日各引擎余额压低单任务查询上限（只收紧不放宽）。
+	// 流水线默认每引擎 10 次；余额不足 10 的按余额走，余额耗尽压到 1
+	//（0 会被流水线当成「用默认」处理，压不下去，属已知取舍）。
+	if budget := GetEngineBudgetService(); budget.CanAccount() {
+		engines := task.Config.ThirdPartySources
+		if len(engines) == 0 {
+			engines = []string{"fofa", "hunter", "quake", "zoomeye", "shodan"}
+		}
+		cap := 10
+		for _, raw := range engines {
+			e := strings.ToLower(strings.TrimSpace(raw))
+			remaining, tracked := budget.RemainingToday(ctx, e)
+			if tracked && remaining >= 0 && remaining < cap {
+				cap = remaining
+			}
+		}
+		if cap < 10 {
+			if cap < 1 {
+				cap = 1
+			}
+			task.Config.EngineQueryMaxPerEngine = cap
 		}
 	}
 

@@ -120,7 +120,7 @@ func (h *NodeHandler) RevokeNodeToken(c *gin.Context) {
 		return
 	}
 	if node != nil {
-		stopLocalGostTunnel(node.NodeID)
+		stopLocalRemTunnel(node.NodeID)
 		if h.hub != nil {
 			h.hub.CloseNode(node.NodeID)
 		}
@@ -254,7 +254,7 @@ func (h *NodeHandler) DeleteNode(c *gin.Context) {
 		return
 	}
 	if node != nil {
-		stopLocalGostTunnel(node.NodeID)
+		stopLocalRemTunnel(node.NodeID)
 		if h.hub != nil {
 			h.hub.CloseNode(node.NodeID)
 		}

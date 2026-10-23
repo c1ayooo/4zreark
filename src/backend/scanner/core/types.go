@@ -22,7 +22,18 @@ type ScanResult struct {
 	StartTime time.Time    `json:"start_time"`
 	EndTime   time.Time    `json:"end_time"`
 	Ports     []PortResult `json:"ports"`
-	Error     string       `json:"error,omitempty"`
+	// Vulns 是外部扫描器（gogo）内置 poc 的命中，随端口结果一并返回。
+	Vulns []VulFinding `json:"vulns,omitempty"`
+	Error string       `json:"error,omitempty"`
+}
+
+// VulFinding 外部扫描器上报的漏洞命中（gogo fingers/common.Vuln 的中性化形态）。
+type VulFinding struct {
+	Target        string                 `json:"target"` // ip:port
+	Name          string                 `json:"name"`
+	SeverityLevel int                    `json:"severity_level"` // fingers 口径: 1=info 2=medium 3=high 4=critical 5=unknown
+	Tags          []string               `json:"tags,omitempty"`
+	Payload       map[string]interface{} `json:"payload,omitempty"`
 }
 
 // GetCommonPorts returns common ports to scan (loaded from config)
