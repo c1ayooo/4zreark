@@ -19,6 +19,7 @@ import {
   Loader2,
   Server,
 } from 'lucide-react'
+import { statusTagClass } from '@/components/ui/StatusTag'
 
 const statusConfig: Record<string, { label: string; variant: 'default' | 'destructive' | 'outline' | 'secondary'; icon: React.ReactNode }> = {
   pending: { label: '等待中', variant: 'outline', icon: <Clock className="h-3 w-3" /> },
@@ -29,15 +30,7 @@ const statusConfig: Record<string, { label: string; variant: 'default' | 'destru
 }
 
 // shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
-const badgeCls = (variant: 'default' | 'secondary' | 'destructive' | 'outline') =>
-  variant === 'default'
-    ? 'border-transparent bg-primary text-primary-foreground'
-    : variant === 'secondary'
-      ? 'border-transparent bg-secondary text-secondary-foreground'
-      : variant === 'destructive'
-        ? 'border-transparent bg-destructive text-destructive-foreground'
-        : ''
-
+const badgeCls = statusTagClass
 export default function QueuePage() {
   const { toast } = useToast()
   const confirm = useConfirm()

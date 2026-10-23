@@ -54,6 +54,7 @@ import { reportApi, type ReportProfile } from '@/api/reports'
 import { useConfirm } from '@/components/common/confirm-provider'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate, formatNumber } from '@/lib/utils'
+import { statusTagClass } from '@/components/ui/StatusTag'
 
 // app（商店）暂无展开数据源，先不暴露创建入口，避免建出永远空跑的计划。
 const SEED_KINDS: SeedKind[] = ['domain', 'cidr', 'company', 'cert', 'repo', 'dict']
@@ -70,19 +71,7 @@ const fmtDate = (v?: string | null) => (v ? formatDate(v) : '—')
 type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info'
 
 // shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
-const badgeCls = (variant: BadgeVariant) =>
-  variant === 'default' || variant === 'success'
-    ? 'border-transparent bg-primary text-primary-foreground'
-    : variant === 'secondary'
-      ? 'border-transparent bg-secondary text-secondary-foreground'
-      : variant === 'destructive'
-        ? 'border-transparent bg-destructive text-destructive-foreground'
-        : variant === 'warning'
-          ? 'border-transparent bg-yellow-500 text-black'
-          : variant === 'info'
-            ? 'border-transparent bg-blue-500 text-white'
-            : ''
-
+const badgeCls = statusTagClass
 const runStatusMeta: Record<Run['status'], { label: string; variant: BadgeVariant }> = {
   queued: { label: '排队中', variant: 'secondary' },
   running: { label: '执行中', variant: 'info' },

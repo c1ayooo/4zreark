@@ -24,6 +24,7 @@ import {
   CheckCheck,
   ChevronRight,
 } from 'lucide-react'
+import { statusTagClass } from '@/components/ui/StatusTag'
 
 const channelTypeIcons: Record<string, React.ReactNode> = {
   dingtalk: <MessageSquare className="h-4 w-4 text-blue-500" />,
@@ -42,17 +43,7 @@ const channelTypeLabels: Record<string, string> = {
 }
 
 // shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
-const badgeCls = (variant: 'default' | 'secondary' | 'destructive' | 'outline' | 'warning') =>
-  variant === 'default'
-    ? 'border-transparent bg-primary text-primary-foreground'
-    : variant === 'secondary'
-      ? 'border-transparent bg-secondary text-secondary-foreground'
-      : variant === 'destructive'
-        ? 'border-transparent bg-destructive text-destructive-foreground'
-        : variant === 'warning'
-          ? 'border-transparent bg-yellow-500 text-black'
-          : ''
-
+const badgeCls = statusTagClass
 export default function NotifyPage() {
   const navigate = useNavigate()
   const { toast } = useToast()

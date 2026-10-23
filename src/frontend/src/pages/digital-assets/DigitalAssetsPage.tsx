@@ -15,15 +15,12 @@ import { useConfirm } from '@/components/common/confirm-provider'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
+import { statusTagClass } from '@/components/ui/StatusTag'
 
 const PAGE_SIZE = 50
 
 // shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
-const badgeCls = (variant: 'secondary' | 'outline') =>
-  variant === 'secondary'
-    ? 'border-transparent bg-secondary text-secondary-foreground'
-    : ''
-
+const badgeCls = statusTagClass
 export default function DigitalAssetsPage() {
   const confirm = useConfirm()
   const { toast } = useToast()

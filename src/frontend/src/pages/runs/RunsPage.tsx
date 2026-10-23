@@ -16,6 +16,7 @@ import EmptyState from '@/components/common/EmptyState'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
+import { statusTagClass } from '@/components/ui/StatusTag'
 
 // stats.targets 可能是数字，也可能是按状态聚合的对象（{done:3, skipped:1}）。
 // 直接渲染对象会触发 React #31，这里统一折算成总数。
@@ -43,15 +44,7 @@ const TARGET_STATES = [
 ]
 
 // shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
-const badgeCls = (variant: 'default' | 'secondary' | 'destructive' | 'outline') =>
-  variant === 'default'
-    ? 'border-transparent bg-primary text-primary-foreground'
-    : variant === 'secondary'
-      ? 'border-transparent bg-secondary text-secondary-foreground'
-      : variant === 'destructive'
-        ? 'border-transparent bg-destructive text-destructive-foreground'
-        : ''
-
+const badgeCls = statusTagClass
 export default function RunsPage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()

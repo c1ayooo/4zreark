@@ -21,25 +21,12 @@ import {
   SlidersHorizontal,
   X,
 } from 'lucide-react'
+import { statusTagClass } from '@/components/ui/StatusTag'
 
 type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info'
 
 // shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
-const badgeCls = (variant: BadgeVariant) =>
-  variant === 'default' || variant === 'success'
-    ? 'border-transparent bg-primary text-primary-foreground'
-    : variant === 'secondary'
-      ? 'border-transparent bg-secondary text-secondary-foreground'
-      : variant === 'destructive'
-        ? 'border-transparent bg-destructive text-destructive-foreground'
-        : variant === 'warning'
-          ? 'border-transparent bg-yellow-500 text-black'
-          : variant === 'info'
-            ? 'border-transparent bg-blue-500 text-white'
-            : ''
-
-// 档位颜色与分值条的样式；文案由后端 level_label / band.label 下发，前端不重复维护映射。
-// 只在 facets 还没返回时兜底用，正常展示一律走后端下发的文案。
+const badgeCls = statusTagClass
 const FALLBACK_LEVEL_LABEL: Record<FpScoreLevel, string> = {
   high: '高危',
   medium: '中危',

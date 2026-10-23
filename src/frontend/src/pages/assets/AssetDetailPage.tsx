@@ -29,23 +29,12 @@ import {
 import { discoveryApi } from '@/api/discovery'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate } from '@/lib/utils'
+import { statusTagClass } from '@/components/ui/StatusTag'
 
 type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info'
 
 // shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
-const badgeCls = (variant: BadgeVariant) =>
-  variant === 'default' || variant === 'success'
-    ? 'border-transparent bg-primary text-primary-foreground'
-    : variant === 'secondary'
-      ? 'border-transparent bg-secondary text-secondary-foreground'
-      : variant === 'destructive'
-        ? 'border-transparent bg-destructive text-destructive-foreground'
-        : variant === 'warning'
-          ? 'border-transparent bg-yellow-500 text-black'
-          : variant === 'info'
-            ? 'border-transparent bg-blue-500 text-white'
-            : ''
-
+const badgeCls = statusTagClass
 const stateLabel: Record<string, string> = {
   reachable: '可访问',
   lost: '失联',

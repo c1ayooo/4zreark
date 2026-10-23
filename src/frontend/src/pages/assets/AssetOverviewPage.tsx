@@ -6,22 +6,12 @@ import type { TableProps } from 'antd'
 
 import { assetApi, type AssetProject, type OverviewData } from '@/api/assets'
 import EmptyState from '@/components/common/EmptyState'
+import { statusTagClass } from '@/components/ui/StatusTag'
 
 const nf = new Intl.NumberFormat('zh-CN')
 
 // shadcn Badge variant → antd Tag 主题配色（沿用原 CSS 变量，保持视觉不变）
-const badgeCls = (variant: 'default' | 'secondary') =>
-  variant === 'default'
-    ? 'border-transparent bg-primary text-primary-foreground'
-    : 'border-transparent bg-secondary text-secondary-foreground'
-
-/**
- * 资产总览。
- *
- * 与「资产探索」分工：探索页负责按条件找具体资产，总览页回答「现在一共有什么、
- * 哪些项目在产出、技术栈集中在哪」。数据全部来自 /api/overview 与 /api/projects，
- * 不做二次入库。
- */
+const badgeCls = statusTagClass
 export default function AssetOverviewPage() {
   const overview = useQuery({
     queryKey: ['asset-overview'],

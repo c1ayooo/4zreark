@@ -40,6 +40,7 @@ import {
   ChevronUp,
   RotateCcw,
 } from 'lucide-react'
+import { statusTagClass } from '@/components/ui/StatusTag'
 
 const stateLabel: Record<string, string> = {
   reachable: '可访问',
@@ -51,15 +52,7 @@ const stateLabel: Record<string, string> = {
 type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline' | 'success'
 
 // shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
-const badgeCls = (variant: BadgeVariant) =>
-  variant === 'default' || variant === 'success'
-    ? 'border-transparent bg-primary text-primary-foreground'
-    : variant === 'secondary'
-      ? 'border-transparent bg-secondary text-secondary-foreground'
-      : variant === 'destructive'
-        ? 'border-transparent bg-destructive text-destructive-foreground'
-        : ''
-
+const badgeCls = statusTagClass
 const stateVariant = (state: string): BadgeVariant => {
   if (state === 'reachable') return 'default'
   if (state === 'lost') return 'destructive'

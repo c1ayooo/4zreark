@@ -22,6 +22,7 @@ import {
   Hash,
   Layout,
 } from 'lucide-react'
+import { statusTagClass } from '@/components/ui/StatusTag'
 
 const monitorTypeLabels: Record<MonitorType, string> = {
   content_hash: '内容哈希',
@@ -45,15 +46,7 @@ const statusConfig: Record<string, { label: string; variant: 'default' | 'destru
 }
 
 // shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
-const badgeCls = (variant: 'default' | 'secondary' | 'destructive' | 'outline') =>
-  variant === 'default'
-    ? 'border-transparent bg-primary text-primary-foreground'
-    : variant === 'secondary'
-      ? 'border-transparent bg-secondary text-secondary-foreground'
-      : variant === 'destructive'
-        ? 'border-transparent bg-destructive text-destructive-foreground'
-        : ''
-
+const badgeCls = statusTagClass
 export default function MonitorPage() {
   const { toast } = useToast()
   const confirm = useConfirm()

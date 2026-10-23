@@ -9,17 +9,10 @@ import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate, getSeverityColor } from '@/lib/utils'
 import { Search, Plus, Eye, Upload, RefreshCw, Trash2, FileArchive, FileText, ChevronDown } from 'lucide-react'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
+import { statusTagClass } from '@/components/ui/StatusTag'
 
 // shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
-const badgeCls = (variant: 'default' | 'secondary' | 'destructive' | 'outline') =>
-  variant === 'default'
-    ? 'border-transparent bg-primary text-primary-foreground'
-    : variant === 'secondary'
-      ? 'border-transparent bg-secondary text-secondary-foreground'
-      : variant === 'destructive'
-        ? 'border-transparent bg-destructive text-destructive-foreground'
-        : ''
-
+const badgeCls = statusTagClass
 export default function POCsPage() {
   const confirm = useConfirm()
   const { toast } = useToast()

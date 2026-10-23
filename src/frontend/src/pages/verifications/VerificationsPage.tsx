@@ -11,6 +11,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
+import { statusTagClass } from '@/components/ui/StatusTag'
 
 const STATUS_OPTIONS = [
   { value: 'all', label: '全部状态' },
@@ -34,15 +35,7 @@ const statusVariant = (status: string): 'default' | 'secondary' | 'destructive' 
 }
 
 // shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
-const badgeCls = (variant: 'default' | 'secondary' | 'destructive' | 'outline') =>
-  variant === 'default'
-    ? 'border-transparent bg-primary text-primary-foreground'
-    : variant === 'secondary'
-      ? 'border-transparent bg-secondary text-secondary-foreground'
-      : variant === 'destructive'
-        ? 'border-transparent bg-destructive text-destructive-foreground'
-        : ''
-
+const badgeCls = statusTagClass
 export default function VerificationsPage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()

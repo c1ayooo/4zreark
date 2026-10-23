@@ -12,19 +12,12 @@ import {
 } from '@/api/digital'
 import { useConfirm } from '@/components/common/confirm-provider'
 import { useToast } from '@/components/ui/use-toast'
+import { statusTagClass } from '@/components/ui/StatusTag'
 
 const ACCEPT = '.har,.json,.csv,.txt,.xlsx'
 
 // shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
-const badgeCls = (variant: 'default' | 'secondary' | 'destructive' | 'outline') =>
-  variant === 'default'
-    ? 'border-transparent bg-primary text-primary-foreground'
-    : variant === 'secondary'
-      ? 'border-transparent bg-secondary text-secondary-foreground'
-      : variant === 'destructive'
-        ? 'border-transparent bg-destructive text-destructive-foreground'
-        : ''
-
+const badgeCls = statusTagClass
 export default function LocalDocumentsPage() {
   const confirm = useConfirm()
   const { toast } = useToast()
