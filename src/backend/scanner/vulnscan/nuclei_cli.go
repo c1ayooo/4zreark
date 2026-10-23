@@ -164,6 +164,23 @@ func (s *NucleiCLIScanner) buildArgs(targets []string, config *NucleiScanConfig)
 		"-ni",  // 关闭 interactsh，避免 OAST 模板挂住整轮
 	}
 
+	// 本地路径目标（JS 产物、配置文件、备份目录）需要 -file 才会加载 file 协议模板。
+	// 注意 -file 是「启用 file 模板」开关，不是目标列表文件；用 os.Stat 判定，
+	// 避免把裸域名（无 scheme）误判成路径而改变线上 http 扫描行为。
+	fileMode := false
+	for _, target := range targets {
+		if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
+			continue
+		}
+		if fi, err := os.Stat(target); err == nil && (fi.IsDir() || fi.Mode().IsRegular()) {
+			fileMode = true
+			break
+		}
+	}
+	if fileMode {
+		args = append(args, "-file")
+	}
+
 	// 添加目标
 	for _, target := range targets {
 		args = append(args, "-u", target)

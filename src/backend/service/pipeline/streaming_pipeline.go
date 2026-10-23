@@ -61,6 +61,12 @@ type PipelineConfig struct {
 	// WIH 接口候选探测：从页面/JS 词法提取接口候选，同源受控探测后落档
 	ApiProbe bool `json:"api_probe"`
 
+	// JS 产物审计：爬虫拿到的 JS 下载落盘后，用 nuclei file 模板查密钥泄露。
+	// NucleiCustomTemplatesDir 是 keys 规则目录，由任务执行器注入（相对路径在
+	// worker 工作目录下不成立，必须显式传绝对路径）。
+	JsAudit                  bool   `json:"js_audit"`
+	NucleiCustomTemplatesDir string `json:"-"`
+
 	// 节奏控制：除漏洞扫描外，所有会主动发请求的模块都受这两个参数约束。
 	// 默认值刻意保守，宁可慢，也不要因为高频请求把出口 IP 打进黑名单。
 	RatePerSec    int `json:"rate_per_sec"`    // 每秒请求上限；0=用默认 20
@@ -137,6 +143,7 @@ type StreamingPipeline struct {
 	fingerprintModule *FingerprintModule
 	vulnScanModule    *VulnScanModule
 	crawlerModule     *CrawlerModule
+	jsAuditModule     *JSAuditModule
 	dirScanModule     *DirScanModule
 	sensitiveModule   *SensitiveModule
 	wihModule         *WihProbeModule
@@ -365,6 +372,16 @@ func (p *StreamingPipeline) buildModuleChain() error {
 		p.wihModule.SetProgressTracker(p.progressTracker)
 		p.wihModule.nextModule = lastModule
 		lastModule = p.wihModule
+	}
+
+	// JS 产物审计：接在爬虫下游，爬虫产出的 JS URL 直接落盘做密钥检查。
+	// 放在接口探测之前——密钥是静态内容，不必等接口面刻画完再动手。
+	if p.config.JsAudit && p.config.NucleiCustomTemplatesDir != "" {
+		p.jsAuditModule = NewJSAuditModule(p.ctx, lastModule, p.config.moduleConcurrency(4), p.config.NucleiCustomTemplatesDir)
+		p.jsAuditModule.SetScope(p.scope)
+		p.jsAuditModule.SetInput(make(chan interface{}, 500))
+		p.jsAuditModule.SetProgressTracker(p.progressTracker)
+		lastModule = p.jsAuditModule
 	}
 
 	// 爬虫模块

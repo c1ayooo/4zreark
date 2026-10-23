@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -791,6 +792,14 @@ func (e *TaskExecutor) buildCustomConfig(task *models.Task) *pipeline.PipelineCo
 		config.ApiProbe = true
 	}
 
+	// JS 审计依赖爬虫产出的 JS URL，单勾它没有输入
+	if scanTypes["js_audit"] || scanTypes["js_secret"] {
+		config.JsAudit = true
+		if !config.WebCrawler {
+			config.WebCrawler = true
+		}
+	}
+
 	log.Printf("[TaskExecutor] Built custom config for task %s: subdomain=%v, port=%v, fingerprint=%v, crawler=%v, dirscan=%v, vuln=%v, sensitive=%v",
 		task.ID.Hex(), config.SubdomainScan, config.PortScan, config.Fingerprint, config.WebCrawler, config.DirScan, config.VulnScan, config.SensitiveScan)
 
@@ -812,6 +821,7 @@ func applyScanTypes(cfg *pipeline.PipelineConfig, scanTypes []string) {
 	cfg.WebCrawler = false
 	cfg.DirScan = false
 	cfg.SensitiveScan = false
+	cfg.JsAudit = false
 
 	for _, raw := range scanTypes {
 		switch strings.ToLower(strings.TrimSpace(raw)) {
@@ -831,6 +841,10 @@ func applyScanTypes(cfg *pipeline.PipelineConfig, scanTypes []string) {
 			cfg.SensitiveScan = true
 		case "api_probe", "wih":
 			cfg.ApiProbe = true
+		case "js_audit", "js_secret", "jsaudit":
+			cfg.JsAudit = true
+			// 没爬虫就没有 JS URL，依赖在这里补齐
+			cfg.WebCrawler = true
 		}
 	}
 
@@ -970,6 +984,22 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 	progressCallback := func(report *pipeline.ProgressReport) {
 		// 更新任务进度到数据库
 		e.updateProgressWithDetails(task, report)
+	}
+
+	// JS 产物审计用的密钥规则目录。worker 的工作目录与后端不同，
+	// 相对路径在这里不成立，必须用运行时算出的绝对路径。
+	if config.JsAudit {
+		if rt := GetNucleiRuntimeService(); rt != nil {
+			keysDir := filepath.Join(rt.CustomTemplatesDir(), "keys")
+			if st, serr := os.Stat(keysDir); serr == nil && st.IsDir() {
+				config.NucleiCustomTemplatesDir = keysDir
+			} else {
+				log.Printf("[TaskExecutor] JS 审计已开启但 keys 规则目录不存在: %s", keysDir)
+				config.JsAudit = false
+			}
+		} else {
+			config.JsAudit = false
+		}
 	}
 
 	scanPipe := pipeline.NewStreamingPipelineWithProgress(ctx, task, config, len(task.Targets), progressCallback)
