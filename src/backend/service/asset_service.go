@@ -293,6 +293,9 @@ func (s *AssetService) IconClusters(ctx context.Context, projectID int64, q stri
 	if r == nil {
 		return nil, 0, errors.New("数据层未初始化")
 	}
+	// 聚类只按 host ILIKE 过滤，吃不下 DSL；把 text="…" 还原成检索词，
+	// 全局搜索跳过来后切到聚类视图不出空列表。
+	q = repo.ExtractSearchTerm(q)
 	return r.Clusters().IconClusters(ctx, projectID, q, page, pageSize)
 }
 
@@ -302,6 +305,7 @@ func (s *AssetService) TechClusters(ctx context.Context, projectID int64, q stri
 	if r == nil {
 		return nil, 0, errors.New("数据层未初始化")
 	}
+	q = repo.ExtractSearchTerm(q)
 	return r.Clusters().TechClusters(ctx, projectID, q, page, pageSize)
 }
 

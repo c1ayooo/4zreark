@@ -1,11 +1,11 @@
 package repo
 
 import (
-	"sort"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -648,7 +648,7 @@ func (a *AssetRepo) listIPsCursor(ctx context.Context, w *whereBuilder, q AssetQ
 	return out, next, hasMore, nil
 }
 
-func (a *AssetRepo) buildRecordWhere(q AssetQuery) *whereBuilder {
+func (a *AssetRepo) buildRecordWhere(q AssetQuery) (*whereBuilder, error) {
 	w := newWhereBuilder(1)
 	if q.ProjectID > 0 {
 		w.parts = append(w.parts, "r.project_id = "+w.ph())
@@ -670,14 +670,30 @@ func (a *AssetRepo) buildRecordWhere(q AssetQuery) *whereBuilder {
 	case "interfaces":
 		w.parts = append(w.parts, interfacePredicate("r"))
 	}
-	if strings.TrimSpace(q.Q) != "" {
-		pattern := likePattern(q.Q)
-		w.parts = append(w.parts,
-			"(r.host ILIKE "+w.ph()+" OR r.value ILIKE "+w.ph()+" OR coalesce(r.title,'') ILIKE "+w.ph()+" OR r.evidence::text ILIKE "+w.ph()+")")
-		w.args = append(w.args, pattern, pattern, pattern, pattern)
-		w.next += 4
+	qQ := strings.TrimSpace(q.Q)
+	if qQ == "" {
+		return w, nil
 	}
-	return w
+	// 与站点粒度同一套查询口径：带 DSL 痕迹的串按 DSL 编译（条件里引用的 s.* 经
+	// join 生效），普通关键词仍走 r.* 的 ILIKE。全局搜索 text="…" 和裸词都直接出数据。
+	if looksLikeAssetDSL(qQ) {
+		expr, args, err := BuildAssetWhereFrom(qQ, w.next)
+		if err != nil {
+			return nil, err
+		}
+		if expr != "" {
+			w.parts = append(w.parts, expr)
+			w.args = append(w.args, args...)
+			w.next += len(args)
+		}
+		return w, nil
+	}
+	pattern := likePattern(qQ)
+	w.parts = append(w.parts,
+		"(r.host ILIKE "+w.ph()+" OR r.value ILIKE "+w.ph()+" OR coalesce(r.title,'') ILIKE "+w.ph()+" OR r.evidence::text ILIKE "+w.ph()+")")
+	w.args = append(w.args, pattern, pattern, pattern, pattern)
+	w.next += 4
+	return w, nil
 }
 
 func rawRecordColumns() string {
@@ -706,7 +722,10 @@ func (a *AssetRepo) listRawRecords(ctx context.Context, q AssetQuery) ([]*RawRec
 	if q.PageSize < 1 || q.PageSize > 500 {
 		q.PageSize = 20
 	}
-	w := a.buildRecordWhere(q)
+	w, err := a.buildRecordWhere(q)
+	if err != nil {
+		return nil, 0, err
+	}
 	var total int64
 	if err := a.r.pool.QueryRow(ctx,
 		"SELECT count(*) FROM raw_records r LEFT JOIN sites s ON s.id = r.site_id WHERE "+w.String(),
@@ -739,7 +758,10 @@ func (a *AssetRepo) listRawRecordsCursor(ctx context.Context, q AssetQuery) ([]*
 	if q.PageSize < 1 || q.PageSize > 500 {
 		q.PageSize = 20
 	}
-	w := a.buildRecordWhere(q)
+	w, err := a.buildRecordWhere(q)
+	if err != nil {
+		return nil, "", false, err
+	}
 	where := w.String()
 	args := append([]any{}, w.args...)
 	if q.Cursor != "" {
@@ -928,7 +950,7 @@ func (a *AssetRepo) listDomainsByRisk(ctx context.Context, w *whereBuilder, q As
 	}
 	cond := w.String()
 	stmt := fmt.Sprintf(`
-		SELECT ` + domainAggregateCols + `
+		SELECT `+domainAggregateCols+`
 		  FROM sites s JOIN projects p ON p.id = s.project_id
 		 WHERE %s
 		 GROUP BY s.host`, cond)
@@ -994,7 +1016,7 @@ func (a *AssetRepo) listIPsByRisk(ctx context.Context, w *whereBuilder, q AssetQ
 	// 与 listIPs 一致：排除没有 IP 的站点，避免出现空 IP 行。
 	cond := w.String() + " AND s.ip IS NOT NULL"
 	stmt := fmt.Sprintf(`
-		SELECT ` + ipAggregateCols + `
+		SELECT `+ipAggregateCols+`
 		  FROM sites s
 		 WHERE %s
 		 GROUP BY s.ip`, cond)

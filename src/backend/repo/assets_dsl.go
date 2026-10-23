@@ -3,6 +3,7 @@ package repo
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -136,16 +137,20 @@ func (p *dslParser) parsePrimary() (string, error) {
 
 func (p *dslParser) parseCond() (string, error) {
 	p.skipSpace()
+	// 带引号的短语：按全文检索处理（顶层 "美团 招聘" 等价 text="美团 招聘"）。
+	if p.peek() == '"' {
+		return p.parseBareTerm(true)
+	}
 	start := p.pos
 	for p.pos < len(p.src) && (isAlnum(p.src[p.pos]) || p.src[p.pos] == '_') {
 		p.pos++
 	}
 	field := string(p.src[start:p.pos])
-	if field == "" {
-		return "", p.errf("此处应为字段名")
-	}
-	if !isAssetField(field) {
-		return "", p.errf("不支持的查询字段「%s」，支持：%s", field, strings.Join(assetQueryFields, ", "))
+	// 裸词 / 未知字段：整体当一个 text 条件，让搜索框里的普通关键词直接可用。
+	// 字段名打错时也按全文检索，而不是报「不支持的查询字段」。
+	if field == "" || !isAssetField(field) {
+		p.pos = start
+		return p.parseBareTerm(false)
 	}
 
 	p.skipSpace()
@@ -194,6 +199,55 @@ func (p *dslParser) parseCond() (string, error) {
 		return "", p.errf("字段值包含控制字符")
 	}
 	return p.buildCond(field, op, val)
+}
+
+// parseBareTerm 读裸检索词：quoted=true 消费一个双引号短语，否则读到
+// &&、||、括号或结尾为止。值校验与字段值同一套规则，语义等价 text="…"。
+func (p *dslParser) parseBareTerm(quoted bool) (string, error) {
+	var sb strings.Builder
+	if quoted {
+		p.pos++
+		closed := false
+		for p.pos < len(p.src) {
+			c := p.src[p.pos]
+			if c == '\\' && p.pos+1 < len(p.src) {
+				p.pos++
+				sb.WriteRune(p.src[p.pos])
+				p.pos++
+				continue
+			}
+			if c == '"' {
+				p.pos++
+				closed = true
+				break
+			}
+			sb.WriteRune(c)
+			p.pos++
+		}
+		if !closed {
+			return "", p.errf("字符串缺少结束引号")
+		}
+	} else {
+		for p.pos < len(p.src) {
+			c := p.src[p.pos]
+			if c == '&' || c == '|' || c == '(' || c == ')' {
+				break
+			}
+			sb.WriteRune(c)
+			p.pos++
+		}
+	}
+	val := strings.TrimSpace(sb.String())
+	if val == "" {
+		return "", p.errf("查询词为空")
+	}
+	if len(val) > 1024 {
+		return "", p.errf("查询词超过 1024 字节")
+	}
+	if strings.ContainsAny(val, "\x00\r\n") {
+		return "", p.errf("查询词包含控制字符")
+	}
+	return p.buildCond("text", "=", val)
 }
 
 func (p *dslParser) add(v any) string {
@@ -356,4 +410,42 @@ func isAssetField(f string) bool {
 		}
 	}
 	return false
+}
+
+// dslHintRe 识别 DSL 痕迹：字段=值（含比较符）或逻辑符。普通关键词不含这些。
+var dslHintRe = regexp.MustCompile(`[a-zA-Z_]\w*\s*(==|!=|>=|<=|=)|&&|\|\|`)
+
+// looksLikeAssetDSL 判断查询串应按 DSL 编译还是按纯文本检索。
+// record 视图与聚类接口没有字段约束的概念，靠它把两种写法分开，互不误伤。
+func looksLikeAssetDSL(q string) bool {
+	return dslHintRe.MatchString(q)
+}
+
+// dslValueRe 抠出 text/host/domain/title/ip 的字段值，给不支持 DSL 的接口
+// （图标/技术栈聚类只按 host ILIKE）把查询串还原成纯文本检索词。
+var dslValueRe = regexp.MustCompile(`(?:text|host|domain|title|ip)\s*(?:==|=|!=)\s*"([^"]*)"`)
+
+// ExtractSearchTerm 把资产查询串还原成纯文本检索词：
+// text="a" host="b" 之类取值以空格拼接；裸词原样返回；
+// 其余 DSL 表达式（端口、状态码等）在纯文本口径下无从匹配，返回空串。
+func ExtractSearchTerm(q string) string {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return ""
+	}
+	if m := dslValueRe.FindAllStringSubmatch(q, -1); len(m) > 0 {
+		terms := make([]string, 0, len(m))
+		for _, v := range m {
+			if v[1] = strings.TrimSpace(v[1]); v[1] != "" {
+				terms = append(terms, v[1])
+			}
+		}
+		if len(terms) > 0 {
+			return strings.Join(terms, " ")
+		}
+	}
+	if looksLikeAssetDSL(q) {
+		return ""
+	}
+	return q
 }

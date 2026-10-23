@@ -60,7 +60,7 @@ func sortByRisk(rows []riskOrder) {
 	})
 }
 
-const riskSelect = `s.id, s.host, s.ip, coalesce(s.title,''), s.tech, s.http_status, s.state,
+const riskSelect = `s.id, s.host, s.ip::text, coalesce(s.title,''), s.tech, s.http_status, s.state,
 	s.verification_status, (s.verified_at IS NOT NULL),
 	coalesce(rr.ports, '[]'::jsonb), coalesce(rr.server, '')`
 
