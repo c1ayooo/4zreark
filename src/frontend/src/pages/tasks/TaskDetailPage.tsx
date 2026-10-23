@@ -21,7 +21,7 @@ import TaskAssetsView from '@/components/tasks/TaskAssetsView'
 import { useToast } from '@/components/ui/use-toast'
 import { useConfirm } from '@/components/common/confirm-provider'
 import { getErrorMessage } from '@/lib/errors'
-import { DetailBlock } from './components/DetailBits'
+import TaskSettingsModal from './components/TaskSettingsModal'
 import VulnDetailModal from './components/VulnDetailModal'
 import { cn, formatDate, getSeverityColor, getStatusColor } from '@/lib/utils'
 import { 
@@ -29,6 +29,15 @@ import {
   Search, Download, Settings, ChevronDown,
   RefreshCw, ExternalLink, Eye, Pencil
 } from 'lucide-react'
+
+// 结果表通用的「序号」列:跨页连续编号(第 N 页第 M 行 = (N-1)*size+M+1)。
+const indexColumn = (page: number, pageSize: number) => ({
+  title: '序号',
+  key: 'index',
+  width: 64,
+  className: 'text-muted-foreground',
+  render: (_: unknown, __: unknown, index: number) => (page - 1) * pageSize + index + 1,
+})
 
 // Tab 配置 - ID 对应后端 ResultType；assets 是任务级资产视图（非结果类型）
 type TaskTabId = ResultType | 'assets'
@@ -429,7 +438,7 @@ export default function TaskDetailPage() {
 
   const renderSubdomainTable = () => {
     const columns: ColumnsType<SubdomainResult> = [
-      { title: '序号', key: 'index', width: 64, className: 'text-muted-foreground', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
+      indexColumn(page, pageSize),
       {
         title: '子域名',
         key: 'subdomain',
@@ -510,7 +519,7 @@ export default function TaskDetailPage() {
   // 子域名接管检测结果表格
   const renderTakeoverTable = () => {
     const columns: ColumnsType<Record<string, unknown>> = [
-      { title: '序号', key: 'index', width: 64, className: 'text-muted-foreground', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
+      indexColumn(page, pageSize),
       { title: '子域名', key: 'subdomain', width: 220, className: 'font-mono', render: (_, item) => item.subdomain as string },
       { title: 'CNAME', key: 'cname', width: 200, ellipsis: true, className: 'font-mono text-xs', render: (_, item) => item.cname as string || '-' },
       { title: '服务商', key: 'provider', width: 120, render: (_, item) => <Tag>{item.provider as string || '-'}</Tag> },
@@ -558,7 +567,7 @@ export default function TaskDetailPage() {
 
   const renderURLTable = () => {
     const columns: ColumnsType<Record<string, unknown>> = [
-      { title: '序号', key: 'index', width: 64, className: 'text-muted-foreground', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
+      indexColumn(page, pageSize),
       {
         title: 'URL',
         key: 'url',
@@ -606,7 +615,7 @@ export default function TaskDetailPage() {
 
   const renderSensitiveTable = () => {
     const columns: ColumnsType<Record<string, unknown>> = [
-      { title: '序号', key: 'index', width: 64, className: 'text-muted-foreground', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
+      indexColumn(page, pageSize),
       {
         title: 'URL',
         key: 'url',
@@ -672,7 +681,7 @@ export default function TaskDetailPage() {
 
   const renderPortTable = () => {
     const columns: ColumnsType<Record<string, unknown>> = [
-      { title: '序号', key: 'index', width: 64, className: 'text-muted-foreground', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
+      indexColumn(page, pageSize),
       { title: 'IP', key: 'ip', width: 160, className: 'font-mono', render: (_, item) => item.ip as string },
       {
         title: '端口',
@@ -728,7 +737,7 @@ export default function TaskDetailPage() {
 
   const renderServiceTable = () => {
     const columns: ColumnsType<Record<string, unknown>> = [
-      { title: '序号', key: 'index', width: 64, className: 'text-muted-foreground', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
+      indexColumn(page, pageSize),
       {
         title: 'URL',
         key: 'url',
@@ -806,7 +815,7 @@ export default function TaskDetailPage() {
 
   const renderDirScanTable = () => {
     const columns: ColumnsType<Record<string, unknown>> = [
-      { title: '序号', key: 'index', width: 64, className: 'text-muted-foreground', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
+      indexColumn(page, pageSize),
       {
         title: 'URL',
         key: 'url',
@@ -900,7 +909,7 @@ export default function TaskDetailPage() {
 
   const renderCrawlerTable = () => {
     const columns: ColumnsType<Record<string, unknown>> = [
-      { title: '序号', key: 'index', width: 64, className: 'text-muted-foreground', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
+      indexColumn(page, pageSize),
       {
         title: 'URL',
         key: 'url',
@@ -1087,7 +1096,7 @@ export default function TaskDetailPage() {
 
   const renderGenericTable = () => {
     const columns: ColumnsType<Record<string, unknown>> = [
-      { title: '序号', key: 'index', width: 64, className: 'text-muted-foreground', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
+      indexColumn(page, pageSize),
       {
         title: '数据',
         key: 'data',
@@ -1499,85 +1508,8 @@ export default function TaskDetailPage() {
       </Modal>
 
       {/* Table Content or Topology View */}
-      <Modal
-        open={settingsOpen}
-        onCancel={() => setSettingsOpen(false)}
-        title="任务设置"
-        width={672}
-        footer={null}
-      >
-        <div className="space-y-3 py-2 text-sm">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <DetailBlock label="任务类型" value={task.type} />
-            <DetailBlock label="当前状态" value={getStatusLabel(task.status)} />
-            <DetailBlock label="归属项目" value={`#${task.projectId ?? 0}`} />
-            <DetailBlock label="执行节点" value={task.nodeId || '自动选择'} />
-            <DetailBlock
-              label="扫描节奏"
-              value={
-                task.config.rate_per_sec
-                  ? `${task.config.rate_per_sec} req/s · 目标间隔 ${task.config.target_delay_ms ?? 0}ms`
-                  : '默认（未显式限速）'
-              }
-            />
-            <DetailBlock label="端口模式" value={task.config.port_scan_mode || 'quick'} />
-            <DetailBlock label="超时 / 并发" value={`${task.config.timeout ?? '默认'}s / ${task.config.concurrent ?? '默认'}`} />
-            <DetailBlock label="创建时间" value={formatDate(task.createdAt)} />
-          </div>
+            <TaskSettingsModal task={task} open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
-          <div>
-            <div className="text-muted-foreground text-xs">扫描类型</div>
-            <div className="mt-1 flex flex-wrap gap-1">
-              {(task.config.scanTypes || []).length === 0 ? (
-                <span className="text-muted-foreground text-xs">未显式配置</span>
-              ) : (
-                (task.config.scanTypes || []).map((t) => (
-                  <Tag key={t} className={cn(TAG_SECONDARY, 'text-xs')}>
-                    {scanTypeLabels[t] || t}
-                  </Tag>
-                ))
-              )}
-            </div>
-          </div>
-
-          <div>
-            <div className="text-muted-foreground text-xs">扫描目标</div>
-            <div className="mt-1 flex flex-wrap gap-1">
-              {task.targets.map((t) => (
-                <Tag key={t} className="font-mono text-xs">
-                  {t}
-                </Tag>
-              ))}
-            </div>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <DetailBlock
-              label="子域字典"
-              value={
-                task.config.subdomain_dict_id
-                  ? `${task.config.subdomain_dict_id} · ${task.config.subdomain_wordlist?.length ?? 0} 条`
-                  : '内置词表'
-              }
-            />
-            <DetailBlock
-              label="目录字典"
-              value={
-                task.config.dir_dict_id
-                  ? `${task.config.dir_dict_id} · ${task.config.dir_wordlist?.length ?? 0} 条`
-                  : 'spray 默认字典'
-              }
-            />
-          </div>
-
-          <details className="rounded-md border p-3">
-            <summary className="text-muted-foreground cursor-pointer text-xs">原始配置 JSON</summary>
-            <pre className="bg-muted/50 mt-2 max-h-64 overflow-auto rounded p-2 font-mono text-xs">
-              {JSON.stringify(task.config, null, 2)}
-            </pre>
-          </details>
-        </div>
-      </Modal>
 
       <div className={currentTab === 'topology' ? 'flex-1 overflow-hidden' : 'flex-1 overflow-auto'}>
         {currentTab === 'topology' ? (
