@@ -3,10 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom'
 import {keepPreviousData, useQuery, useMutation, useQueryClient} from '@tanstack/react-query'
 import {
   Button,
-  Checkbox,
   Dropdown,
   Input,
-  Modal,
   Progress,
   Select,
   Table,
@@ -22,6 +20,8 @@ import { useToast } from '@/components/ui/use-toast'
 import { useConfirm } from '@/components/common/confirm-provider'
 import { getErrorMessage } from '@/lib/errors'
 import TaskSettingsModal from './components/TaskSettingsModal'
+import EditConfigModal from './components/EditConfigModal'
+import { getStatusLabel } from './taskMeta'
 import VulnDetailModal from './components/VulnDetailModal'
 import { cn, formatDate, getSeverityColor, getStatusColor } from '@/lib/utils'
 import { 
@@ -76,13 +76,6 @@ export default function TaskDetailPage() {
   const [selectedVuln, setSelectedVuln] = useState<Record<string, unknown> | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
-  const [editTargets, setEditTargets] = useState('')
-  const [editScanTypes, setEditScanTypes] = useState<string[]>([])
-  const [editPortMode, setEditPortMode] = useState('quick')
-  const [editRate, setEditRate] = useState('10')
-  const [editDelay, setEditDelay] = useState('500')
-  const [editSubDict, setEditSubDict] = useState('')
-  const [editDirDict, setEditDirDict] = useState('')
   const [statusCodeFilter, setStatusCodeFilter] = useState<string>('all')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
@@ -231,26 +224,8 @@ export default function TaskDetailPage() {
   const isResultsLoading = currentTab === 'port' ? portResultsLoading : resultsLoading
 
   const updateConfigMutation = useMutation({
-    mutationFn: () => {
-      if (!task) return Promise.reject(new Error('任务不存在'))
-      const targets = editTargets
-        .split(/[\n,\s]+/)
-        .map((t) => t.trim())
-        .filter(Boolean)
-      if (targets.length === 0) return Promise.reject(new Error('至少保留一个目标'))
-      return taskApi.updateTask(id!, {
-        targets,
-        config: {
-          ...task.config,
-          scan_types: editScanTypes,
-          port_scan_mode: editPortMode,
-          rate_per_sec: Number(editRate) || 0,
-          target_delay_ms: Number(editDelay) || 0,
-          subdomain_dict_id: editSubDict.trim(),
-          dir_dict_id: editDirDict.trim(),
-        },
-      } as Partial<Task>)
-    },
+    mutationFn: (payload: { targets: string[]; config: Record<string, unknown> }) =>
+      taskApi.updateTask(id!, { targets: payload.targets, config: { ...task!.config, ...payload.config } } as Partial<Task>),
     onSuccess: () => {
       toast({ title: '任务配置已更新' })
       setEditOpen(false)
@@ -266,13 +241,7 @@ export default function TaskDetailPage() {
 
   const openEditConfig = () => {
     if (!task || task.status === 'running') return
-    setEditTargets(task.targets.join('\n'))
-    setEditScanTypes(task.config.scanTypes || [])
-    setEditPortMode(task.config.port_scan_mode || 'quick')
-    setEditRate(String(task.config.rate_per_sec || 10))
-    setEditDelay(String(task.config.target_delay_ms || 500))
-    setEditSubDict(task.config.subdomain_dict_id || '')
-    setEditDirDict(task.config.dir_dict_id || '')
+    // 表单初值由 EditConfigModal 在 open 时自行从 task 初始化
     setEditOpen(true)
   }
 
@@ -329,18 +298,6 @@ export default function TaskDetailPage() {
         <Button type="primary" onClick={() => navigate('/tasks')}>返回任务列表</Button>
       </div>
     )
-  }
-
-  const getStatusLabel = (status: string) => {
-    const labels: Record<string, string> = {
-      pending: '等待中',
-      running: '运行中',
-      paused: '已暂停',
-      completed: '已完成',
-      failed: '失败',
-      cancelled: '已取消',
-    }
-    return labels[status] || status
   }
 
   const handleSearch = () => {
@@ -1429,83 +1386,15 @@ export default function TaskDetailPage() {
       <VulnDetailModal vuln={selectedVuln} onClose={() => setSelectedVuln(null)} />
 
 
-      {/* 编辑配置：运行中只读，先停止再改 */}
-      <Modal
+      <EditConfigModal
         open={editOpen}
-        onCancel={() => setEditOpen(false)}
-        title="编辑任务配置"
-        width={672}
-        footer={null}
-      >
-        <div className="space-y-3 py-2">
-          <div className="space-y-1">
-            <label className="text-sm font-medium">扫描目标（每行一个）</label>
-            <Input.TextArea
-              rows={3}
-              className="font-mono text-xs"
-              value={editTargets}
-              onChange={(e) => setEditTargets(e.target.value)}
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="text-sm font-medium">扫描类型</label>
-            <div className="grid gap-2 sm:grid-cols-3">
-              {Object.entries(scanTypeLabels).map(([id, label]) => (
-                <label key={id} className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-sm">
-                  <Checkbox
-                    checked={editScanTypes.includes(id)}
-                    onChange={(e) =>
-                      setEditScanTypes((prev) =>
-                        e.target.checked ? [...prev, id] : prev.filter((x) => x !== id)
-                      )
-                    }
-                  />
-                  {label}
-                </label>
-              ))}
-            </div>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="space-y-1">
-              <label className="text-sm font-medium">端口模式</label>
-              <Select
-                value={editPortMode}
-                onChange={(v) => setEditPortMode(v)}
-                className="w-full"
-                options={[
-                  { value: 'quick', label: '快速' },
-                  { value: 'top1000', label: 'Top 1000' },
-                  { value: 'full', label: '全端口' },
-                ]}
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-sm font-medium">限速（req/s）</label>
-              <Input value={editRate} onChange={(e) => setEditRate(e.target.value)} />
-            </div>
-            <div className="space-y-1">
-              <label className="text-sm font-medium">目标间隔（ms）</label>
-              <Input value={editDelay} onChange={(e) => setEditDelay(e.target.value)} />
-            </div>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1">
-              <label className="text-sm font-medium">子域字典 ID（留空内置）</label>
-              <Input value={editSubDict} onChange={(e) => setEditSubDict(e.target.value)} placeholder="dictionaries.id" />
-            </div>
-            <div className="space-y-1">
-              <label className="text-sm font-medium">目录字典 ID（留空 spray 默认）</label>
-              <Input value={editDirDict} onChange={(e) => setEditDirDict(e.target.value)} placeholder="dictionaries.id" />
-            </div>
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button onClick={() => setEditOpen(false)}>取消</Button>
-            <Button type="primary" onClick={() => updateConfigMutation.mutate()} disabled={updateConfigMutation.isPending}>
-              保存配置
-            </Button>
-          </div>
-        </div>
-      </Modal>
+        task={task!}
+        onClose={() => setEditOpen(false)}
+        saving={updateConfigMutation.isPending}
+        onSave={async (payload) => {
+          await updateConfigMutation.mutateAsync(payload)
+        }}
+      />
 
       {/* Table Content or Topology View */}
             <TaskSettingsModal task={task} open={settingsOpen} onClose={() => setSettingsOpen(false)} />
@@ -1528,20 +1417,6 @@ export default function TaskDetailPage() {
       </div>
     </div>
   )
-}
-
-const scanTypeLabels: Record<string, string> = {
-  subdomain: '子域名枚举',
-  takeover: '子域名接管',
-  port_scan: '端口扫描',
-  fingerprint: '指纹识别',
-  crawler: 'Web 爬虫',
-  dir_scan: '目录扫描',
-  sensitive: '敏感信息',
-  vuln_scan: '漏洞扫描',
-  service_detect: '服务识别',
-  exposure_scan: '暴露面探测',
-  clue_hunt: '存量线索',
 }
 
 const moduleLabels: Record<string, string> = {
