@@ -163,9 +163,11 @@ func (h *GovernanceHandler) ListPlans(c *gin.Context) {
 // CreatePlan 新建计划。POST /api/plans
 func (h *GovernanceHandler) CreatePlan(c *gin.Context) {
 	var body struct {
-		SeedID        int64          `json:"seed_id" binding:"required"`
-		IntervalHours int            `json:"interval_hours"`
-		Budget        map[string]any `json:"budget"`
+		SeedID                int64          `json:"seed_id" binding:"required"`
+		IntervalHours         int            `json:"interval_hours"`
+		TriggerMode           string         `json:"trigger_mode"`
+		ChangeCooldownMinutes int            `json:"change_cooldown_minutes"`
+		Budget                map[string]any `json:"budget"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		utils.BadRequest(c, err.Error())
@@ -178,13 +180,27 @@ func (h *GovernanceHandler) CreatePlan(c *gin.Context) {
 		utils.BadRequest(c, "interval_hours 需在 1..720")
 		return
 	}
+	// 前端「添加监控种子」会传触发方式；此前这里没绑定这两个字段，
+	// 用户选的「资产变化 / 周期+变化」被静默落成固定周期。
+	if t := strings.TrimSpace(body.TriggerMode); t != "" &&
+		t != "interval" && t != "on_change" && t != "both" {
+		utils.BadRequest(c, "trigger_mode 只支持 interval / on_change / both")
+		return
+	}
 
 	seeds, _, err := h.stores()
 	if err != nil {
 		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
 		return
 	}
-	plan := &repo.Plan{SeedID: body.SeedID, IntervalHours: body.IntervalHours, Budget: body.Budget, Enabled: true}
+	plan := &repo.Plan{
+		SeedID:                body.SeedID,
+		IntervalHours:         body.IntervalHours,
+		TriggerMode:           strings.TrimSpace(body.TriggerMode),
+		ChangeCooldownMinutes: body.ChangeCooldownMinutes,
+		Budget:                body.Budget,
+		Enabled:               true,
+	}
 	if err := seeds.CreatePlan(c.Request.Context(), plan); err != nil {
 		utils.BadRequest(c, err.Error())
 		return

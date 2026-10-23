@@ -182,8 +182,11 @@ func (s *EnterpriseService) Collect(ctx context.Context, in EnterpriseCollectInp
 		if strings.TrimSpace(name) == "" {
 			name = ref.Name
 		}
+		capWan, _ := enterprise.ParseCapitalWan(detail.RegisteredCapital)
 		entity, uerr := r.Upsert(ctx, in.ProjectID, repo.EnterpriseInput{
 			Name: name, LegalPerson: detail.LegalPerson, OpenStatus: detail.OpenStatus,
+			CreditCode: detail.CreditCode, Address: detail.Address, Industry: detail.Industry,
+			RegisteredCapital: detail.RegisteredCapital, RegisteredCapitalWan: capWan,
 			ICPNumbers: icpList, Domains: domains, Source: provider.Name(),
 			Status: "unverified", Notes: "来自 " + provider.Name() + " 检索",
 		})

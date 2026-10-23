@@ -409,6 +409,21 @@ export default function EnterprisePage() {
       render: (_, e) => <span className="text-sm">{e.legal_person || '—'}</span>,
     },
     {
+      title: '注册资本',
+      dataIndex: 'registered_capital',
+      key: 'registered_capital',
+      width: 130,
+      sorter: (a, b) => (a.registered_capital_wan || 0) - (b.registered_capital_wan || 0),
+      render: (_, e) =>
+        e.registered_capital ? (
+          <span className="text-sm" title={`约 ${e.registered_capital_wan || 0} 万元`}>
+            {e.registered_capital}
+          </span>
+        ) : (
+          <span className="text-sm text-muted-foreground">—</span>
+        ),
+    },
+    {
       title: '状态',
       dataIndex: 'status',
       key: 'status',

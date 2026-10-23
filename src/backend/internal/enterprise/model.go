@@ -30,7 +30,13 @@ type CompanyDetail struct {
 	OpenStatus  string
 	Phone       string
 	Email       string
-	Domains     []DomainHit
+	// RegisteredCapital 注册资本原文（如 "6500万元"），用于 CNVD 事件型等
+	// 按资金规模筛目标的场景；只有 qcc 的详情页稳定返回该字段。
+	RegisteredCapital string
+	CreditCode        string
+	Address           string
+	Industry          string
+	Domains           []DomainHit
 }
 
 // Entity 企业实体节点。

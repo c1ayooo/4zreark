@@ -291,7 +291,7 @@ func (s *CruiseService) executeCruiseWithMode(cruiseID oid.ObjectID, manual bool
 	if err := s.taskService.CreateTask(task); err != nil {
 		log.Printf("[CruiseService] Failed to create task for cruise %s: %v", cruise.Name, err)
 		s.recordCruiseLog(cruiseID, oid.NilObjectID, "failed", startTime, time.Now(), 0, 0, err.Error())
-		s.updateCruiseStatus(cruiseID, restoreStatus)
+		s.finishCruiseRun(cruiseID, restoreStatus)
 		s.updateLastStatus(cruiseID, "failed")
 		s.incrementFailCount(cruiseID)
 		return
@@ -338,7 +338,7 @@ func (s *CruiseService) executeCruiseWithMode(cruiseID oid.ObjectID, manual bool
 				}
 
 				s.updateCruiseLog(cruiseID, taskObjID, status, endTime, duration, resultCount, vulnCount, errorMsg)
-				s.updateCruiseStatus(cruiseID, restoreStatus)
+				s.finishCruiseRun(cruiseID, restoreStatus)
 				s.updateLastStatus(cruiseID, status)
 
 				if status == "success" {
@@ -371,7 +371,8 @@ func (s *CruiseService) executeCruiseWithMode(cruiseID oid.ObjectID, manual bool
 				}
 				s.updateCruiseLog(cruiseID, taskObjID, "timeout", time.Now(),
 					int64(24*time.Hour.Seconds()), 0, 0, "任务执行超时")
-				s.updateCruiseStatus(cruiseID, restoreStatus)
+				s.finishCruiseRun(cruiseID, restoreStatus)
+				s.updateLastStatus(cruiseID, "timeout")
 				s.incrementFailCount(cruiseID)
 				return
 			}
@@ -594,8 +595,8 @@ func (s *CruiseService) UpdateCruise(cruiseID string, req *models.CruiseTaskUpda
 		return err
 	}
 
-	// cron / 目标来源变了且任务是启用状态，重新调度。
-	if req.CronExpr != nil || req.TargetSource != nil || req.TargetType != nil || req.Targets != nil || req.ProjectID != nil {
+	// cron / 时区 / 目标来源变了且任务是启用状态，重新调度。
+	if req.CronExpr != nil || req.Timezone != nil || req.TargetSource != nil || req.TargetType != nil || req.Targets != nil || req.ProjectID != nil {
 		cruise, getErr := s.GetCruise(cruiseID)
 		if getErr == nil && cruise.Status == models.CruiseStatusEnabled {
 			s.scheduleCruise(cruise)
@@ -673,6 +674,11 @@ func (s *CruiseService) EnableCruise(cruiseID string) error {
 	}
 	if cruise.ProjectID <= 0 {
 		return errors.New("请先编辑巡航任务并选择归属项目")
+	}
+	if cruise.Status == models.CruiseStatusRunning {
+		// 手动跑禁用巡航的期间启用会造成双跑：本轮结束的恢复会把状态改回
+		// disabled 但 entry 已挂上，cron 空转；守卫掉，等本轮结束后再启用。
+		return errors.New("巡航正在执行中，请等待本轮结束后再启用")
 	}
 	if cruise.Status == models.CruiseStatusEnabled {
 		return nil
@@ -939,7 +945,7 @@ func (s *CruiseService) failBeforeCreate(cruiseID oid.ObjectID, name string, sta
 	restoreStatus models.CruiseStatus, cause error) {
 	log.Printf("[CruiseService] Failed to prepare task for cruise %s: %v", name, cause)
 	s.recordCruiseLog(cruiseID, oid.NilObjectID, "failed", startTime, time.Now(), 0, 0, cause.Error())
-	s.updateCruiseStatus(cruiseID, restoreStatus)
+	s.finishCruiseRun(cruiseID, restoreStatus)
 	s.updateLastStatus(cruiseID, "failed")
 	s.incrementFailCount(cruiseID)
 }
@@ -954,6 +960,43 @@ func (s *CruiseService) updateCruiseStatus(cruiseID oid.ObjectID, status models.
 	ctx, cancel := dbCtx()
 	defer cancel()
 	return store.SetStatus(ctx, cruiseID.Hex(), string(status))
+}
+
+// finishCruiseRun 巡航结束（完成/失败/超时/前置失败）恢复状态并对账调度。
+// 恢复是条件更新：仅当仍为 running 时落 restoreStatus——执行期间用户
+// disable（或手动改库）的结果优先生效。随后按最终状态重建/撤销 cron entry，
+// 保证「显示启用一定在调度、显示禁用一定不在调度」，顺带让执行期间
+// 修改过的 cron/时区在本轮结束后即生效。
+func (s *CruiseService) finishCruiseRun(cruiseID oid.ObjectID, restoreStatus models.CruiseStatus) {
+	applied, err := s.restoreCruiseStatus(cruiseID, restoreStatus)
+	if err != nil {
+		log.Printf("[CruiseService] Failed to restore cruise %s status: %v", cruiseID.Hex(), err)
+		return
+	}
+	if !applied {
+		log.Printf("[CruiseService] Cruise %s status changed during run, reconciling schedule only", cruiseID.Hex())
+	}
+	cruise, getErr := s.GetCruise(cruiseID.Hex())
+	if getErr != nil {
+		log.Printf("[CruiseService] Failed to reload cruise %s for schedule reconcile: %v", cruiseID.Hex(), getErr)
+		return
+	}
+	switch cruise.Status {
+	case models.CruiseStatusEnabled:
+		_ = s.scheduleCruise(cruise) // 幂等：先摘旧 entry 再挂新的
+	case models.CruiseStatusDisabled:
+		s.unscheduleCruise(cruiseID.Hex())
+	}
+}
+
+func (s *CruiseService) restoreCruiseStatus(cruiseID oid.ObjectID, status models.CruiseStatus) (bool, error) {
+	store, err := s.store()
+	if err != nil {
+		return false, err
+	}
+	ctx, cancel := dbCtx()
+	defer cancel()
+	return store.SetStatusIfRunning(ctx, cruiseID.Hex(), string(status))
 }
 
 func (s *CruiseService) acquireCruiseRun(cruiseID oid.ObjectID) (bool, error) {

@@ -22,44 +22,52 @@ type EnterpriseDomain struct {
 }
 
 type EnterpriseEntity struct {
-	ID           int64              `json:"id"`
-	ProjectID    int64              `json:"project_id"`
-	Name         string             `json:"name"`
-	CreditCode   string             `json:"credit_code"`
-	LegalPerson  string             `json:"legal_person"`
-	OpenStatus   string             `json:"open_status"`
-	Industry     string             `json:"industry"`
-	Address      string             `json:"address"`
-	ICPNumbers   []string           `json:"icp_numbers"`
-	Domains      []EnterpriseDomain `json:"domains"`
-	Source       string             `json:"source"`
-	Status       string             `json:"status"`
-	Notes        string             `json:"notes"`
-	DigitalCount int                `json:"digital_count"`
-	CreatedAt    time.Time          `json:"created_at"`
-	UpdatedAt    time.Time          `json:"updated_at"`
+	ID          int64  `json:"id"`
+	ProjectID   int64  `json:"project_id"`
+	Name        string `json:"name"`
+	CreditCode  string `json:"credit_code"`
+	LegalPerson string `json:"legal_person"`
+	OpenStatus  string `json:"open_status"`
+	Industry    string `json:"industry"`
+	Address     string `json:"address"`
+	// RegisteredCapital 注册资本原文（"6500万元"），RegisteredCapitalWan 为归一后的万元数值，
+	// 用于按资金规模筛目标（如 CNVD 事件型要求注册资金 ≥ 5000 万）。
+	RegisteredCapital    string             `json:"registered_capital"`
+	RegisteredCapitalWan float64            `json:"registered_capital_wan"`
+	ICPNumbers           []string           `json:"icp_numbers"`
+	Domains              []EnterpriseDomain `json:"domains"`
+	Source               string             `json:"source"`
+	Status               string             `json:"status"`
+	Notes                string             `json:"notes"`
+	DigitalCount         int                `json:"digital_count"`
+	CreatedAt            time.Time          `json:"created_at"`
+	UpdatedAt            time.Time          `json:"updated_at"`
 }
 
 type EnterpriseInput struct {
-	Name        string             `json:"name"`
-	CreditCode  string             `json:"credit_code"`
-	LegalPerson string             `json:"legal_person"`
-	OpenStatus  string             `json:"open_status"`
-	Industry    string             `json:"industry"`
-	Address     string             `json:"address"`
-	ICPNumbers  []string           `json:"icp_numbers"`
-	Domains     []EnterpriseDomain `json:"domains"`
-	Source      string             `json:"source"`
-	Status      string             `json:"status"`
-	Notes       string             `json:"notes"`
+	Name                 string             `json:"name"`
+	CreditCode           string             `json:"credit_code"`
+	LegalPerson          string             `json:"legal_person"`
+	OpenStatus           string             `json:"open_status"`
+	Industry             string             `json:"industry"`
+	Address              string             `json:"address"`
+	RegisteredCapital    string             `json:"registered_capital"`
+	RegisteredCapitalWan float64            `json:"registered_capital_wan"`
+	ICPNumbers           []string           `json:"icp_numbers"`
+	Domains              []EnterpriseDomain `json:"domains"`
+	Source               string             `json:"source"`
+	Status               string             `json:"status"`
+	Notes                string             `json:"notes"`
 }
 
 type EnterpriseFilter struct {
 	ProjectID int64
 	Query     string
 	Status    string
-	Page      int
-	PageSize  int
+	// MinRegisteredCapitalWan > 0 时只返回注册资金不低于该值（万元）的企业。
+	MinRegisteredCapitalWan float64
+	Page                    int
+	PageSize                int
 }
 
 type EnterpriseRepo interface {
@@ -78,7 +86,8 @@ type enterpriseRepo struct{ r *Repo }
 func (r *Repo) Enterprises() EnterpriseRepo { return &enterpriseRepo{r: r} }
 
 const enterpriseColumns = `e.id, e.project_id, e.name, e.credit_code, e.legal_person,
-	e.open_status, e.industry, e.address, e.icp_numbers, e.domains, e.source, e.status,
+	e.open_status, e.industry, e.address, e.registered_capital, coalesce(e.registered_capital_wan, 0),
+	e.icp_numbers, e.domains, e.source, e.status,
 	e.notes, e.created_at, e.updated_at,
 	(select count(*) from digital_assets d
 	  where d.project_id = e.project_id and d.company = e.name) as digital_count`
@@ -89,7 +98,8 @@ func scanEnterprise(row interface{ Scan(...any) error }) (*EnterpriseEntity, err
 		icpB, domB []byte
 	)
 	if err := row.Scan(&e.ID, &e.ProjectID, &e.Name, &e.CreditCode, &e.LegalPerson,
-		&e.OpenStatus, &e.Industry, &e.Address, &icpB, &domB, &e.Source, &e.Status,
+		&e.OpenStatus, &e.Industry, &e.Address, &e.RegisteredCapital, &e.RegisteredCapitalWan,
+		&icpB, &domB, &e.Source, &e.Status,
 		&e.Notes, &e.CreatedAt, &e.UpdatedAt, &e.DigitalCount); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -124,6 +134,10 @@ func (r *enterpriseRepo) List(ctx context.Context, f EnterpriseFilter) ([]*Enter
 	if s := strings.TrimSpace(f.Status); s != "" {
 		w.parts = append(w.parts, "e.status = "+w.ph())
 		w.args = append(w.args, s)
+	}
+	if f.MinRegisteredCapitalWan > 0 {
+		w.parts = append(w.parts, "coalesce(e.registered_capital_wan, 0) >= "+w.ph())
+		w.args = append(w.args, f.MinRegisteredCapitalWan)
 	}
 	cond := w.String()
 
@@ -179,14 +193,19 @@ func (r *enterpriseRepo) Upsert(ctx context.Context, projectID int64, in Enterpr
 	var id int64
 	if err := r.r.pool.QueryRow(ctx, `
 insert into enterprise_entities (project_id, name, credit_code, legal_person, open_status,
-                                 industry, address, icp_numbers, domains, source, status, notes)
-values ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12)
+                                 industry, address, registered_capital, registered_capital_wan,
+                                 icp_numbers, domains, source, status, notes)
+values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14)
 on conflict (project_id, name) do update
    set credit_code = excluded.credit_code,
        legal_person = excluded.legal_person,
-       open_status = excluded.open_status,
+       open_status = case when excluded.open_status = '' then enterprise_entities.open_status else excluded.open_status end,
        industry = excluded.industry,
        address = excluded.address,
+       -- 注册资本只有 qcc 采集填充：其他来源/手工编辑传空时保留原值，
+       -- 不然一次非 qcc 的重复采集或一次保存就会把已有数据清掉
+       registered_capital = case when excluded.registered_capital = '' then enterprise_entities.registered_capital else excluded.registered_capital end,
+       registered_capital_wan = case when coalesce(excluded.registered_capital_wan, 0) = 0 then enterprise_entities.registered_capital_wan else excluded.registered_capital_wan end,
        icp_numbers = excluded.icp_numbers,
        domains = excluded.domains,
        source = case when excluded.source = 'manual' then enterprise_entities.source else excluded.source end,
@@ -196,6 +215,7 @@ on conflict (project_id, name) do update
 returning id`,
 		projectID, name, strings.TrimSpace(in.CreditCode), strings.TrimSpace(in.LegalPerson),
 		strings.TrimSpace(in.OpenStatus), strings.TrimSpace(in.Industry), strings.TrimSpace(in.Address),
+		strings.TrimSpace(in.RegisteredCapital), in.RegisteredCapitalWan,
 		string(icp), string(domains), source, status, strings.TrimSpace(in.Notes)).Scan(&id); err != nil {
 		return nil, err
 	}
@@ -236,11 +256,14 @@ func (r *enterpriseRepo) UpsertMany(ctx context.Context, projectID int64, rows [
 		var isInsert bool
 		if err := tx.QueryRow(ctx, `
 insert into enterprise_entities (project_id, name, credit_code, legal_person, open_status,
-                                 industry, address, icp_numbers, domains, source, status, notes)
-values ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12)
+                                 industry, address, registered_capital, registered_capital_wan,
+                                 icp_numbers, domains, source, status, notes)
+values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14)
 on conflict (project_id, name) do update
    set credit_code = excluded.credit_code,
        legal_person = excluded.legal_person,
+       registered_capital = excluded.registered_capital,
+       registered_capital_wan = excluded.registered_capital_wan,
        icp_numbers = excluded.icp_numbers,
        domains = excluded.domains,
        source = excluded.source,
@@ -249,7 +272,8 @@ on conflict (project_id, name) do update
        updated_at = now()
 returning (xmax = 0)`,
 			projectID, name, in.CreditCode, in.LegalPerson, in.OpenStatus, in.Industry,
-			in.Address, string(icp), string(domains), in.Source, in.Status, in.Notes).Scan(&isInsert); err != nil {
+			in.Address, in.RegisteredCapital, in.RegisteredCapitalWan,
+			string(icp), string(domains), in.Source, in.Status, in.Notes).Scan(&isInsert); err != nil {
 			return inserted, updated, err
 		}
 		if isInsert {

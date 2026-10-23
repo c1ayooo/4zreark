@@ -422,6 +422,13 @@ export default function AssetsPage() {
       }),
   })
 
+  // 「按指纹筛选」下拉候选：指纹规则命中与技术栈名并集（低频变化，长缓存）。
+  const appOptions = useQuery({
+    queryKey: ['asset-app-options'],
+    queryFn: () => assetApi.apps({ limit: 500 }),
+    staleTime: 5 * 60_000,
+  })
+
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['assets'] })
     queryClient.invalidateQueries({ queryKey: ['asset-overview'] })
@@ -431,6 +438,22 @@ export default function AssetsPage() {
   const changeProject = (v: string) => {
     setProjectId(v)
     setPage(1)
+  }
+
+  // 指纹筛选是 q 里 app="…" 条件的 UI 形态：appliedQ 是唯一事实源——技术栈下钻、
+  // 保存视图、手写 DSL 设进去的 app 都会反映到下拉框。
+  const activeFp = appliedQ.match(/app\s*=\s*"([^"]*)"/)?.[1] ?? ''
+  const changeFp = (v: string) => {
+    const rest = appliedQ
+      .replace(/\s*&&\s*app\s*=\s*"[^"]*"/g, '')
+      .replace(/app\s*=\s*"[^"]*"\s*&&\s*/g, '')
+      .replace(/app\s*=\s*"[^"]*"/g, '')
+      .trim()
+    const nextQ = v ? (rest ? `app="${v}" && ${rest}` : `app="${v}"`) : rest
+    setQ(nextQ)
+    setAppliedQ(nextQ)
+    setPage(1)
+    setCursorStack([undefined])
   }
 
   const probe = useMutation({
@@ -1332,6 +1355,20 @@ export default function AssetsPage() {
               label: `${p.name}（${p.asset_count}）`,
             })),
           ]}
+        />
+        <Select
+          className="w-[200px]"
+          value={activeFp || undefined}
+          onChange={(v) => changeFp(typeof v === 'string' ? v : '')}
+          placeholder="按指纹筛选"
+          allowClear
+          showSearch
+          optionFilterProp="value"
+          loading={appOptions.isLoading}
+          options={(appOptions.data?.data.items ?? []).map((o) => ({
+            value: o.name,
+            label: `${o.name}（${o.site_count}）`,
+          }))}
         />
       </div>
 

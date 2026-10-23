@@ -115,6 +115,13 @@ export interface TechCluster {
   site_count: number
 }
 
+/** 「按指纹筛选」下拉候选：指纹规则名 / 技术栈名 + 命中站点数 */
+export interface AppOption {
+  name: string
+  category: string
+  site_count: number
+}
+
 export interface ConnectivityPolicy {
   failure_threshold: number
   first_hours: number
@@ -261,6 +268,9 @@ export const assetApi = {
     api.get<unknown, { code: number; data: { items: TechCluster[]; total: number } }>('/assets/technologies', {
       params,
     }),
+  /** 「按指纹筛选」下拉候选：指纹规则命中与技术栈名并集，按站点数倒序 */
+  apps: (params: { q?: string; limit?: number } = {}) =>
+    api.get<unknown, { code: number; data: { items: AppOption[] } }>('/assets/apps', { params }),
   /** 图标字节地址（公开路由，可直接放 <img src>） */
   iconURL: (sha256: string) => `/api/asset-icons/${sha256}`,
   /** 资产星图：不分页、保留父子关系，供分层布局 */

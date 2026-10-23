@@ -19,6 +19,8 @@ export interface EnterpriseEntity {
   open_status: string
   industry: string
   address: string
+  registered_capital: string
+  registered_capital_wan: number
   icp_numbers: string[]
   domains: EnterpriseDomain[]
   source: string

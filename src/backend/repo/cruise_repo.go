@@ -23,6 +23,10 @@ type CruiseRepo interface {
 	Delete(ctx context.Context, id string) error
 
 	SetStatus(ctx context.Context, id, status string) error
+	// SetStatusIfRunning 仅当当前仍为 running 时改为目标状态，返回是否生效。
+	// 巡航结束「恢复快照状态」专用：执行期间用户 enable/disable 的结果优先，
+	// 无条件覆写会造成「显示已启用但 cron entry 已删、永远不再调度」的僵尸态。
+	SetStatusIfRunning(ctx context.Context, id, status string) (bool, error)
 	// AcquireRun 原子地把巡航从非 running 置为 running，返回是否抢到。
 	// cron 触发与「立即执行」并发时只允许一个通过，替代先读后写的 TOCTOU 检查。
 	AcquireRun(ctx context.Context, id string) (bool, error)
@@ -311,6 +315,15 @@ func (r *cruiseRepo) SetStatus(ctx context.Context, id, status string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (r *cruiseRepo) SetStatusIfRunning(ctx context.Context, id, status string) (bool, error) {
+	tag, err := r.r.pool.Exec(ctx,
+		`update cruise_tasks set status = $2, updated_at = now() where id = $1 and status = 'running'`, id, status)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 func (r *cruiseRepo) AcquireRun(ctx context.Context, id string) (bool, error) {

@@ -341,13 +341,7 @@ func (p *dslParser) buildCond(field, op, val string) (string, error) {
 	case "app":
 		// 优先走 fingerprint_hits（有索引），没命中规则名时回退到 sites.tech 数组。
 		// v2 §19 记的正是这个字段：ScopesHub 自己在这里返回 500，这里两条路径都要兜住。
-		exact := p.add(strings.ToLower(val))
-		fuzzy := p.add("%" + escapeLike(strings.ToLower(val)) + "%")
-		cond := fmt.Sprintf(`(exists (select 1 from fingerprint_hits f
-		                               join fingerprint_rules fr on fr.id = f.rule_id
-		                              where f.site_id = s.id and lower(fr.name) = %s)
-		                     or exists (select 1 from jsonb_array_elements_text(s.tech) t
-		                                 where lower(t) like %s))`, exact, fuzzy)
+		cond := appExistsCond(p.add(strings.ToLower(val)), p.add("%"+escapeLike(strings.ToLower(val))+"%"))
 		if neg {
 			return "(NOT " + cond + ")", nil
 		}
@@ -369,6 +363,17 @@ func (p *dslParser) buildCond(field, op, val string) (string, error) {
 		}
 		return cond, nil
 	}
+}
+
+// appExistsCond 是 app 字段的共享谓词：指纹规则名精确命中（fingerprint_hits，
+// 有索引）或站点技术栈模糊包含（sites.tech），别名固定为 s。DSL 编译与
+// 图标/技术栈聚类接口共用，保证「按指纹筛选」在各视图同一口径。
+func appExistsCond(exactPh, fuzzyPh string) string {
+	return fmt.Sprintf(`(exists (select 1 from fingerprint_hits f
+                               join fingerprint_rules fr on fr.id = f.rule_id
+                              where f.site_id = s.id and lower(fr.name) = %s)
+                     or exists (select 1 from jsonb_array_elements_text(s.tech) t
+                                 where lower(t) like %s))`, exactPh, fuzzyPh)
 }
 
 // intervalOf 把 "7d" / "12h" / "30m" 转成 PostgreSQL interval 文本。
@@ -424,6 +429,18 @@ func looksLikeAssetDSL(q string) bool {
 // dslValueRe 抠出 text/host/domain/title/ip 的字段值，给不支持 DSL 的接口
 // （图标/技术栈聚类只按 host ILIKE）把查询串还原成纯文本检索词。
 var dslValueRe = regexp.MustCompile(`(?:text|host|domain|title|ip)\s*(?:==|=|!=)\s*"([^"]*)"`)
+
+// ExtractAppTerm 取查询串里的 app="…" 指纹条件值；没有则返回空串。
+// 供图标/技术栈聚类接口把指纹过滤带进聚类 SQL（纯文本检索词带不了这个条件）。
+func ExtractAppTerm(q string) string {
+	m := appTermRe.FindStringSubmatch(strings.TrimSpace(q))
+	if len(m) > 1 {
+		return m[1]
+	}
+	return ""
+}
+
+var appTermRe = regexp.MustCompile(`(?:^|[^\w"])\s*app\s*(?:==|=)\s*"([^"]*)"`)
 
 // ExtractSearchTerm 把资产查询串还原成纯文本检索词：
 // text="a" host="b" 之类取值以空格拼接；裸词原样返回；

@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import { cruiseApi, CruiseTask, CruiseCreateRequest, CruiseTargetPreview } from '@/api/cruise'
 import { projectApi } from '@/api/projects'
-import { Button, Input, Modal, Select, Switch, Table, Tag } from 'antd'
+import { seedCollectionApi, CruiseOverviewRow } from '@/api/seedCollection'
+import { Badge, Button, Card, Input, Modal, Select, Switch, Table, Tag } from 'antd'
 import type { TableProps } from 'antd'
 import EmptyState from '@/components/common/EmptyState'
 import { useToast } from '@/components/ui/use-toast'
@@ -19,6 +21,7 @@ import {
   XCircle,
   Loader2,
   History,
+  Pause,
 } from 'lucide-react'
 import CruiseLogsDialog from './CruiseLogsDialog'
 
@@ -55,7 +58,6 @@ const TARGET_TYPES = [
 
 export default function CruisePage() {
   const { toast } = useToast()
-  const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
@@ -109,6 +111,112 @@ export default function CruisePage() {
   const projectList = projects?.data ?? []
   const projectName = (id?: number) =>
     projectList.find((p) => p.id === id)?.name || (id ? `项目 #${id}` : '-')
+
+  // 资产巡航 v2 总览：被动发现 + 站点内容巡检（60s 自动刷新）
+  const { data: overview, isLoading: overviewLoading } = useQuery({
+    queryKey: ['cruise-v2-overview'],
+    queryFn: () => seedCollectionApi.overview(),
+    refetchInterval: 60000,
+  })
+  const overviewRows = overview?.data ?? []
+  const queryClient = useQueryClient()
+  const pauseMutation = useMutation({
+    mutationFn: ({ id, paused }: { id: number; paused: boolean }) =>
+      paused ? projectApi.resume(id) : projectApi.pause(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['cruise-v2-overview'] }),
+    onError: (e: Error) => toast({ title: '操作失败', description: e.message, variant: 'destructive' }),
+  })
+
+  const overviewColumns: TableProps<CruiseOverviewRow>['columns'] = [
+    {
+      title: '项目',
+      dataIndex: 'name',
+      key: 'name',
+      render: (_, row) => (
+        <div className="flex items-baseline gap-2">
+          <span className="font-medium">{row.name}</span>
+          <span className="font-mono text-xs text-muted-foreground">{row.code}</span>
+        </div>
+      ),
+    },
+    {
+      title: '最近发现轮',
+      dataIndex: 'last_run_at',
+      key: 'last_run_at',
+      width: 170,
+      render: (v: string | null) =>
+        v ? (
+          <span className="text-sm">{formatDate(v)}</span>
+        ) : (
+          <span className="text-sm text-muted-foreground">尚未运行</span>
+        ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'paused',
+      key: 'paused',
+      width: 80,
+      render: (paused: boolean) =>
+        paused ? <Tag className="border-transparent bg-amber-500/15 text-amber-600">已暂停</Tag> : <Tag className="border-transparent bg-emerald-500/15 text-emerald-600">采集中</Tag>,
+    },
+    { title: '发现累计', dataIndex: 'discover_new', key: 'discover_new', width: 90 },
+    {
+      title: '待确认候选',
+      dataIndex: 'pending',
+      key: 'pending',
+      width: 100,
+      render: (v: number, row) =>
+        v > 0 ? (
+          <Link to={`/projects/${row.project_id}`} className="text-sm text-green-600">
+            {v}
+          </Link>
+        ) : (
+          <span className="text-sm">{v}</span>
+        ),
+    },
+    { title: '巡检可达', dataIndex: 'reachable', key: 'reachable', width: 90 },
+    { title: '24h 已查', dataIndex: 'checked_24h', key: 'checked_24h', width: 90 },
+    {
+      title: '累计变更',
+      dataIndex: 'changed_total',
+      key: 'changed_total',
+      width: 90,
+      render: (v: number) => <span className={v > 0 ? 'text-red-600' : undefined}>{v}</span>,
+    },
+    {
+      title: '收集队列',
+      dataIndex: 'collecting',
+      key: 'collecting',
+      width: 100,
+      render: (v: number) =>
+        v > 0 ? (
+          <Badge status="processing" text={<span className="text-sm text-blue-500">{v}</span>} />
+        ) : (
+          <span className="text-sm">{v}</span>
+        ),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 150,
+      render: (_, row) => (
+        <div className="flex items-center gap-2">
+          <Button
+            type="text"
+            size="small"
+            disabled={pauseMutation.isPending}
+            onClick={() => pauseMutation.mutate({ id: row.project_id, paused: row.paused })}
+            icon={row.paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
+          >
+            {row.paused ? '恢复' : '暂停'}
+          </Button>
+          <Link to={`/projects/${row.project_id}`} className="text-sm">
+            前往项目
+          </Link>
+        </div>
+      ),
+    },
+  ]
 
   const createMutation = useMutation({
     mutationFn: cruiseApi.createCruise,
@@ -503,6 +611,30 @@ export default function CruisePage() {
           <div className="text-sm text-muted-foreground">执行中</div>
         </div>
       </div>
+
+      {/* 资产巡航 v2 总览 */}
+      <Card
+        title={
+          <div className="flex flex-col gap-1">
+            <span>资产巡航 v2（发现 + 巡检）</span>
+            <span className="text-xs font-normal leading-relaxed text-muted-foreground">
+              被动发现与站点内容巡检的汇总。新内容在项目详情「发现候选」面板确认；详情见
+              docs/方案-资产巡航v2
+            </span>
+          </div>
+        }
+      >
+        <Table<CruiseOverviewRow>
+          columns={overviewColumns}
+          dataSource={overviewRows}
+          rowKey="project_id"
+          loading={overviewLoading}
+          size="small"
+          pagination={false}
+          locale={{ emptyText: <EmptyState title="暂无项目数据" className="border-0" /> }}
+        />
+      </Card>
+
 
       {/* 工具栏 */}
       <div className="flex items-center justify-between">

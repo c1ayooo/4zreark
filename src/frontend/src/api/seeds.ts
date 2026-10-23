@@ -15,11 +15,6 @@ export interface Seed {
   created_at: string
 }
 
-export interface SeedCapabilities {
-  kinds?: { value: SeedKind; label: string; hint?: string }[]
-  [key: string]: unknown
-}
-
 export interface SeedPreview {
   targets?: { host?: string; value?: string; port?: number }[]
   total?: number
@@ -44,8 +39,6 @@ export const seedsApi = {
   }): Promise<ApiResponse<Seed>> => api.post('/seeds', body),
 
   remove: (id: number): Promise<ApiResponse<null>> => api.delete(`/seeds/${id}`),
-
-  capabilities: (): Promise<ApiResponse<SeedCapabilities>> => api.get('/seeds/capabilities'),
 
   preview: (body: { project_id: number | string; kind: SeedKind; value: string }): Promise<ApiResponse<SeedPreview>> =>
     api.post('/seeds/preview', body),

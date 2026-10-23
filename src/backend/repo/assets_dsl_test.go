@@ -91,6 +91,41 @@ func TestExtractSearchTerm(t *testing.T) {
 	}
 }
 
+func TestExtractAppTerm(t *testing.T) {
+	cases := map[string]string{
+		`app="nginx"`:                      "nginx",
+		`app == "Next.js"`:                  "Next.js",
+		`title="x" && app="美团"`:             "美团",
+		`text="app"`:                       "",
+		`status_code="200"`:                "",
+		"meituan":                          "",
+		"":                                 "",
+	}
+	for q, want := range cases {
+		if got := ExtractAppTerm(q); got != want {
+			t.Fatalf("ExtractAppTerm(%q) = %q，期望 %q", q, got, want)
+		}
+	}
+}
+
+// app 条件 = 指纹规则精确命中 OR 技术栈模糊包含；聚类接口与 DSL 共享同一谓词。
+func TestBuildAssetWhereAppCond(t *testing.T) {
+	expr, _, err := BuildAssetWhere(`app="OpenResty"`)
+	if err != nil {
+		t.Fatalf("app 条件不应报错: %v", err)
+	}
+	if !strings.Contains(expr, "fingerprint_hits") || !strings.Contains(expr, "jsonb_array_elements_text") {
+		t.Fatalf("app 条件应同时覆盖指纹命中与技术栈：%s", expr)
+	}
+	neg, _, err := BuildAssetWhere(`app!="OpenResty"`)
+	if err != nil {
+		t.Fatalf("app 取反不应报错: %v", err)
+	}
+	if !strings.HasPrefix(neg, "(NOT (") {
+		t.Fatalf("app 取反应包裹 NOT：%s", neg)
+	}
+}
+
 // record 视图的 q 口径：裸词走 r.* 的 ILIKE，DSL 串走编译（条件经 join 引用 s.*），
 // 残缺 DSL 报错而不是静默当纯文本。
 func TestBuildRecordWhereSplitsDSLAndPlain(t *testing.T) {

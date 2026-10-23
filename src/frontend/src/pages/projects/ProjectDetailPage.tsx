@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
   ArrowLeft,
   Calendar,
+  ChevronDown,
+  ChevronRight,
   Database,
   ExternalLink,
   FileText,
@@ -12,6 +14,7 @@ import {
   ImagePlus,
   Layers,
   ListTodo,
+  Loader2,
   Pause,
   Pencil,
   Play,
@@ -22,7 +25,7 @@ import {
   Trash2,
   Zap,
 } from 'lucide-react'
-import { Button, Card, Input, Modal, Progress, Select, Skeleton, Switch, Table, Tag } from 'antd'
+import { Badge, Button, Card, Input, Modal, Progress, Select, Skeleton, Switch, Table, Tag } from 'antd'
 import type { TableProps } from 'antd'
 
 import {
@@ -38,8 +41,14 @@ import {
   type PlanTriggerMode,
 } from '@/api/projects'
 import { dictionaryApi } from '@/api/sources'
+import {
+  seedCollectionApi,
+  type SeedCollectionJob,
+  type SeedCollectionJobStatus,
+} from '@/api/seedCollection'
 import { taskApi, type Task } from '@/api/tasks'
 import { ProjectFormDialog } from '@/components/projects/ProjectFormDialog'
+import { DiscoveryCandidatesPanel } from '@/components/projects/DiscoveryCandidatesPanel'
 import { ReportGenerateDialog } from '@/components/reports/ReportGenerateDialog'
 import { reportApi, type ReportProfile } from '@/api/reports'
 import { useConfirm } from '@/components/common/confirm-provider'
@@ -108,6 +117,16 @@ const taskTypeLabel: Record<string, string> = {
   service_detect: '服务识别',
   exposure_scan: '暴露面探测',
   clue_hunt: '存量线索',
+}
+
+const collectJobStatusMeta: Record<
+  SeedCollectionJobStatus,
+  { label: string; variant: BadgeVariant }
+> = {
+  queued: { label: '待处理', variant: 'secondary' },
+  running: { label: '处理中', variant: 'info' },
+  done: { label: '完成', variant: 'success' },
+  error: { label: '失败', variant: 'destructive' },
 }
 
 function InfoRow({ label, children }: { label: string; children: ReactNode }) {
@@ -490,17 +509,25 @@ function AddSeedDialog({
 }
 
 export default function ProjectDetailPage() {
+  const navigate = useNavigate()
   const { id } = useParams<{ id: string }>()
+  const [searchParams, setSearchParams] = useSearchParams()
   const idNum = Number(id)
   const validId = Number.isFinite(idNum) && idNum > 0
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const confirm = useConfirm()
   const iconInputRef = useRef<HTMLInputElement>(null)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [confirmCode, setConfirmCode] = useState('')
+  const pendingCodeRef = useRef('')
 
   const [editOpen, setEditOpen] = useState(false)
   const [seedOpen, setSeedOpen] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
+  // 种子表勾选（收集入口）+ 收集队列折叠态
+  const [selectedSeedIds, setSelectedSeedIds] = useState<number[]>([])
+  const [queueOpen, setQueueOpen] = useState(false)
 
   const reportTemplatesQuery = useQuery({
     queryKey: ['report-templates'],
@@ -541,15 +568,78 @@ export default function ProjectDetailPage() {
     enabled: validId,
     refetchInterval: 10000,
   })
+  // 种子收集队列：有进行中作业时 10s 轮询
+  const collectJobsQuery = useQuery({
+    queryKey: ['project-seed-collect-jobs', idNum],
+    queryFn: () => seedCollectionApi.jobs(idNum),
+    enabled: validId,
+    refetchInterval: (query) => ((query.state.data?.data?.active ?? 0) > 0 ? 10000 : false),
+  })
 
   const project = projectQuery.data?.data
   const seeds = seedsQuery.data?.data ?? []
+  const collectJobs = collectJobsQuery.data?.data?.items ?? []
+  const collectActive = collectJobsQuery.data?.data?.active ?? 0
   const domainCounts = domainCountsQuery.data?.data?.items ?? []
   const domainCountMap = new Map(domainCounts.map((d) => [d.seed_id, d.site_count]))
   const plans = plansQuery.data?.data ?? []
   const runs = runsQuery.data?.data ?? []
   const tasks = tasksQuery.data?.data.list ?? []
   const tasksTotal = tasksQuery.data?.data.total ?? 0
+
+  // 永久删除项目：危险区按钮触发，输项目编码确认；后端级联清任务/资产/巡航等全部归属数据
+  const deleteMutation = useMutation({
+    mutationFn: (confirm_code: string) => projectApi.delete(idNum, confirm_code),
+    onSuccess: (res) => {
+      const d = res.data
+      toast({
+        title: `项目「${d?.name ?? project?.name ?? ''}」已删除`,
+        description: `站点 ${d?.sites ?? 0} · 原始记录 ${d?.records ?? 0} · 任务 ${d?.tasks ?? 0} · 扫描结果 ${d?.scan_results ?? 0} · 巡航 ${d?.cruise_tasks ?? 0}`,
+      })
+      queryClient.removeQueries({ queryKey: ['project', idNum] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['asset-projects'] })
+      queryClient.invalidateQueries({ queryKey: ['tasks'] })
+      navigate('/projects')
+    },
+    onError: (e) => {
+      toast({ title: '删除项目失败', description: (e as Error).message, variant: 'destructive' })
+    },
+  })
+
+  // 列表页「删除」深链：?delete=1 且项目已加载时自动弹确认框
+  useEffect(() => {
+    if (searchParams.get('delete') === '1' && project && !deleteOpen) {
+      setConfirmCode('')
+      pendingCodeRef.current = project.code
+      setDeleteOpen(true)
+      setSearchParams({}, { replace: true })
+    }
+  }, [searchParams, project, deleteOpen, setSearchParams])
+
+  const handleDeleteProject = async () => {
+    if (!project) return
+    const ok = await confirm({
+      title: `永久删除项目「${project.name}」`,
+      description: `将删除项目编码 ${project.code} 归属的全部数据：站点、原始记录、种子、巡航计划、任务（含扫描结果与队列作业）、巡航任务、关系图谱、企业身份、ICP 备案。此操作不可恢复。`,
+      confirmText: '删除项目',
+      cancelText: '取消',
+      destructive: true,
+    })
+    if (!ok) return
+    setConfirmCode('')
+    pendingCodeRef.current = project.code
+    setDeleteOpen(true)
+  }
+
+  const confirmDelete = () => {
+    if (confirmCode.trim() !== pendingCodeRef.current) {
+      toast({ title: '项目编码不一致，未删除', variant: 'destructive' })
+      return
+    }
+    deleteMutation.mutate(confirmCode.trim())
+    setDeleteOpen(false)
+  }
 
   const invalidateProject = () => {
     queryClient.invalidateQueries({ queryKey: ['projects'] })
@@ -658,10 +748,41 @@ export default function ProjectDetailPage() {
     mutationFn: (seedId: number) => projectApi.deleteSeed(seedId),
     onSuccess: () => {
       toast({ title: '种子已删除，关联计划一并移除' })
+      setSelectedSeedIds((ids) => ids.filter((id) => id !== deleteSeedMutation.variables))
       invalidateMonitoring()
     },
     onError: fail('删除种子失败'),
   })
+
+  // 种子收集：把选中/全部 live-capable 种子排入队列，后台 worker 串行慢速执行
+  const collectMutation = useMutation({
+    mutationFn: ({ ids, all }: { ids?: number[]; all?: boolean }) =>
+      seedCollectionApi.collect(idNum, ids, all),
+    onSuccess: (res) => {
+      const d = res.data
+      toast({
+        title: `已入队 ${d?.enqueued ?? 0} 个收集任务`,
+        description: d?.skipped?.length
+          ? `跳过 ${d.skipped.length} 个：${d.skipped.join('、')}`
+          : undefined,
+      })
+      setSelectedSeedIds([])
+      queryClient.invalidateQueries({ queryKey: ['project-seed-collect-jobs', idNum] })
+      queryClient.invalidateQueries({ queryKey: ['project-cruise-status', idNum] })
+    },
+    onError: fail('发起收集失败'),
+  })
+
+  const handleCollectAll = async () => {
+    const ok = await confirm({
+      title: '收集全部种子？',
+      description: '将对全部 域名/公司(ICP)/证书组织 种子排队收集，串行慢速执行。',
+      confirmText: '全部收集',
+      cancelText: '取消',
+    })
+    if (!ok) return
+    collectMutation.mutate({ all: true })
+  }
 
   const updatePlanMutation = useMutation({
     mutationFn: ({ planId, enabled }: { planId: number; enabled: boolean }) =>
@@ -856,6 +977,61 @@ export default function ProjectDetailPage() {
           }}
         />
       ),
+    },
+  ]
+
+  const seedRowSelection: TableProps<Seed>['rowSelection'] = {
+    selectedRowKeys: selectedSeedIds,
+    onChange: (keys) => setSelectedSeedIds(keys.map(Number).filter((n) => Number.isFinite(n))),
+    columnWidth: 48,
+  }
+
+  const jobColumns: TableProps<SeedCollectionJob>['columns'] = [
+    {
+      title: '种子值',
+      dataIndex: 'value',
+      key: 'value',
+      render: (_, job) => (
+        <span className="block max-w-[240px] truncate font-mono text-xs">{job.value}</span>
+      ),
+    },
+    {
+      title: '类型',
+      dataIndex: 'kind',
+      key: 'kind',
+      width: 110,
+      render: (_, job) => (
+        <span className="text-muted-foreground whitespace-nowrap text-xs">
+          {seedKindLabel[job.kind as SeedKind] ?? job.kind}
+        </span>
+      ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      render: (_, job) => {
+        const meta = collectJobStatusMeta[job.status] ?? {
+          label: job.status,
+          variant: 'outline' as const,
+        }
+        return (
+          <span className="flex items-center gap-1.5">
+            <Tag className={badgeCls(meta.variant)}>
+              {job.status === 'running' && <Loader2 className="mr-1 inline size-3 animate-spin" />}
+              {meta.label}
+            </Tag>
+            {job.status === 'done' && (
+              <span className="text-muted-foreground text-xs">+{job.found} 候选</span>
+            )}
+            {job.status === 'error' && (
+              <span className="text-muted-foreground max-w-[200px] truncate text-xs" title={job.error}>
+                {job.error}
+              </span>
+            )}
+          </span>
+        )
+      },
     },
   ]
 
@@ -1143,8 +1319,53 @@ export default function ProjectDetailPage() {
               </>
             )}
           </Button>
+          <Button danger type="text" size="small" onClick={handleDeleteProject}>
+            <Trash2 className="mr-2 h-4 w-4" />
+            删除项目
+          </Button>
         </div>
       </div>
+
+      {/* 删除项目：输项目编码确认（后端同样校验，双保险） */}
+      <Modal
+        open={deleteOpen}
+        title={`永久删除项目「${project?.name ?? ''}」`}
+        onCancel={() => setDeleteOpen(false)}
+        width={480}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setDeleteOpen(false)}>取消</Button>
+            <Button
+              danger
+              type="primary"
+              disabled={confirmCode.trim() !== pendingCodeRef.current}
+              loading={deleteMutation.isPending}
+              onClick={confirmDelete}
+            >
+              永久删除
+            </Button>
+          </div>
+        }
+      >
+        <p className="text-sm text-muted-foreground">
+          将删除编码 <span className="font-mono text-foreground">{pendingCodeRef.current}</span>{' '}
+          归属的全部数据：站点、原始记录、种子、巡航计划、任务（含扫描结果与队列作业）、巡航任务、关系图谱、企业身份、ICP
+          备案。<span className="text-destructive">此操作不可恢复。</span>
+        </p>
+        <div className="mt-3">
+          <label className="text-sm font-medium" htmlFor="project-delete-confirm">
+            请输入项目编码 <span className="font-mono text-destructive">{pendingCodeRef.current}</span> 确认：
+          </label>
+          <Input
+            id="project-delete-confirm"
+            className="mt-1.5"
+            value={confirmCode}
+            onChange={(e) => setConfirmCode(e.target.value)}
+            placeholder={pendingCodeRef.current}
+            autoComplete="off"
+          />
+        </div>
+      </Modal>
 
       {/* 统计 */}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
@@ -1221,6 +1442,8 @@ export default function ProjectDetailPage() {
             </div>
           </Card>
 
+          <DiscoveryCandidatesPanel projectId={project.id} />
+
           <Card>
             <SectionHeader
               title="监控种子"
@@ -1240,12 +1463,68 @@ export default function ProjectDetailPage() {
                   还没有种子，先添加一个域名或网段。
                 </p>
               ) : (
-                <Table<Seed>
-                  columns={seedColumns}
-                  dataSource={seeds}
-                  rowKey="id"
-                  pagination={false}
-                />
+                <>
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    <Button
+                      type="primary"
+                      size="small"
+                      disabled={selectedSeedIds.length === 0}
+                      loading={collectMutation.isPending && collectMutation.variables?.all !== true}
+                      onClick={() => collectMutation.mutate({ ids: selectedSeedIds })}
+                    >
+                      收集{selectedSeedIds.length > 0 ? `（${selectedSeedIds.length}）` : ''}
+                    </Button>
+                    <Button
+                      size="small"
+                      loading={collectMutation.isPending && collectMutation.variables?.all === true}
+                      onClick={handleCollectAll}
+                    >
+                      全部收集
+                    </Button>
+                    <span className="text-muted-foreground text-xs">
+                      {selectedSeedIds.length > 0
+                        ? '对选中种子发起一轮收集'
+                        : '勾选种子后可单独发起收集'}
+                    </span>
+                  </div>
+                  <Table<Seed>
+                    columns={seedColumns}
+                    dataSource={seeds}
+                    rowKey="id"
+                    rowSelection={seedRowSelection}
+                    pagination={false}
+                  />
+                  <div className="mt-4 border-t pt-3">
+                    <button
+                      type="button"
+                      className="flex items-center gap-1 text-sm font-medium"
+                      onClick={() => setQueueOpen((v) => !v)}
+                    >
+                      {queueOpen ? (
+                        <ChevronDown className="size-4" />
+                      ) : (
+                        <ChevronRight className="size-4" />
+                      )}
+                      收集队列
+                      {collectActive > 0 && <Badge count={collectActive} size="small" />}
+                      <span className="text-muted-foreground ml-1 text-xs font-normal">
+                        最近 {collectJobs.length} 条
+                        {collectActive > 0 ? ` · 进行中 ${collectActive}` : ''}
+                      </span>
+                    </button>
+                    {queueOpen && (
+                      <Table<SeedCollectionJob>
+                        className="mt-2"
+                        columns={jobColumns}
+                        dataSource={collectJobs}
+                        rowKey="id"
+                        loading={collectJobsQuery.isLoading}
+                        size="small"
+                        pagination={false}
+                      />
+                    )}
+                  </div>
+                </>
               )}
             </div>
           </Card>

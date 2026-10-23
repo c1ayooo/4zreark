@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -39,14 +40,22 @@ type TechCluster struct {
 	SiteCount int64  `json:"site_count"`
 }
 
+// AppOption 是「按指纹筛选」下拉的候选：指纹规则名或技术栈名 + 命中站点数。
+type AppOption struct {
+	Name      string `json:"name"`
+	Category  string `json:"category"`
+	SiteCount int    `json:"site_count"`
+}
+
 // ClusterRepo 负责图标存取与两个聚类视图。
 type ClusterRepo interface {
 	UpsertIcon(ctx context.Context, in IconInput) error
 	AttachIconToSite(ctx context.Context, siteID int64, sha256 string, mmh3 int64) error
 	GetIcon(ctx context.Context, sha256 string) (*IconInput, error)
 
-	IconClusters(ctx context.Context, projectID int64, q string, page, pageSize int) ([]*IconCluster, int64, error)
-	TechClusters(ctx context.Context, projectID int64, q string, page, pageSize int) ([]*TechCluster, int64, error)
+	IconClusters(ctx context.Context, projectID int64, q, app string, page, pageSize int) ([]*IconCluster, int64, error)
+	TechClusters(ctx context.Context, projectID int64, q, app string, page, pageSize int) ([]*TechCluster, int64, error)
+	AppOptions(ctx context.Context, q string, limit int) ([]*AppOption, error)
 }
 
 type clusterRepo struct{ r *Repo }
@@ -90,7 +99,7 @@ func (c *clusterRepo) GetIcon(ctx context.Context, sha256 string) (*IconInput, e
 	return &in, nil
 }
 
-func (c *clusterRepo) IconClusters(ctx context.Context, projectID int64, q string, page, pageSize int) ([]*IconCluster, int64, error) {
+func (c *clusterRepo) IconClusters(ctx context.Context, projectID int64, q, app string, page, pageSize int) ([]*IconCluster, int64, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -106,6 +115,10 @@ func (c *clusterRepo) IconClusters(ctx context.Context, projectID int64, q strin
 	if q != "" {
 		b.parts = append(b.parts, "s.host ILIKE "+b.ph())
 		b.args = append(b.args, "%"+q+"%")
+	}
+	if app != "" {
+		b.parts = append(b.parts, appExistsCond(b.ph(), b.ph()))
+		b.args = append(b.args, strings.ToLower(app), "%"+escapeLike(strings.ToLower(app))+"%")
 	}
 
 	var total int64
@@ -145,7 +158,7 @@ func (c *clusterRepo) IconClusters(ctx context.Context, projectID int64, q strin
 	return out, total, rows.Err()
 }
 
-func (c *clusterRepo) TechClusters(ctx context.Context, projectID int64, q string, page, pageSize int) ([]*TechCluster, int64, error) {
+func (c *clusterRepo) TechClusters(ctx context.Context, projectID int64, q, app string, page, pageSize int) ([]*TechCluster, int64, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -161,6 +174,10 @@ func (c *clusterRepo) TechClusters(ctx context.Context, projectID int64, q strin
 	if q != "" {
 		b.parts = append(b.parts, "s.host ILIKE "+b.ph())
 		b.args = append(b.args, "%"+q+"%")
+	}
+	if app != "" {
+		b.parts = append(b.parts, appExistsCond(b.ph(), b.ph()))
+		b.args = append(b.args, strings.ToLower(app), "%"+escapeLike(strings.ToLower(app))+"%")
 	}
 
 	// 一个站点在同一技术名下只算一次
@@ -194,4 +211,46 @@ func (c *clusterRepo) TechClusters(ctx context.Context, projectID int64, q strin
 		out = append(out, &tc)
 	}
 	return out, total, rows.Err()
+}
+
+// AppOptions 给「按指纹筛选」下拉出候选：指纹规则命中（fingerprint_hits×rules）
+// 与站点技术栈（sites.tech）取并集，按命中站点数倒序。q 对名称做 ILIKE 前缀外的
+// 包含匹配，limit 截断候选数。计数是两种来源的站点数之和，用于排序与展示，
+// 与 app 谓词的精确口径可能有出入（同站点双源计数）。
+func (c *clusterRepo) AppOptions(ctx context.Context, q string, limit int) ([]*AppOption, error) {
+	if limit < 1 || limit > 1000 {
+		limit = 200
+	}
+	pattern := "%" + escapeLike(q) + "%"
+	rows, err := c.r.pool.Query(ctx, `
+		SELECT u.name, max(u.category), sum(u.site_count)::int
+		  FROM (
+		        SELECT fr.name, fr.category, count(DISTINCT fh.site_id) AS site_count
+		          FROM fingerprint_hits fh
+		          JOIN fingerprint_rules fr ON fr.id = fh.rule_id
+		         GROUP BY fr.name, fr.category
+		        UNION ALL
+		        SELECT x.tech, '', count(DISTINCT s.id)
+		          FROM sites s, jsonb_array_elements_text(s.tech) x(tech)
+		         WHERE x.tech <> ''
+		         GROUP BY x.tech
+		       ) u
+		 WHERE ($1 = '' OR u.name ILIKE $2)
+		 GROUP BY u.name
+		 ORDER BY sum(u.site_count) DESC, u.name
+		 LIMIT $3`, q, pattern, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []*AppOption{}
+	for rows.Next() {
+		var o AppOption
+		if err := rows.Scan(&o.Name, &o.Category, &o.SiteCount); err != nil {
+			return nil, err
+		}
+		out = append(out, &o)
+	}
+	return out, rows.Err()
 }

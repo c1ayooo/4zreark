@@ -323,6 +323,15 @@ func main() {
 		toolRuntimeService := service.GetToolRuntimeService()
 		defer toolRuntimeService.Stop()
 		log.Println("Tool runtime service started (gogo/spray/katana/rem)")
+
+		// 资产巡航 v2：被动发现（新内容候选）+ 站点内容慢速巡检（hash 判变→慢爬）
+		discoveryService := service.GetDiscoveryService()
+		discoveryService.Start()
+		defer discoveryService.Stop()
+		siteWatchService := service.GetSiteWatchService()
+		siteWatchService.Start()
+		defer siteWatchService.Stop()
+		log.Println("Asset cruise v2 started (discovery + site watch)")
 	}
 
 	// Start vuln intel poller（9 个公开漏洞源 → vuln_intel）

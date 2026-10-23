@@ -22,7 +22,7 @@ var Registry = []ProviderKind{
 	{Name: "tyc", Label: "天眼查", Auth: "cookie", Available: true, Hint: "网页版登录 Cookie，或请求头 x-auth-token 值（auth_token 自动提取）"},
 	{Name: "kuaicha", Label: "快查", Auth: "cookie", Available: true, Hint: "kuaicha365.com 网页版登录 Cookie"},
 	{Name: "fengniao", Label: "风鸟", Auth: "account", Available: true, Hint: "账号密码自动登录（密码登录无验证码）或网页版 Cookie"},
-	{Name: "qcc", Label: "企查查", Auth: "pending", Available: false, Hint: "强反爬+字段加密，待接入校准"},
+	{Name: "qcc", Label: "企查查", Auth: "cookie", Available: true, Hint: "网页版 Cookie（需含 QCCSESSID + acw_tc；走 SSR 页面解析，含注册资本）"},
 	{Name: "xiaolanben", Label: "小蓝本", Auth: "account", Available: true, Hint: "账号密码登录（RSA 加密）；查询经平台内嵌无头浏览器承载上游签名"},
 }
 
@@ -43,7 +43,7 @@ func NewProvider(provider string, cfg map[string]string, proxyURL string) (Provi
 		}
 		return NewFengniaoProvider(cfg["cookie"], effectiveProxy(cfg, proxyURL))
 	case "qcc":
-		return nil, fmt.Errorf("企查查(qcc) 适配器待接入：上游有强反爬与字段加密，需校准端点后启用；建议优先使用爱企查/天眼查")
+		return NewQccProvider(cfg["cookie"], effectiveProxy(cfg, proxyURL))
 	case "xiaolanben":
 		return NewXiaolanbenProvider(cfg["username"], cfg["password"], effectiveProxy(cfg, proxyURL))
 	default:

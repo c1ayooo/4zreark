@@ -420,6 +420,17 @@ func (h *AssetHandler) TechClusters(c *gin.Context) {
 		"view": "technologies", "view_supported": true})
 }
 
+// AppOptions 「按指纹筛选」下拉候选。GET /api/assets/apps?q=&limit=
+func (h *AssetHandler) AppOptions(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "200"))
+	items, err := h.assets.AppOptions(c.Request.Context(), c.Query("q"), limit)
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"items": items})
+}
+
 // IconImage 输出图标字节。GET /api/asset-icons/:sha256
 // 放在公开组：图标本身就是公开站点的 favicon，且 <img> 标签带不了 Authorization。
 func (h *AssetHandler) IconImage(c *gin.Context) {

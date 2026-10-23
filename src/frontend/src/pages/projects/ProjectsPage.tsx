@@ -10,6 +10,7 @@ import {
   Layers,
   Plus,
   RefreshCw,
+  Trash2,
 } from 'lucide-react'
 import { Button, Card, Skeleton, Tag } from 'antd'
 
@@ -34,7 +35,15 @@ function Field({ label, value }: { label: string; value: ReactNode }) {
   )
 }
 
-function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void }) {
+function ProjectCard({
+  project,
+  onOpen,
+  onDelete,
+}: {
+  project: Project
+  onOpen: () => void
+  onDelete: () => void
+}) {
   return (
     <Card
       role="button"
@@ -128,6 +137,24 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
           <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
         </span>
       </div>
+          {/* 底部操作条：整体仍可点击打开；删除走详情页输码流程（唯一确认入口） */}
+      <div className="flex items-center justify-between border-t pt-3">
+        <span className="text-muted-foreground text-xs">
+          {project.seed_count != null ? `${project.seed_count} 种子 · ` : '点击查看详情'}
+        </span>
+        <Button
+          type="text"
+          size="small"
+          danger
+          onClick={(e) => {
+            e.stopPropagation()
+            onDelete()
+          }}
+        >
+          <Trash2 className="mr-1 h-3.5 w-3.5" />
+          删除
+        </Button>
+      </div>
     </Card>
   )
 }
@@ -216,7 +243,12 @@ export default function ProjectsPage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {list.map((p) => (
-            <ProjectCard key={p.id} project={p} onOpen={() => navigate(`/projects/${p.id}`)} />
+            <ProjectCard
+              key={p.id}
+              project={p}
+              onOpen={() => navigate(`/projects/${p.id}`)}
+              onDelete={() => navigate(`/projects/${p.id}?delete=1`)}
+            />
           ))}
         </div>
       )}

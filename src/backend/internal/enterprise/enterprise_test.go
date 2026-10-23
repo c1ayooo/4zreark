@@ -2,7 +2,6 @@ package enterprise
 
 import (
 	"context"
-	"strings"
 	"testing"
 )
 
@@ -31,8 +30,12 @@ func TestEffectiveProxyAndFactory(t *testing.T) {
 	if got := effectiveProxy(nil, "http://global:8080"); got != "http://global:8080" {
 		t.Errorf("无会话代理应回落全局，实际 %q", got)
 	}
-	if _, err := NewProvider("qcc", nil, ""); err == nil || !strings.Contains(err.Error(), "待接入") {
-		t.Errorf("qcc 应明确报待接入，实际 %v", err)
+	// qcc 已接入（Cookie 走 SSR 解析）：无 cookie 应报会话缺失，带 cookie 应构造成功
+	if _, err := NewProvider("qcc", nil, ""); err == nil || !IsSessionMissing(err) {
+		t.Errorf("qcc 无 cookie 应报会话缺失，实际 %v", err)
+	}
+	if _, err := NewProvider("qcc", map[string]string{"cookie": "QCCSESSID=x; acw_tc=y"}, ""); err != nil {
+		t.Errorf("qcc 带 cookie 应构造成功: %v", err)
 	}
 	if _, err := NewProvider("unknown", nil, ""); err == nil {
 		t.Error("未知 provider 应报错")

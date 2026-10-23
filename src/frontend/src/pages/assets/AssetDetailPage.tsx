@@ -14,7 +14,7 @@ import {
   Server,
   ShieldAlert,
 } from 'lucide-react'
-import { Button, Card, Descriptions, Skeleton, Table, Tag } from 'antd'
+import { Button, Card, Descriptions, Skeleton, Switch, Table, Tag } from 'antd'
 import type { TableProps } from 'antd'
 
 import {
@@ -26,6 +26,7 @@ import {
   type AssetVerification,
   type Site,
 } from '@/api/assets'
+import { discoveryApi } from '@/api/discovery'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate } from '@/lib/utils'
 
@@ -423,6 +424,29 @@ export default function AssetDetailPage() {
     enabled: validId,
   })
 
+  // 资产即站点，路由 ID 直接对应 /sites/:id 的巡检接口
+  const watchStatusQuery = useQuery({
+    queryKey: ['site-watch-status', idNum],
+    queryFn: () => discoveryApi.watchStatus(idNum),
+    enabled: validId,
+  })
+  const watch = watchStatusQuery.data?.data
+
+  const watchExcludeMutation = useMutation({
+    mutationFn: (excluded: boolean) => discoveryApi.setWatchExcluded(idNum, excluded),
+    onSuccess: () => {
+      toast({ title: '巡检设置已保存' })
+      queryClient.invalidateQueries({ queryKey: ['site-watch-status', idNum] })
+    },
+    onError: (e: any) => {
+      toast({
+        title: '保存巡检设置失败',
+        description: e?.message || '请稍后重试',
+        variant: 'destructive',
+      })
+    },
+  })
+
   const probe = useMutation({
     mutationFn: () => assetApi.probe(idNum),
     onSuccess: (res) => {
@@ -691,6 +715,42 @@ export default function AssetDetailPage() {
               <p className="text-muted-foreground border-t pt-2 text-xs">
                 {site.verification_reason}
               </p>
+            )}
+          </SectionCard>
+
+          <SectionCard
+            title="内容巡检"
+            description="巡航时抓取页面并比对内容指纹，用于发现挂马、黑页与改版。"
+          >
+            {watchStatusQuery.isLoading ? (
+              <Skeleton active title={false} paragraph={{ rows: 2 }} />
+            ) : !watch ? (
+              <p className="text-muted-foreground py-2 text-sm">暂时拿不到巡检状态</p>
+            ) : (
+              <>
+                <Descriptions
+                  column={1}
+                  size="small"
+                  className="text-sm"
+                  items={[
+                    { key: 'checked', label: '上次检查', children: fmtDate(watch.content_checked_at) },
+                    { key: 'changed', label: '最近变更', children: fmtDate(watch.content_changed_at) },
+                  ]}
+                />
+                <div className="flex items-start justify-between gap-3 border-t pt-3">
+                  <div>
+                    <div className="text-sm font-medium">免巡检</div>
+                    <p className="text-muted-foreground mt-1 text-xs">
+                      打开后巡航跳过此站点的内容比对，适合登录页、无意义页面。
+                    </p>
+                  </div>
+                  <Switch
+                    checked={watch.watch_excluded}
+                    loading={watchExcludeMutation.isPending}
+                    onChange={(checked) => watchExcludeMutation.mutate(checked)}
+                  />
+                </div>
+              </>
             )}
           </SectionCard>
 

@@ -532,12 +532,15 @@ func (m *NotifyManager) NotifyTaskComplete(taskName string, taskID string, succe
 }
 
 // NotifyAssetChange 发送资产变更通知
-func (m *NotifyManager) NotifyAssetChange(changeType, assetInfo string) {
+// NotifyAssetChange 资产变更通知。changeType 用中文短句（进通知标题），
+// extra 会随站内通知落库（前端 notificationLink 优先读 extra.link 做跳转）。
+func (m *NotifyManager) NotifyAssetChange(changeType, assetInfo string, extra map[string]interface{}) {
 	msg := &NotifyMessage{
 		Level:     NotifyLevelInfo,
 		Title:     "资产变更: " + changeType,
 		Content:   assetInfo,
 		Source:    "asset_monitor",
+		Extra:     extra,
 		Timestamp: time.Now(),
 	}
 

@@ -293,10 +293,11 @@ func (s *AssetService) IconClusters(ctx context.Context, projectID int64, q stri
 	if r == nil {
 		return nil, 0, errors.New("数据层未初始化")
 	}
-	// 聚类只按 host ILIKE 过滤，吃不下 DSL；把 text="…" 还原成检索词，
-	// 全局搜索跳过来后切到聚类视图不出空列表。
-	q = repo.ExtractSearchTerm(q)
-	return r.Clusters().IconClusters(ctx, projectID, q, page, pageSize)
+	// 聚类只按 host ILIKE 过滤，吃不下 DSL；把 text="…" 还原成检索词、app="…"
+	// 单独传给聚类 SQL，全局搜索或指纹筛选跳过来后切到聚类视图不出空列表。
+	text := repo.ExtractSearchTerm(q)
+	app := repo.ExtractAppTerm(q)
+	return r.Clusters().IconClusters(ctx, projectID, text, app, page, pageSize)
 }
 
 // TechClusters 按技术栈聚类（T4 第二步）。
@@ -305,8 +306,18 @@ func (s *AssetService) TechClusters(ctx context.Context, projectID int64, q stri
 	if r == nil {
 		return nil, 0, errors.New("数据层未初始化")
 	}
-	q = repo.ExtractSearchTerm(q)
-	return r.Clusters().TechClusters(ctx, projectID, q, page, pageSize)
+	text := repo.ExtractSearchTerm(q)
+	app := repo.ExtractAppTerm(q)
+	return r.Clusters().TechClusters(ctx, projectID, text, app, page, pageSize)
+}
+
+// AppOptions 「按指纹筛选」下拉候选：指纹规则命中与技术栈名并集。
+func (s *AssetService) AppOptions(ctx context.Context, q string, limit int) ([]*repo.AppOption, error) {
+	r := repo.Default()
+	if r == nil {
+		return nil, errors.New("数据层未初始化")
+	}
+	return r.Clusters().AppOptions(ctx, q, limit)
 }
 
 // IconBytes 读一张图标的原始字节（给 /api/asset-icons/:sha256 用）。

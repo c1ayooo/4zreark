@@ -26,9 +26,11 @@ func (h *EnterpriseHandler) List(c *gin.Context) {
 	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
+	minCap, _ := strconv.ParseFloat(c.Query("min_capital_wan"), 64)
 	items, total, err := h.svc.List(c.Request.Context(), repo.EnterpriseFilter{
 		ProjectID: projectID, Query: c.Query("q"), Status: c.Query("status"),
-		Page: page, PageSize: pageSize,
+		MinRegisteredCapitalWan: minCap,
+		Page:                    page, PageSize: pageSize,
 	})
 	if err != nil {
 		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())

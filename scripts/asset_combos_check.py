@@ -176,6 +176,63 @@ def main():
                     reds.append(f"[recent_record.value 空 site={s['id']}] {json.dumps(r, ensure_ascii=False)[:160]}")
                     break
 
+    # 指纹筛选（app="…"）：候选接口 + 四种粒度 + 聚类视图 + 不存在的指纹
+    total_checked += 1
+    url = BASE + "/api/assets/apps?" + urllib.parse.urlencode({"limit": 200})
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {TOKEN}"})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(req, timeout=30) as resp:
+            payload = json.loads(resp.read())
+        app_items = (payload.get("data") or {}).get("items") or []
+        if not app_items:
+            reds.append("[候选接口空] /api/assets/apps 无任何指纹/技术栈候选")
+    except Exception as e:  # noqa: BLE001
+        app_items = []
+        reds.append(f"[候选接口失败] /api/assets/apps :: {e}")
+    if app_items:
+        app_name = app_items[0]["name"]
+        app_q = f'app="{app_name}"'
+        app_qq = urllib.parse.quote(app_q)
+        for kind in KINDS:
+            total_checked += 1
+            req = urllib.request.Request(
+                BASE + f"/api/assets?kind={kind}&catalog=all&page_size=20&q={app_qq}",
+                headers={"Authorization": f"Bearer {TOKEN}"})
+            try:
+                with opener.open(req, timeout=30) as resp:
+                    payload = json.loads(resp.read())
+                rows = (payload.get("data") or {}).get("items") or []
+                if payload.get("code") != 0:
+                    reds.append(f"[app 筛选 code={payload.get('code')}] kind={kind} :: {str(payload.get('message'))[:120]}")
+                elif kind == "site" and not rows:
+                    reds.append(f"[app 筛选站点 0 行] app={app_name}")
+            except Exception as e:  # noqa: BLE001
+                reds.append(f"[app 筛选失败] kind={kind} :: {e}")
+        for ep in ("icons", "technologies"):
+            total_checked += 1
+            req = urllib.request.Request(
+                BASE + f"/api/assets/{ep}?page_size=20&q={app_qq}",
+                headers={"Authorization": f"Bearer {TOKEN}"})
+            try:
+                with opener.open(req, timeout=30) as resp:
+                    payload = json.loads(resp.read())
+                if payload.get("code") != 0:
+                    reds.append(f"[app 筛选聚类失败 code={payload.get('code')}] /{ep} :: {str(payload.get('message'))[:120]}")
+            except Exception as e:  # noqa: BLE001
+                reds.append(f"[app 筛选聚类失败] /{ep} :: {e}")
+        total_checked += 1
+        req = urllib.request.Request(
+            BASE + "/api/assets?kind=site&page_size=20&q=" + urllib.parse.quote('app="__no_such_fp__"'),
+            headers={"Authorization": f"Bearer {TOKEN}"})
+        try:
+            with opener.open(req, timeout=30) as resp:
+                payload = json.loads(resp.read())
+            if payload.get("code") != 0:
+                reds.append(f"[不存在指纹应 200 空列表] code={payload.get('code')}")
+        except Exception as e:  # noqa: BLE001
+            reds.append(f"[不存在指纹请求失败] {e}")
+
     print(f"checked {total_checked} combos, {len(reds)} red")
     # 按故障类聚合（去掉组合标签），全量输出
     import re

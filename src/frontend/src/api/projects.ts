@@ -102,6 +102,22 @@ export interface SeedPreviewResult {
   empty_reason?: string
 }
 
+export interface ProjectDeleteResult {
+  project_id: number
+  code: string
+  name: string
+  sites: number
+  records: number
+  endpoints: number
+  seeds: number
+  plans: number
+  runs: number
+  run_targets: number
+  tasks: number
+  scan_results: number
+  cruise_tasks: number
+}
+
 export const projectApi = {
   list: () => api.get<unknown, ApiResponse<Project[]>>('/projects'),
   get: (id: number) => api.get<unknown, ApiResponse<Project>>(`/projects/${id}`),
@@ -119,6 +135,11 @@ export const projectApi = {
     }),
   clearIcon: (id: number) =>
     api.delete<unknown, ApiResponse<Project>>(`/projects/${id}/icon`),
+  // 永久删除项目：confirm_code 必须与项目编码完全一致；级联清任务/资产/巡航等全部归属数据
+  delete: (id: number, confirm_code: string) =>
+    api.delete<unknown, ApiResponse<ProjectDeleteResult>>(`/projects/${id}`, {
+      data: { confirm_code },
+    }),
 
   seeds: (projectId: number) =>
     api.get<unknown, ApiResponse<Seed[]>>('/seeds', { params: { project_id: projectId } }),
@@ -178,7 +199,7 @@ export const seedKindLabel: Record<SeedKind, string> = {
   domain: '域名',
   cidr: '网段',
   cert: '证书组织',
-  company: '公司',
+  company: '公司(ICP)',
   repo: '代码仓库',
   app: '应用',
   dict: '字典',

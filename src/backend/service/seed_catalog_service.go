@@ -152,7 +152,7 @@ func (s *SeedCatalogService) CreateBatch(ctx context.Context, req SeedBatchReque
 			res.Items = append(res.Items, out)
 			continue
 		}
-		if item.IntervalHours < 0 || item.IntervalHours > 720 || (item.IntervalHours > 0 && item.IntervalHours < 1) {
+		if item.IntervalHours < 0 || item.IntervalHours > 720 {
 			out.Status = "invalid"
 			out.Error = "interval_hours 需在 1..720"
 			res.Invalid++

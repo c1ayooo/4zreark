@@ -25,7 +25,18 @@ api.interceptors.request.use(
 // Response interceptor
 api.interceptors.response.use(
   (response) => {
-    return response.data
+    const body = response.data
+    // 后端业务错误统一返回 HTTP 200 + code≠0（utils.Error），只看 HTTP 状态码
+    // 会把这类错误当成功吞掉（失败弹「成功」、预览失败静默无提示）。
+    // 统一在这里转 reject，让调用方的 catch / onError 真正生效。
+    if (body && typeof body === 'object' && !Array.isArray(body) && 'code' in body && body.code !== 0) {
+      // 1013 = 强制改密：默认口令未改，除改密闭环外全部拒绝。
+      if (body.code === 1013 && !window.location.pathname.startsWith('/settings')) {
+        window.location.href = '/settings?must_change_password=1'
+      }
+      return Promise.reject(body)
+    }
+    return body
   },
   (error) => {
     if (error.response?.status === 401) {
