@@ -7,13 +7,11 @@ import {
   Input,
   Progress,
   Select,
-  Table,
   Tabs,
   Tag,
 } from 'antd'
-import type { ColumnsType } from 'antd/es/table'
 import { taskApi, type Task } from '@/api/tasks'
-import { resultApi, type SubdomainResult, type ResultType } from '@/api/results'
+import { resultApi, type ResultType } from '@/api/results'
 import TaskTopologyView from '@/components/tasks/TaskTopologyView'
 import TaskAssetsView from '@/components/tasks/TaskAssetsView'
 import { useToast } from '@/components/ui/use-toast'
@@ -23,21 +21,25 @@ import TaskSettingsModal from './components/TaskSettingsModal'
 import EditConfigModal from './components/EditConfigModal'
 import { getStatusLabel } from './taskMeta'
 import VulnDetailModal from './components/VulnDetailModal'
-import { cn, formatDate, getSeverityColor, getStatusColor } from '@/lib/utils'
+import {
+  CrawlerResultsTable,
+  DirScanResultsTable,
+  GenericResultsTable,
+  PortResultsTable,
+  SensitiveResultsTable,
+  ServiceResultsTable,
+  SubdomainResultsTable,
+  TakeoverResultsTable,
+  UrlResultsTable,
+  VulnResultsTable,
+  type ResultsTableCtx,
+} from './components/results'
+import { cn, formatDate, getStatusColor } from '@/lib/utils'
 import { 
   ArrowLeft, Play, Pause, Square, Trash2, RotateCcw, 
   Search, Download, Settings, ChevronDown,
-  RefreshCw, ExternalLink, Eye, Pencil
+  RefreshCw, Pencil
 } from 'lucide-react'
-
-// 结果表通用的「序号」列:跨页连续编号(第 N 页第 M 行 = (N-1)*size+M+1)。
-const indexColumn = (page: number, pageSize: number) => ({
-  title: '序号',
-  key: 'index',
-  width: 64,
-  className: 'text-muted-foreground',
-  render: (_: unknown, __: unknown, index: number) => (page - 1) * pageSize + index + 1,
-})
 
 // Tab 配置 - ID 对应后端 ResultType；assets 是任务级资产视图（非结果类型）
 type TaskTabId = ResultType | 'assets'
@@ -56,11 +58,6 @@ const tabConfig: { id: TaskTabId; label: string }[] = [
   { id: 'service', label: 'Web服务' },
   { id: 'topology', label: '资产星图' },
 ]
-
-// shadcn Badge 变体 → antd Tag 的等价 className 映射（保持原视觉语义）
-const TAG_PRIMARY = 'border-transparent bg-primary text-primary-foreground'
-const TAG_SECONDARY = 'border-transparent bg-secondary text-secondary-foreground'
-const TAG_DESTRUCTIVE = 'border-transparent bg-destructive text-destructive-foreground'
 
 export default function TaskDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -346,749 +343,46 @@ export default function TaskDetailPage() {
     if (ok) deleteMutation.mutate()
   }
 
-  // antd Table 服务端分页：接现有 page/pageSize 状态（替代原手写分页 footer）
-  const tablePagination = {
-    current: page,
-    pageSize,
+  // 10 个结果表共享的状态打包：表格只读字段，翻页/勾选/查看漏洞详情回调写回页面状态
+  const resultsCtx: ResultsTableCtx = {
+    results,
     total,
-    showQuickJumper: true,
-    showSizeChanger: true,
-    showTotal: (t: number) => `共 ${t} 条结果`,
-    onChange: (p: number, s: number) => {
+    page,
+    pageSize,
+    loading: isResultsLoading,
+    selectedRows,
+    onSelectedRowsChange: setSelectedRows,
+    onPageChange: (p, s) => {
       setPage(p)
       setPageSize(s)
     },
-  }
-
-  // 行选择：key 统一为 string（port 表为 ip，其余为 id）
-  const tableRowSelection = {
-    selectedRowKeys: selectedRows,
-    onChange: (keys: React.Key[]) => setSelectedRows(keys.map(String)),
-    columnWidth: 48,
+    onViewVuln: setSelectedVuln,
   }
 
   // 渲染不同类型的表格
   const renderTable = () => {
     switch (currentTab) {
       case 'subdomain':
-        return renderSubdomainTable()
+        return <SubdomainResultsTable ctx={resultsCtx} />
       case 'takeover':
-        return renderTakeoverTable()
+        return <TakeoverResultsTable ctx={resultsCtx} />
       case 'url':
-        return renderURLTable()
+        return <UrlResultsTable ctx={resultsCtx} />
       case 'sensitive':
-        return renderSensitiveTable()
+        return <SensitiveResultsTable ctx={resultsCtx} />
       case 'port':
-        return renderPortTable()
+        return <PortResultsTable ctx={resultsCtx} />
       case 'service':
-        return renderServiceTable()
+        return <ServiceResultsTable ctx={resultsCtx} />
       case 'dirscan':
-        return renderDirScanTable()
+        return <DirScanResultsTable ctx={resultsCtx} />
       case 'crawler':
-        return renderCrawlerTable()
+        return <CrawlerResultsTable ctx={resultsCtx} />
       case 'vuln':
-        return renderVulnTable()
+        return <VulnResultsTable ctx={resultsCtx} />
       default:
-        return renderGenericTable()
+        return <GenericResultsTable ctx={resultsCtx} />
     }
-  }
-
-  const renderSubdomainTable = () => {
-    const columns: ColumnsType<SubdomainResult> = [
-      indexColumn(page, pageSize),
-      {
-        title: '子域名',
-        key: 'subdomain',
-        render: (_, item) => {
-          // 兼容不同数据格式：subdomain 或 domain 字段
-          const subdomainName = item.subdomain || item.domain || '-'
-          return (
-            <a 
-              href={`https://${subdomainName}`} 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="text-primary hover:underline flex items-center gap-1"
-            >
-              {subdomainName}
-              <ExternalLink className="h-3 w-3" />
-            </a>
-          )
-        },
-      },
-      {
-        title: 'IP',
-        key: 'ips',
-        width: 150,
-        className: 'text-muted-foreground font-mono text-xs',
-        render: (_, item) => item.ips?.join(', ') || (item as unknown as { ip?: string }).ip || '-',
-      },
-      { title: '标题', key: 'title', width: 200, ellipsis: true, render: (_, item) => item.title || '-' },
-      {
-        title: '状态码',
-        key: 'statusCode',
-        width: 90,
-        render: (_, item) => (
-          item.statusCode && item.statusCode > 0 ? (
-            <Tag className={item.statusCode === 200 ? TAG_PRIMARY : TAG_SECONDARY}>
-              {item.statusCode}
-            </Tag>
-          ) : (
-            <Tag className="text-muted-foreground">-</Tag>
-          )
-        ),
-      },
-      {
-        title: 'CDN',
-        key: 'cdn',
-        width: 120,
-        render: (_, item) => (
-          item.cdn ? (
-            <Tag>{item.cdnName || item.cdnProvider || 'CDN'}</Tag>
-          ) : '-'
-        ),
-      },
-      {
-        title: '指纹',
-        key: 'fingerprint',
-        width: 200,
-        render: (_, item) => (
-          (item.technologies?.slice(0, 2) || item.fingerprint?.slice(0, 2))?.map((fp: string) => (
-            <Tag key={fp} className="mr-1 text-xs">{fp}</Tag>
-          )) || '-'
-        ),
-      },
-      { title: '时间', key: 'createdAt', width: 160, className: 'text-muted-foreground', render: (_, item) => formatDate(item.createdAt) },
-    ]
-    return (
-      <Table
-        rowKey="id"
-        columns={columns}
-        dataSource={results}
-        rowSelection={tableRowSelection}
-        pagination={tablePagination}
-        locale={{ emptyText: resultsLoading ? '加载中...' : '暂无数据' }}
-        sticky
-        scroll={{ x: 1000 }}
-      />
-    )
-  }
-
-  // 子域名接管检测结果表格
-  const renderTakeoverTable = () => {
-    const columns: ColumnsType<Record<string, unknown>> = [
-      indexColumn(page, pageSize),
-      { title: '子域名', key: 'subdomain', width: 220, className: 'font-mono', render: (_, item) => item.subdomain as string },
-      { title: 'CNAME', key: 'cname', width: 200, ellipsis: true, className: 'font-mono text-xs', render: (_, item) => item.cname as string || '-' },
-      { title: '服务商', key: 'provider', width: 120, render: (_, item) => <Tag>{item.provider as string || '-'}</Tag> },
-      {
-        title: '风险等级',
-        key: 'severity',
-        width: 100,
-        render: (_, item) => (
-          <Tag 
-            className={
-              (item.severity as string) === 'high' 
-                ? TAG_DESTRUCTIVE
-                : (item.severity as string) === 'medium'
-                  ? TAG_SECONDARY
-                  : undefined
-            }
-          >
-            {(item.severity as string) || '高'}
-          </Tag>
-        ),
-      },
-      {
-        title: '原因',
-        key: 'reason',
-        width: 300,
-        ellipsis: true,
-        render: (_, item) => <span title={item.reason as string}>{item.reason as string || '-'}</span>,
-      },
-      { title: '时间', key: 'createdAt', width: 160, className: 'text-muted-foreground', render: (_, item) => formatDate(item.createdAt as string) },
-    ]
-    return (
-      <Table
-        rowKey="id"
-        columns={columns}
-        dataSource={results}
-        rowSelection={tableRowSelection}
-        pagination={tablePagination}
-        locale={{ emptyText: resultsLoading ? '加载中...' : '暂无数据' }}
-        rowClassName={(item) => ((item.vulnerable as boolean) ? 'bg-destructive/5' : '')}
-        sticky
-        scroll={{ x: 1000 }}
-      />
-    )
-  }
-
-  const renderURLTable = () => {
-    const columns: ColumnsType<Record<string, unknown>> = [
-      indexColumn(page, pageSize),
-      {
-        title: 'URL',
-        key: 'url',
-        width: 400,
-        ellipsis: true,
-        render: (_, item) => (
-          <a 
-            href={item.url as string} 
-            target="_blank" 
-            rel="noopener noreferrer"
-            className="text-primary hover:underline"
-          >
-            {item.url as string}
-          </a>
-        ),
-      },
-      { title: '方法', key: 'method', width: 90, render: (_, item) => <Tag>{(item.method as string) || 'GET'}</Tag> },
-      {
-        title: '状态码',
-        key: 'statusCode',
-        width: 90,
-        render: (_, item) => (
-          <Tag className={(item.statusCode as number) === 200 ? TAG_PRIMARY : TAG_SECONDARY}>
-            {item.statusCode as number || '-'}
-          </Tag>
-        ),
-      },
-      { title: '类型', key: 'contentType', width: 160, className: 'text-muted-foreground', render: (_, item) => item.contentType as string || '-' },
-      { title: '长度', key: 'length', width: 90, className: 'text-muted-foreground', render: (_, item) => item.length as number || '-' },
-      { title: '时间', key: 'createdAt', width: 160, className: 'text-muted-foreground', render: (_, item) => formatDate(item.createdAt as string) },
-    ]
-    return (
-      <Table
-        rowKey="id"
-        columns={columns}
-        dataSource={results}
-        rowSelection={tableRowSelection}
-        pagination={tablePagination}
-        locale={{ emptyText: resultsLoading ? '加载中...' : '暂无数据' }}
-        sticky
-        scroll={{ x: 1000 }}
-      />
-    )
-  }
-
-  const renderSensitiveTable = () => {
-    const columns: ColumnsType<Record<string, unknown>> = [
-      indexColumn(page, pageSize),
-      {
-        title: 'URL',
-        key: 'url',
-        width: 300,
-        ellipsis: true,
-        render: (_, item) => (
-          <a 
-            href={item.url as string} 
-            target="_blank" 
-            rel="noopener noreferrer"
-            className="text-primary hover:underline"
-          >
-            {item.url as string}
-          </a>
-        ),
-      },
-      { title: '类型', key: 'type', width: 110, render: (_, item) => <Tag>{item.type as string}</Tag> },
-      { title: '模式', key: 'pattern', width: 140, className: 'text-muted-foreground', render: (_, item) => item.pattern as string },
-      {
-        title: '匹配内容',
-        key: 'matches',
-        width: 200,
-        ellipsis: true,
-        className: 'font-mono text-xs',
-        render: (_, item) => (
-          <span title={Array.isArray(item.matches) ? (item.matches as string[]).join(', ') : ''}>
-            {Array.isArray(item.matches) ? (item.matches as string[]).slice(0, 2).join(', ') : '-'}
-            {Array.isArray(item.matches) && (item.matches as string[]).length > 2 && '...'}
-          </span>
-        ),
-      },
-      {
-        title: '级别',
-        key: 'severity',
-        width: 100,
-        render: (_, item) => (
-          <Tag 
-            className={
-              (item.severity as string) === 'critical' || (item.severity as string) === 'high' ? TAG_DESTRUCTIVE :
-              (item.severity as string) === 'medium' ? TAG_PRIMARY : TAG_SECONDARY
-            }
-          >
-            {item.severity as string}
-          </Tag>
-        ),
-      },
-      { title: '位置', key: 'location', width: 110, className: 'text-muted-foreground', render: (_, item) => item.location as string },
-      { title: '时间', key: 'createdAt', width: 160, className: 'text-muted-foreground', render: (_, item) => formatDate(item.createdAt as string) },
-    ]
-    return (
-      <Table
-        rowKey="id"
-        columns={columns}
-        dataSource={results}
-        rowSelection={tableRowSelection}
-        pagination={tablePagination}
-        locale={{ emptyText: resultsLoading ? '加载中...' : '暂无数据' }}
-        sticky
-        scroll={{ x: 1100 }}
-      />
-    )
-  }
-
-  const renderPortTable = () => {
-    const columns: ColumnsType<Record<string, unknown>> = [
-      indexColumn(page, pageSize),
-      { title: 'IP', key: 'ip', width: 160, className: 'font-mono', render: (_, item) => item.ip as string },
-      {
-        title: '端口',
-        key: 'ports',
-        render: (_, item) => {
-          const ports = (item.ports as string[]) || []
-          return (
-            <div className="flex flex-wrap gap-1">
-              {ports.slice(0, 10).map((port, i) => (
-                <Tag key={i} className="text-xs">
-                  {port}
-                </Tag>
-              ))}
-              {ports.length > 10 && (
-                <Tag className={cn(TAG_SECONDARY, 'text-xs')}>+{ports.length - 10}</Tag>
-              )}
-            </div>
-          )
-        },
-      },
-      {
-        title: '服务',
-        key: 'services',
-        render: (_, item) => {
-          const services = (item.services as string[]) || []
-          return (
-            <div className="flex flex-wrap gap-1">
-              {[...new Set(services.filter(Boolean))].slice(0, 5).map((s: string, i) => (
-                <Tag key={i} className={cn(TAG_SECONDARY, 'text-xs')}>{s}</Tag>
-              ))}
-              {[...new Set(services.filter(Boolean))].length > 5 && (
-                <Tag className="text-xs">+{[...new Set(services.filter(Boolean))].length - 5}</Tag>
-              )}
-            </div>
-          )
-        },
-      },
-      { title: '时间', key: 'created_at', width: 160, className: 'text-muted-foreground', render: (_, item) => formatDate(item.created_at as string) },
-    ]
-    return (
-      <Table
-        rowKey="ip"
-        columns={columns}
-        dataSource={results}
-        rowSelection={tableRowSelection}
-        pagination={tablePagination}
-        locale={{ emptyText: isResultsLoading ? '加载中...' : '暂无数据' }}
-        sticky
-        scroll={{ x: 900 }}
-      />
-    )
-  }
-
-  const renderServiceTable = () => {
-    const columns: ColumnsType<Record<string, unknown>> = [
-      indexColumn(page, pageSize),
-      {
-        title: 'URL',
-        key: 'url',
-        render: (_, item) => (
-          <a 
-            href={item.url as string} 
-            target="_blank" 
-            rel="noopener noreferrer"
-            className="text-primary hover:underline flex items-center gap-1 max-w-xs truncate"
-          >
-            {item.url as string}
-            <ExternalLink className="h-3 w-3 flex-shrink-0" />
-          </a>
-        ),
-      },
-      {
-        title: '标题',
-        key: 'title',
-        width: 200,
-        ellipsis: true,
-        render: (_, item) => <span title={item.title as string}>{item.title as string || '-'}</span>,
-      },
-      {
-        title: '状态码',
-        key: 'status_code',
-        width: 90,
-        render: (_, item) => (
-          <Tag 
-            className={
-              (item.status_code as number) >= 200 && (item.status_code as number) < 300 ? TAG_PRIMARY :
-              (item.status_code as number) >= 300 && (item.status_code as number) < 400 ? TAG_SECONDARY :
-              (item.status_code as number) >= 400 ? TAG_DESTRUCTIVE : undefined
-            }
-          >
-            {item.status_code as number || '-'}
-          </Tag>
-        ),
-      },
-      { title: 'Server', key: 'server', width: 140, className: 'text-muted-foreground', render: (_, item) => item.server as string || '-' },
-      {
-        title: '技术栈',
-        key: 'technologies',
-        width: 180,
-        render: (_, item) => (
-          (item.technologies as string[])?.slice(0, 3).map((tech: string) => (
-            <Tag key={tech} className="mr-1 text-xs">{tech}</Tag>
-          ))
-        ),
-      },
-      {
-        title: '指纹',
-        key: 'fingerprints',
-        width: 160,
-        render: (_, item) => (
-          (item.fingerprints as string[])?.slice(0, 2).map((fp: string) => (
-            <Tag key={fp} className={cn(TAG_SECONDARY, 'mr-1 text-xs')}>{fp}</Tag>
-          ))
-        ),
-      },
-      { title: '时间', key: 'createdAt', width: 160, className: 'text-muted-foreground', render: (_, item) => formatDate(item.createdAt as string) },
-    ]
-    return (
-      <Table
-        rowKey="id"
-        columns={columns}
-        dataSource={results}
-        rowSelection={tableRowSelection}
-        pagination={tablePagination}
-        locale={{ emptyText: resultsLoading ? '加载中...' : '暂无数据' }}
-        sticky
-        scroll={{ x: 1100 }}
-      />
-    )
-  }
-
-  const renderDirScanTable = () => {
-    const columns: ColumnsType<Record<string, unknown>> = [
-      indexColumn(page, pageSize),
-      {
-        title: 'URL',
-        key: 'url',
-        width: 400,
-        ellipsis: true,
-        render: (_, item) => {
-          // 从 data 字段中提取数据
-          const data = (item.data || item) as Record<string, unknown>
-          return (
-            <a 
-              href={data.url as string} 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="text-primary hover:underline"
-            >
-              {data.url as string}
-            </a>
-          )
-        },
-      },
-      {
-        title: '状态码',
-        key: 'status',
-        width: 90,
-        render: (_, item) => {
-          const data = (item.data || item) as Record<string, unknown>
-          return data.status ? (
-            <Tag 
-              className={
-                (data.status as number) >= 200 && (data.status as number) < 300 ? TAG_PRIMARY : 
-                (data.status as number) >= 400 ? TAG_DESTRUCTIVE : TAG_SECONDARY
-              }
-            >
-              {data.status as number}
-            </Tag>
-          ) : '-'
-        },
-      },
-      {
-        title: '大小',
-        key: 'size',
-        width: 90,
-        className: 'text-muted-foreground',
-        render: (_, item) => {
-          const data = (item.data || item) as Record<string, unknown>
-          return data.size ? `${data.size}` : '-'
-        },
-      },
-      {
-        title: '类型',
-        key: 'content_type',
-        width: 140,
-        className: 'text-muted-foreground text-xs',
-        render: (_, item) => {
-          const data = (item.data || item) as Record<string, unknown>
-          return data.content_type as string || '-'
-        },
-      },
-      {
-        title: '目标',
-        key: 'target',
-        width: 150,
-        ellipsis: true,
-        className: 'text-muted-foreground',
-        render: (_, item) => {
-          const data = (item.data || item) as Record<string, unknown>
-          return data.target as string || '-'
-        },
-      },
-      {
-        title: '时间',
-        key: 'createdAt',
-        width: 160,
-        className: 'text-muted-foreground',
-        render: (_, item) => formatDate(item.createdAt as string),
-      },
-    ]
-    return (
-      <Table
-        rowKey="id"
-        columns={columns}
-        dataSource={results}
-        rowSelection={tableRowSelection}
-        pagination={tablePagination}
-        locale={{ emptyText: resultsLoading ? '加载中...' : '暂无数据' }}
-        sticky
-        scroll={{ x: 1000 }}
-      />
-    )
-  }
-
-  const renderCrawlerTable = () => {
-    const columns: ColumnsType<Record<string, unknown>> = [
-      indexColumn(page, pageSize),
-      {
-        title: 'URL',
-        key: 'url',
-        width: 400,
-        ellipsis: true,
-        render: (_, item) => {
-          const data = (item.data || item) as Record<string, unknown>
-          return (
-            <a 
-              href={data.url as string} 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="text-primary hover:underline"
-            >
-              {data.url as string}
-            </a>
-          )
-        },
-      },
-      {
-        title: '方法',
-        key: 'method',
-        width: 90,
-        render: (_, item) => {
-          const data = (item.data || item) as Record<string, unknown>
-          return <Tag>{(data.method as string) || 'GET'}</Tag>
-        },
-      },
-      {
-        title: '状态码',
-        key: 'status_code',
-        width: 90,
-        render: (_, item) => {
-          const data = (item.data || item) as Record<string, unknown>
-          return data.status_code ? (
-            <Tag 
-              className={
-                (data.status_code as number) === 200 ? TAG_PRIMARY : 
-                (data.status_code as number) >= 400 ? TAG_DESTRUCTIVE : TAG_SECONDARY
-              }
-            >
-              {data.status_code as number}
-            </Tag>
-          ) : '-'
-        },
-      },
-      {
-        title: '爬虫',
-        key: 'crawler',
-        width: 120,
-        render: (_, item) => {
-          const data = (item.data || item) as Record<string, unknown>
-          return (
-            <Tag className="text-xs">
-              {(data.crawler as string) || (item.source as string) || '-'}
-            </Tag>
-          )
-        },
-      },
-      {
-        title: '目标',
-        key: 'target',
-        width: 150,
-        ellipsis: true,
-        className: 'text-muted-foreground',
-        render: (_, item) => {
-          const data = (item.data || item) as Record<string, unknown>
-          return data.target as string || '-'
-        },
-      },
-      {
-        title: '时间',
-        key: 'createdAt',
-        width: 160,
-        className: 'text-muted-foreground',
-        render: (_, item) => formatDate(item.createdAt as string),
-      },
-    ]
-    return (
-      <Table
-        rowKey="id"
-        columns={columns}
-        dataSource={results}
-        rowSelection={tableRowSelection}
-        pagination={tablePagination}
-        locale={{ emptyText: resultsLoading ? '加载中...' : '暂无数据' }}
-        sticky
-        scroll={{ x: 1000 }}
-      />
-    )
-  }
-
-  const renderVulnTable = () => {
-    const columns: ColumnsType<Record<string, unknown>> = [
-      {
-        title: '等级',
-        key: 'severity',
-        width: 80,
-        render: (_, item) => {
-          const data = (item.data || item) as Record<string, unknown>
-          const severity = String(data.severity || '').toLowerCase()
-          return (
-            <Tag className={cn(getSeverityColor(severity), 'text-xs')}>
-              {severity || 'unknown'}
-            </Tag>
-          )
-        },
-      },
-      {
-        title: '漏洞名称',
-        key: 'name',
-        width: 320,
-        ellipsis: true,
-        className: 'font-medium',
-        render: (_, item) => {
-          const data = (item.data || item) as Record<string, unknown>
-          return (data.name as string) || (data.vuln_id as string) || '-'
-        },
-      },
-      {
-        title: '目标',
-        key: 'target',
-        width: 240,
-        ellipsis: true,
-        className: 'font-mono text-xs',
-        render: (_, item) => {
-          const data = (item.data || item) as Record<string, unknown>
-          return (data.target as string) || '-'
-        },
-      },
-      {
-        title: '匹配位置',
-        key: 'matched_at',
-        width: 260,
-        ellipsis: true,
-        className: 'font-mono text-xs text-muted-foreground',
-        render: (_, item) => {
-          const data = (item.data || item) as Record<string, unknown>
-          return (data.matched_at as string) || '-'
-        },
-      },
-      {
-        title: '来源',
-        key: 'source',
-        width: 112,
-        className: 'text-muted-foreground',
-        render: (_, item) => {
-          const data = (item.data || item) as Record<string, unknown>
-          return (item.source as string) || (data.source as string) || '-'
-        },
-      },
-      {
-        title: '操作',
-        key: 'actions',
-        width: 96,
-        render: (_, item) => {
-          const data = (item.data || item) as Record<string, unknown>
-          return (
-            <Button
-              type="text"
-              size="small"
-              onClick={() => setSelectedVuln(data)}
-            >
-              <Eye className="h-4 w-4 mr-1" />
-              详情
-            </Button>
-          )
-        },
-      },
-    ]
-    return (
-      <Table
-        rowKey="id"
-        columns={columns}
-        dataSource={results}
-        rowSelection={tableRowSelection}
-        pagination={tablePagination}
-        locale={{ emptyText: resultsLoading ? '加载中...' : '暂无漏洞' }}
-        sticky
-        scroll={{ x: 1100 }}
-      />
-    )
-  }
-
-  const renderGenericTable = () => {
-    const columns: ColumnsType<Record<string, unknown>> = [
-      indexColumn(page, pageSize),
-      {
-        title: '数据',
-        key: 'data',
-        width: 400,
-        ellipsis: true,
-        className: 'font-mono text-xs',
-        render: (_, item) => JSON.stringify(item.data || item),
-      },
-      { title: '项目', key: 'project', width: 140, render: (_, item) => item.project as string || '-' },
-      {
-        title: 'TAG',
-        key: 'tags',
-        width: 200,
-        render: (_, item) => (
-          (item.tags as string[])?.length > 0 ? (
-            (item.tags as string[]).map((tag: string) => (
-              <Tag key={tag} className="mr-1">{tag}</Tag>
-            ))
-          ) : '-'
-        ),
-      },
-      { title: '时间', key: 'createdAt', width: 160, className: 'text-muted-foreground', render: (_, item) => formatDate(item.createdAt as string) },
-    ]
-    return (
-      <Table
-        rowKey="id"
-        columns={columns}
-        dataSource={results}
-        rowSelection={tableRowSelection}
-        pagination={tablePagination}
-        locale={{ emptyText: resultsLoading ? '加载中...' : '暂无数据' }}
-        sticky
-        scroll={{ x: 1000 }}
-      />
-    )
   }
 
   return (

@@ -14,7 +14,8 @@ import {
   Server,
   ShieldAlert,
 } from 'lucide-react'
-import { Button, Card, Descriptions, Skeleton, Switch, Table, Tag } from 'antd'
+import { FileSearch } from 'lucide-react'
+import { Button, Card, Descriptions, Modal, Skeleton, Switch, Table, Tag } from 'antd'
 import type { TableProps } from 'antd'
 
 import {
@@ -280,70 +281,87 @@ function Events({ items }: { items: AssetEvent[] }) {
   )
 }
 
-const recordColumns: TableProps<AssetRawRecord>['columns'] = [
-  {
-    title: '来源',
-    dataIndex: 'source',
-    key: 'source',
-    render: (v: string) => <span className="text-xs">{v}</span>,
-  },
-  {
-    title: '入口',
-    dataIndex: 'value',
-    key: 'value',
-    ellipsis: true,
-    render: (v: string) => <span className="max-w-[260px] truncate font-mono text-xs">{v}</span>,
-  },
-  {
-    title: '状态码',
-    dataIndex: 'status_code',
-    key: 'status_code',
-    render: (v: number) => (
-      <Tag className={badgeCls(v >= 200 && v < 400 ? 'default' : 'secondary')}>{v || '—'}</Tag>
-    ),
-  },
-  {
-    title: '标题',
-    dataIndex: 'title',
-    key: 'title',
-    ellipsis: true,
-    render: (v: string) => <span className="max-w-[220px] truncate text-sm">{v || '—'}</span>,
-  },
-  {
-    title: '观测时间',
-    dataIndex: 'observed_at',
-    key: 'observed_at',
-    render: (v: string) => (
-      <span className="text-muted-foreground whitespace-nowrap text-xs">{fmtDate(v)}</span>
-    ),
-  },
-  {
-    title: '',
-    key: 'evidence',
-    width: 64,
-    render: (_, r) =>
-      hasKeys(r.evidence) ? (
-        <details>
-          <summary className="text-muted-foreground cursor-pointer text-xs">证据</summary>
-          <pre className="bg-muted mt-1 max-h-40 w-64 overflow-auto rounded p-2 text-[11px]">
-            {JSON.stringify(r.evidence, null, 2)}
-          </pre>
-        </details>
-      ) : null,
-  },
-]
 
 function Records({ items }: { items: AssetRawRecord[] }) {
+  const [evidenceRow, setEvidenceRow] = useState<AssetRawRecord | null>(null)
+  const recordColumns: TableProps<AssetRawRecord>['columns'] = [
+    {
+      title: '来源',
+      dataIndex: 'source',
+      key: 'source',
+      render: (v: string) => <span className="text-xs">{v}</span>,
+    },
+    {
+      title: '入口',
+      dataIndex: 'value',
+      key: 'value',
+      ellipsis: true,
+      render: (v: string) => <span className="max-w-[260px] truncate font-mono text-xs">{v}</span>,
+    },
+    {
+      title: '状态码',
+      dataIndex: 'status_code',
+      key: 'status_code',
+      render: (v: number) => (
+        <Tag className={badgeCls(v >= 200 && v < 400 ? 'default' : 'secondary')}>{v || '—'}</Tag>
+      ),
+    },
+    {
+      title: '标题',
+      dataIndex: 'title',
+      key: 'title',
+      ellipsis: true,
+      render: (v: string) => <span className="max-w-[220px] truncate text-sm">{v || '—'}</span>,
+    },
+    {
+      title: '观测时间',
+      dataIndex: 'observed_at',
+      key: 'observed_at',
+      render: (v: string) => (
+        <span className="text-muted-foreground whitespace-nowrap text-xs">{fmtDate(v)}</span>
+      ),
+    },
+    {
+      title: '操作',
+      key: 'evidence',
+      width: 88,
+      render: (_, r) =>
+        hasKeys(r.evidence) ? (
+          <Button
+            type="text"
+            size="small"
+            icon={<FileSearch className="h-3.5 w-3.5" />}
+            onClick={() => setEvidenceRow(r)}
+          >
+            证据
+          </Button>
+        ) : null,
+    },
+  ]
   if (items.length === 0) {
     return <p className="text-muted-foreground py-4 text-sm">还没有原始记录</p>
   }
   return (
+    <>
     <Table
       columns={recordColumns}
       dataSource={items}
       rowKey="id"
       pagination={false}
     />
+    <Modal
+      open={!!evidenceRow}
+      onCancel={() => setEvidenceRow(null)}
+      title={evidenceRow ? `采集证据 · ${evidenceRow.value}` : '采集证据'}
+      width={560}
+      centered
+      footer={null}
+    >
+      <pre className="bg-muted/50 max-h-[60vh] overflow-auto rounded-md border p-3 font-mono text-xs whitespace-pre-wrap break-all">
+        {evidenceRow ? JSON.stringify(evidenceRow.evidence, null, 2) : ''}
+      </pre>
+    </Modal>
+    </>
   )
 }
 
