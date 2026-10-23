@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import TaskCreateDialog from '@/components/tasks/TaskCreateDialog'
+import { getStatusLabel } from './taskMeta'
 import { useConfirm } from '@/components/common/confirm-provider'
 import { getErrorMessage } from '@/lib/errors'
 
@@ -125,17 +126,6 @@ export default function TasksPage() {
   const hasMore = data?.data?.hasMore ?? false
   const nextCursor = data?.data?.nextCursor ?? '' 
 
-  const getStatusLabel = (status: Task['status']) => {
-    const labels: Record<string, string> = {
-      pending: '等待中',
-      running: '运行中',
-      paused: '已暂停',
-      completed: '已完成',
-      failed: '失败',
-      cancelled: '已取消',
-    }
-    return labels[status] || status
-  }
 
   const columns: TableProps<Task>['columns'] = [
     {
