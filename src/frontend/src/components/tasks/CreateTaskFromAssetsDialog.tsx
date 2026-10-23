@@ -1,27 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Rocket, Loader2 } from 'lucide-react'
+import { Button, Input, Modal, Select } from 'antd'
+import { Rocket } from 'lucide-react'
 
 import { taskApi } from '@/api/tasks'
 import { assetApi } from '@/api/assets'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 
 // 可对「已有资产」派的任务类型。子域枚举不在此列：资产已经归并过，再枚举一遍没有意义。
@@ -126,107 +110,108 @@ export default function CreateTaskFromAssetsDialog({
   const canSubmit = targets.length > 0 && scanTypes.length > 0 && !!pid && !create.isPending
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl">
-        <DialogHeader>
-          <DialogTitle>用选中资产创建任务</DialogTitle>
-          <DialogDescription>
-            已选 {targets.length} 个资产，选好扫描类型就直接派单，不用再手写目标列表。
-          </DialogDescription>
-        </DialogHeader>
+    <Modal
+      open={open}
+      onCancel={() => onOpenChange(false)}
+      title="用选中资产创建任务"
+      width={576}
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button onClick={() => onOpenChange(false)}>取消</Button>
+          <Button
+            icon={<Rocket className="h-4 w-4" />}
+            loading={create.isPending}
+            onClick={() => create.mutate()}
+            disabled={!canSubmit}
+          >
+            创建并启动任务
+          </Button>
+        </div>
+      }
+    >
+      <p className="mb-4 text-sm text-muted-foreground">
+        已选 {targets.length} 个资产，选好扫描类型就直接派单，不用再手写目标列表。
+      </p>
 
-        <div className="space-y-3">
-          <div className="rounded-md border bg-muted/30 p-2 text-xs">
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">目标预览</span>
-              {targets.length > 6 && (
-                <button className="text-primary text-xs hover:underline" onClick={() => setShowAll((v) => !v)}>
-                  {showAll ? '收起' : `展开全部 ${hosts.length} 个`}
-                </button>
-              )}
-            </div>
-            <div className="mt-1 flex flex-wrap gap-1 font-mono">
-              {preview.map((h) => (
-                <span key={h} className="bg-background rounded border px-1.5 py-0.5">
-                  {h}
-                </span>
-              ))}
-            </div>
+      <div className="space-y-3">
+        <div className="rounded-md border bg-muted/30 p-2 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">目标预览</span>
+            {targets.length > 6 && (
+              <button className="text-primary text-xs hover:underline" onClick={() => setShowAll((v) => !v)}>
+                {showAll ? '收起' : `展开全部 ${hosts.length} 个`}
+              </button>
+            )}
           </div>
-
-          <div className="space-y-1">
-            <label className="text-sm font-medium">任务名称</label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="任务名称" />
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-sm font-medium">归属项目</label>
-            <Select value={pid} onValueChange={setPid}>
-              <SelectTrigger>
-                <SelectValue placeholder="选择项目（任务必须归属一个项目）" />
-              </SelectTrigger>
-              <SelectContent>
-                {(projects.data?.data || []).map((p: any) => (
-                  <SelectItem key={String(p.id)} value={String(p.id)}>
-                    {p.name}（{p.code || p.id}）
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-sm font-medium">扫描类型</label>
-            <div className="grid grid-cols-2 gap-2">
-              {SCAN_OPTIONS.map((opt) => {
-                const checked = scanTypes.includes(opt.value)
-                return (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => toggleType(opt.value)}
-                    className={`rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
-                      checked ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'
-                    }`}
-                  >
-                    <div className="flex items-center gap-1.5 font-medium">
-                      <span
-                        className={`flex h-3.5 w-3.5 items-center justify-center rounded border ${
-                          checked ? 'border-primary bg-primary text-primary-foreground' : ''
-                        }`}
-                      >
-                        {checked ? '✓' : ''}
-                      </span>
-                      {opt.label}
-                    </div>
-                    <div className="text-muted-foreground mt-0.5 pl-5">{opt.hint}</div>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <label className="text-sm font-medium">并发</label>
-            <Input
-              className="h-8 w-24"
-              value={threads}
-              onChange={(e) => setThreads(e.target.value.replace(/[^0-9]/g, ''))}
-            />
-            <span className="text-muted-foreground text-xs">按节点能力自动选执行节点</span>
+          <div className="mt-1 flex flex-wrap gap-1 font-mono">
+            {preview.map((h) => (
+              <span key={h} className="bg-background rounded border px-1.5 py-0.5">
+                {h}
+              </span>
+            ))}
           </div>
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            取消
-          </Button>
-          <Button onClick={() => create.mutate()} disabled={!canSubmit}>
-            {create.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Rocket className="mr-1 h-4 w-4" />}
-            创建并启动任务
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        <div className="space-y-1">
+          <label className="text-sm font-medium">任务名称</label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="任务名称" />
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-sm font-medium">归属项目</label>
+          <Select
+            className="w-full"
+            value={pid || undefined}
+            onChange={(v) => setPid(v)}
+            placeholder="选择项目（任务必须归属一个项目）"
+            options={(projects.data?.data || []).map((p: any) => ({
+              value: String(p.id),
+              label: `${p.name}（${p.code || p.id}）`,
+            }))}
+          />
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-sm font-medium">扫描类型</label>
+          <div className="grid grid-cols-2 gap-2">
+            {SCAN_OPTIONS.map((opt) => {
+              const checked = scanTypes.includes(opt.value)
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => toggleType(opt.value)}
+                  className={`rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
+                    checked ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 font-medium">
+                    <span
+                      className={`flex h-3.5 w-3.5 items-center justify-center rounded border ${
+                        checked ? 'border-primary bg-primary text-primary-foreground' : ''
+                      }`}
+                    >
+                      {checked ? '✓' : ''}
+                    </span>
+                    {opt.label}
+                  </div>
+                  <div className="text-muted-foreground mt-0.5 pl-5">{opt.hint}</div>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <label className="text-sm font-medium">并发</label>
+          <Input
+            className="h-8 w-24"
+            value={threads}
+            onChange={(e) => setThreads(e.target.value.replace(/[^0-9]/g, ''))}
+          />
+          <span className="text-muted-foreground text-xs">按节点能力自动选执行节点</span>
+        </div>
+      </div>
+    </Modal>
   )
 }

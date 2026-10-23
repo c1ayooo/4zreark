@@ -1,14 +1,11 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
+import { Button, Card, Input } from 'antd'
+
 import { useAuthStore } from '@/store/auth'
 import { authApi } from '@/api/auth'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2 } from 'lucide-react'
 
 export default function LoginPage() {
   const navigate = useNavigate()
@@ -69,7 +66,7 @@ export default function LoginPage() {
 
   return (
     <Card className="w-full">
-      <CardHeader className="space-y-1 text-center">
+      <div className="space-y-1 text-center">
         <div className="mb-4 flex justify-center">
           <img
             src="/icon-192x192.png"
@@ -77,13 +74,15 @@ export default function LoginPage() {
             className="h-16 w-16 rounded-xl dark:invert"
           />
         </div>
-        <CardTitle className="text-2xl font-bold tracking-tight">4zreark</CardTitle>
-        <CardDescription>资产侦察与漏洞管理平台</CardDescription>
-      </CardHeader>
-      <form onSubmit={handleSubmit}>
-        <CardContent className="space-y-4">
+        <div className="text-2xl font-bold tracking-tight">4zreark</div>
+        <p className="text-sm text-muted-foreground">资产侦察与漏洞管理平台</p>
+      </div>
+      <form onSubmit={handleSubmit} className="mt-6">
+        <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="username">用户名</Label>
+            <label htmlFor="username" className="text-sm font-medium">
+              用户名
+            </label>
             <Input
               id="username"
               placeholder="请输入用户名"
@@ -93,7 +92,9 @@ export default function LoginPage() {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="password">密码</Label>
+            <label htmlFor="password" className="text-sm font-medium">
+              密码
+            </label>
             <Input
               id="password"
               type="password"
@@ -103,24 +104,19 @@ export default function LoginPage() {
               autoComplete="current-password"
             />
           </div>
-        </CardContent>
-        <CardFooter className="flex flex-col space-y-4">
+        </div>
+        <div className="mt-6 flex flex-col gap-4 border-t pt-6">
           <Button
-            type="submit"
+            htmlType="submit"
             className="w-full"
-            disabled={loginMutation.isPending}
+            loading={loginMutation.isPending}
           >
-            {loginMutation.isPending && (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            )}
             登录
           </Button>
-          <div className="pt-4 border-t text-center">
-            <p className="text-xs text-muted-foreground">
-              4zreark · c1ayoo
-            </p>
-          </div>
-        </CardFooter>
+          <p className="text-center text-xs text-muted-foreground">
+            4zreark · c1ayoo
+          </p>
+        </div>
       </form>
     </Card>
   )

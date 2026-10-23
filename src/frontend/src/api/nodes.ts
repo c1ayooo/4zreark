@@ -108,11 +108,9 @@ export interface DeployNodeInput {
   platform_url: string
   proxy?: string
   dir: string
-  gost_reverse?: boolean
-  gost_relay_port?: number
-  gost_tunnel_port?: number
-  gost_user?: string
-  gost_pass?: string
+  reverse_tunnel?: boolean
+  relay_port?: number
+  tunnel_port?: number
   platform_port?: number
 }
 

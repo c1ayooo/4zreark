@@ -1,22 +1,9 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { cruiseApi, CruiseTask, CruiseLog } from '@/api/cruise'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { Modal, Table, Tag } from 'antd'
+import type { TableProps } from 'antd'
+import EmptyState from '@/components/common/EmptyState'
 import { formatDate } from '@/lib/utils'
 import {
   CheckCircle,
@@ -50,36 +37,36 @@ export default function CruiseLogsDialog({
     switch (status) {
       case 'success':
         return (
-          <Badge className="bg-green-500">
+          <Tag className="border-transparent bg-green-500 text-white">
             <CheckCircle className="h-3 w-3 mr-1" />
             成功
-          </Badge>
+          </Tag>
         )
       case 'failed':
         return (
-          <Badge variant="destructive">
+          <Tag className="border-transparent bg-destructive text-destructive-foreground">
             <XCircle className="h-3 w-3 mr-1" />
             失败
-          </Badge>
+          </Tag>
         )
       case 'running':
         return (
-          <Badge className="bg-blue-500">
+          <Tag className="border-transparent bg-blue-500 text-white">
             <Loader2 className="h-3 w-3 mr-1 animate-spin" />
             执行中
-          </Badge>
+          </Tag>
         )
       case 'timeout':
         return (
-          <Badge variant="secondary">
+          <Tag className="border-transparent bg-secondary text-secondary-foreground">
             <Clock className="h-3 w-3 mr-1" />
             超时
-          </Badge>
+          </Tag>
         )
       case 'cancelled':
-        return <Badge variant="secondary">已取消</Badge>
+        return <Tag className="border-transparent bg-secondary text-secondary-foreground">已取消</Tag>
       default:
-        return <Badge variant="outline">{status}</Badge>
+        return <Tag>{status}</Tag>
     }
   }
 
@@ -91,114 +78,99 @@ export default function CruiseLogsDialog({
     return `${hours}时${mins}分`
   }
 
+  const columns: TableProps<CruiseLog>['columns'] = [
+    {
+      title: '开始时间',
+      dataIndex: 'start_time',
+      key: 'start_time',
+      width: 160,
+      render: (v: string) => <span className="text-sm">{formatDate(v)}</span>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 100,
+      render: (v: string) => getStatusBadge(v),
+    },
+    {
+      title: '耗时',
+      dataIndex: 'duration',
+      key: 'duration',
+      width: 100,
+      render: (v: number) => <span className="text-sm">{v > 0 ? formatDuration(v) : '-'}</span>,
+    },
+    {
+      title: '发现资产',
+      dataIndex: 'result_count',
+      key: 'result_count',
+      width: 90,
+    },
+    {
+      title: '发现漏洞',
+      dataIndex: 'vuln_count',
+      key: 'vuln_count',
+      width: 90,
+      render: (v: number) =>
+        v > 0 ? <span className="text-red-500 font-medium">{v}</span> : 0,
+    },
+    {
+      title: '错误信息',
+      dataIndex: 'error',
+      key: 'error',
+      ellipsis: true,
+      render: (v?: string) =>
+        v ? (
+          <span className="text-red-500 text-sm" title={v}>
+            {v}
+          </span>
+        ) : (
+          '-'
+        ),
+    },
+    {
+      title: '关联任务',
+      dataIndex: 'task_id',
+      key: 'task_id',
+      width: 90,
+      render: (v: string) =>
+        v && v !== '000000000000000000000000' ? (
+          <Link
+            to={`/tasks/${v}`}
+            className="text-blue-500 hover:underline inline-flex items-center"
+          >
+            查看
+            <ExternalLink className="h-3 w-3 ml-1" />
+          </Link>
+        ) : (
+          '-'
+        ),
+    },
+  ]
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>执行日志 - {cruise.name}</DialogTitle>
-        </DialogHeader>
-
-        <div className="rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>开始时间</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead>耗时</TableHead>
-                <TableHead>发现资产</TableHead>
-                <TableHead>发现漏洞</TableHead>
-                <TableHead>错误信息</TableHead>
-                <TableHead>关联任务</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {isLoading ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="text-center py-8">
-                    <Loader2 className="h-6 w-6 animate-spin mx-auto" />
-                  </TableCell>
-                </TableRow>
-              ) : data?.items?.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                    暂无执行记录
-                  </TableCell>
-                </TableRow>
-              ) : (
-                data?.items?.map((log: CruiseLog) => (
-                  <TableRow key={log.id}>
-                    <TableCell className="text-sm">
-                      {formatDate(log.start_time)}
-                    </TableCell>
-                    <TableCell>{getStatusBadge(log.status)}</TableCell>
-                    <TableCell className="text-sm">
-                      {log.duration > 0 ? formatDuration(log.duration) : '-'}
-                    </TableCell>
-                    <TableCell>{log.result_count}</TableCell>
-                    <TableCell>
-                      {log.vuln_count > 0 ? (
-                        <span className="text-red-500 font-medium">{log.vuln_count}</span>
-                      ) : (
-                        0
-                      )}
-                    </TableCell>
-                    <TableCell className="max-w-[200px]">
-                      {log.error ? (
-                        <span className="text-red-500 text-sm truncate block" title={log.error}>
-                          {log.error}
-                        </span>
-                      ) : (
-                        '-'
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {log.task_id && log.task_id !== '000000000000000000000000' ? (
-                        <Link
-                          to={`/tasks/${log.task_id}`}
-                          className="text-blue-500 hover:underline inline-flex items-center"
-                        >
-                          查看
-                          <ExternalLink className="h-3 w-3 ml-1" />
-                        </Link>
-                      ) : (
-                        '-'
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
-
-        {/* 分页 */}
-        {data && data.total > 10 && (
-          <div className="flex items-center justify-between mt-4">
-            <div className="text-sm text-muted-foreground">
-              共 {data.total} 条记录
-            </div>
-            <div className="flex items-center space-x-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={page === 1}
-              >
-                上一页
-              </Button>
-              <span className="text-sm">第 {page} 页</span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setPage((p) => p + 1)}
-                disabled={page * 10 >= data.total}
-              >
-                下一页
-              </Button>
-            </div>
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
+    <Modal
+      open={open}
+      onCancel={() => onOpenChange(false)}
+      title={`执行日志 - ${cruise.name}`}
+      width={896}
+      footer={null}
+    >
+      <Table
+        columns={columns}
+        dataSource={data?.items ?? []}
+        rowKey="id"
+        loading={isLoading}
+        locale={{ emptyText: <EmptyState title="暂无执行记录" className="border-0" /> }}
+        pagination={{
+          current: page,
+          pageSize: 10,
+          total: data?.total ?? 0,
+          hideOnSinglePage: true,
+          showTotal: (t) => `共 ${t} 条记录`,
+          onChange: (p) => setPage(p),
+        }}
+      />
+    </Modal>
   )
 }

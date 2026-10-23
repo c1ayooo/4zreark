@@ -1,25 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { Button, Input, Modal, Select } from 'antd'
 
 import type { Project, ProjectInput } from '@/api/projects'
-import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { Textarea } from '@/components/ui/textarea'
 
 const emptyForm: ProjectInput = {
   code: '',
@@ -83,111 +65,128 @@ export function ProjectFormDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl">
-        <DialogHeader>
-          <DialogTitle>{project ? '编辑项目资料' : '新建项目'}</DialogTitle>
-          <DialogDescription>
-            项目是公司或 SRC 的资产边界，种子、监控计划和资产都归属到项目。
-          </DialogDescription>
-        </DialogHeader>
+    <Modal
+      open={open}
+      onCancel={() => onOpenChange(false)}
+      width={576}
+      title={project ? '编辑项目资料' : '新建项目'}
+      footer={null}
+    >
+      <p className="text-muted-foreground mb-4 text-sm">
+        项目是公司或 SRC 的资产边界，种子、监控计划和资产都归属到项目。
+      </p>
 
-        <form onSubmit={submit} className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="project-code">项目编码</Label>
-              <Input
-                id="project-code"
-                value={form.code}
-                disabled={!!project}
-                placeholder="acme-src"
-                onChange={(e) => set('code', e.target.value)}
-              />
-              <p className="text-muted-foreground text-xs">
-                字母、数字、下划线、短横线，创建后不可修改。
-              </p>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="project-name">项目名称</Label>
-              <Input
-                id="project-name"
-                value={form.name}
-                placeholder="示例公司 SRC"
-                onChange={(e) => set('name', e.target.value)}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>地区</Label>
-              <Select value={form.region} onValueChange={(v) => set('region', v)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="选择地区" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="domestic">国内</SelectItem>
-                  <SelectItem value="intl">国际</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="project-cycle">采集周期（天）</Label>
-              <Input
-                id="project-cycle"
-                type="number"
-                min={1}
-                max={3650}
-                value={form.cycle_interval_days}
-                onChange={(e) => set('cycle_interval_days', Number(e.target.value))}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="project-homepage">主页</Label>
-              <Input
-                id="project-homepage"
-                value={form.homepage_url}
-                placeholder="https://example.com"
-                onChange={(e) => set('homepage_url', e.target.value)}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="project-color">主题色</Label>
-              <div className="flex items-center gap-2">
-                <Input
-                  id="project-color"
-                  type="color"
-                  className="h-9 w-16 p-1"
-                  value={form.color || '#64748b'}
-                  onChange={(e) => set('color', e.target.value)}
-                />
-                <Input
-                  value={form.color}
-                  className="font-mono"
-                  onChange={(e) => set('color', e.target.value)}
-                />
-              </div>
-            </div>
-          </div>
-
+      <form onSubmit={submit} className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
           <div className="space-y-1.5">
-            <Label htmlFor="project-description">项目说明</Label>
-            <Textarea
-              id="project-description"
-              value={form.description}
-              placeholder="沉淀范围、授权信息、对接人等"
-              onChange={(e) => set('description', e.target.value)}
+            <label htmlFor="project-code" className="text-sm font-medium">
+              项目编码
+            </label>
+            <Input
+              id="project-code"
+              value={form.code}
+              disabled={!!project}
+              placeholder="acme-src"
+              onChange={(e) => set('code', e.target.value)}
+            />
+            <p className="text-muted-foreground text-xs">
+              字母、数字、下划线、短横线，创建后不可修改。
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="project-name" className="text-sm font-medium">
+              项目名称
+            </label>
+            <Input
+              id="project-name"
+              value={form.name}
+              placeholder="示例公司 SRC"
+              onChange={(e) => set('name', e.target.value)}
             />
           </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">地区</label>
+            <Select
+              className="w-full"
+              value={form.region}
+              onChange={(v) => set('region', v)}
+              placeholder="选择地区"
+              options={[
+                { value: 'domestic', label: '国内' },
+                { value: 'intl', label: '国际' },
+              ]}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="project-cycle" className="text-sm font-medium">
+              采集周期（天）
+            </label>
+            <Input
+              id="project-cycle"
+              type="number"
+              min={1}
+              max={3650}
+              value={form.cycle_interval_days}
+              onChange={(e) => set('cycle_interval_days', Number(e.target.value))}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="project-homepage" className="text-sm font-medium">
+              主页
+            </label>
+            <Input
+              id="project-homepage"
+              value={form.homepage_url}
+              placeholder="https://example.com"
+              onChange={(e) => set('homepage_url', e.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="project-color" className="text-sm font-medium">
+              主题色
+            </label>
+            <div className="flex items-center gap-2">
+              <Input
+                id="project-color"
+                type="color"
+                className="h-9 w-16 p-1"
+                value={form.color || '#64748b'}
+                onChange={(e) => set('color', e.target.value)}
+              />
+              <Input
+                value={form.color}
+                className="font-mono"
+                onChange={(e) => set('color', e.target.value)}
+              />
+            </div>
+          </div>
+        </div>
 
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              取消
-            </Button>
-            <Button type="submit" disabled={submitting || !form.name.trim()}>
-              {submitting ? '保存中…' : project ? '保存' : '创建项目'}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+        <div className="space-y-1.5">
+          <label htmlFor="project-description" className="text-sm font-medium">
+            项目说明
+          </label>
+          <Input.TextArea
+            id="project-description"
+            value={form.description}
+            placeholder="沉淀范围、授权信息、对接人等"
+            onChange={(e) => set('description', e.target.value)}
+          />
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <Button onClick={() => onOpenChange(false)}>取消</Button>
+          <Button
+            type="primary"
+            htmlType="submit"
+            loading={submitting}
+            disabled={!form.name.trim()}
+          >
+            {project ? '保存' : '创建项目'}
+          </Button>
+        </div>
+      </form>
+    </Modal>
   )
 }
 

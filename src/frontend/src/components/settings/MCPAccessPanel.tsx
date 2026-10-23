@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Button, Checkbox, Input, Modal, Select, Table, Tag } from 'antd'
+import type { ColumnsType } from 'antd/es/table'
 import { CheckCircle2, Copy, KeyRound, Plus, Power, Trash2 } from 'lucide-react'
 
 import {
@@ -12,45 +14,6 @@ import {
   type CreatedAPIKey,
 } from '@/api/apiKeys'
 import { projectApi } from '@/api/projects'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
 
@@ -89,12 +52,12 @@ const SCOPE_PRESETS = [
   { label: '完全控制', scopes: MCP_SCOPES.map((s) => s.name) },
 ]
 
-function keyStatus(key: APIKey) {
-  if (!key.enabled) return { label: '已禁用', variant: 'secondary' as const }
+function keyStatus(key: APIKey): { label: string; color?: string } {
+  if (!key.enabled) return { label: '已禁用' }
   if (key.expires_at && new Date(key.expires_at).getTime() <= Date.now()) {
-    return { label: '已过期', variant: 'destructive' as const }
+    return { label: '已过期', color: 'error' }
   }
-  return { label: '可用', variant: 'success' as const }
+  return { label: '可用', color: 'success' }
 }
 
 async function copyText(text: string) {
@@ -212,39 +175,122 @@ export function MCPAccessPanel() {
     }
   }
 
+  const columns: ColumnsType<APIKey> = [
+    {
+      title: '名称',
+      dataIndex: 'name',
+      render: (_, k) => <span className="font-medium">{k.name}</span>,
+    },
+    {
+      title: '项目范围',
+      render: (_, k) =>
+        k.project_id ? (
+          <span>
+            {k.project_name}
+            <span className="text-muted-foreground ml-1 font-mono text-xs">{k.project_code}</span>
+          </span>
+        ) : (
+          <Tag color="warning">全部项目</Tag>
+        ),
+    },
+    {
+      title: '权限',
+      render: (_, k) => (
+        <div className="flex max-w-[220px] flex-wrap gap-1">
+          {Array.from(new Set((k.scopes ?? []).map(scopeGroup))).map((group) => (
+            <Tag key={group}>{group}</Tag>
+          ))}
+          {(k.scopes ?? []).length === 0 && (
+            <span className="text-muted-foreground text-xs">无</span>
+          )}
+        </div>
+      ),
+    },
+    {
+      title: 'Key',
+      render: (_, k) => <code className="font-mono text-xs">{k.key_prefix}…</code>,
+    },
+    {
+      title: '状态',
+      render: (_, k) => {
+        const status = keyStatus(k)
+        return <Tag color={status.color}>{status.label}</Tag>
+      },
+    },
+    {
+      title: '最近使用',
+      className: 'text-muted-foreground whitespace-nowrap text-xs',
+      render: (_, k) => (k.last_used_at ? formatDate(k.last_used_at) : '从未使用'),
+    },
+    {
+      title: '创建时间',
+      className: 'text-muted-foreground whitespace-nowrap text-xs',
+      render: (_, k) => formatDate(k.created_at),
+    },
+    {
+      title: '操作',
+      align: 'right',
+      className: 'whitespace-nowrap',
+      render: (_, k) => (
+        <span className="inline-flex gap-1">
+          <Button
+            type="text"
+            size="small"
+            disabled={toggleMutation.isPending}
+            onClick={() => toggleMutation.mutate({ id: k.id, enabled: !k.enabled })}
+            icon={<Power className="h-3.5 w-3.5" />}
+          >
+            {k.enabled ? '停用' : '启用'}
+          </Button>
+          <Button
+            type="text"
+            size="small"
+            danger
+            onClick={() => setDeleting(k)}
+            icon={<Trash2 className="h-3.5 w-3.5" />}
+          >
+            删除
+          </Button>
+        </span>
+      ),
+    },
+  ]
+
   return (
     <div className="space-y-6">
-      <Card>
-        <CardHeader>
+      <section className="bg-card text-card-foreground rounded-xl border shadow">
+        <div className="flex flex-col space-y-1.5 p-6">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <CardTitle className="flex items-center gap-2">
+              <h3 className="flex items-center gap-2 font-semibold leading-none tracking-tight">
                 <KeyRound className="h-4 w-4" />
                 MCP / 外部平台接入
-              </CardTitle>
-              <CardDescription>
+              </h3>
+              <p className="text-muted-foreground mt-1.5 text-sm">
                 签发只读 API key，供外部平台或 MCP 客户端读取项目所属资产与详情。
                 key 绑定项目后无法访问其它项目。
-              </CardDescription>
+              </p>
             </div>
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus className="mr-2 h-4 w-4" />
+            <Button onClick={() => setCreateOpen(true)} icon={<Plus className="h-4 w-4" />}>
               新建 API key
             </Button>
           </div>
-        </CardHeader>
-        <CardContent className="space-y-3">
+        </div>
+        <div className="space-y-3 p-6 pt-0">
           <div className="rounded-lg border bg-muted/40 p-4 text-sm">
             <div className="mb-2 flex items-center gap-2 font-medium">
               <CheckCircle2 className="h-4 w-4 text-green-500" />
               MCP 端点（Streamable HTTP）
             </div>
             <div className="flex items-center gap-2">
-              <code className="min-w-0 flex-1 break-all rounded bg-background px-2 py-1 font-mono text-xs">
+              <code className="bg-background min-w-0 flex-1 break-all rounded px-2 py-1 font-mono text-xs">
                 {endpoint}
               </code>
-              <Button variant="outline" size="sm" onClick={() => handleCopy(endpoint)}>
-                <Copy className="mr-2 h-3.5 w-3.5" />
+              <Button
+                size="small"
+                onClick={() => handleCopy(endpoint)}
+                icon={<Copy className="h-3.5 w-3.5" />}
+              >
                 复制
               </Button>
             </div>
@@ -259,291 +305,193 @@ export function MCPAccessPanel() {
               </p>
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>访问凭证</CardTitle>
-          <CardDescription>
+      <section className="bg-card text-card-foreground rounded-xl border shadow">
+        <div className="flex flex-col space-y-1.5 p-6">
+          <h3 className="font-semibold leading-none tracking-tight">访问凭证</h3>
+          <p className="text-muted-foreground mt-1.5 text-sm">
             明文只在创建时显示一次；列表中仅保留前缀。停用后客户端立即无法访问。
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+          </p>
+        </div>
+        <div className="p-6 pt-0">
           <div className="overflow-x-auto rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>名称</TableHead>
-                  <TableHead>项目范围</TableHead>
-                  <TableHead>权限</TableHead>
-                  <TableHead>Key</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>最近使用</TableHead>
-                  <TableHead>创建时间</TableHead>
-                  <TableHead className="text-right">操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {isLoading ? (
-                  <TableRow>
-                    <TableCell colSpan={8} className="text-muted-foreground py-8 text-center">
-                      加载中…
-                    </TableCell>
-                  </TableRow>
-                ) : keys.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={8} className="text-muted-foreground py-8 text-center">
-                      还没有 API key，点击右上角「新建 API key」签发第一把。
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  keys.map((key) => {
-                    const status = keyStatus(key)
-                    return (
-                      <TableRow key={key.id}>
-                        <TableCell className="font-medium">{key.name}</TableCell>
-                        <TableCell>
-                          {key.project_id ? (
-                            <span>
-                              {key.project_name}
-                              <span className="text-muted-foreground ml-1 font-mono text-xs">
-                                {key.project_code}
-                              </span>
-                            </span>
-                          ) : (
-                            <Badge variant="warning">全部项目</Badge>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex max-w-[220px] flex-wrap gap-1">
-                            {Array.from(new Set((key.scopes ?? []).map(scopeGroup))).map((group) => (
-                              <Badge key={group} variant="outline">
-                                {group}
-                              </Badge>
-                            ))}
-                            {(key.scopes ?? []).length === 0 && (
-                              <span className="text-muted-foreground text-xs">无</span>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <code className="font-mono text-xs">{key.key_prefix}…</code>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={status.variant}>{status.label}</Badge>
-                        </TableCell>
-                        <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
-                          {key.last_used_at ? formatDate(key.last_used_at) : '从未使用'}
-                        </TableCell>
-                        <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
-                          {formatDate(key.created_at)}
-                        </TableCell>
-                        <TableCell className="text-right whitespace-nowrap">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            disabled={toggleMutation.isPending}
-                            onClick={() =>
-                              toggleMutation.mutate({ id: key.id, enabled: !key.enabled })
-                            }
-                          >
-                            <Power className="mr-1.5 h-3.5 w-3.5" />
-                            {key.enabled ? '停用' : '启用'}
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-destructive hover:text-destructive"
-                            onClick={() => setDeleting(key)}
-                          >
-                            <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-                            删除
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })
-                )}
-              </TableBody>
-            </Table>
+            <Table<APIKey>
+              columns={columns}
+              dataSource={keys}
+              rowKey="id"
+              pagination={false}
+              loading={isLoading}
+              locale={{ emptyText: '还没有 API key，点击右上角「新建 API key」签发第一把。' }}
+            />
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
       {/* 新建凭证 */}
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>新建 API key</DialogTitle>
-            <DialogDescription>
-              选择项目后，这把 key 只能读取该项目的资产；选择「全部项目」会授予全库只读权限。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="api-key-name">名称</Label>
-              <Input
-                id="api-key-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="例如：SIEM 对接 / 外部资产看板"
-                maxLength={120}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>项目范围</Label>
-              <Select value={projectID} onValueChange={setProjectID}>
-                <SelectTrigger>
-                  <SelectValue placeholder="选择项目" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="0">全部项目（只读）</SelectItem>
-                  {projects.map((p) => (
-                    <SelectItem key={p.id} value={String(p.id)}>
-                      {p.name}（{p.code}）
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>有效期</Label>
-              <Select value={expiryDays} onValueChange={setExpiryDays}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {EXPIRY_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <Label>权限</Label>
-                <div className="flex flex-wrap gap-1">
-                  {SCOPE_PRESETS.map((preset) => (
-                    <Button
-                      key={preset.label}
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 px-2 text-xs"
-                      onClick={() => setScopes(preset.scopes)}
-                    >
-                      {preset.label}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-              <div className="max-h-64 space-y-3 overflow-y-auto rounded-md border p-3">
-                {MCP_SCOPE_GROUPS.map((group) => (
-                  <div key={group}>
-                    <div className="text-muted-foreground mb-1 text-xs font-medium">{group}</div>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      {MCP_SCOPES.filter((s) => s.group === group).map((s) => (
-                        <label key={s.name} className="flex items-start gap-2 text-sm">
-                          <Checkbox
-                            className="mt-0.5"
-                            checked={scopes.includes(s.name)}
-                            onCheckedChange={(v) => toggleScope(s.name, v === true)}
-                          />
-                          <span>
-                            <span className={s.dangerous ? 'text-destructive' : ''}>{s.label}</span>
-                            <span className="text-muted-foreground block text-xs">{s.description}</span>
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
+      <Modal
+        open={createOpen}
+        onCancel={() => setCreateOpen(false)}
+        title="新建 API key"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setCreateOpen(false)}>取消</Button>
+            <Button loading={createMutation.isPending} onClick={submitCreate}>
+              创建
+            </Button>
+          </div>
+        }
+      >
+        <p className="text-muted-foreground mb-4 text-sm">
+          选择项目后，这把 key 只能读取该项目的资产；选择「全部项目」会授予全库只读权限。
+        </p>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <label htmlFor="api-key-name" className="text-sm font-medium">
+              名称
+            </label>
+            <Input
+              id="api-key-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="例如：SIEM 对接 / 外部资产看板"
+              maxLength={120}
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">项目范围</label>
+            <Select
+              className="w-full"
+              value={projectID}
+              onChange={setProjectID}
+              options={[
+                { value: '0', label: '全部项目（只读）' },
+                ...projects.map((p) => ({ value: String(p.id), label: `${p.name}（${p.code}）` })),
+              ]}
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">有效期</label>
+            <Select
+              className="w-full"
+              value={expiryDays}
+              onChange={setExpiryDays}
+              options={EXPIRY_OPTIONS}
+            />
+          </div>
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="text-sm font-medium">权限</label>
+              <div className="flex flex-wrap gap-1">
+                {SCOPE_PRESETS.map((preset) => (
+                  <Button
+                    key={preset.label}
+                    size="small"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => setScopes(preset.scopes)}
+                  >
+                    {preset.label}
+                  </Button>
                 ))}
               </div>
-              {scopes.some((name) => MCP_SCOPES.find((s) => s.name === name)?.dangerous) && (
-                <p className="text-destructive text-xs">
-                  写/扫描权限会产生真实数据变更或网络流量，请只授予可信平台。
-                </p>
-              )}
-              {projectID !== '0' && (
-                <p className="text-muted-foreground text-xs">
-                  漏洞/POC 权限只对「全部项目」的 key 生效；绑定项目的 key 即使勾选也无法调用。
-                </p>
-              )}
             </div>
+            <div className="max-h-64 space-y-3 overflow-y-auto rounded-md border p-3">
+              {MCP_SCOPE_GROUPS.map((group) => (
+                <div key={group}>
+                  <div className="text-muted-foreground mb-1 text-xs font-medium">{group}</div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {MCP_SCOPES.filter((s) => s.group === group).map((s) => (
+                      <label key={s.name} className="flex items-start gap-2 text-sm">
+                        <Checkbox
+                          className="mt-0.5"
+                          checked={scopes.includes(s.name)}
+                          onChange={(e) => toggleScope(s.name, e.target.checked)}
+                        />
+                        <span>
+                          <span className={s.dangerous ? 'text-destructive' : ''}>{s.label}</span>
+                          <span className="text-muted-foreground block text-xs">{s.description}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {scopes.some((name) => MCP_SCOPES.find((s) => s.name === name)?.dangerous) && (
+              <p className="text-destructive text-xs">
+                写/扫描权限会产生真实数据变更或网络流量，请只授予可信平台。
+              </p>
+            )}
+            {projectID !== '0' && (
+              <p className="text-muted-foreground text-xs">
+                漏洞/POC 权限只对「全部项目」的 key 生效；绑定项目的 key 即使勾选也无法调用。
+              </p>
+            )}
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateOpen(false)}>
-              取消
-            </Button>
-            <Button onClick={submitCreate} disabled={createMutation.isPending}>
-              {createMutation.isPending ? '创建中…' : '创建'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </div>
+      </Modal>
 
       {/* 明文只显示一次 */}
-      <Dialog open={!!createdKey} onOpenChange={(open) => !open && setCreatedKey(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>API key 已创建</DialogTitle>
-            <DialogDescription>
-              请立即复制并保存到外部平台。关闭此窗口后，平台无法再次显示完整 key。
-            </DialogDescription>
-          </DialogHeader>
-          {createdKey && (
-            <div className="space-y-3">
-              <code className="block break-all rounded-md border bg-muted p-3 font-mono text-xs">
-                {createdKey.key}
-              </code>
-              <div className="text-muted-foreground text-xs">
-                项目范围：{createdKey.project_name || '全部项目'} · 有效期：
-                {createdKey.expires_at ? formatDate(createdKey.expires_at) : '永不过期'}
-              </div>
-              <div className="text-muted-foreground text-xs">
-                权限：{(createdKey.scopes ?? []).map(scopeLabel).join('、') || '未声明'}
-              </div>
-            </div>
-          )}
-          <DialogFooter>
+      <Modal
+        open={!!createdKey}
+        onCancel={() => setCreatedKey(null)}
+        title="API key 已创建"
+        footer={
+          <div className="flex justify-end gap-2">
             <Button
+              icon={<Copy className="h-4 w-4" />}
               onClick={() => createdKey && handleCopy(createdKey.key)}
               disabled={!createdKey}
             >
-              <Copy className="mr-2 h-4 w-4" />
               复制 key
             </Button>
-            <Button variant="outline" onClick={() => setCreatedKey(null)}>
-              我已保存
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            <Button onClick={() => setCreatedKey(null)}>我已保存</Button>
+          </div>
+        }
+      >
+        <p className="text-muted-foreground mb-4 text-sm">
+          请立即复制并保存到外部平台。关闭此窗口后，平台无法再次显示完整 key。
+        </p>
+        {createdKey && (
+          <div className="space-y-3">
+            <code className="bg-muted block break-all rounded-md border p-3 font-mono text-xs">
+              {createdKey.key}
+            </code>
+            <div className="text-muted-foreground text-xs">
+              项目范围：{createdKey.project_name || '全部项目'} · 有效期：
+              {createdKey.expires_at ? formatDate(createdKey.expires_at) : '永不过期'}
+            </div>
+            <div className="text-muted-foreground text-xs">
+              权限：{(createdKey.scopes ?? []).map(scopeLabel).join('、') || '未声明'}
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* 删除确认 */}
-      <AlertDialog open={!!deleting} onOpenChange={(open) => !open && setDeleting(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>删除 API key？</AlertDialogTitle>
-            <AlertDialogDescription>
-              删除后使用该 key 的外部平台会立即失去访问权限，且无法恢复。
-              {deleting ? ` 即将删除「${deleting.name}」。` : ''}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+      <Modal
+        open={!!deleting}
+        onCancel={() => setDeleting(null)}
+        title="删除 API key？"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setDeleting(null)}>取消</Button>
+            <Button
+              danger
+              loading={deleteMutation.isPending}
               onClick={() => deleting && deleteMutation.mutate(deleting.id)}
             >
               删除
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </Button>
+          </div>
+        }
+      >
+        <p className="text-sm">
+          删除后使用该 key 的外部平台会立即失去访问权限，且无法恢复。
+          {deleting ? ` 即将删除「${deleting.name}」。` : ''}
+        </p>
+      </Modal>
     </div>
   )
 }

@@ -1,7 +1,8 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
-import { useVirtualizer } from '@tanstack/react-virtual'
+import { Button, Checkbox, Dropdown, Input, Modal, Pagination, Select, Table, Tag } from 'antd'
+import type { MenuProps, TableProps } from 'antd'
 import {
   assetApi,
   AssetCatalog,
@@ -13,37 +14,8 @@ import {
   RawRecordRow,
   Site,
 } from '@/api/assets'
-import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/common/EmptyState'
 import CreateTaskFromAssetsDialog from '@/components/tasks/CreateTaskFromAssetsDialog'
-import { Checkbox } from '@/components/ui/checkbox'
-import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
 import {
@@ -76,7 +48,19 @@ const stateLabel: Record<string, string> = {
   pending: '待验证',
 }
 
-const stateVariant = (state: string): 'default' | 'secondary' | 'destructive' | 'outline' => {
+type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline' | 'success'
+
+// shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
+const badgeCls = (variant: BadgeVariant) =>
+  variant === 'default' || variant === 'success'
+    ? 'border-transparent bg-primary text-primary-foreground'
+    : variant === 'secondary'
+      ? 'border-transparent bg-secondary text-secondary-foreground'
+      : variant === 'destructive'
+        ? 'border-transparent bg-destructive text-destructive-foreground'
+        : ''
+
+const stateVariant = (state: string): BadgeVariant => {
   if (state === 'reachable') return 'default'
   if (state === 'lost') return 'destructive'
   if (state === 'archived') return 'outline'
@@ -85,7 +69,7 @@ const stateVariant = (state: string): 'default' | 'secondary' | 'destructive' | 
 
 const priorityLabel = (p: string) => (p ? p.toUpperCase() : '—')
 
-const priorityVariant = (p: string): 'default' | 'secondary' | 'destructive' | 'outline' => {
+const priorityVariant = (p: string): BadgeVariant => {
   if (p === 'p0' || p === 'p1') return 'destructive'
   if (p === 'p2') return 'default'
   if (p === 'p3') return 'secondary'
@@ -265,6 +249,9 @@ function Segmented<T extends string>({
     </div>
   )
 }
+
+// 列表行的联合类型：四种粒度共用一张 antd Table，列定义按粒度分支构建。
+type AssetRow = Site | DomainRow | IPRow | EndpointRow | RawRecordRow
 
 export default function AssetsPage() {
   const { toast } = useToast()
@@ -568,7 +555,6 @@ export default function AssetsPage() {
   const items = data?.items ?? []
   const total = data?.total ?? 0
   const size = data?.page_size ?? pageSize
-  const pages = Math.max(1, Math.ceil(total / size))
   const nextCursor = data?.next_cursor ?? ''
   const hasMore = data?.has_more ?? false
   const stats = overview.data?.data
@@ -634,196 +620,517 @@ export default function AssetsPage() {
     downloadCSV(`assets-${kind}-${stamp}.csv`, rows)
   }
 
-  const visibleSiteCols = SITE_COLUMNS.reduce((n, c) => n + (siteCols[c.key] ? 1 : 0), 0)
-  const colCount = expanded ? 7 : kind === 'site' ? 3 + visibleSiteCols : kind === 'record' ? 7 : 5
-
   // 资产多选：选中后可直接对这些资产派新任务（选资产 → 选类型 → 起任务）
   const [selectedHosts, setSelectedHosts] = useState<Set<string>>(new Set())
   const [createOpen, setCreateOpen] = useState(false)
-  const pageHosts = kind === 'site' && !expanded ? (items as Site[]).map((s) => s.value) : []
-  const allPageSelected = pageHosts.length > 0 && pageHosts.every((h) => selectedHosts.has(h))
-  const toggleHost = (host: string) => {
-    setSelectedHosts((prev) => {
+
+  const toggleSiteExpand = (id: number) => {
+    setExpandedSiteIDs((prev) => {
       const next = new Set(prev)
-      if (next.has(host)) next.delete(host)
-      else next.add(host)
-      return next
-    })
-  }
-  const togglePageHosts = () => {
-    setSelectedHosts((prev) => {
-      const next = new Set(prev)
-      if (allPageSelected) pageHosts.forEach((h) => next.delete(h))
-      else pageHosts.forEach((h) => next.add(h))
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
       return next
     })
   }
 
-  // 大页（>=100 行）启用虚拟滚动：只渲染视口附近的站点行。
+  // 大页（>=100 行）启用 antd Table 的虚拟滚动：只渲染视口附近的站点行。
   const virtualize = kind === 'site' && !expanded && pageSize >= 100 && !clusterView && expandedSiteIDs.size === 0
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const rowVirtualizer = useVirtualizer({
-    count: virtualize ? (items as Site[]).length : 0,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => 68,
-    overscan: 8,
-  })
-  const virtualItems = rowVirtualizer.getVirtualItems()
 
-  const renderSiteRow = (s: Site, virtualIndex?: number) => {
-    const isOpen = expandedSiteIDs.has(s.id)
-    const recent = s.recent_records ?? []
-    return (
-      <Fragment key={s.id}>
-      <TableRow
-        ref={virtualIndex !== undefined ? rowVirtualizer.measureElement : undefined}
-        data-index={virtualIndex}
-        className="hover:bg-muted/40 cursor-pointer"
-        data-state={selectedHosts.has(s.value) ? 'selected' : undefined}
-        onClick={() => navigate(`/assets/${s.id}`)}
-      >
-      <TableCell onClick={(e) => e.stopPropagation()}>
-        <Checkbox
-          checked={selectedHosts.has(s.value)}
-          onCheckedChange={() => toggleHost(s.value)}
-          aria-label={`选择 ${s.value}`}
-        />
-      </TableCell>
-      <TableCell>
-        <div className="break-all text-sm font-medium">{s.value}</div>
-        <div className="mt-1 flex flex-wrap items-center gap-1">
-          {(s.endpoints ?? []).length > 0 ? (
-            (s.endpoints ?? []).map((e) => (
-              <span
-                key={`${e.scheme}-${e.port}`}
-                title={`最近状态码 ${e.status_code || '—'}`}
-                className="rounded-sm bg-muted px-1.5 py-0.5 text-[13px] text-muted-foreground"
-              >
-                {e.scheme}:{e.port}
+  // —— 列定义：四种行形态各自的列集，渲染内容与迁移前逐列一致 ——
+  const stateTag = (state: string) => (
+    <Tag className={badgeCls(stateVariant(state))}>{stateLabel[state] ?? state}</Tag>
+  )
+  const statusTag = (code: number) => (
+    <Tag className={badgeCls(code >= 200 && code < 400 ? 'default' : 'secondary')}>{code || '—'}</Tag>
+  )
+
+  const riskCell = (priority: string | undefined, score: number | undefined) =>
+    score ? (
+      <Tag className={`${badgeCls('outline')} tabular-nums`}>
+        {priority?.toUpperCase() || `P? · ${score}`} · {score}
+      </Tag>
+    ) : (
+      '—'
+    )
+
+  const columns: TableProps<AssetRow>['columns'] = []
+  let rowKey: (row: AssetRow) => string
+  let onRow: TableProps<AssetRow>['onRow']
+
+  if (kind === 'site' && !expanded) {
+    // 站点归并：资产 + 可配置列（图标/风险/状态码/标题/记录/项目/发现时间/操作）+ 连通
+    const siteColumns: TableProps<Site>['columns'] = [
+      {
+        title: '资产',
+        render: (_, s) => (
+          <>
+            <div className="break-all text-sm font-medium">{s.value}</div>
+            <div className="mt-1 flex flex-wrap items-center gap-1">
+              {(s.endpoints ?? []).length > 0 ? (
+                (s.endpoints ?? []).map((e) => (
+                  <span
+                    key={`${e.scheme}-${e.port}`}
+                    title={`最近状态码 ${e.status_code || '—'}`}
+                    className="rounded-sm bg-muted px-1.5 py-0.5 text-[13px] text-muted-foreground"
+                  >
+                    {e.scheme}:{e.port}
+                  </span>
+                ))
+              ) : (
+                <span className="text-[13px] text-muted-foreground">
+                  {s.protocol}:{s.port}
+                </span>
+              )}
+              <span className="ml-1 text-[13px] text-muted-foreground">
+                {s.ip || '—'}
+                {s.technology_stack.length > 0 && ` · ${s.technology_stack.join(', ')}`}
               </span>
-            ))
-          ) : (
-            <span className="text-[13px] text-muted-foreground">
-              {s.protocol}:{s.port}
-            </span>
-          )}
-          <span className="ml-1 text-[13px] text-muted-foreground">
-            {s.ip || '—'}
-            {s.technology_stack.length > 0 && ` · ${s.technology_stack.join(', ')}`}
-          </span>
-        </div>
-      </TableCell>
-      {siteCols.icon && (
-        <TableCell className="hidden sm:table-cell">
-          <SiteIcon sha256={s.icon_sha256} alt={s.host} />
-        </TableCell>
-      )}
-      {siteCols.risk && (
-        <TableCell className="hidden text-right lg:table-cell">
-          <Badge variant={priorityVariant(s.priority)} title={riskTitle(s)}>
+            </div>
+          </>
+        ),
+      },
+    ]
+    if (siteCols.icon) {
+      siteColumns.push({
+        title: '图标',
+        width: 52,
+        responsive: ['sm'],
+        render: (_, s) => <SiteIcon sha256={s.icon_sha256} alt={s.host} />,
+      })
+    }
+    if (siteCols.risk) {
+      siteColumns.push({
+        title: '风险',
+        width: 90,
+        align: 'right',
+        responsive: ['lg'],
+        render: (_, s) => (
+          <Tag className={badgeCls(priorityVariant(s.priority))} title={riskTitle(s)}>
             {priorityLabel(s.priority)} · {s.risk_score}
-          </Badge>
-        </TableCell>
-      )}
-      {siteCols.status && (
-        <TableCell className="hidden text-right sm:table-cell">
-          <Badge variant={s.http_status >= 200 && s.http_status < 400 ? 'default' : 'secondary'}>
-            {s.http_status || '—'}
-          </Badge>
-        </TableCell>
-      )}
-      {siteCols.title && (
-        <TableCell className="hidden max-w-[260px] truncate text-sm md:table-cell">{s.title || '—'}</TableCell>
-      )}
-      {siteCols.records && (
-        <TableCell
-          className="hidden text-right text-sm tabular-nums lg:table-cell"
-          title={`入口 ${s.endpoint_count} · 原始记录 ${s.record_count} · 指纹 ${s.fingerprint_count}`}
-        >
-          <div className="flex items-center justify-end gap-1">
-            <button
-              type="button"
-              aria-label={isOpen ? '收起最近记录' : '展开最近记录'}
-              className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-              onClick={(e) => {
-                e.stopPropagation()
-                setExpandedSiteIDs((prev) => {
-                  const next = new Set(prev)
-                  if (next.has(s.id)) next.delete(s.id)
-                  else next.add(s.id)
-                  return next
-                })
-              }}
-            >
-              {isOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-            </button>
-            <span>{s.record_count}</span>
-          </div>
-        </TableCell>
-      )}
-      {siteCols.project && <TableCell className="hidden text-sm lg:table-cell">{s.project_name}</TableCell>}
-      {siteCols.first_seen && (
-        <TableCell className="hidden text-right text-[13px] tabular-nums text-muted-foreground xl:table-cell">{s.first_seen?.slice(0, 10)}</TableCell>
-      )}
-      <TableCell>
-        <Badge variant={stateVariant(s.state)}>{stateLabel[s.state] ?? s.state}</Badge>
-        {s.consecutive_failures > 0 && (
-          <span className="ml-1 text-[13px] text-destructive">×{s.consecutive_failures}</span>
-        )}
-      </TableCell>
-      {siteCols.actions && (
-      <TableCell className="hidden sm:table-cell" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-1">
-          <Button size="sm" variant="outline" onClick={() => setDetailSite(s)} disabled={busy}>
-            <Eye className="mr-1 h-3.5 w-3.5" /> 详情
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => probe.mutate(s)} disabled={busy}>
-            <Radar className="mr-1 h-3.5 w-3.5" /> 探测
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button size="sm" variant="ghost" disabled={busy}>
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                onClick={() => {
-                  setExpandedSiteIDs((prev) => {
-                    const next = new Set(prev)
-                    if (next.has(s.id)) next.delete(s.id)
-                    else next.add(s.id)
-                    return next
-                  })
+          </Tag>
+        ),
+      })
+    }
+    if (siteCols.status) {
+      siteColumns.push({
+        title: '状态码',
+        width: 90,
+        align: 'right',
+        responsive: ['sm'],
+        render: (_, s) => statusTag(s.http_status),
+      })
+    }
+    if (siteCols.title) {
+      siteColumns.push({
+        title: '标题',
+        responsive: ['md'],
+        render: (_, s) => <span className="block max-w-[260px] truncate text-sm">{s.title || '—'}</span>,
+      })
+    }
+    if (siteCols.records) {
+      siteColumns.push({
+        title: '记录',
+        width: 82,
+        align: 'right',
+        responsive: ['lg'],
+        onCell: (s) => ({ title: `入口 ${s.endpoint_count} · 原始记录 ${s.record_count} · 指纹 ${s.fingerprint_count}` }),
+        render: (_, s) => {
+          const isOpen = expandedSiteIDs.has(s.id)
+          return (
+            <div className="flex items-center justify-end gap-1">
+              <button
+                type="button"
+                aria-label={isOpen ? '收起最近记录' : '展开最近记录'}
+                className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  toggleSiteExpand(s.id)
                 }}
               >
-                {isOpen ? <ChevronUp className="mr-2 h-3.5 w-3.5" /> : <ChevronDown className="mr-2 h-3.5 w-3.5" />}
-                {isOpen ? '收起最近记录' : '展开最近记录'}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => verify.mutate({ site: s, reachable: true })}>
-                <ShieldCheck className="mr-2 h-3.5 w-3.5" /> 人工标记可达
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => verify.mutate({ site: s, reachable: false })}>
-                <ShieldAlert className="mr-2 h-3.5 w-3.5" /> 人工标记失败
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => protect.mutate(s)}>
-                <Lock className="mr-2 h-3.5 w-3.5" /> 保护 90 天
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </TableCell>
-      )}
-      </TableRow>
-      {isOpen && (
-        <TableRow className="bg-muted/30 hover:bg-muted/30">
-          <TableCell colSpan={colCount} className="p-0">
+                {isOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+              </button>
+              <span>{s.record_count}</span>
+            </div>
+          )
+        },
+      })
+    }
+    if (siteCols.project) {
+      siteColumns.push({
+        title: '项目',
+        width: 120,
+        responsive: ['lg'],
+        render: (_, s) => <span className="text-sm">{s.project_name}</span>,
+      })
+    }
+    if (siteCols.first_seen) {
+      siteColumns.push({
+        title: '发现时间',
+        width: 110,
+        align: 'right',
+        responsive: ['xl'],
+        render: (_, s) => (
+          <span className="text-[13px] tabular-nums text-muted-foreground">{s.first_seen?.slice(0, 10)}</span>
+        ),
+      })
+    }
+    siteColumns.push({
+      title: '连通',
+      width: 110,
+      render: (_, s) => (
+        <>
+          {stateTag(s.state)}
+          {s.consecutive_failures > 0 && (
+            <span className="ml-1 text-[13px] text-destructive">×{s.consecutive_failures}</span>
+          )}
+        </>
+      ),
+    })
+    if (siteCols.actions) {
+      siteColumns.push({
+        title: '操作',
+        width: 150,
+        responsive: ['sm'],
+        render: (_, s) => {
+          const isOpen = expandedSiteIDs.has(s.id)
+          return (
+            <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+              <Button size="small" onClick={() => setDetailSite(s)} disabled={busy}>
+                <Eye className="mr-1 h-3.5 w-3.5" /> 详情
+              </Button>
+              <Button size="small" onClick={() => probe.mutate(s)} disabled={busy}>
+                <Radar className="mr-1 h-3.5 w-3.5" /> 探测
+              </Button>
+              <Dropdown
+                trigger={['click']}
+                menu={{
+                  items: [
+                    {
+                      key: 'expand',
+                      label: isOpen ? '收起最近记录' : '展开最近记录',
+                      icon: isOpen ? (
+                        <ChevronUp className="h-3.5 w-3.5" style={{ fontSize: 0 }} />
+                      ) : (
+                        <ChevronDown className="h-3.5 w-3.5" style={{ fontSize: 0 }} />
+                      ),
+                      onClick: () => toggleSiteExpand(s.id),
+                    },
+                    {
+                      key: 'mark-ok',
+                      label: '人工标记可达',
+                      icon: <ShieldCheck className="h-3.5 w-3.5" style={{ fontSize: 0 }} />,
+                      onClick: () => verify.mutate({ site: s, reachable: true }),
+                    },
+                    {
+                      key: 'mark-fail',
+                      label: '人工标记失败',
+                      icon: <ShieldAlert className="h-3.5 w-3.5" style={{ fontSize: 0 }} />,
+                      onClick: () => verify.mutate({ site: s, reachable: false }),
+                    },
+                    {
+                      key: 'protect',
+                      label: '保护 90 天',
+                      icon: <Lock className="h-3.5 w-3.5" style={{ fontSize: 0 }} />,
+                      onClick: () => protect.mutate(s),
+                    },
+                  ],
+                }}
+              >
+                <Button size="small" type="text" disabled={busy} icon={<MoreHorizontal className="h-4 w-4" />} />
+              </Dropdown>
+            </div>
+          )
+        },
+      })
+    }
+    columns.push(...(siteColumns as unknown as NonNullable<TableProps<AssetRow>['columns']>))
+    // 行键用站点 value：多选、导出、派任务都以 host/value 为准。
+    rowKey = (s) => (s as Site).value
+    onRow = (s) => ({
+      className: 'cursor-pointer',
+      onClick: (e) => {
+        // 勾选列的点击不触发行跳转
+        if ((e.target as HTMLElement).closest('.ant-table-selection-column')) return
+        navigate(`/assets/${(s as Site).id}`)
+      },
+    })
+  } else if (expanded) {
+    // 站点展开（入口粒度）
+    columns.push(
+      {
+        title: '入口',
+        render: (_, row) => {
+          const e = row as EndpointRow
+          return (
+            <>
+              <div className="text-sm font-medium">
+                {e.host}:{e.port}
+              </div>
+              <div className="text-[13px] text-muted-foreground">
+                {e.value || '—'} · 站点 #{e.site_id} · 采集 {e.record_count} 次
+              </div>
+            </>
+          )
+        },
+      },
+      {
+        title: '协议',
+        width: 90,
+        render: (_, row) => <Tag className={badgeCls('outline')}>{(row as EndpointRow).protocol || '—'}</Tag>,
+      },
+      {
+        title: '标题',
+        responsive: ['md'],
+        render: (_, row) => (
+          <span className="block max-w-[260px] truncate text-sm">{(row as EndpointRow).title || '—'}</span>
+        ),
+      },
+      {
+        title: '记录数',
+        width: 90,
+        align: 'right',
+        render: (_, row) => <span className="text-sm tabular-nums">{(row as EndpointRow).record_count}</span>,
+      },
+      {
+        title: '连通',
+        width: 110,
+        render: (_, row) => stateTag((row as EndpointRow).state),
+      },
+      {
+        title: '最近发现',
+        width: 110,
+        align: 'right',
+        render: (_, row) => (
+          <span className="text-[13px] tabular-nums text-muted-foreground">
+            {(row as EndpointRow).last_seen?.slice(0, 10)}
+          </span>
+        ),
+      },
+      {
+        title: '项目',
+        width: 120,
+        responsive: ['lg'],
+        render: (_, row) => <span className="text-sm">{(row as EndpointRow).project_name}</span>,
+      },
+    )
+    rowKey = (row) => {
+      const e = row as EndpointRow
+      return `${e.host}-${e.port}-${e.protocol}`
+    }
+    onRow = (row) => ({
+      className: 'cursor-pointer',
+      onClick: () => navigate(`/assets/${(row as EndpointRow).site_id}`),
+    })
+  } else if (kind === 'record') {
+    columns.push(
+      {
+        title: '原始记录',
+        render: (_, row) => {
+          const r = row as RawRecordRow
+          return (
+            <>
+              <div className="flex items-start gap-1.5">
+                <div className="break-all text-sm font-medium">
+                  {r.value || `${r.protocol}://${r.host}:${r.port}`}
+                </div>
+                {r.is_interface && (
+                  <Tag className={`${badgeCls('outline')} shrink-0 text-[11px]`}>接口</Tag>
+                )}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {r.host}:{r.port} · {r.protocol}
+              </div>
+            </>
+          )
+        },
+      },
+      {
+        title: '来源 / 方法',
+        width: 110,
+        render: (_, row) => {
+          const r = row as RawRecordRow
+          return (
+            <div className="text-[13px] text-muted-foreground">
+              <div>{r.source || '—'}</div>
+              <div className="text-[11px]">{r.method || 'GET'}</div>
+            </div>
+          )
+        },
+      },
+      {
+        title: '状态码',
+        width: 90,
+        align: 'right',
+        render: (_, row) => statusTag((row as RawRecordRow).status_code),
+      },
+      {
+        title: '标题',
+        render: (_, row) => (
+          <span className="block max-w-[280px] truncate text-sm">{(row as RawRecordRow).title || '—'}</span>
+        ),
+      },
+      {
+        title: 'IP / 服务',
+        width: 150,
+        render: (_, row) => {
+          const r = row as RawRecordRow
+          return (
+            <div className="text-[13px]">
+              <div>{r.ip || '—'}</div>
+              {r.server && <div className="text-muted-foreground">{r.server}</div>}
+            </div>
+          )
+        },
+      },
+      {
+        title: '观察时间',
+        width: 170,
+        align: 'right',
+        render: (_, row) => (
+          <span className="text-[13px] tabular-nums text-muted-foreground">
+            {(row as RawRecordRow).observed_at?.replace('T', ' ').slice(0, 19)}
+          </span>
+        ),
+      },
+      {
+        title: '项目',
+        width: 120,
+        render: (_, row) => <span className="text-[13px]">{(row as RawRecordRow).project_name || '—'}</span>,
+      },
+    )
+    rowKey = (row) => String((row as RawRecordRow).id)
+    onRow = (row) => {
+      const r = row as RawRecordRow
+      return {
+        className: r.site_id > 0 ? 'cursor-pointer' : undefined,
+        onClick: () => r.site_id > 0 && navigate(`/assets/${r.site_id}`),
+      }
+    }
+  } else if (kind === 'domain') {
+    if (riskSort) {
+      columns.push({
+        title: '风险',
+        width: 90,
+        align: 'right',
+        render: (_, row) => {
+          const d = row as DomainRow
+          return riskCell(d.priority, d.risk_score)
+        },
+      })
+    }
+    columns.push(
+      {
+        title: '域名',
+        render: (_, row) => <span className="text-sm font-medium">{(row as DomainRow).host}</span>,
+      },
+      {
+        title: '站点数',
+        width: 100,
+        align: 'right',
+        render: (_, row) => <span className="text-sm tabular-nums">{(row as DomainRow).site_count}</span>,
+      },
+      {
+        title: '可达',
+        width: 100,
+        align: 'right',
+        render: (_, row) => <span className="text-sm tabular-nums">{(row as DomainRow).reachable_count}</span>,
+      },
+      {
+        title: '项目',
+        width: 120,
+        responsive: ['lg'],
+        render: (_, row) => <span className="text-sm">{(row as DomainRow).project_name}</span>,
+      },
+      {
+        title: '最近发现',
+        align: 'right',
+        render: (_, row) => (
+          <span className="text-[13px] tabular-nums text-muted-foreground">
+            {(row as DomainRow).last_seen?.slice(0, 10)}
+          </span>
+        ),
+      },
+    )
+    rowKey = (row) => (row as DomainRow).host
+  } else {
+    // kind === 'ip'
+    if (riskSort) {
+      columns.push({
+        title: '风险',
+        width: 90,
+        align: 'right',
+        render: (_, row) => {
+          const r = row as IPRow
+          return riskCell(r.priority, r.risk_score)
+        },
+      })
+    }
+    columns.push(
+      {
+        title: 'IP',
+        render: (_, row) => <span className="text-sm font-medium">{(row as IPRow).ip}</span>,
+      },
+      {
+        title: '站点数',
+        width: 100,
+        align: 'right',
+        render: (_, row) => <span className="text-sm tabular-nums">{(row as IPRow).site_count}</span>,
+      },
+      {
+        title: '域名数',
+        width: 100,
+        align: 'right',
+        render: (_, row) => <span className="text-sm tabular-nums">{(row as IPRow).domain_count}</span>,
+      },
+      {
+        title: '最近发现',
+        width: 110,
+        align: 'right',
+        render: (_, row) => (
+          <span className="text-[13px] tabular-nums text-muted-foreground">
+            {(row as IPRow).last_seen?.slice(0, 10)}
+          </span>
+        ),
+      },
+      {
+        title: '项目',
+        width: 110,
+        render: (_, row) => <span className="text-[13px] text-muted-foreground">#{(row as IPRow).project_id}</span>,
+      },
+    )
+    rowKey = (row) => (row as IPRow).ip
+  }
+
+  // 站点归并粒度：行多选（key 与 host/value 对齐），行内展开最近记录。
+  const siteMode = kind === 'site' && !expanded
+  const rowSelection: TableProps<Site>['rowSelection'] = siteMode
+    ? {
+        selectedRowKeys: [...selectedHosts],
+        // 翻页后保留其它页已选中的资产（原 Set 语义）
+        preserveSelectedRowKeys: true,
+        onChange: (keys) => setSelectedHosts(new Set(keys as string[])),
+      }
+    : undefined
+  const expandable: TableProps<Site>['expandable'] = siteMode
+    ? {
+        // 展开入口在「记录」列与行菜单里，antd 自带的展开图标列不显示
+        showExpandColumn: false,
+        expandedRowKeys: (items as Site[]).filter((s) => expandedSiteIDs.has(s.id)).map((s) => s.value),
+        onExpandedRowsChange: (keys) =>
+          setExpandedSiteIDs(
+            new Set(
+              (items as Site[]).filter((s) => (keys as (string | number)[]).includes(s.value)).map((s) => s.id)
+            )
+          ),
+        expandedRowRender: (s) => {
+          const recent = s.recent_records ?? []
+          return (
             <div className="space-y-2 px-3 py-2">
               <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <span>最近 {recent.length} 条采集证据 · 共 {s.record_count} 条</span>
                 <Button
-                  size="sm"
-                  variant="ghost"
+                  size="small"
+                  type="text"
                   className="h-6 px-2 text-xs"
                   onClick={() => {
                     setDetailSite(s)
@@ -839,9 +1146,9 @@ export default function AssetsPage() {
                 <div className="space-y-1">
                   {recent.map((r) => (
                     <div key={r.id} className="flex items-start gap-2 font-mono text-xs">
-                      <Badge variant="outline" className="shrink-0 text-[10px]">{r.method || 'GET'}</Badge>
+                      <Tag className={`${badgeCls('outline')} shrink-0 text-[10px]`}>{r.method || 'GET'}</Tag>
                       {r.is_interface && (
-                        <Badge variant="secondary" className="shrink-0 text-[10px]">接口</Badge>
+                        <Tag className={`${badgeCls('secondary')} shrink-0 text-[10px]`}>接口</Tag>
                       )}
                       <span className="break-all">{r.value}</span>
                       <span className="ml-auto shrink-0 tabular-nums text-muted-foreground">
@@ -852,12 +1159,96 @@ export default function AssetsPage() {
                 </div>
               )}
             </div>
-          </TableCell>
-        </TableRow>
-      )}
-      </Fragment>
-    )
+          )
+        },
+      }
+    : undefined
+
+  // —— 工具栏菜单 ——
+  const savedViewMenuItems: MenuProps['items'] = [
+    ...(savedViews.length === 0
+      ? [
+          {
+            key: 'empty',
+            disabled: true,
+            label: <span className="text-sm text-muted-foreground">还没有保存的视图</span>,
+          },
+        ]
+      : savedViews.map((v) => ({
+          key: v.id,
+          label: (
+            <span className="flex items-center gap-2">
+              <span className="flex-1 truncate">{v.name}</span>
+              <button
+                type="button"
+                aria-label={`删除视图 ${v.name}`}
+                className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  deleteSavedView(v.id)
+                }}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </span>
+          ),
+          onClick: () => applySavedView(v),
+        }))),
+    { type: 'divider' as const },
+    {
+      key: 'save',
+      label: '保存当前视图',
+      icon: <Plus className="h-4 w-4" style={{ fontSize: 0 }} />,
+      onClick: () => {
+        setViewName('')
+        setSaveViewOpen(true)
+      },
+    },
+  ]
+
+  const toggleSiteCol = (key: SiteColumn) => {
+    const next = { ...siteCols, [key]: !siteCols[key] }
+    setSiteCols(next)
+    try {
+      localStorage.setItem(SITE_COLUMNS_KEY, JSON.stringify(next))
+    } catch { /* 存储不可用时只影响本次会话 */ }
   }
+
+  // 常驻渲染按需禁用：切粒度时工具栏几何形状不变
+  const colsApplicable = kind === 'site' && siteGroup
+  const columnMenuItems: MenuProps['items'] = [
+    { key: '_label', disabled: true, label: <span className="text-xs text-muted-foreground">站点列表列</span> },
+    { type: 'divider' as const },
+    ...SITE_COLUMNS.map((c) => ({
+      key: c.key,
+      label: (
+        <span className="flex items-center gap-2">
+          <Checkbox className="pointer-events-none" checked={siteCols[c.key]} />
+          <span>{c.label}</span>
+        </span>
+      ),
+      onClick: () => toggleSiteCol(c.key),
+    })),
+    { type: 'divider' as const },
+    {
+      key: 'reset',
+      label: '恢复默认列',
+      icon: <RotateCcw className="h-4 w-4" style={{ fontSize: 0 }} />,
+      onClick: () => {
+        setSiteCols({ ...DEFAULT_SITE_COLUMNS })
+        try {
+          localStorage.removeItem(SITE_COLUMNS_KEY)
+        } catch { /* noop */ }
+      },
+    },
+  ]
+
+  // 聚类/偏移两种分页共用 total
+  const offsetTotal = clusterView
+    ? view === 'icons'
+      ? iconClusters.data?.data.total ?? 0
+      : techClusters.data?.data.total ?? 0
+    : total
 
   return (
     <div className="space-y-5 p-6">
@@ -879,100 +1270,29 @@ export default function AssetsPage() {
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline">
-                <Bookmark className="mr-2 h-4 w-4" /> 保存的视图
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-60">
-              {savedViews.length === 0 ? (
-                <div className="px-2 py-1.5 text-sm text-muted-foreground">还没有保存的视图</div>
-              ) : (
-                savedViews.map((v) => (
-                  <DropdownMenuItem
-                    key={v.id}
-                    className="gap-2"
-                    onSelect={() => applySavedView(v)}
-                  >
-                    <span className="flex-1 truncate">{v.name}</span>
-                    <button
-                      type="button"
-                      aria-label={`删除视图 ${v.name}`}
-                      className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        deleteSavedView(v.id)
-                      }}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </DropdownMenuItem>
-                ))
-              )}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onSelect={() => {
-                  setViewName('')
-                  setSaveViewOpen(true)
-                }}
-              >
-                <Plus className="mr-2 h-4 w-4" /> 保存当前视图
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Button variant="outline" onClick={() => exportCurrent()} disabled={items.length === 0}>
+          <Dropdown
+            trigger={['click']}
+            menu={{ items: savedViewMenuItems, style: { minWidth: 240 } }}
+          >
+            <Button>
+              <Bookmark className="mr-2 h-4 w-4" /> 保存的视图
+            </Button>
+          </Dropdown>
+          <Button onClick={() => exportCurrent()} disabled={items.length === 0}>
             <Download className="mr-2 h-4 w-4" /> 导出本页
           </Button>
-          <Button variant="outline" onClick={() => list.refetch()}>
+          <Button onClick={() => list.refetch()}>
             <RefreshCw className="mr-2 h-4 w-4" /> 刷新
           </Button>
-          {(() => {
-            // 常驻渲染按需禁用：切粒度时工具栏几何形状不变
-            const colsApplicable = kind === 'site' && siteGroup
-            return (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" disabled={!colsApplicable}
-                title={colsApplicable ? undefined : '仅站点归并视图支持自定义列'}>
-                <SlidersHorizontal className="mr-2 h-4 w-4" /> 列
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-52">
-              <DropdownMenuLabel>站点列表列</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              {SITE_COLUMNS.map((c) => (
-                <DropdownMenuCheckboxItem
-                  key={c.key}
-                  checked={siteCols[c.key]}
-                  onCheckedChange={(v) => {
-                    const next = { ...siteCols, [c.key]: v === true }
-                    setSiteCols(next)
-                    try {
-                      localStorage.setItem(SITE_COLUMNS_KEY, JSON.stringify(next))
-                    } catch { /* 存储不可用时只影响本次会话 */ }
-                  }}
-                >
-                  {c.label}
-                </DropdownMenuCheckboxItem>
-              ))}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onSelect={() => {
-                  setSiteCols({ ...DEFAULT_SITE_COLUMNS })
-                  try {
-                    localStorage.removeItem(SITE_COLUMNS_KEY)
-                  } catch { /* noop */ }
-                }}
-              >
-                <RotateCcw className="mr-2 h-4 w-4" /> 恢复默认列
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-            )
-          })()}
-          <Button variant="outline" onClick={() => list.refetch()}>
+          <Dropdown
+            trigger={['click']}
+            menu={{ items: columnMenuItems, style: { minWidth: 208 } }}
+          >
+            <Button disabled={!colsApplicable} title={colsApplicable ? undefined : '仅站点归并视图支持自定义列'}>
+              <SlidersHorizontal className="mr-2 h-4 w-4" /> 列
+            </Button>
+          </Dropdown>
+          <Button onClick={() => list.refetch()}>
             <RefreshCw className="mr-2 h-4 w-4" /> 刷新
           </Button>
         </div>
@@ -986,12 +1306,12 @@ export default function AssetsPage() {
             placeholder={kind === 'record' ? '搜索主机 / URL / 标题' : 'status_code="200" && domain="example.com"'}
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && applyQuery()}
+            onPressEnter={applyQuery}
           />
         </div>
-        <Button onClick={applyQuery}>查询</Button>
+        <Button type="primary" onClick={applyQuery}>查询</Button>
         <Button
-          variant="ghost"
+          type="text"
           onClick={() => {
             setQ('')
             setAppliedQ('')
@@ -1000,19 +1320,19 @@ export default function AssetsPage() {
         >
           清空
         </Button>
-        <Select value={projectId} onValueChange={changeProject}>
-          <SelectTrigger className="w-[200px]">
-            <SelectValue placeholder="全部项目" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="0">全部项目</SelectItem>
-            {(projects.data?.data ?? []).map((p) => (
-              <SelectItem key={p.id} value={String(p.id)}>
-                {p.name}（{p.asset_count}）
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <Select
+          className="w-[200px]"
+          value={projectId}
+          onChange={changeProject}
+          placeholder="全部项目"
+          options={[
+            { value: '0', label: '全部项目' },
+            ...(projects.data?.data ?? []).map((p) => ({
+              value: String(p.id),
+              label: `${p.name}（${p.asset_count}）`,
+            })),
+          ]}
+        />
       </div>
 
       <div className="flex flex-wrap items-center gap-4">
@@ -1028,20 +1348,18 @@ export default function AssetsPage() {
           <span className="text-[13px] text-muted-foreground">视图</span>
           <Segmented value={view} options={VIEWS} onChange={changeView} />
         </div>
-        <label
-          className={
-            'flex items-center gap-2 text-[13px] ' +
-            (kind === 'site' ? 'text-muted-foreground' : 'text-muted-foreground/50')
-          }
+        <span
+          className="flex items-center gap-2 text-[13px] text-muted-foreground"
           title={kind === 'site' ? undefined : '仅站点粒度支持按站点归并'}
         >
           <Checkbox
             checked={siteGroup}
             disabled={kind !== 'site'}
-            onCheckedChange={(v) => { setSiteGroup(v === true); setPage(1) }}
-          />
-          按站点归并
-        </label>
+            onChange={(e) => { setSiteGroup(e.target.checked); setPage(1) }}
+          >
+            按站点归并
+          </Checkbox>
+        </span>
         <div className="flex items-center gap-2">
           <span className={'text-[13px] ' + (sortApplicable ? 'text-muted-foreground' : 'text-muted-foreground/50')}>
             排序
@@ -1051,18 +1369,11 @@ export default function AssetsPage() {
         <div className="flex items-center gap-2">
           <span className="text-[13px] text-muted-foreground">每页</span>
           <Select
+            className="w-[76px]"
             value={String(pageSize)}
-            onValueChange={(v) => { setPageSize(Number(v)); setPage(1) }}
-          >
-            <SelectTrigger className="h-8 w-[76px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {[20, 50, 100, 200, 500].map((n) => (
-                <SelectItem key={n} value={String(n)}>{n}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            onChange={(v) => { setPageSize(Number(v)); setPage(1) }}
+            options={[20, 50, 100, 200, 500].map((n) => ({ value: String(n), label: String(n) }))}
+          />
         </div>
         <span className="ml-auto flex items-center gap-2 text-sm text-muted-foreground">
           {list.isFetching && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-label="加载中" />}
@@ -1161,19 +1472,18 @@ export default function AssetsPage() {
           <span className="text-muted-foreground">
             已选 <span className="text-foreground font-medium">{selectedHosts.size}</span> 个资产
           </span>
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <Button size="small" type="primary" onClick={() => setCreateOpen(true)}>
             <Rocket className="mr-1 h-4 w-4" />
             用选中资产创建任务
           </Button>
           <Button
-            variant="outline"
-            size="sm"
+            size="small"
             onClick={() => exportCurrent((items as Site[]).filter((s) => selectedHosts.has(s.value)))}
           >
             <Download className="mr-1 h-4 w-4" />
             导出所选
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setSelectedHosts(new Set())}>
+          <Button size="small" onClick={() => setSelectedHosts(new Set())}>
             <X className="mr-1 h-4 w-4" />
             清空选择
           </Button>
@@ -1182,264 +1492,93 @@ export default function AssetsPage() {
 
       {!clusterView && (!data || data.view_supported !== false) && (
         <div
-          ref={scrollRef}
           className={
-            (virtualize ? 'max-h-[70vh] overflow-auto rounded-md border [&>div]:overflow-visible' : 'rounded-md border') +
+            'rounded-md border' +
             // 后台取新数据时整表弱化，代替「塌陷成加载态」的硬切换
             (list.isFetching && !list.isLoading ? ' opacity-60 transition-opacity' : ' transition-opacity')
           }
         >
-          <Table>
-            <TableHeader className={virtualize ? 'sticky top-0 z-10 bg-background' : undefined}>
-              <TableRow>
-                {kind === 'site' && !expanded && (
-                  <TableHead className="w-10">
-                    <Checkbox checked={allPageSelected} onCheckedChange={togglePageHosts} aria-label="选中本页资产" />
-                  </TableHead>
-                )}
-                <TableHead>{expanded ? '入口' : kind === 'site' ? '资产' : kind === 'domain' ? '域名' : kind === 'record' ? '原始记录' : 'IP'}</TableHead>
-                {kind === 'record' && <TableHead className="w-[110px]">来源 / 方法</TableHead>}
-                {kind === 'record' && <TableHead className="w-[90px] text-right">状态码</TableHead>}
-                {kind === 'record' && <TableHead>标题</TableHead>}
-                {kind === 'record' && <TableHead className="w-[150px]">IP / 服务</TableHead>}
-                {kind === 'record' && <TableHead className="w-[170px] text-right">观察时间</TableHead>}
-                {kind === 'record' && <TableHead className="w-[120px]">项目</TableHead>}
-                {kind === 'site' && !expanded && siteCols.icon && <TableHead className="hidden w-[52px] sm:table-cell">图标</TableHead>}
-                {kind === 'site' && !expanded && siteCols.risk && <TableHead className="hidden w-[90px] text-right lg:table-cell">风险</TableHead>}
-                {kind === 'site' && !expanded && siteCols.status && <TableHead className="hidden w-[90px] text-right sm:table-cell">状态码</TableHead>}
-                {kind === 'site' && !expanded && siteCols.title && <TableHead className="hidden md:table-cell">标题</TableHead>}
-                {kind === 'site' && !expanded && siteCols.records && <TableHead className="hidden w-[82px] text-right lg:table-cell">记录</TableHead>}
-                {kind === 'site' && !expanded && siteCols.project && <TableHead className="hidden w-[120px] lg:table-cell">项目</TableHead>}
-                {kind === 'site' && !expanded && siteCols.first_seen && <TableHead className="hidden w-[110px] text-right xl:table-cell">发现时间</TableHead>}
-                {kind === 'site' && !expanded && <TableHead className="w-[110px]">连通</TableHead>}
-                {expanded && <TableHead className="w-[90px]">协议</TableHead>}
-                {expanded && <TableHead className="hidden md:table-cell">标题</TableHead>}
-                {expanded && <TableHead className="w-[90px] text-right">记录数</TableHead>}
-                {expanded && <TableHead className="w-[110px]">连通</TableHead>}
-                {expanded && <TableHead className="w-[110px] text-right">最近发现</TableHead>}
-                {expanded && <TableHead className="hidden w-[120px] lg:table-cell">项目</TableHead>}
-                {kind === 'domain' && riskSort && <TableHead className="w-[90px] text-right">风险</TableHead>}
-                {kind === 'domain' && <TableHead className="w-[100px] text-right">站点数</TableHead>}
-                {kind === 'domain' && <TableHead className="w-[100px] text-right">可达</TableHead>}
-                {kind === 'domain' && <TableHead className="hidden w-[120px] lg:table-cell">项目</TableHead>}
-                {kind === 'ip' && riskSort && <TableHead className="w-[90px] text-right">风险</TableHead>}
-                {kind === 'ip' && <TableHead className="w-[100px] text-right">站点数</TableHead>}
-                {kind === 'ip' && <TableHead className="w-[100px] text-right">域名数</TableHead>}
-                {kind === 'ip' && <TableHead className="w-[110px] text-right">最近发现</TableHead>}
-                {kind === 'site' && !expanded && siteCols.actions && <TableHead className="hidden w-[150px] sm:table-cell">操作</TableHead>}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {list.isLoading && (
-                <TableRow>
-                  <TableCell colSpan={colCount} className="py-8 text-center text-muted-foreground">
-                    加载中…
-                  </TableCell>
-                </TableRow>
-              )}
-              {!list.isLoading && items.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={colCount} className="p-0">
-                    {hasFilters ? (
-                      <EmptyState
-                        icon={Search}
-                        title="没有匹配的资产"
-                        description="当前筛选条件下没有任何资产，资产本身可能已经存在。"
-                        hints={[
-                          appliedQ ? `关键词：${appliedQ}` : '关键词：无',
-                          `资产类型：${KINDS.find((k) => k.value === kind)?.label ?? '全部'}`,
-                          '清空筛选后能看到项目内的全部资产',
-                        ]}
-                        actions={
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setQ('')
-                              setAppliedQ('')
-                              setPage(1)
-                              setSearchParams({})
-                            }}
-                          >
-                            清空筛选
-                          </Button>
-                        }
-                      />
-                    ) : (
-                      <EmptyState
-                        icon={Radar}
-                        title="这个项目还没有资产"
-                        description="资产是任务跑出来的：子域、端口、URL 结果经入口探测与指纹识别后归并成站点。项目刚建、还没跑任务时为空是正常的。"
-                        hints={[
-                          '第一步：建一个侦察任务，选子域枚举 + 端口指纹，目标填主域名',
-                          '任务开始后，原始结果先落「本次任务资产」之外的明细页签',
-                          '归并成站点后，这里会按 host 列出入口、标题、技术栈与风险',
-                        ]}
-                        actions={
-                          <>
-                            <Button size="sm" onClick={() => navigate('/tasks/new' + (projectId && projectId !== '0' ? `?project_id=${projectId}` : ''))}>
-                              建第一个侦察任务
-                            </Button>
-                            <Button variant="outline" size="sm" onClick={() => navigate('/tasks' + (projectId && projectId !== '0' ? `?project_id=${projectId}` : ''))}>
-                              看任务列表
-                            </Button>
-                          </>
-                        }
-                      />
-                    )}
-                  </TableCell>
-                </TableRow>
-              )}
-
-              {kind === 'site' && !expanded && !virtualize &&
-                (items as Site[]).map((s) => renderSiteRow(s))}
-
-              {virtualize && virtualItems.length > 0 && (
-                <TableRow style={{ height: virtualItems[0].start }}>
-                  <TableCell colSpan={colCount} style={{ padding: 0 }} />
-                </TableRow>
-              )}
-              {virtualize && virtualItems.map((vi) => renderSiteRow((items as Site[])[vi.index], vi.index))}
-              {virtualize && virtualItems.length > 0 && (
-                <TableRow
-                  style={{
-                    height: Math.max(0, rowVirtualizer.getTotalSize() - virtualItems[virtualItems.length - 1].end),
-                  }}
-                >
-                  <TableCell colSpan={colCount} style={{ padding: 0 }} />
-                </TableRow>
-              )}
-
-              {expanded &&
-                (items as EndpointRow[]).map((e) => (
-                  <TableRow
-                    key={`${e.host}-${e.port}-${e.protocol}`}
-                    className="hover:bg-muted/40 cursor-pointer"
-                    onClick={() => navigate(`/assets/${e.site_id}`)}
-                  >
-                    <TableCell>
-                      <div className="text-sm font-medium">
-                        {e.host}:{e.port}
-                      </div>
-                      <div className="text-[13px] text-muted-foreground">
-                        {e.value || '—'} · 站点 #{e.site_id} · 采集 {e.record_count} 次
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{e.protocol || '—'}</Badge>
-                    </TableCell>
-                    <TableCell className="max-w-[260px] truncate text-sm">{e.title || '—'}</TableCell>
-                    <TableCell className="text-right text-sm tabular-nums">{e.record_count}</TableCell>
-                    <TableCell>
-                      <Badge variant={stateVariant(e.state)}>{stateLabel[e.state] ?? e.state}</Badge>
-                    </TableCell>
-                    <TableCell className="text-right text-[13px] tabular-nums text-muted-foreground">{e.last_seen?.slice(0, 10)}</TableCell>
-                    <TableCell className="text-sm">{e.project_name}</TableCell>
-                  </TableRow>
-                ))}
-
-              {kind === 'record' &&
-                (items as RawRecordRow[]).map((r) => (
-                  <TableRow
-                    key={r.id}
-                    className={r.site_id > 0 ? 'cursor-pointer hover:bg-muted/40' : undefined}
-                    onClick={() => r.site_id > 0 && navigate(`/assets/${r.site_id}`)}
-                  >
-                    <TableCell>
-                      <div className="flex items-start gap-1.5">
-                        <div className="break-all text-sm font-medium">
-                          {r.value || `${r.protocol}://${r.host}:${r.port}`}
-                        </div>
-                        {r.is_interface && (
-                          <Badge variant="outline" className="shrink-0 text-[11px]">接口</Badge>
-                        )}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {r.host}:{r.port} · {r.protocol}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-[13px] text-muted-foreground">
-                      <div>{r.source || '—'}</div>
-                      <div className="text-[11px]">{r.method || 'GET'}</div>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Badge variant={r.status_code >= 200 && r.status_code < 400 ? 'default' : 'secondary'}>
-                        {r.status_code || '—'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="max-w-[280px] truncate text-sm">{r.title || '—'}</TableCell>
-                    <TableCell className="text-[13px]">
-                      <div>{r.ip || '—'}</div>
-                      {r.server && <div className="text-muted-foreground">{r.server}</div>}
-                    </TableCell>
-                    <TableCell className="text-right text-[13px] tabular-nums text-muted-foreground">
-                      {r.observed_at?.replace('T', ' ').slice(0, 19)}
-                    </TableCell>
-                    <TableCell className="text-[13px]">{r.project_name || '—'}</TableCell>
-                  </TableRow>
-                ))}
-
-              {kind === 'domain' &&
-                (items as DomainRow[]).map((d) => (
-                  <TableRow key={d.host}>
-                    <TableCell className="text-sm font-medium">{d.host}</TableCell>
-                    {riskSort && (
-                      <TableCell className="text-right">
-                        {d.risk_score ? (
-                          <Badge variant="outline" className="tabular-nums">
-                            {d.priority?.toUpperCase() || `P? · ${d.risk_score}`} · {d.risk_score}
-                          </Badge>
-                        ) : '—'}
-                      </TableCell>
-                    )}
-                    <TableCell className="text-right text-sm tabular-nums">{d.site_count}</TableCell>
-                    <TableCell className="text-right text-sm tabular-nums">{d.reachable_count}</TableCell>
-                    <TableCell className="text-sm">{d.project_name}</TableCell>
-                    <TableCell className="text-right text-[13px] tabular-nums text-muted-foreground">{d.last_seen?.slice(0, 10)}</TableCell>
-                  </TableRow>
-                ))}
-
-              {kind === 'ip' &&
-                (items as IPRow[]).map((r) => (
-                  <TableRow key={r.ip}>
-                    <TableCell className="text-sm font-medium">{r.ip}</TableCell>
-                    {riskSort && (
-                      <TableCell className="text-right">
-                        {r.risk_score ? (
-                          <Badge variant="outline" className="tabular-nums">
-                            {r.priority?.toUpperCase() || `P? · ${r.risk_score}`} · {r.risk_score}
-                          </Badge>
-                        ) : '—'}
-                      </TableCell>
-                    )}
-                    <TableCell className="text-right text-sm tabular-nums">{r.site_count}</TableCell>
-                    <TableCell className="text-right text-sm tabular-nums">{r.domain_count}</TableCell>
-                    <TableCell className="text-right text-[13px] tabular-nums text-muted-foreground">{r.last_seen?.slice(0, 10)}</TableCell>
-                    <TableCell className="text-[13px] text-muted-foreground">#{r.project_id}</TableCell>
-                  </TableRow>
-                ))}
-            </TableBody>
-          </Table>
+          <Table<AssetRow>
+            columns={columns}
+            dataSource={items as AssetRow[]}
+            rowKey={rowKey}
+            loading={list.isFetching}
+            pagination={false}
+            virtual={virtualize}
+            scroll={virtualize ? { y: '70vh' } : undefined}
+            rowSelection={rowSelection as TableProps<AssetRow>['rowSelection']}
+            expandable={expandable as TableProps<AssetRow>['expandable']}
+            onRow={onRow}
+            locale={{
+              emptyText: hasFilters ? (
+                <EmptyState
+                  icon={Search}
+                  title="没有匹配的资产"
+                  description="当前筛选条件下没有任何资产，资产本身可能已经存在。"
+                  hints={[
+                    appliedQ ? `关键词：${appliedQ}` : '关键词：无',
+                    `资产类型：${KINDS.find((k) => k.value === kind)?.label ?? '全部'}`,
+                    '清空筛选后能看到项目内的全部资产',
+                  ]}
+                  actions={
+                    <Button
+                      size="small"
+                      onClick={() => {
+                        setQ('')
+                        setAppliedQ('')
+                        setPage(1)
+                        setSearchParams({})
+                      }}
+                    >
+                      清空筛选
+                    </Button>
+                  }
+                  className="border-0"
+                />
+              ) : (
+                <EmptyState
+                  icon={Radar}
+                  title="这个项目还没有资产"
+                  description="资产是任务跑出来的：子域、端口、URL 结果经入口探测与指纹识别后归并成站点。项目刚建、还没跑任务时为空是正常的。"
+                  hints={[
+                    '第一步：建一个侦察任务，选子域枚举 + 端口指纹，目标填主域名',
+                    '任务开始后，原始结果先落「本次任务资产」之外的明细页签',
+                    '归并成站点后，这里会按 host 列出入口、标题、技术栈与风险',
+                  ]}
+                  actions={
+                    <>
+                      <Button size="small" type="primary" onClick={() => navigate('/tasks/new' + (projectId && projectId !== '0' ? `?project_id=${projectId}` : ''))}>
+                        建第一个侦察任务
+                      </Button>
+                      <Button size="small" onClick={() => navigate('/tasks' + (projectId && projectId !== '0' ? `?project_id=${projectId}` : ''))}>
+                        看任务列表
+                      </Button>
+                    </>
+                  }
+                  className="border-0"
+                />
+              ),
+            }}
+          />
         </div>
       )}
 
       {cursorMode ? (
+        // 游标分页：只有上一页/下一页（keyset 无法跳页），页码即游标栈深度
         <div className="flex items-center justify-between text-sm">
           <span className="text-muted-foreground">
             第 {cursorStack.length} 页 · 本页 {items.length} 条
           </span>
           <div className="flex gap-2">
             <Button
-              variant="outline"
-              size="sm"
+              size="small"
               disabled={cursorStack.length <= 1}
               onClick={() => setCursorStack((stack) => stack.slice(0, -1))}
             >
               上一页
             </Button>
             <Button
-              variant="outline"
-              size="sm"
+              size="small"
               disabled={!hasMore || !nextCursor}
               onClick={() => setCursorStack((stack) => [...stack, nextCursor])}
             >
@@ -1448,36 +1587,17 @@ export default function AssetsPage() {
           </div>
         </div>
       ) : (
+        // 偏移分页：风险排序 / 入口展开 / 聚类视图走 page 参数
         <div className="flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">
-            共{' '}
-            {(clusterView
-              ? view === 'icons'
-                ? iconClusters.data?.data.total ?? 0
-                : techClusters.data?.data.total ?? 0
-              : total
-            ).toLocaleString()}{' '}
-            条 · 第 {page} /{' '}
-            {Math.max(
-              1,
-              Math.ceil(
-                (clusterView
-                  ? view === 'icons'
-                    ? iconClusters.data?.data.total ?? 0
-                    : techClusters.data?.data.total ?? 0
-                  : total) / (clusterView ? 60 : size)
-              )
-            )}{' '}
-            页
-          </span>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-              上一页
-            </Button>
-            <Button variant="outline" size="sm" disabled={page >= pages} onClick={() => setPage((p) => p + 1)}>
-              下一页
-            </Button>
-          </div>
+          <span className="text-muted-foreground">共 {offsetTotal.toLocaleString()} 条</span>
+          <Pagination
+            current={page}
+            pageSize={clusterView ? 60 : size}
+            total={offsetTotal}
+            showQuickJumper
+            showSizeChanger={false}
+            onChange={(p) => setPage(p)}
+          />
         </div>
       )}
 
@@ -1496,17 +1616,15 @@ export default function AssetsPage() {
                   {detailSite.value || detailSite.host}
                 </div>
                 <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                  <Badge variant={stateVariant(detailSite.state)}>
+                  <Tag className={badgeCls(stateVariant(detailSite.state))}>
                     {stateLabel[detailSite.state] ?? detailSite.state}
-                  </Badge>
+                  </Tag>
                   <span>{detailSite.project_name}</span>
                   <span>·</span>
                   <span className="tabular-nums">P{detailSite.priority?.replace(/^p/i, '') || '—'} · {detailSite.risk_score}</span>
                 </div>
               </div>
-              <Button variant="ghost" size="icon" aria-label="关闭详情" onClick={() => setDetailSite(null)}>
-                <X className="h-4 w-4" />
-              </Button>
+              <Button type="text" aria-label="关闭详情" onClick={() => setDetailSite(null)} icon={<X className="h-4 w-4" />} />
             </div>
 
             <div className="flex gap-1 overflow-x-auto border-b px-3 py-2">
@@ -1576,7 +1694,7 @@ export default function AssetsPage() {
                           {(detailSite.technology_stack ?? []).length === 0 ? (
                             <span className="text-sm text-muted-foreground">—</span>
                           ) : detailSite.technology_stack.map((t) => (
-                            <Badge key={t} variant="secondary" className="text-xs">{t}</Badge>
+                            <Tag key={t} className={`${badgeCls('secondary')} text-xs`}>{t}</Tag>
                           ))}
                         </div>
                       </div>
@@ -1590,9 +1708,9 @@ export default function AssetsPage() {
                       ) : detailSite.endpoints.map((e) => (
                         <div key={`${e.scheme}-${e.port}`} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
                           <span className="font-mono">{e.scheme}:{e.port}</span>
-                          <Badge variant={e.status_code >= 200 && e.status_code < 400 ? 'default' : 'secondary'}>
+                          <Tag className={badgeCls(e.status_code >= 200 && e.status_code < 400 ? 'default' : 'secondary')}>
                             {e.status_code || '—'}
-                          </Badge>
+                          </Tag>
                         </div>
                       ))}
                     </div>
@@ -1600,69 +1718,77 @@ export default function AssetsPage() {
 
                   {detailTab === 'records' && (
                     <div className="space-y-3">
-                      <label className="flex items-center gap-2 text-[13px] text-muted-foreground">
+                      <span className="flex items-center gap-2 text-[13px] text-muted-foreground">
                         <Checkbox
                           checked={recordsInterfaceOnly}
-                          onCheckedChange={(v) => {
-                            setRecordsInterfaceOnly(v === true)
+                          onChange={(e) => {
+                            setRecordsInterfaceOnly(e.target.checked)
                             setRecordsCursorStack([undefined])
                           }}
-                        />
-                        只看接口
-                      </label>
+                        >
+                          只看接口
+                        </Checkbox>
+                      </span>
                       {recordsQuery.isLoading ? (
                         <p className="text-sm text-muted-foreground">加载原始记录…</p>
                       ) : records.length === 0 ? (
                         <p className="text-sm text-muted-foreground">暂无原始记录。</p>
                       ) : (
                         <div className="rounded-md border">
-                          <Table>
-                            <TableHeader>
-                              <TableRow>
-                                <TableHead>记录</TableHead>
-                                <TableHead className="w-[54px]">来源</TableHead>
-                                <TableHead className="w-[54px] text-right">状态</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {records.map((r) => (
-                                <TableRow key={r.id}>
-                                  <TableCell className="max-w-[270px] break-all font-mono text-xs">
+                          <Table
+                            size="small"
+                            pagination={false}
+                            rowKey={(r) => String(r.id)}
+                            dataSource={records}
+                            columns={[
+                              {
+                                title: '记录',
+                                render: (_, r) => (
+                                  <div className="max-w-[270px] break-all font-mono text-xs">
                                     <div className="flex items-start gap-1">
                                       <span>{r.value}</span>
                                       {r.is_interface && (
-                                        <Badge variant="outline" className="shrink-0 text-[10px]">接口</Badge>
+                                        <Tag className={`${badgeCls('outline')} shrink-0 text-[10px]`}>接口</Tag>
                                       )}
                                     </div>
                                     <div className="mt-0.5 text-[11px] text-muted-foreground">
                                       {formatDate(r.observed_at)}
                                     </div>
-                                  </TableCell>
-                                  <TableCell className="text-xs text-muted-foreground">
+                                  </div>
+                                ),
+                              },
+                              {
+                                title: '来源',
+                                width: 54,
+                                render: (_, r) => (
+                                  <div className="text-xs text-muted-foreground">
                                     <div>{r.source}</div>
                                     <div>{r.method || 'GET'}</div>
-                                  </TableCell>
-                                  <TableCell className="text-right text-xs tabular-nums">{r.status_code || '—'}</TableCell>
-                                </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
+                                  </div>
+                                ),
+                              },
+                              {
+                                title: '状态',
+                                width: 54,
+                                align: 'right',
+                                render: (_, r) => <span className="text-xs tabular-nums">{r.status_code || '—'}</span>,
+                              },
+                            ]}
+                          />
                         </div>
                       )}
                       <div className="flex items-center justify-between text-xs text-muted-foreground">
                         <span>已加载 {records.length} 条</span>
                         <div className="flex gap-1">
                           <Button
-                            variant="outline"
-                            size="sm"
+                            size="small"
                             disabled={recordsCursorStack.length <= 1}
                             onClick={() => setRecordsCursorStack((stack) => stack.slice(0, -1))}
                           >
                             上一页
                           </Button>
                           <Button
-                            variant="outline"
-                            size="sm"
+                            size="small"
                             disabled={!recordsPage?.has_more || !recordsPage?.next_cursor}
                             onClick={() => setRecordsCursorStack((stack) => [...stack, recordsPage?.next_cursor])}
                           >
@@ -1695,7 +1821,7 @@ export default function AssetsPage() {
                       ) : detail.verifications.map((v) => (
                         <div key={v.id} className="rounded-md border px-3 py-2 text-sm">
                           <div className="flex items-center justify-between gap-2">
-                            <Badge variant={v.status === 'reachable' ? 'success' : 'secondary'}>{v.status}</Badge>
+                            <Tag className={badgeCls(v.status === 'reachable' ? 'success' : 'secondary')}>{v.status}</Tag>
                             <span className="text-xs text-muted-foreground">{formatDate(v.observed_at)}</span>
                           </div>
                           <div className="mt-1 text-xs text-muted-foreground">
@@ -1711,6 +1837,7 @@ export default function AssetsPage() {
 
             <div className="border-t p-3">
               <Button
+                type="primary"
                 className="w-full"
                 onClick={() => {
                   const id = detailSite.id
@@ -1725,29 +1852,28 @@ export default function AssetsPage() {
         </>
       )}
 
-      <Dialog open={saveViewOpen} onOpenChange={setSaveViewOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>保存当前视图</DialogTitle>
-            <DialogDescription>
-              保存查询串、粒度、视图、项目、排序与每页条数；不保存页码。
-            </DialogDescription>
-          </DialogHeader>
-          <Input
-            autoFocus
-            value={viewName}
-            placeholder="例如：美团接口资产"
-            onChange={(e) => setViewName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') saveCurrentView()
-            }}
-          />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSaveViewOpen(false)}>取消</Button>
-            <Button onClick={saveCurrentView} disabled={!viewName.trim()}>保存</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <Modal
+        open={saveViewOpen}
+        onCancel={() => setSaveViewOpen(false)}
+        title="保存当前视图"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setSaveViewOpen(false)}>取消</Button>
+            <Button type="primary" onClick={saveCurrentView} disabled={!viewName.trim()}>保存</Button>
+          </div>
+        }
+      >
+        <p className="mb-3 text-sm text-muted-foreground">
+          保存查询串、粒度、视图、项目、排序与每页条数；不保存页码。
+        </p>
+        <Input
+          autoFocus
+          value={viewName}
+          placeholder="例如：美团接口资产"
+          onChange={(e) => setViewName(e.target.value)}
+          onPressEnter={saveCurrentView}
+        />
+      </Modal>
 
       <CreateTaskFromAssetsDialog
         open={createOpen}

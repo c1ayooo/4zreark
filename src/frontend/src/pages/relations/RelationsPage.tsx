@@ -1,24 +1,17 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Network, RefreshCw, Share2 } from 'lucide-react'
+import { Button, Card, Select, Table, Tag } from 'antd'
+import type { TableProps } from 'antd'
 
 import { projectApi } from '@/api/projects'
 import {
   relationApi,
   relationTypeLabel,
+  type RelationEdge,
   type RelationIndexStatus,
 } from '@/api/relations'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader } from '@/components/ui/card'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import EmptyState from '@/components/common/EmptyState'
 import { useToast } from '@/components/ui/use-toast'
 
 const TYPES = [
@@ -70,7 +63,56 @@ export default function RelationsPage() {
 
   const stats: RelationIndexStatus | undefined = status.data?.data
   const data = graph.data?.data
-  const edges = data?.edges ?? []
+  const edges: RelationEdge[] = data?.edges ?? []
+
+  const edgeColumns: TableProps<RelationEdge>['columns'] = [
+    {
+      title: '类型',
+      dataIndex: 'type',
+      key: 'type',
+      width: 110,
+      render: (v: string) => <Tag>{relationTypeLabel[v] ?? v}</Tag>,
+    },
+    {
+      title: '聚类键',
+      dataIndex: 'key',
+      key: 'key',
+      render: (v: string) => (
+        <span className="font-mono text-xs text-muted-foreground">{v}</span>
+      ),
+    },
+    {
+      title: '站点 A',
+      key: 'left',
+      render: (_, e) => (
+        <div>
+          <div className="text-sm font-mono">{e.left.host}</div>
+          <div className="text-xs text-muted-foreground">
+            {e.left.title || '—'} · {e.left.ip || '—'}
+          </div>
+        </div>
+      ),
+    },
+    {
+      title: '站点 B',
+      key: 'right',
+      render: (_, e) => (
+        <div>
+          <div className="text-sm font-mono">{e.right.host}</div>
+          <div className="text-xs text-muted-foreground">
+            {e.right.title || '—'} · {e.right.ip || '—'}
+          </div>
+        </div>
+      ),
+    },
+    {
+      title: '置信度',
+      dataIndex: 'confidence',
+      key: 'confidence',
+      width: 90,
+      render: (v: number) => <span className="text-sm tabular-nums">{v.toFixed(2)}</span>,
+    },
+  ]
 
   return (
     <div className="space-y-5 p-6">
@@ -82,23 +124,20 @@ export default function RelationsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Select value={projectId} onValueChange={setProjectId}>
-            <SelectTrigger className="w-[190px]">
-              <SelectValue placeholder="全部项目" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="0">全部项目</SelectItem>
-              {(projects.data?.data ?? []).map((p) => (
-                <SelectItem key={p.id} value={String(p.id)}>
-                  {p.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button variant="outline" onClick={() => graph.refetch()}>
+          <Select
+            className="w-[190px]"
+            value={projectId}
+            placeholder="全部项目"
+            onChange={(v) => setProjectId(v)}
+            options={[
+              { value: '0', label: '全部项目' },
+              ...(projects.data?.data ?? []).map((p) => ({ value: String(p.id), label: p.name })),
+            ]}
+          />
+          <Button onClick={() => graph.refetch()}>
             <RefreshCw className="mr-2 h-4 w-4" /> 刷新
           </Button>
-          <Button onClick={() => rebuild.mutate()} disabled={rebuild.isPending}>
+          <Button type="primary" onClick={() => rebuild.mutate()} disabled={rebuild.isPending}>
             <Share2 className="mr-2 h-4 w-4" />
             {rebuild.isPending ? '重建中…' : '重建图谱'}
           </Button>
@@ -143,55 +182,23 @@ export default function RelationsPage() {
       </div>
 
       <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-[110px]">类型</TableHead>
-              <TableHead>聚类键</TableHead>
-              <TableHead>站点 A</TableHead>
-              <TableHead>站点 B</TableHead>
-              <TableHead className="w-[90px]">置信度</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {graph.isLoading && (
-              <TableRow>
-                <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
-                  加载中…
-                </TableCell>
-              </TableRow>
-            )}
-            {!graph.isLoading && edges.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
-                  <Network className="mx-auto mb-2 h-6 w-6 opacity-40" />
-                  还没有关系边。导入资产后点右上角「重建图谱」；同 IP/父子域/同图标/同技术栈会生成聚类。
-                </TableCell>
-              </TableRow>
-            )}
-            {edges.map((e) => (
-              <TableRow key={e.id}>
-                <TableCell>
-                  <Badge variant="outline">{relationTypeLabel[e.type] ?? e.type}</Badge>
-                </TableCell>
-                <TableCell className="font-mono text-xs text-muted-foreground">{e.key}</TableCell>
-                <TableCell>
-                  <div className="text-sm font-mono">{e.left.host}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {e.left.title || '—'} · {e.left.ip || '—'}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <div className="text-sm font-mono">{e.right.host}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {e.right.title || '—'} · {e.right.ip || '—'}
-                  </div>
-                </TableCell>
-                <TableCell className="text-sm tabular-nums">{e.confidence.toFixed(2)}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <Table
+          columns={edgeColumns}
+          dataSource={edges}
+          rowKey="id"
+          loading={graph.isLoading}
+          pagination={false}
+          locale={{
+            emptyText: (
+              <EmptyState
+                icon={Network}
+                title="还没有关系边"
+                description="导入资产后点右上角「重建图谱」；同 IP/父子域/同图标/同技术栈会生成聚类。"
+                className="border-0"
+              />
+            ),
+          }}
+        />
       </div>
     </div>
   )
@@ -199,13 +206,9 @@ export default function RelationsPage() {
 
 function StatCard({ label, value, small }: { label: string; value: string | number; small?: boolean }) {
   return (
-    <Card>
-      <CardHeader className="pb-1">
-        <span className="text-xs font-medium text-muted-foreground">{label}</span>
-      </CardHeader>
-      <CardContent>
-        <div className={small ? 'text-sm font-medium' : 'text-2xl font-bold tabular-nums'}>{value}</div>
-      </CardContent>
+    <Card styles={{ body: { paddingTop: 12, paddingBottom: 12 } }}>
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <div className={small ? 'text-sm font-medium' : 'text-2xl font-bold tabular-nums'}>{value}</div>
     </Card>
   )
 }

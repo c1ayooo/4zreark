@@ -1,11 +1,11 @@
 import { useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Button } from 'antd'
 import { RefreshCw } from 'lucide-react'
 
 import type { AssetGraphData, AssetGraphEdge, AssetGraphNode, AssetGraphRel } from '@/api/assets'
 import { resultApi, type ResultType } from '@/api/results'
 import { AssetGraphCanvas } from '@/components/assets/AssetGraphCanvas'
-import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 interface TaskTopologyViewProps {
@@ -408,12 +408,11 @@ export default function TaskTopologyView({ taskId, taskName }: TaskTopologyViewP
           任务 → 根域名 → 子域名 → IP → 服务 → 入口，左到右分层。
         </p>
         <Button
-          variant="outline"
-          size="sm"
+          size="small"
           onClick={() => queryClient.invalidateQueries({ queryKey: ['task-topology', taskId] })}
           disabled={isFetching}
+          icon={<RefreshCw className={cn('h-4 w-4', isFetching && 'animate-spin')} />}
         >
-          <RefreshCw className={cn('mr-2 h-4 w-4', isFetching && 'animate-spin')} />
           刷新
         </Button>
       </div>

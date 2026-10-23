@@ -5,7 +5,6 @@
 
 import { lazy } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { Toaster } from '@/components/ui/toaster'
 import { ConfirmProvider } from '@/components/common/confirm-provider'
 import { useAuthStore } from '@/store/auth'
 import MainLayout from '@/layouts/MainLayout'
@@ -126,7 +125,6 @@ function App() {
         </Routes>
         </ConfirmProvider>
       </ErrorBoundary>
-      <Toaster />
     </>
   )
 }

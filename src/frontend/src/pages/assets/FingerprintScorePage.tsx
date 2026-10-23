@@ -9,24 +9,8 @@ import {
   FpScoreLevel,
   FpScoreSort,
 } from '@/api/fingerprint-scores'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { Button, Input, Pagination, Progress, Select, Table, Tag } from 'antd'
+import type { TableProps } from 'antd'
 import EmptyState from '@/components/common/EmptyState'
 import { cn } from '@/lib/utils'
 import {
@@ -40,6 +24,20 @@ import {
 
 type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info'
 
+// shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
+const badgeCls = (variant: BadgeVariant) =>
+  variant === 'default' || variant === 'success'
+    ? 'border-transparent bg-primary text-primary-foreground'
+    : variant === 'secondary'
+      ? 'border-transparent bg-secondary text-secondary-foreground'
+      : variant === 'destructive'
+        ? 'border-transparent bg-destructive text-destructive-foreground'
+        : variant === 'warning'
+          ? 'border-transparent bg-yellow-500 text-black'
+          : variant === 'info'
+            ? 'border-transparent bg-blue-500 text-white'
+            : ''
+
 // 档位颜色与分值条的样式；文案由后端 level_label / band.label 下发，前端不重复维护映射。
 // 只在 facets 还没返回时兜底用，正常展示一律走后端下发的文案。
 const FALLBACK_LEVEL_LABEL: Record<FpScoreLevel, string> = {
@@ -49,11 +47,11 @@ const FALLBACK_LEVEL_LABEL: Record<FpScoreLevel, string> = {
   none: '无信号',
 }
 
-const levelMeta: Record<FpScoreLevel, { badge: BadgeVariant; bar: string }> = {
-  high: { badge: 'destructive', bar: 'bg-destructive' },
-  medium: { badge: 'warning', bar: 'bg-yellow-500' },
-  low: { badge: 'info', bar: 'bg-blue-500' },
-  none: { badge: 'outline', bar: 'bg-muted-foreground/40' },
+const levelMeta: Record<FpScoreLevel, { badge: BadgeVariant; dot: string; stroke: string }> = {
+  high: { badge: 'destructive', dot: 'bg-destructive', stroke: 'hsl(var(--destructive))' },
+  medium: { badge: 'warning', dot: 'bg-yellow-500', stroke: '#eab308' },
+  low: { badge: 'info', dot: 'bg-blue-500', stroke: '#3b82f6' },
+  none: { badge: 'outline', dot: 'bg-muted-foreground/40', stroke: 'hsl(var(--muted-foreground) / 0.4)' },
 }
 
 const stateLabel: Record<string, string> = {
@@ -170,8 +168,6 @@ export default function FingerprintScorePage() {
   const items = data?.items ?? []
   const facets = data?.facets
   const total = data?.total ?? 0
-  const size = data?.page_size ?? pageSize
-  const pages = Math.max(1, Math.ceil(total / size))
   const hasFilters = !!appliedQ || !!level || !!minScore || !!maxScore || !!category || !!fingerprint
 
   // 档位中文名来自分档计数；没拿到（比如还没加载完）时退回固定文案。
@@ -225,6 +221,148 @@ export default function FingerprintScorePage() {
     setPage(1)
   }
 
+  const columns: TableProps<FpScoreItem>['columns'] = [
+    {
+      title: '资产',
+      key: 'host',
+      render: (_, item) => (
+        <>
+          <div className="break-all text-sm font-medium">{item.host}</div>
+          <div className="mt-0.5 max-w-[420px] truncate text-[13px] text-muted-foreground">
+            {item.title || item.value}
+            {item.ip && item.ip !== item.host ? ` · ${item.ip}` : ''}
+          </div>
+          <div className="mt-1 flex items-center gap-2 md:hidden">
+            <Tag className={cn('tabular-nums', badgeCls(levelMeta[item.level]?.badge ?? levelMeta.none.badge))}>
+              {item.score}
+            </Tag>
+            <span className="text-[13px] text-muted-foreground">{item.level_label}</span>
+          </div>
+        </>
+      ),
+    },
+    {
+      title: '项目',
+      dataIndex: 'project_name',
+      key: 'project_name',
+      width: 110,
+      className: 'hidden lg:table-cell',
+      render: (v: string) => <span className="text-sm">{v}</span>,
+    },
+    {
+      title: '指纹评分',
+      key: 'score',
+      width: 170,
+      className: 'hidden text-right md:table-cell',
+      render: (_, item) => {
+        const meta = levelMeta[item.level] ?? levelMeta.none
+        return (
+          <div title={scoreTitle(item)}>
+            <div className="flex items-center justify-end gap-2">
+              <div className="w-20">
+                <Progress
+                  percent={Math.min(100, Math.max(0, item.score))}
+                  showInfo={false}
+                  strokeWidth={6}
+                  strokeColor={meta.stroke}
+                />
+              </div>
+              <Tag className={cn('tabular-nums', badgeCls(meta.badge))}>{item.score}</Tag>
+            </div>
+            <div className="mt-0.5 text-[13px] tabular-nums text-muted-foreground">{item.level_label}</div>
+          </div>
+        )
+      },
+    },
+    {
+      title: '命中指纹',
+      key: 'matches',
+      className: 'hidden xl:table-cell',
+      render: (_, item) => (
+        <div className="flex max-w-[360px] flex-wrap items-center gap-1">
+          {item.matches.slice(0, 3).map((m) => (
+            <button
+              key={`${m.source}-${m.name}`}
+              type="button"
+              title={`${m.reason} +${m.points}`}
+              onClick={(e) => {
+                e.stopPropagation()
+                applyFingerprint(m.name)
+              }}
+              className="rounded-full border px-2 py-0.5 text-[13px] tabular-nums hover:bg-muted"
+            >
+              {m.name}
+              <span className="ml-1 font-mono tabular-nums text-muted-foreground">{m.points}</span>
+            </button>
+          ))}
+          {item.matches.length > 3 && (
+            <span className="text-[13px] tabular-nums text-muted-foreground">
+              +{item.matches.length - 3}
+            </span>
+          )}
+          {item.matches.length === 0 && (
+            <span className="text-[13px] text-muted-foreground">—</span>
+          )}
+        </div>
+      ),
+    },
+    {
+      title: '分类',
+      key: 'categories',
+      width: 150,
+      className: 'hidden xl:table-cell',
+      render: (_, item) => (
+        <div className="flex flex-wrap gap-1">
+          {item.categories.map((c) => (
+            <button
+              key={c}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                setCategory(c)
+                setPage(1)
+              }}
+              className="rounded border px-1.5 py-0.5 text-[13px] text-muted-foreground hover:bg-muted"
+            >
+              {categoryLabel(c)}
+            </button>
+          ))}
+          {item.categories.length === 0 && <span className="text-[13px] text-muted-foreground">—</span>}
+        </div>
+      ),
+    },
+    {
+      title: '状态',
+      key: 'state',
+      width: 110,
+      render: (_, item) => (
+        <Tag className={badgeCls(stateVariant(item.state))}>
+          {stateLabel[item.state] ?? item.state}
+        </Tag>
+      ),
+    },
+    {
+      title: '最近发现',
+      dataIndex: 'last_seen',
+      key: 'last_seen',
+      width: 110,
+      className: 'hidden text-right xl:table-cell',
+      render: (v: string | null) => (
+        <span className="text-[13px] tabular-nums text-muted-foreground">{v?.slice(0, 10)}</span>
+      ),
+    },
+    {
+      title: '',
+      key: 'go',
+      width: 32,
+      render: () => (
+        <span className="text-muted-foreground">
+          <ChevronRight className="h-4 w-4" />
+        </span>
+      ),
+    },
+  ]
+
   return (
     <div className="space-y-5 p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -245,7 +383,7 @@ export default function FingerprintScorePage() {
             </p>
           )}
         </div>
-        <Button variant="outline" onClick={() => list.refetch()}>
+        <Button onClick={() => list.refetch()}>
           <RefreshCw className="mr-2 h-4 w-4" /> 刷新
         </Button>
       </div>
@@ -292,7 +430,7 @@ export default function FingerprintScorePage() {
                 </span>
               </div>
               <div className="flex items-center gap-2">
-                <span className={cn('h-2 w-2 rounded-full', meta.bar)} />
+                <span className={cn('h-2 w-2 rounded-full', meta.dot)} />
                 <span className="text-lg font-semibold tabular-nums">{band.count}</span>
               </div>
             </button>
@@ -302,27 +440,24 @@ export default function FingerprintScorePage() {
 
       <div className="flex flex-wrap items-center gap-2">
         <Select
+          className="w-[200px]"
           value={projectId}
-          onValueChange={(v) => {
+          onChange={(v) => {
             setProjectId(v)
             setPage(1)
           }}
-        >
-          <SelectTrigger className="w-[200px]">
-            <SelectValue placeholder="全部项目" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="0">全部项目</SelectItem>
-            {(projects.data?.data ?? []).map((p) => (
-              <SelectItem key={p.id} value={String(p.id)}>
-                {p.name}（{p.asset_count}）
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          placeholder="全部项目"
+          options={[
+            { value: '0', label: '全部项目' },
+            ...(projects.data?.data ?? []).map((p) => ({
+              value: String(p.id),
+              label: `${p.name}（${p.asset_count}）`,
+            })),
+          ]}
+        />
 
         <div className="relative min-w-[240px] flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground z-10" />
           <Input
             className="pl-9"
             placeholder="搜索主机名或 URL，回车查询"
@@ -337,6 +472,7 @@ export default function FingerprintScorePage() {
           />
         </div>
         <Button
+          type="primary"
           onClick={() => {
             setAppliedQ(q.trim())
             setPage(1)
@@ -370,43 +506,31 @@ export default function FingerprintScorePage() {
         </div>
 
         <Select
+          className="w-[180px]"
           value={category || 'all'}
-          onValueChange={(v) => {
+          onChange={(v) => {
             setCategory(v === 'all' ? '' : v)
             setPage(1)
           }}
-        >
-          <SelectTrigger className="w-[180px]">
-            <SelectValue placeholder="全部分类" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">全部分类</SelectItem>
-            {(facets?.categories ?? []).map((c) => (
-              <SelectItem key={c.name} value={c.name}>
-                {c.label || c.name}（{c.asset_count}）
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          placeholder="全部分类"
+          options={[
+            { value: 'all', label: '全部分类' },
+            ...(facets?.categories ?? []).map((c) => ({
+              value: c.name,
+              label: `${c.label || c.name}（${c.asset_count}）`,
+            })),
+          ]}
+        />
 
         <Select
+          className="w-[120px]"
           value={sort}
-          onValueChange={(v) => {
+          onChange={(v) => {
             setSort(v as FpScoreSort)
             setPage(1)
           }}
-        >
-          <SelectTrigger className="w-[120px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {SORTS.map((s) => (
-              <SelectItem key={s.value} value={s.value}>
-                {s.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          options={SORTS.map((s) => ({ value: s.value, label: s.label }))}
+        />
 
         <div className="flex items-center gap-1 rounded-md border px-2 py-1">
           <Fingerprint className="mr-1 h-3.5 w-3.5 text-muted-foreground" />
@@ -427,205 +551,75 @@ export default function FingerprintScorePage() {
         </div>
 
         {hasFilters && (
-          <Button variant="ghost" onClick={clearAll}>
+          <Button type="text" onClick={clearAll}>
             <X className="mr-1 h-4 w-4" /> 清空筛选
           </Button>
         )}
       </div>
 
       <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>资产</TableHead>
-              <TableHead className="hidden w-[110px] lg:table-cell">项目</TableHead>
-              <TableHead className="hidden w-[170px] text-right md:table-cell">指纹评分</TableHead>
-              <TableHead className="hidden xl:table-cell">命中指纹</TableHead>
-              <TableHead className="hidden w-[150px] xl:table-cell">分类</TableHead>
-              <TableHead className="w-[110px]">状态</TableHead>
-              <TableHead className="hidden w-[110px] text-right xl:table-cell">最近发现</TableHead>
-              <TableHead className="w-8" />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {list.isLoading && (
-              <TableRow>
-                <TableCell colSpan={8} className="py-10 text-center text-muted-foreground">
-                  加载中…
-                </TableCell>
-              </TableRow>
-            )}
-
-            {!list.isLoading && items.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={8} className="p-0">
-                  {hasFilters ? (
-                    <EmptyState
-                      icon={Search}
-                      title="没有匹配的资产"
-                      description="当前分数区间或筛选条件下没有资产。"
-                      hints={[
-                        level ? `档位：${bandLabel(level)}` : '档位：全部',
-                        minScore || maxScore ? `分数：${minScore || 0} - ${maxScore || 100}` : '分数：不限',
-                        category ? `分类：${categoryLabel(category)}` : '分类：全部',
-                        fingerprint ? `指纹：${fingerprint}` : '指纹：不限',
-                      ]}
-                      actions={
-                        <Button variant="outline" size="sm" onClick={clearAll}>
-                          清空筛选
-                        </Button>
-                      }
-                    />
-                  ) : (
-                    <EmptyState
-                      icon={Fingerprint}
-                      title={projectId === '0' ? '还没有可评分的资产' : '这个项目还没有可评分的资产'}
-                      description="指纹评分依赖站点已识别的技术栈或指纹规则命中。跑一次带指纹识别的任务后再回来。"
-                      hints={[
-                        '指纹来源：探测时命中的 fingerprint_rules，以及站点技术栈',
-                        '分析完成后，这里会按分数从高到低列出资产',
-                      ]}
-                      actions={
-                        <Button size="sm" onClick={() => navigate('/tasks/new')}>
-                          建一个侦察任务
-                        </Button>
-                      }
-                    />
-                  )}
-                </TableCell>
-              </TableRow>
-            )}
-
-            {!list.isLoading &&
-              items.map((item) => {
-                const meta = levelMeta[item.level] ?? levelMeta.none
-                return (
-                  <TableRow
-                    key={item.id}
-                    className="hover:bg-muted/40 cursor-pointer"
-                    onClick={() => navigate(`/assets/${item.id}`)}
-                  >
-                    <TableCell>
-                      <div className="break-all text-sm font-medium">{item.host}</div>
-                      <div className="mt-0.5 max-w-[420px] truncate text-[13px] text-muted-foreground">
-                        {item.title || item.value}
-                        {item.ip && item.ip !== item.host ? ` · ${item.ip}` : ''}
-                      </div>
-                      <div className="mt-1 flex items-center gap-2 md:hidden">
-                        <Badge variant={meta.badge} className="tabular-nums">{item.score}</Badge>
-                        <span className="text-[13px] text-muted-foreground">{item.level_label}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="hidden text-sm lg:table-cell">{item.project_name}</TableCell>
-                    <TableCell className="hidden text-right md:table-cell" title={scoreTitle(item)}>
-                      <div className="flex items-center justify-end gap-2">
-                        <div className="h-1.5 w-20 overflow-hidden rounded-full bg-muted">
-                          <div
-                            className={cn('h-full rounded-full', meta.bar)}
-                            style={{ width: `${Math.min(100, Math.max(0, item.score))}%` }}
-                          />
-                        </div>
-                        <Badge variant={meta.badge} className="tabular-nums">
-                          {item.score}
-                        </Badge>
-                      </div>
-                      <div className="mt-0.5 text-[13px] tabular-nums text-muted-foreground">{item.level_label}</div>
-                    </TableCell>
-                    <TableCell className="hidden xl:table-cell">
-                      <div className="flex max-w-[360px] flex-wrap items-center gap-1">
-                        {item.matches.slice(0, 3).map((m) => (
-                          <button
-                            key={`${m.source}-${m.name}`}
-                            type="button"
-                            title={`${m.reason} +${m.points}`}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              applyFingerprint(m.name)
-                            }}
-                            className="rounded-full border px-2 py-0.5 text-[13px] tabular-nums hover:bg-muted"
-                          >
-                            {m.name}
-                            <span className="ml-1 font-mono tabular-nums text-muted-foreground">{m.points}</span>
-                          </button>
-                        ))}
-                        {item.matches.length > 3 && (
-                          <span className="text-[13px] tabular-nums text-muted-foreground">
-                            +{item.matches.length - 3}
-                          </span>
-                        )}
-                        {item.matches.length === 0 && (
-                          <span className="text-[13px] text-muted-foreground">—</span>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="hidden xl:table-cell">
-                      <div className="flex flex-wrap gap-1">
-                        {item.categories.map((c) => (
-                          <button
-                            key={c}
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setCategory(c)
-                              setPage(1)
-                            }}
-                            className="rounded border px-1.5 py-0.5 text-[13px] text-muted-foreground hover:bg-muted"
-                          >
-                            {categoryLabel(c)}
-                          </button>
-                        ))}
-                        {item.categories.length === 0 && <span className="text-[13px] text-muted-foreground">—</span>}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={stateVariant(item.state)}>
-                        {stateLabel[item.state] ?? item.state}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="hidden text-right text-[13px] tabular-nums text-muted-foreground xl:table-cell">
-                      {item.last_seen?.slice(0, 10)}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      <ChevronRight className="h-4 w-4" />
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
-          </TableBody>
-        </Table>
+        <Table
+          columns={columns}
+          dataSource={items}
+          rowKey="id"
+          loading={list.isLoading}
+          onRow={(record) => ({
+            className: 'cursor-pointer',
+            onClick: () => navigate(`/assets/${record.id}`),
+          })}
+          locale={{
+            emptyText: hasFilters ? (
+              <EmptyState
+                icon={Search}
+                title="没有匹配的资产"
+                description="当前分数区间或筛选条件下没有资产。"
+                hints={[
+                  level ? `档位：${bandLabel(level)}` : '档位：全部',
+                  minScore || maxScore ? `分数：${minScore || 0} - ${maxScore || 100}` : '分数：不限',
+                  category ? `分类：${categoryLabel(category)}` : '分类：全部',
+                  fingerprint ? `指纹：${fingerprint}` : '指纹：不限',
+                ]}
+                actions={
+                  <Button size="small" onClick={clearAll}>
+                    清空筛选
+                  </Button>
+                }
+              />
+            ) : (
+              <EmptyState
+                icon={Fingerprint}
+                title={projectId === '0' ? '还没有可评分的资产' : '这个项目还没有可评分的资产'}
+                description="指纹评分依赖站点已识别的技术栈或指纹规则命中。跑一次带指纹识别的任务后再回来。"
+                hints={[
+                  '指纹来源：探测时命中的 fingerprint_rules，以及站点技术栈',
+                  '分析完成后，这里会按分数从高到低列出资产',
+                ]}
+                actions={
+                  <Button type="primary" size="small" onClick={() => navigate('/tasks/new')}>
+                    建一个侦察任务
+                  </Button>
+                }
+              />
+            ),
+          }}
+          pagination={false}
+        />
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-        <span className="text-muted-foreground">
-          共 {total.toLocaleString()} 条 · 第 {page} / {pages} 页
-        </span>
-        <div className="flex items-center gap-2">
-          <span className="text-[13px] text-muted-foreground">每页</span>
-          <Select
-            value={String(pageSize)}
-            onValueChange={(v) => {
-              setPageSize(Number(v))
-              setPage(1)
-            }}
-          >
-            <SelectTrigger className="h-8 w-[76px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {PAGE_SIZES.map((n) => (
-                <SelectItem key={n} value={String(n)}>
-                  {n}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-            上一页
-          </Button>
-          <Button variant="outline" size="sm" disabled={page >= pages} onClick={() => setPage((p) => p + 1)}>
-            下一页
-          </Button>
-        </div>
+      <div className="flex flex-wrap items-center justify-end gap-3">
+        <Pagination
+          current={page}
+          pageSize={pageSize}
+          total={total}
+          pageSizeOptions={PAGE_SIZES.map(String)}
+          showQuickJumper
+          showSizeChanger
+          showTotal={(t) => `共 ${t.toLocaleString()} 条`}
+          onChange={(p, s) => {
+            setPage(p)
+            setPageSize(s)
+          }}
+        />
       </div>
     </div>
   )

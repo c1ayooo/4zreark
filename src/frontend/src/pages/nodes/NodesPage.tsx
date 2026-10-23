@@ -1,43 +1,12 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { nodeApi, ScannerNode, NodeUpdateInput } from '@/api/nodes'
-import { Card, CardContent } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import { Progress } from '@/components/ui/progress'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
-import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/switch'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { Button, Card, Form, Input, InputNumber, Modal, Progress, Select, Switch, Tag } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
+import { useConfirm } from '@/components/common/confirm-provider'
+import { StaggerItem } from '@/components/common/PageTransition'
 import { cn, getStatusColor } from '@/lib/utils'
 import { RefreshCw, HardDrive, Cpu, Database, Trash2, Settings, Plus, Copy, KeyRound, Rocket, Star } from 'lucide-react'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
 
 const STATUS_LABELS: Record<string, string> = {
   online: '在线',
@@ -86,11 +55,9 @@ interface DeployForm {
   platformUrl: string
   proxy: string
   dir: string
-  gostReverse: boolean
-  gostRelayPort: number
-  gostTunnelPort: number
-  gostUser: string
-  gostPass: string
+  reverseTunnel: boolean
+  relayPort: number
+  tunnelPort: number
   platformPort: number
 }
 
@@ -99,6 +66,7 @@ const splitList = (value: string) =>
 
 export default function NodesPage() {
   const { toast } = useToast()
+  const confirm = useConfirm()
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState<ScannerNode | null>(null)
   const [form, setForm] = useState<ConfigForm>({ name: '', maxTasks: 0, tags: '', enabled: true })
@@ -112,7 +80,9 @@ export default function NodesPage() {
   const [tokenInfo, setTokenInfo] = useState<{ title: string; token: string; hint: string } | null>(null)
   const [deployOpen, setDeployOpen] = useState(false)
   const [deployResult, setDeployResult] = useState<{ title: string; output: string } | null>(null)
-  const [deployForm, setDeployForm] = useState<DeployForm>({
+  // SSH 一键部署表单：antd Form 托管，字段名与 initialValues 与原 useState 版本一致
+  const [deployForm] = Form.useForm<DeployForm>()
+  const deployInitialValues: DeployForm = {
     host: '',
     port: 22,
     os: 'linux',
@@ -128,15 +98,13 @@ export default function NodesPage() {
     platformUrl: typeof window !== 'undefined' ? window.location.origin : '',
     proxy: '',
     dir: '/opt/4zreark-worker',
-    gostReverse: true,
-    gostRelayPort: 18421,
-    gostTunnelPort: 18080,
-    gostUser: '',
-    gostPass: '',
+    reverseTunnel: true,
+    relayPort: 18421,
+    tunnelPort: 18080,
     platformPort: typeof window !== 'undefined'
       ? (Number(window.location.port) || (window.location.protocol === 'https:' ? 443 : 80))
       : 8080,
-  })
+  }
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['nodes'],
@@ -261,40 +229,38 @@ export default function NodesPage() {
     },
   })
 
-  const submitDeploy = () => {
-    if (!deployForm.host.trim() || !deployForm.username.trim()) {
+  const submitDeploy = (deployValues: DeployForm) => {
+    if (!deployValues.host.trim() || !deployValues.username.trim()) {
       toast({ title: '请填写 SSH 主机和用户名', variant: 'destructive' })
       return
     }
-    if (deployForm.authMode === 'password' && !deployForm.password) {
+    if (deployValues.authMode === 'password' && !deployValues.password) {
       toast({ title: '请填写 SSH 密码', variant: 'destructive' })
       return
     }
-    if (deployForm.authMode === 'key' && !deployForm.privateKey.trim()) {
+    if (deployValues.authMode === 'key' && !deployValues.privateKey.trim()) {
       toast({ title: '请粘贴 SSH 私钥', variant: 'destructive' })
       return
     }
     deployMutation.mutate({
-      host: deployForm.host.trim(),
-      port: Number(deployForm.port) || 22,
-      os: deployForm.os,
-      username: deployForm.username.trim(),
-      password: deployForm.authMode === 'password' ? deployForm.password : undefined,
-      private_key: deployForm.authMode === 'key' ? deployForm.privateKey : undefined,
-      key_passphrase: deployForm.authMode === 'key' ? deployForm.keyPassphrase : undefined,
-      name: deployForm.name.trim() || deployForm.host.trim(),
-      max_tasks: Number(deployForm.maxTasks) || 5,
-      capabilities: splitList(deployForm.capabilities),
-      tags: splitList(deployForm.tags),
-      platform_url: deployForm.platformUrl.trim(),
-      proxy: deployForm.proxy.trim(),
-      dir: deployForm.dir.trim() || (deployForm.os === 'windows' ? 'C:\\4zreark-worker' : '/opt/4zreark-worker'),
-      gost_reverse: deployForm.gostReverse,
-      gost_relay_port: Number(deployForm.gostRelayPort) || 18421,
-      gost_tunnel_port: Number(deployForm.gostTunnelPort) || 18080,
-      gost_user: deployForm.gostUser.trim(),
-      gost_pass: deployForm.gostPass,
-      platform_port: Number(deployForm.platformPort) || 8080,
+      host: deployValues.host.trim(),
+      port: Number(deployValues.port) || 22,
+      os: deployValues.os,
+      username: deployValues.username.trim(),
+      password: deployValues.authMode === 'password' ? deployValues.password : undefined,
+      private_key: deployValues.authMode === 'key' ? deployValues.privateKey : undefined,
+      key_passphrase: deployValues.authMode === 'key' ? deployValues.keyPassphrase : undefined,
+      name: deployValues.name.trim() || deployValues.host.trim(),
+      max_tasks: Number(deployValues.maxTasks) || 5,
+      capabilities: splitList(deployValues.capabilities),
+      tags: splitList(deployValues.tags),
+      platform_url: deployValues.platformUrl.trim(),
+      proxy: deployValues.proxy.trim(),
+      dir: deployValues.dir.trim() || (deployValues.os === 'windows' ? 'C:\\4zreark-worker' : '/opt/4zreark-worker'),
+      reverse_tunnel: deployValues.reverseTunnel,
+      relay_port: Number(deployValues.relayPort) || 18421,
+      tunnel_port: Number(deployValues.tunnelPort) || 18080,
+      platform_port: Number(deployValues.platformPort) || 8080,
     })
   }
 
@@ -351,6 +317,18 @@ export default function NodesPage() {
     })
   }
 
+  // 删除节点：危险操作，先确认（替代原 AlertDialog）
+  const handleDeleteNode = async (node: ScannerNode) => {
+    const ok = await confirm({
+      title: '确认删除节点？',
+      description: `确定要删除节点 "${node.name}" 吗？节点进程还活着时，下一次心跳会重新注册它；要彻底下线请先停掉对应进程。`,
+      confirmText: '删除',
+      cancelText: '取消',
+      destructive: true,
+    })
+    if (ok) deleteMutation.mutate(node.id)
+  }
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -369,15 +347,15 @@ export default function NodesPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button size="sm" variant="outline" onClick={() => setDeployOpen(true)}>
+          <Button size="small" onClick={() => setDeployOpen(true)}>
             <Rocket className="h-4 w-4 mr-2" />
             一键部署
           </Button>
-          <Button size="sm" onClick={() => setEnrollOpen(true)}>
+          <Button type="primary" size="small" onClick={() => setEnrollOpen(true)}>
             <Plus className="h-4 w-4 mr-2" />
             添加节点
           </Button>
-          <Button variant="outline" size="sm" onClick={() => refetch()}>
+          <Button size="small" onClick={() => refetch()}>
             <RefreshCw className="h-4 w-4 mr-2" />
             刷新
           </Button>
@@ -387,45 +365,37 @@ export default function NodesPage() {
       {/* Stats */}
       {stats && (
         <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-          <Card>
-            <CardContent className="flex items-center gap-2 p-3">
-              <HardDrive className="h-5 w-5 text-muted-foreground" />
-              <div>
-                <p className="text-lg font-semibold leading-tight">{stats.total}</p>
-                <p className="text-[11px] text-muted-foreground">总节点</p>
-              </div>
-            </CardContent>
+          <Card classNames={{ body: 'flex items-center gap-2 p-3' }}>
+            <HardDrive className="h-5 w-5 text-muted-foreground" />
+            <div>
+              <p className="text-lg font-semibold leading-tight">{stats.total}</p>
+              <p className="text-[11px] text-muted-foreground">总节点</p>
+            </div>
           </Card>
-          <Card>
-            <CardContent className="flex items-center gap-2 p-3">
-              <div className="flex h-5 w-5 items-center justify-center rounded-full bg-green-500 text-[10px] font-bold text-white">
-                {activeCount}
-              </div>
-              <div>
-                <p className="text-lg font-semibold leading-tight text-green-500">{activeCount}</p>
-                <p className="text-[11px] text-muted-foreground">
-                  在线{stats.busy > 0 ? `（${stats.busy} 忙碌）` : ''}
-                </p>
-              </div>
-            </CardContent>
+          <Card classNames={{ body: 'flex items-center gap-2 p-3' }}>
+            <div className="flex h-5 w-5 items-center justify-center rounded-full bg-green-500 text-[10px] font-bold text-white">
+              {activeCount}
+            </div>
+            <div>
+              <p className="text-lg font-semibold leading-tight text-green-500">{activeCount}</p>
+              <p className="text-[11px] text-muted-foreground">
+                在线{stats.busy > 0 ? `（${stats.busy} 忙碌）` : ''}
+              </p>
+            </div>
           </Card>
-          <Card>
-            <CardContent className="flex items-center gap-2 p-3">
-              <Cpu className="h-5 w-5 text-blue-500" />
-              <div>
-                <p className="text-lg font-semibold leading-tight">{(stats.averageCpu ?? 0).toFixed(1)}%</p>
-                <p className="text-[11px] text-muted-foreground">平均CPU</p>
-              </div>
-            </CardContent>
+          <Card classNames={{ body: 'flex items-center gap-2 p-3' }}>
+            <Cpu className="h-5 w-5 text-blue-500" />
+            <div>
+              <p className="text-lg font-semibold leading-tight">{(stats.averageCpu ?? 0).toFixed(1)}%</p>
+              <p className="text-[11px] text-muted-foreground">平均CPU</p>
+            </div>
           </Card>
-          <Card>
-            <CardContent className="flex items-center gap-2 p-3">
-              <Database className="h-5 w-5 text-purple-500" />
-              <div>
-                <p className="text-lg font-semibold leading-tight">{(stats.averageMemory ?? 0).toFixed(1)}%</p>
-                <p className="text-[11px] text-muted-foreground">平均内存</p>
-              </div>
-            </CardContent>
+          <Card classNames={{ body: 'flex items-center gap-2 p-3' }}>
+            <Database className="h-5 w-5 text-purple-500" />
+            <div>
+              <p className="text-lg font-semibold leading-tight">{(stats.averageMemory ?? 0).toFixed(1)}%</p>
+              <p className="text-[11px] text-muted-foreground">平均内存</p>
+            </div>
           </Card>
         </div>
       )}
@@ -437,18 +407,18 @@ export default function NodesPage() {
             暂无节点。启动一个 `role: worker` 的扫描端后会自动出现在这里。
           </div>
         ) : (
-          nodes.map((node) => (
-            <Card key={node.id}>
-              <CardContent className="space-y-2 p-3">
+          nodes.map((node, index) => (
+            <StaggerItem key={node.id} index={index}>
+              <Card classNames={{ body: 'space-y-2 p-3' }}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5">
                       <p className="truncate text-sm font-semibold" title={node.capabilities.join(', ')}>
                         {node.name}
                       </p>
-                      <Badge className={cn(getStatusColor(node.status), 'px-1.5 py-0 text-[10px]')}>
+                      <Tag className={cn(getStatusColor(node.status), 'border-transparent px-1.5 py-0 text-[10px]')}>
                         {STATUS_LABELS[node.status] || node.status}
-                      </Badge>
+                      </Tag>
                     </div>
                     <p className="truncate font-mono text-[11px] text-muted-foreground">
                       {node.ipAddress || '—'}{node.port ? `:${node.port}` : ''} · {TYPE_LABELS[node.type] || node.type}
@@ -456,55 +426,28 @@ export default function NodesPage() {
                   </div>
                   <div className="flex shrink-0 items-center gap-2 sm:gap-0.5">
                     <Button
-                      variant="ghost"
-                      size="icon"
-                      className={cn('h-11 w-11 sm:h-6 sm:w-6', defaultNodeId === node.nodeId && 'text-primary')}
+                      type="text"
+                      className={cn('h-11 w-11 p-0 sm:h-6 sm:w-6', defaultNodeId === node.nodeId && 'text-primary')}
                       title={defaultNodeId === node.nodeId ? '当前默认扫描节点' : '设为默认扫描节点'}
                       disabled={setDefaultMutation.isPending || defaultNodeId === node.nodeId}
                       onClick={() => setDefaultMutation.mutate(node.nodeId)}
-                    >
-                      <Star className="h-3.5 w-3.5" />
-                    </Button>
+                      icon={<Star className="h-3.5 w-3.5" />}
+                    />
                     <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-11 w-11 sm:h-6 sm:w-6"
+                      type="text"
+                      className="h-11 w-11 p-0 sm:h-6 sm:w-6"
                       title="配置"
                       onClick={() => openConfig(node)}
-                    >
-                      <Settings className="h-3.5 w-3.5" />
-                    </Button>
-                    <AlertDialog>
-                      <AlertDialogTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-11 w-11 text-destructive hover:text-destructive sm:h-6 sm:w-6"
-                          title="删除"
-                          disabled={node.currentTasks > 0}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </AlertDialogTrigger>
-                      <AlertDialogContent>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>确认删除节点？</AlertDialogTitle>
-                          <AlertDialogDescription>
-                            确定要删除节点 "{node.name}" 吗？节点进程还活着时，下一次心跳会重新注册它；
-                            要彻底下线请先停掉对应进程。
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>取消</AlertDialogCancel>
-                          <AlertDialogAction
-                            onClick={() => deleteMutation.mutate(node.id)}
-                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                          >
-                            删除
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
+                      icon={<Settings className="h-3.5 w-3.5" />}
+                    />
+                    <Button
+                      type="text"
+                      className="h-11 w-11 p-0 text-destructive sm:h-6 sm:w-6"
+                      title="删除"
+                      disabled={node.currentTasks > 0}
+                      onClick={() => handleDeleteNode(node)}
+                      icon={<Trash2 className="h-3.5 w-3.5" />}
+                    />
                   </div>
                 </div>
 
@@ -515,8 +458,8 @@ export default function NodesPage() {
                   <span>CPU {node.cpuUsage.toFixed(0)}% · 内存 {node.memoryUsage.toFixed(0)}%</span>
                 </div>
                 <div className="flex gap-1">
-                  <Progress value={node.cpuUsage} className="h-1 flex-1" />
-                  <Progress value={node.memoryUsage} className="h-1 flex-1" />
+                  <Progress percent={node.cpuUsage} showInfo={false} strokeWidth={4} className="m-0 flex-1" />
+                  <Progress percent={node.memoryUsage} showInfo={false} strokeWidth={4} className="m-0 flex-1" />
                 </div>
 
                 <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
@@ -526,9 +469,9 @@ export default function NodesPage() {
                   {node.tags.length > 0 && (
                     <div className="flex shrink-0 gap-1">
                       {node.tags.slice(0, 2).map((tag) => (
-                        <Badge key={tag} className="bg-blue-500/10 px-1.5 py-0 text-[10px] text-blue-500 hover:bg-blue-500/20">
+                        <Tag key={tag} className="border-transparent bg-blue-500/10 px-1.5 py-0 text-[10px] text-blue-500 hover:bg-blue-500/20">
                           {tag}
-                        </Badge>
+                        </Tag>
                       ))}
                       {node.tags.length > 2 && (
                         <span className="text-[10px] text-muted-foreground">+{node.tags.length - 2}</span>
@@ -536,469 +479,436 @@ export default function NodesPage() {
                     </div>
                   )}
                 </div>
-              </CardContent>
-            </Card>
+              </Card>
+            </StaggerItem>
           ))
         )}
       </div>
 
       {/* 节点配置 */}
-      <Dialog open={!!editing} onOpenChange={(open) => !open && setEditing(null)}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>节点配置 · {editing?.name}</DialogTitle>
-            <DialogDescription>
-              启用/停用与并发上限即时生效；worker 只需要平台地址和节点密钥，不需要数据库账号。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="grid gap-2">
-              <Label htmlFor="node-name">节点名称</Label>
-              <Input
-                id="node-name"
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="node-max-tasks">单节点并发</Label>
-              <Input
-                id="node-max-tasks"
-                type="number"
-                min={1}
-                value={form.maxTasks}
-                onChange={(e) => setForm((f) => ({ ...f, maxTasks: Number(e.target.value) }))}
-              />
-              <p className="text-xs text-muted-foreground">
-                调低约 1 个心跳周期生效，不会中断正在执行的任务；调高不能超过节点启动时的
-                并发容量（需重启）。节点重启后回到启动配置。
-              </p>
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="node-tags">标签</Label>
-              <Input
-                id="node-tags"
-                placeholder="overseas, high-performance"
-                value={form.tags}
-                onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))}
-              />
-              <p className="text-xs text-muted-foreground">多个标签用英文逗号分隔。</p>
-            </div>
-            <div className="flex items-center justify-between rounded-md border p-3">
-              <div>
-                <Label>启用扫描</Label>
-                <p className="text-xs text-muted-foreground mt-1">
-                  关闭后该节点不再领取新任务，已在执行的任务会继续完成。
-                </p>
-              </div>
-              <Switch
-                checked={form.enabled}
-                onCheckedChange={(checked) => setForm((f) => ({ ...f, enabled: checked }))}
-              />
-            </div>
-            <div className="space-y-2 rounded-md border p-3">
-              <Label>节点密钥</Label>
-              <p className="text-xs text-muted-foreground">
-                密钥只保存在 worker 侧，平台只存哈希。重置会立即断开旧连接；吊销后节点无法再连接平台。
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={!editing || rotateMutation.isPending}
-                  onClick={() => editing && rotateMutation.mutate(editing.id)}
-                >
-                  <KeyRound className="h-4 w-4 mr-1" />
-                  重置密钥
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="text-destructive hover:text-destructive"
-                  disabled={!editing || revokeMutation.isPending}
-                  onClick={() => editing && revokeMutation.mutate(editing.id)}
-                >
-                  <Trash2 className="h-4 w-4 mr-1" />
-                  吊销密钥
-                </Button>
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEditing(null)}>
-              取消
-            </Button>
-            <Button onClick={saveConfig} disabled={updateMutation.isPending}>
+      <Modal
+        open={!!editing}
+        onCancel={() => setEditing(null)}
+        title={`节点配置 · ${editing?.name}`}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setEditing(null)}>取消</Button>
+            <Button type="primary" onClick={saveConfig} disabled={updateMutation.isPending}>
               保存
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* 添加节点 */}
-      <Dialog open={enrollOpen} onOpenChange={setEnrollOpen}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>添加扫描节点</DialogTitle>
-            <DialogDescription>
-              平台会生成节点 ID 和一次性密钥。worker 配置里只填平台地址和密钥，不需要数据库账号。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="grid gap-2">
-              <Label htmlFor="enroll-name">节点名称</Label>
-              <Input
-                id="enroll-name"
-                placeholder="worker-hk-1"
-                value={enrollForm.name}
-                onChange={(e) => setEnrollForm((f) => ({ ...f, name: e.target.value }))}
-              />
+          </div>
+        }
+      >
+        <p className="text-sm text-muted-foreground">
+          启用/停用与并发上限即时生效；worker 只需要平台地址和节点密钥，不需要数据库账号。
+        </p>
+        <div className="space-y-4 mt-4">
+          <div className="grid gap-2">
+            <label className="text-sm font-medium" htmlFor="node-name">节点名称</label>
+            <Input
+              id="node-name"
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            />
+          </div>
+          <div className="grid gap-2">
+            <label className="text-sm font-medium" htmlFor="node-max-tasks">单节点并发</label>
+            <Input
+              id="node-max-tasks"
+              type="number"
+              min={1}
+              value={form.maxTasks}
+              onChange={(e) => setForm((f) => ({ ...f, maxTasks: Number(e.target.value) }))}
+            />
+            <p className="text-xs text-muted-foreground">
+              调低约 1 个心跳周期生效，不会中断正在执行的任务；调高不能超过节点启动时的
+              并发容量（需重启）。节点重启后回到启动配置。
+            </p>
+          </div>
+          <div className="grid gap-2">
+            <label className="text-sm font-medium" htmlFor="node-tags">标签</label>
+            <Input
+              id="node-tags"
+              placeholder="overseas, high-performance"
+              value={form.tags}
+              onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))}
+            />
+            <p className="text-xs text-muted-foreground">多个标签用英文逗号分隔。</p>
+          </div>
+          <div className="flex items-center justify-between rounded-md border p-3">
+            <div>
+              <label className="text-sm font-medium">启用扫描</label>
+              <p className="text-xs text-muted-foreground mt-1">
+                关闭后该节点不再领取新任务，已在执行的任务会继续完成。
+              </p>
             </div>
-            <div className="grid gap-2">
-              <Label htmlFor="enroll-max">单节点并发</Label>
-              <Input
-                id="enroll-max"
-                type="number"
-                min={1}
-                value={enrollForm.maxTasks}
-                onChange={(e) => setEnrollForm((f) => ({ ...f, maxTasks: Number(e.target.value) }))}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="enroll-caps">能力</Label>
-              <Input
-                id="enroll-caps"
-                value={enrollForm.capabilities}
-                onChange={(e) => setEnrollForm((f) => ({ ...f, capabilities: e.target.value }))}
-              />
-              <p className="text-xs text-muted-foreground">英文逗号分隔；留空表示全部能力。</p>
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="enroll-tags">标签</Label>
-              <Input
-                id="enroll-tags"
-                placeholder="overseas, high-performance"
-                value={enrollForm.tags}
-                onChange={(e) => setEnrollForm((f) => ({ ...f, tags: e.target.value }))}
-              />
+            <Switch
+              checked={form.enabled}
+              onChange={(checked) => setForm((f) => ({ ...f, enabled: checked }))}
+            />
+          </div>
+          <div className="space-y-2 rounded-md border p-3">
+            <label className="text-sm font-medium">节点密钥</label>
+            <p className="text-xs text-muted-foreground">
+              密钥只保存在 worker 侧，平台只存哈希。重置会立即断开旧连接；吊销后节点无法再连接平台。
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="small"
+                disabled={!editing || rotateMutation.isPending}
+                onClick={() => editing && rotateMutation.mutate(editing.id)}
+              >
+                <KeyRound className="h-4 w-4 mr-1" />
+                重置密钥
+              </Button>
+              <Button
+                size="small"
+                danger
+                disabled={!editing || revokeMutation.isPending}
+                onClick={() => editing && revokeMutation.mutate(editing.id)}
+              >
+                <Trash2 className="h-4 w-4 mr-1" />
+                吊销密钥
+              </Button>
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEnrollOpen(false)}>
-              取消
-            </Button>
-            <Button onClick={submitEnroll} disabled={enrollMutation.isPending}>
+        </div>
+      </Modal>
+
+      {/* 添加节点 */}
+      <Modal
+        open={enrollOpen}
+        onCancel={() => setEnrollOpen(false)}
+        title="添加扫描节点"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setEnrollOpen(false)}>取消</Button>
+            <Button type="primary" onClick={submitEnroll} disabled={enrollMutation.isPending}>
               创建并生成密钥
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </div>
+        }
+      >
+        <p className="text-sm text-muted-foreground">
+          平台会生成节点 ID 和一次性密钥。worker 配置里只填平台地址和密钥，不需要数据库账号。
+        </p>
+        <div className="space-y-4 mt-4">
+          <div className="grid gap-2">
+            <label className="text-sm font-medium" htmlFor="enroll-name">节点名称</label>
+            <Input
+              id="enroll-name"
+              placeholder="worker-hk-1"
+              value={enrollForm.name}
+              onChange={(e) => setEnrollForm((f) => ({ ...f, name: e.target.value }))}
+            />
+          </div>
+          <div className="grid gap-2">
+            <label className="text-sm font-medium" htmlFor="enroll-max">单节点并发</label>
+            <Input
+              id="enroll-max"
+              type="number"
+              min={1}
+              value={enrollForm.maxTasks}
+              onChange={(e) => setEnrollForm((f) => ({ ...f, maxTasks: Number(e.target.value) }))}
+            />
+          </div>
+          <div className="grid gap-2">
+            <label className="text-sm font-medium" htmlFor="enroll-caps">能力</label>
+            <Input
+              id="enroll-caps"
+              value={enrollForm.capabilities}
+              onChange={(e) => setEnrollForm((f) => ({ ...f, capabilities: e.target.value }))}
+            />
+            <p className="text-xs text-muted-foreground">英文逗号分隔；留空表示全部能力。</p>
+          </div>
+          <div className="grid gap-2">
+            <label className="text-sm font-medium" htmlFor="enroll-tags">标签</label>
+            <Input
+              id="enroll-tags"
+              placeholder="overseas, high-performance"
+              value={enrollForm.tags}
+              onChange={(e) => setEnrollForm((f) => ({ ...f, tags: e.target.value }))}
+            />
+          </div>
+        </div>
+      </Modal>
 
       {/* 密钥展示（只显示一次） */}
-      <Dialog open={!!tokenInfo} onOpenChange={(open) => !open && setTokenInfo(null)}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{tokenInfo?.title}</DialogTitle>
-            <DialogDescription>
-              密钥只在此刻显示一次。泄露后可在节点配置里重置或吊销，旧密钥会立即失效。
-            </DialogDescription>
-          </DialogHeader>
-          {tokenInfo?.hint && (
-            <p className="text-xs text-muted-foreground font-mono">{tokenInfo.hint}</p>
-          )}
-          <code className="block break-all rounded-md bg-muted p-3 text-sm">
-            {tokenInfo?.token}
-          </code>
-          <div className="rounded-md border p-3 text-xs text-muted-foreground space-y-1">
-            <p>worker 侧配置：</p>
-            <pre className="whitespace-pre-wrap font-mono">{`node:
+      <Modal
+        open={!!tokenInfo}
+        onCancel={() => setTokenInfo(null)}
+        title={tokenInfo?.title}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button onClick={copyToken}>
+              <Copy className="h-4 w-4 mr-1" />
+              复制密钥
+            </Button>
+            <Button type="primary" onClick={() => setTokenInfo(null)}>我已保存</Button>
+          </div>
+        }
+      >
+        <p className="text-sm text-muted-foreground">
+          密钥只在此刻显示一次。泄露后可在节点配置里重置或吊销，旧密钥会立即失效。
+        </p>
+        {tokenInfo?.hint && (
+          <p className="text-xs text-muted-foreground font-mono mt-3">{tokenInfo.hint}</p>
+        )}
+        <code className="block break-all rounded-md bg-muted p-3 text-sm mt-2">
+          {tokenInfo?.token}
+        </code>
+        <div className="rounded-md border p-3 text-xs text-muted-foreground space-y-1 mt-3">
+          <p>worker 侧配置：</p>
+          <pre className="whitespace-pre-wrap font-mono">{`node:
   role: worker
   platform_url: "http://<平台地址>:8080"
   token: "${tokenInfo?.token ?? ''}"
   max_tasks: 5`}</pre>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={copyToken}>
-              <Copy className="h-4 w-4 mr-1" />
-              复制密钥
-            </Button>
-            <Button onClick={() => setTokenInfo(null)}>我已保存</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </div>
+      </Modal>
 
       {/* SSH 一键部署 */}
-      <Dialog open={deployOpen} onOpenChange={setDeployOpen}>
-        <DialogContent className="max-h-[90vh] w-[calc(100vw-2rem)] max-w-3xl overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>SSH 一键部署扫描节点</DialogTitle>
-            <DialogDescription>
-              平台会通过 SSH（密码或私钥）上传 worker 二进制和只含节点密钥的配置并启动。
-              支持 Linux amd64 与 Windows；SSH 凭据只在本请求内使用，不落库、不写日志。
-            </DialogDescription>
-          </DialogHeader>
+      <Modal
+        open={deployOpen}
+        onCancel={() => setDeployOpen(false)}
+        title="SSH 一键部署扫描节点"
+        width={768}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setDeployOpen(false)}>取消</Button>
+            <Button
+              type="primary"
+              onClick={() => deployForm.submit()}
+              disabled={deployMutation.isPending}
+            >
+              {deployMutation.isPending ? '部署中…' : '开始部署'}
+            </Button>
+          </div>
+        }
+      >
+        <p className="text-sm text-muted-foreground mb-4">
+          平台会通过 SSH（密码或私钥）上传 worker 二进制和只含节点密钥的配置并启动。
+          支持 Linux amd64 与 Windows；SSH 凭据只在本请求内使用，不落库、不写日志。
+        </p>
+        {/* getFieldsValue(true) 取整个表单 store：反连关闭等被卸载字段的值仍与旧 useState 版本一致 */}
+        <Form
+          form={deployForm}
+          initialValues={deployInitialValues}
+          onFinish={() => submitDeploy(deployForm.getFieldsValue(true) as DeployForm)}
+        >
           <div className="grid gap-3 sm:grid-cols-2">
+            {/* 无界面字段：仅随表单存储，保证提交时带上 platform_port */}
+            <Form.Item name="platformPort" hidden className="mb-0">
+              <Input />
+            </Form.Item>
             <div className="grid gap-2">
-              <Label>目标系统</Label>
-              <Select
-                value={deployForm.os}
-                onValueChange={(v) => setDeployForm((f) => ({
-                  ...f,
-                  os: v as 'linux' | 'windows',
-                  username: v === 'windows' ? 'Administrator' : 'root',
-                  gostReverse: v === 'windows' ? false : f.gostReverse,
-                  dir: f.dir === '/opt/4zreark-worker' || f.dir === 'C:\\4zreark-worker'
-                    ? (v === 'windows' ? 'C:\\4zreark-worker' : '/opt/4zreark-worker')
-                    : f.dir,
-                }))}
-              >
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="linux">Linux amd64</SelectItem>
-                  <SelectItem value="windows">Windows amd64</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid gap-2">
-              <Label>SSH 认证方式</Label>
-              <Select
-                value={deployForm.authMode}
-                onValueChange={(v) => setDeployForm((f) => ({ ...f, authMode: v as 'password' | 'key' }))}
-              >
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="password">密码</SelectItem>
-                  <SelectItem value="key">私钥</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="deploy-host">SSH 主机</Label>
-              <Input
-                id="deploy-host"
-                placeholder="1.2.3.4 或 node.example.com"
-                value={deployForm.host}
-                onChange={(e) => setDeployForm((f) => ({ ...f, host: e.target.value }))}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="deploy-port">SSH 端口</Label>
-              <Input
-                id="deploy-port"
-                type="number"
-                value={deployForm.port}
-                onChange={(e) => setDeployForm((f) => ({ ...f, port: Number(e.target.value) }))}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="deploy-user">SSH 用户名</Label>
-              <Input
-                id="deploy-user"
-                placeholder="root / Administrator"
-                value={deployForm.username}
-                onChange={(e) => setDeployForm((f) => ({ ...f, username: e.target.value }))}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="deploy-name">节点名称</Label>
-              <Input
-                id="deploy-name"
-                placeholder="留空则使用 SSH 主机名"
-                value={deployForm.name}
-                onChange={(e) => setDeployForm((f) => ({ ...f, name: e.target.value }))}
-              />
-            </div>
-            {deployForm.authMode === 'password' ? (
-              <div className="grid gap-2 sm:col-span-2">
-                <Label htmlFor="deploy-pass">SSH 密码</Label>
-                <Input
-                  id="deploy-pass"
-                  type="password"
-                  placeholder="仅本次请求使用"
-                  value={deployForm.password}
-                  onChange={(e) => setDeployForm((f) => ({ ...f, password: e.target.value }))}
+              <label className="text-sm font-medium">目标系统</label>
+              <Form.Item name="os" noStyle>
+                <Select
+                  options={[
+                    { value: 'linux', label: 'Linux amd64' },
+                    { value: 'windows', label: 'Windows amd64' },
+                  ]}
+                  onChange={(v) => {
+                    const os = v as 'linux' | 'windows'
+                    const dir = deployForm.getFieldValue('dir') as string
+                    deployForm.setFieldsValue({
+                      username: os === 'windows' ? 'Administrator' : 'root',
+                      reverseTunnel: os === 'windows' ? false : deployForm.getFieldValue('reverseTunnel'),
+                      dir: dir === '/opt/4zreark-worker' || dir === 'C:\\4zreark-worker'
+                        ? (os === 'windows' ? 'C:\\4zreark-worker' : '/opt/4zreark-worker')
+                        : dir,
+                    })
+                  }}
                 />
-              </div>
-            ) : (
-              <>
-                <div className="grid gap-2 sm:col-span-2">
-                  <Label htmlFor="deploy-key">SSH 私钥</Label>
-                  <Textarea
-                    id="deploy-key"
-                    className="min-h-[110px] font-mono text-xs"
-                    placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-                    value={deployForm.privateKey}
-                    onChange={(e) => setDeployForm((f) => ({ ...f, privateKey: e.target.value }))}
-                  />
-                </div>
-                <div className="grid gap-2 sm:col-span-2">
-                  <Label htmlFor="deploy-key-pass">私钥口令（可选）</Label>
-                  <Input
-                    id="deploy-key-pass"
-                    type="password"
-                    value={deployForm.keyPassphrase}
-                    onChange={(e) => setDeployForm((f) => ({ ...f, keyPassphrase: e.target.value }))}
-                  />
-                </div>
-              </>
-            )}
+              </Form.Item>
+            </div>
             <div className="grid gap-2">
-              <Label htmlFor="deploy-max">单节点并发</Label>
-              <Input
-                id="deploy-max"
-                type="number"
-                min={1}
-                value={deployForm.maxTasks}
-                onChange={(e) => setDeployForm((f) => ({ ...f, maxTasks: Number(e.target.value) }))}
-              />
+              <label className="text-sm font-medium">SSH 认证方式</label>
+              <Form.Item name="authMode" noStyle>
+                <Select
+                  options={[
+                    { value: 'password', label: '密码' },
+                    { value: 'key', label: '私钥' },
+                  ]}
+                />
+              </Form.Item>
             </div>
-            <div className="grid gap-2 sm:col-span-2">
-              <Label htmlFor="deploy-platform">平台地址（用于推导节点网关主机）</Label>
-              <Input
-                id="deploy-platform"
-                placeholder="https://master.example.com"
-                value={deployForm.platformUrl}
-                disabled={deployForm.gostReverse}
-                onChange={(e) => setDeployForm((f) => ({ ...f, platformUrl: e.target.value }))}
-              />
-              <p className="text-xs text-muted-foreground">
-                {deployForm.gostReverse
-                  ? 'gost 反连开启时忽略；worker 会走 https://127.0.0.1:<隧道端口> 到独立 TLS 节点网关。'
-                  : 'worker 会连接 https://<该主机>:9443 的独立 TLS 节点网关，不再使用 Web 端口 8080。'}
-              </p>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium" htmlFor="deploy-host">SSH 主机</label>
+              <Form.Item name="host" noStyle>
+                <Input id="deploy-host" placeholder="1.2.3.4 或 node.example.com" />
+              </Form.Item>
             </div>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium" htmlFor="deploy-port">SSH 端口</label>
+              <Form.Item name="port" noStyle>
+                <InputNumber id="deploy-port" className="w-full" />
+              </Form.Item>
+            </div>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium" htmlFor="deploy-user">SSH 用户名</label>
+              <Form.Item name="username" noStyle>
+                <Input id="deploy-user" placeholder="root / Administrator" />
+              </Form.Item>
+            </div>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium" htmlFor="deploy-name">节点名称</label>
+              <Form.Item name="name" noStyle>
+                <Input id="deploy-name" placeholder="留空则使用 SSH 主机名" />
+              </Form.Item>
+            </div>
+            {/* 认证方式切换：密码 / 私钥 二选一 */}
+            <Form.Item noStyle shouldUpdate={(prev, cur) => prev.authMode !== cur.authMode}>
+              {({ getFieldValue }) =>
+                getFieldValue('authMode') === 'password' ? (
+                  <div className="grid gap-2 sm:col-span-2">
+                    <label className="text-sm font-medium" htmlFor="deploy-pass">SSH 密码</label>
+                    <Form.Item name="password" noStyle>
+                      <Input id="deploy-pass" type="password" placeholder="仅本次请求使用" />
+                    </Form.Item>
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid gap-2 sm:col-span-2">
+                      <label className="text-sm font-medium" htmlFor="deploy-key">SSH 私钥</label>
+                      <Form.Item name="privateKey" noStyle>
+                        <Input.TextArea
+                          id="deploy-key"
+                          className="min-h-[110px] font-mono text-xs"
+                          placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                        />
+                      </Form.Item>
+                    </div>
+                    <div className="grid gap-2 sm:col-span-2">
+                      <label className="text-sm font-medium" htmlFor="deploy-key-pass">私钥口令（可选）</label>
+                      <Form.Item name="keyPassphrase" noStyle>
+                        <Input id="deploy-key-pass" type="password" />
+                      </Form.Item>
+                    </div>
+                  </>
+                )
+              }
+            </Form.Item>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium" htmlFor="deploy-max">单节点并发</label>
+              <Form.Item name="maxTasks" noStyle>
+                <InputNumber id="deploy-max" min={1} className="w-full" />
+              </Form.Item>
+            </div>
+            <Form.Item noStyle shouldUpdate={(prev, cur) => prev.reverseTunnel !== cur.reverseTunnel}>
+              {({ getFieldValue }) => (
+                <div className="grid gap-2 sm:col-span-2">
+                  <label className="text-sm font-medium" htmlFor="deploy-platform">平台地址（用于推导节点网关主机）</label>
+                  <Form.Item name="platformUrl" noStyle>
+                    <Input
+                      id="deploy-platform"
+                      placeholder="https://master.example.com"
+                      disabled={getFieldValue('reverseTunnel')}
+                    />
+                  </Form.Item>
+                  <p className="text-xs text-muted-foreground">
+                    {getFieldValue('reverseTunnel')
+                      ? 'rem 反连开启时忽略；worker 会走 https://127.0.0.1:<隧道端口> 到独立 TLS 节点网关。'
+                      : 'worker 会连接 https://<该主机>:9443 的独立 TLS 节点网关，不再使用 Web 端口 8080。'}
+                  </p>
+                </div>
+              )}
+            </Form.Item>
             <div className="grid gap-2 sm:col-span-2">
-              <Label htmlFor="deploy-proxy">代理（可选）</Label>
-              <Input
-                id="deploy-proxy"
-                placeholder="socks5://user:pass@relay:1080 或 http://relay:8080"
-                value={deployForm.proxy}
-                onChange={(e) => setDeployForm((f) => ({ ...f, proxy: e.target.value }))}
-              />
+              <label className="text-sm font-medium" htmlFor="deploy-proxy">代理（可选）</label>
+              <Form.Item name="proxy" noStyle>
+                <Input id="deploy-proxy" placeholder="socks5://user:pass@relay:1080 或 http://relay:8080" />
+              </Form.Item>
               <p className="text-xs text-muted-foreground">
-                目标机不能直连平台时，可填 gost 等提供的 SOCKS5/HTTP 代理；代理服务器需要能访问平台。
+                目标机不能直连平台时，可填 SOCKS5/HTTP 代理；代理服务器需要能访问平台。
               </p>
             </div>
             <div className="grid gap-3 rounded-md border p-3 sm:col-span-2">
               <div className="flex items-center justify-between">
                 <div>
-                  <Label>自动 gost 反连（推荐）</Label>
+                  <label className="text-sm font-medium">自动 rem 反连（推荐）</label>
                   <p className="text-xs text-muted-foreground mt-1">
-                    默认开启：平台自动在目标机启动 gost relay、在本机启动 rtcp 客户端，
+                    默认开启：平台自动在目标机启动 rem 服务端、在本机启动反向转发客户端，
                     worker 通过 127.0.0.1 隧道连平台。只需填写上面的 SSH 主机/用户名/密码（或私钥）。
                     仅支持 Linux 目标机。
                   </p>
                 </div>
-                <Switch
-                  checked={deployForm.gostReverse}
-                  onCheckedChange={(checked) => setDeployForm((f) => ({ ...f, gostReverse: checked }))}
-                />
+                <Form.Item name="reverseTunnel" valuePropName="checked" noStyle>
+                  <Switch />
+                </Form.Item>
               </div>
-              {deployForm.gostReverse && (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="grid gap-2">
-                    <Label htmlFor="gost-relay-port">relay 端口（目标机公网）</Label>
-                    <Input
-                      id="gost-relay-port"
-                      type="number"
-                      value={deployForm.gostRelayPort}
-                      onChange={(e) => setDeployForm((f) => ({ ...f, gostRelayPort: Number(e.target.value) }))}
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="gost-tunnel-port">隧道端口（目标机回环）</Label>
-                    <Input
-                      id="gost-tunnel-port"
-                      type="number"
-                      value={deployForm.gostTunnelPort}
-                      onChange={(e) => setDeployForm((f) => ({ ...f, gostTunnelPort: Number(e.target.value) }))}
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="gost-user">relay 认证（可选）</Label>
-                    <Input
-                      id="gost-user"
-                      placeholder="留空自动生成"
-                      value={deployForm.gostUser}
-                      onChange={(e) => setDeployForm((f) => ({ ...f, gostUser: e.target.value }))}
-                    />
-                  </div>
-                  <div className="grid gap-2 sm:col-span-2">
-                    <Label htmlFor="gost-pass">relay 密码（可选）</Label>
-                    <Input
-                      id="gost-pass"
-                      type="password"
-                      placeholder="留空自动生成"
-                      value={deployForm.gostPass}
-                      onChange={(e) => setDeployForm((f) => ({ ...f, gostPass: e.target.value }))}
-                    />
-                  </div>
-                  <p className="text-xs text-muted-foreground sm:col-span-2">
-                    目标机需要已有 gost，或平台侧有 gost 二进制可自动上传。relay 端口需允许平台访问；
-                    隧道端口只绑定 127.0.0.1，并转发到节点网关 TLS 端口 9443（不是 Web 8080）。
-                  </p>
-                </div>
-              )}
+              <Form.Item noStyle shouldUpdate={(prev, cur) => prev.reverseTunnel !== cur.reverseTunnel}>
+                {({ getFieldValue }) =>
+                  getFieldValue('reverseTunnel') ? (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="grid gap-2">
+                        <label className="text-sm font-medium" htmlFor="rem-relay-port">relay 端口（目标机公网）</label>
+                        <Form.Item name="relayPort" noStyle>
+                          <InputNumber id="rem-relay-port" className="w-full" />
+                        </Form.Item>
+                      </div>
+                      <div className="grid gap-2">
+                        <label className="text-sm font-medium" htmlFor="rem-tunnel-port">隧道端口（目标机回环）</label>
+                        <Form.Item name="tunnelPort" noStyle>
+                          <InputNumber id="rem-tunnel-port" className="w-full" />
+                        </Form.Item>
+                      </div>
+                      <p className="text-xs text-muted-foreground sm:col-span-2">
+                        目标机没有 rem 时平台自动上传（约 3MB，由工具运行时管理）。relay 端口需允许平台访问；
+                        隧道端口只绑定 127.0.0.1，并转发到节点网关 TLS 端口 9443（不是 Web 8080）。
+                      </p>
+                    </div>
+                  ) : null
+                }
+              </Form.Item>
             </div>
             <div className="grid gap-2 sm:col-span-2">
-              <Label htmlFor="deploy-dir">安装目录</Label>
-              <Input
-                id="deploy-dir"
-                value={deployForm.dir}
-                onChange={(e) => setDeployForm((f) => ({ ...f, dir: e.target.value }))}
-              />
+              <label className="text-sm font-medium" htmlFor="deploy-dir">安装目录</label>
+              <Form.Item name="dir" noStyle>
+                <Input id="deploy-dir" />
+              </Form.Item>
               <p className="text-xs text-muted-foreground">
                 Windows 示例：C:\4zreark-worker；Linux 示例：/opt/4zreark-worker。
               </p>
             </div>
             <div className="grid gap-2 sm:col-span-2">
-              <Label htmlFor="deploy-caps">能力</Label>
-              <Input
-                id="deploy-caps"
-                value={deployForm.capabilities}
-                onChange={(e) => setDeployForm((f) => ({ ...f, capabilities: e.target.value }))}
-              />
+              <label className="text-sm font-medium" htmlFor="deploy-caps">能力</label>
+              <Form.Item name="capabilities" noStyle>
+                <Input id="deploy-caps" />
+              </Form.Item>
             </div>
             <div className="grid gap-2 sm:col-span-2">
-              <Label htmlFor="deploy-tags">标签</Label>
-              <Input
-                id="deploy-tags"
-                placeholder="overseas, high-performance"
-                value={deployForm.tags}
-                onChange={(e) => setDeployForm((f) => ({ ...f, tags: e.target.value }))}
-              />
+              <label className="text-sm font-medium" htmlFor="deploy-tags">标签</label>
+              <Form.Item name="tags" noStyle>
+                <Input id="deploy-tags" placeholder="overseas, high-performance" />
+              </Form.Item>
             </div>
           </div>
-          <p className="text-xs text-muted-foreground">
-            注意：默认不校验 SSH host key；Windows 需要先把 worker-windows-amd64.exe 放到 server 同目录
-            或配置 node.windows_binary。目标机需要已有扫描工具/字典（一键部署只传二进制和节点配置）。
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeployOpen(false)}>
-              取消
-            </Button>
-            <Button onClick={submitDeploy} disabled={deployMutation.isPending}>
-              {deployMutation.isPending ? '部署中…' : '开始部署'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </Form>
+        <p className="text-xs text-muted-foreground mt-3">
+          注意：默认不校验 SSH host key；Windows 需要先把 worker-windows-amd64.exe 放到 server 同目录
+          或配置 node.windows_binary。目标机需要已有扫描工具/字典（一键部署只传二进制和节点配置）。
+        </p>
+      </Modal>
 
       {/* 部署结果 */}
-      <Dialog open={!!deployResult} onOpenChange={(open) => !open && setDeployResult(null)}>
-        <DialogContent className="max-h-[90vh] w-[calc(100vw-2rem)] max-w-3xl overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{deployResult?.title}</DialogTitle>
-            <DialogDescription>安装目录和启动日志见下方。</DialogDescription>
-          </DialogHeader>
-          <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">
-            {deployResult?.output}
-          </pre>
-          <DialogFooter>
-            <Button onClick={() => setDeployResult(null)}>关闭</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <Modal
+        open={!!deployResult}
+        onCancel={() => setDeployResult(null)}
+        title={deployResult?.title}
+        width={768}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button type="primary" onClick={() => setDeployResult(null)}>关闭</Button>
+          </div>
+        }
+      >
+        <p className="text-sm text-muted-foreground mb-3">安装目录和启动日志见下方。</p>
+        <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">
+          {deployResult?.output}
+        </pre>
+      </Modal>
     </div>
   )
 }

@@ -11,13 +11,10 @@ import {
   Plus,
   RefreshCw,
 } from 'lucide-react'
+import { Button, Card, Skeleton, Tag } from 'antd'
 
 import { projectApi, type Project, type ProjectInput } from '@/api/projects'
 import { ProjectFormDialog } from '@/components/projects/ProjectFormDialog'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card'
-import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate } from '@/lib/utils'
 
@@ -51,7 +48,8 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
       }}
       className="hover:border-primary/40 hover:shadow-md group cursor-pointer transition-all"
     >
-      <CardHeader className="pb-3">
+      {/* 原 CardHeader 区：标识、名称与状态 */}
+      <div className="pb-3">
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2.5">
             <span
@@ -65,16 +63,24 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
               <div className="text-muted-foreground truncate font-mono text-xs">{project.code}</div>
             </div>
           </div>
-          <Badge variant={project.collection_paused ? 'warning' : 'success'} className="shrink-0">
+          <Tag
+            className={cn(
+              'shrink-0 border-transparent',
+              project.collection_paused
+                ? 'bg-yellow-500 text-black'
+                : 'bg-primary text-primary-foreground',
+            )}
+          >
             {project.collection_paused ? '已暂停' : '采集中'}
-          </Badge>
+          </Tag>
         </div>
         <p className="text-muted-foreground line-clamp-2 min-h-[2.5rem] pt-2 text-sm">
           {project.description || '暂无项目说明'}
         </p>
-      </CardHeader>
+      </div>
 
-      <CardContent className="space-y-2 pb-3">
+      {/* 原 CardContent 区：项目参数与资产计数 */}
+      <div className="space-y-2 pb-3">
         <Field label="地区" value={regionLabel(project.region)} />
         <Field label="采集周期" value={`${project.cycle_interval_days} 天`} />
         <div className="border-border/60 grid grid-cols-2 gap-x-4 gap-y-2 border-t pt-2">
@@ -112,15 +118,16 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
             }
           />
         </div>
-      </CardContent>
+      </div>
 
-      <CardFooter className="text-muted-foreground flex items-center justify-between pt-0 text-xs">
+      {/* 原 CardFooter 区 */}
+      <div className="text-muted-foreground flex items-center justify-between pt-0 text-xs">
         <span>更新于 {formatDate(project.updated_at)}</span>
         <span className="text-primary inline-flex items-center gap-1 font-medium">
           查看详情
           <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
         </span>
-      </CardFooter>
+      </div>
     </Card>
   )
 }
@@ -162,15 +169,14 @@ export default function ProjectsPage() {
         </div>
         <div className="flex items-center gap-2">
           <Button
-            variant="outline"
-            size="sm"
+            size="small"
             onClick={() => projects.refetch()}
             disabled={projects.isFetching}
           >
             <RefreshCw className={cn('mr-2 h-4 w-4', projects.isFetching && 'animate-spin')} />
             刷新
           </Button>
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <Button type="primary" size="small" onClick={() => setCreateOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
             新建项目
           </Button>
@@ -180,32 +186,32 @@ export default function ProjectsPage() {
       {projects.isLoading ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-[260px] w-full rounded-lg" />
+            <Skeleton key={i} loading active paragraph={{ rows: 7 }} className="rounded-lg" />
           ))}
         </div>
       ) : projects.isError ? (
         <Card>
-          <CardContent className="text-muted-foreground flex flex-col items-center gap-3 py-16 text-sm">
+          <div className="text-muted-foreground flex flex-col items-center gap-3 py-16 text-sm">
             <AlertTriangle className="text-destructive h-8 w-8" />
             项目列表加载失败
-            <Button variant="outline" size="sm" onClick={() => projects.refetch()}>
+            <Button size="small" onClick={() => projects.refetch()}>
               重试
             </Button>
-          </CardContent>
+          </div>
         </Card>
       ) : list.length === 0 ? (
         <Card>
-          <CardContent className="text-muted-foreground flex flex-col items-center gap-3 py-16 text-center">
+          <div className="text-muted-foreground flex flex-col items-center gap-3 py-16 text-center">
             <Briefcase className="h-10 w-10 opacity-40" />
             <div>
               <p className="text-foreground font-medium">还没有项目</p>
               <p className="mt-1 text-sm">先创建一个公司 / SRC 项目，再往项目里加种子和监控计划。</p>
             </div>
-            <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Button type="primary" size="small" onClick={() => setCreateOpen(true)}>
               <FolderPlus className="mr-2 h-4 w-4" />
               新建项目
             </Button>
-          </CardContent>
+          </div>
         </Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">

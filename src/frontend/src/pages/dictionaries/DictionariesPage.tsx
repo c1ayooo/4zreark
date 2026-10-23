@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Eye, Paperclip, Plus, RefreshCw, Trash2, Upload } from 'lucide-react'
+import { Button, Input, Modal, Select, Table, Tag } from 'antd'
+import type { TableProps } from 'antd'
 
 import {
   dictionaryApi,
@@ -8,28 +10,9 @@ import {
   type Dictionary,
   type DictionaryPreview,
 } from '@/api/sources'
-import { Badge } from '@/components/ui/badge'
 import { useConfirm } from '@/components/common/confirm-provider'
-import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
+import EmptyState from '@/components/common/EmptyState'
 import { formatDate } from '@/lib/utils'
 
 const pageSize = 20
@@ -109,7 +92,70 @@ export default function DictionariesPage() {
 
   const items = list.data?.data ?? []
   const total = list.data?.total ?? 0
-  const pages = Math.max(1, Math.ceil(total / pageSize))
+
+  const columns: TableProps<Dictionary>['columns'] = [
+    {
+      title: '名称',
+      dataIndex: 'name',
+      key: 'name',
+      render: (v: string) => <span className="text-sm">{v}</span>,
+    },
+    {
+      title: '类型',
+      dataIndex: 'type',
+      key: 'type',
+      width: 120,
+      render: (v: string) => <span className="font-mono text-xs">{v}</span>,
+    },
+    {
+      title: '行数',
+      dataIndex: 'line_count',
+      key: 'line_count',
+      width: 110,
+      render: (v: number) => <span className="text-sm tabular-nums">{v.toLocaleString()}</span>,
+    },
+    {
+      title: '来源',
+      dataIndex: 'is_builtin',
+      key: 'is_builtin',
+      width: 90,
+      render: (v: boolean) =>
+        v ? (
+          <Tag className="border-transparent bg-secondary text-secondary-foreground">内置</Tag>
+        ) : (
+          <Tag>导入</Tag>
+        ),
+    },
+    {
+      title: '创建时间',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      width: 170,
+      render: (v: string) => (
+        <span className="text-xs text-muted-foreground">{formatDate(v)}</span>
+      ),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 170,
+      render: (_, d) => (
+        <div className="flex gap-1">
+          <Button size="small" onClick={() => { setEntriesOf(d); setEntryPage(1) }}>
+            <Eye className="mr-1 h-3.5 w-3.5" /> 条目
+          </Button>
+          <Button
+            type="text"
+            danger
+            icon={<Trash2 className="h-4 w-4" />}
+            onClick={async () => {
+              if (await confirm(`删除字典 ${d.name}？`)) remove.mutate(d.id)
+            }}
+          />
+        </div>
+      ),
+    },
+  ]
 
   return (
     <div className="space-y-5 p-6">
@@ -121,10 +167,10 @@ export default function DictionariesPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => list.refetch()}>
+          <Button onClick={() => list.refetch()}>
             <RefreshCw className="mr-2 h-4 w-4" /> 刷新
           </Button>
-          <Button onClick={() => setImportOpen(true)}>
+          <Button type="primary" onClick={() => setImportOpen(true)}>
             <Upload className="mr-2 h-4 w-4" /> 导入词表
           </Button>
         </div>
@@ -156,178 +202,42 @@ export default function DictionariesPage() {
       </div>
 
       <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>名称</TableHead>
-              <TableHead className="w-[120px]">类型</TableHead>
-              <TableHead className="w-[110px]">行数</TableHead>
-              <TableHead className="w-[90px]">来源</TableHead>
-              <TableHead className="w-[170px]">创建时间</TableHead>
-              <TableHead className="w-[170px]">操作</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {list.isLoading && (
-              <TableRow>
-                <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">加载中…</TableCell>
-              </TableRow>
-            )}
-            {!list.isLoading && items.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
-                  还没有字典。点右上角「导入词表」，预览确认后入库。
-                </TableCell>
-              </TableRow>
-            )}
-            {items.map((d: Dictionary) => (
-              <TableRow key={d.id}>
-                <TableCell className="text-sm">{d.name}</TableCell>
-                <TableCell className="font-mono text-xs">{d.type}</TableCell>
-                <TableCell className="text-sm tabular-nums">{d.line_count.toLocaleString()}</TableCell>
-                <TableCell>
-                  <Badge variant={d.is_builtin ? 'secondary' : 'outline'}>
-                    {d.is_builtin ? '内置' : '导入'}
-                  </Badge>
-                </TableCell>
-                <TableCell className="text-xs text-muted-foreground">{formatDate(d.created_at)}</TableCell>
-                <TableCell>
-                  <div className="flex gap-1">
-                    <Button size="sm" variant="outline" onClick={() => { setEntriesOf(d); setEntryPage(1) }}>
-                      <Eye className="mr-1 h-3.5 w-3.5" /> 条目
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={async () => {
-                        if (await confirm(`删除字典 ${d.name}？`)) remove.mutate(d.id)
-                      }}
-                    >
-                      <Trash2 className="h-4 w-4 text-destructive" />
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <Table<Dictionary>
+          columns={columns}
+          dataSource={items}
+          rowKey="id"
+          loading={list.isLoading}
+          locale={{
+            emptyText: (
+              <EmptyState
+                title="还没有字典。点右上角「导入词表」，预览确认后入库。"
+                className="border-0"
+              />
+            ),
+          }}
+          pagination={{
+            current: page,
+            pageSize,
+            total,
+            showQuickJumper: true,
+            // page_size 固定 20、无独立 pageSize 状态，不展示切换器
+            showSizeChanger: false,
+            hideOnSinglePage: true,
+            onChange: (p) => setPage(p),
+          }}
+        />
       </div>
 
-      {pages > 1 && (
-        <div className="flex items-center justify-end gap-2">
-          <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>
-            上一页
-          </Button>
-          <span className="text-sm text-muted-foreground">{page} / {pages}</span>
-          <Button variant="outline" size="sm" disabled={page >= pages} onClick={() => setPage(page + 1)}>
-            下一页
-          </Button>
-        </div>
-      )}
-
       {/* 导入词表 */}
-      <Dialog open={importOpen} onOpenChange={(v) => { setImportOpen(v); if (!v) setPreview(null) }}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>导入词表</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
-            <div className="grid grid-cols-3 gap-3">
-              <div className="space-y-1">
-                <Label>名称 *</Label>
-                <Input
-                  value={name}
-                  onChange={(e) => { setName(e.target.value); setPreview(null) }}
-                  placeholder="例如：常用子域-2026"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label>类型</Label>
-                <Select value={dictType} onValueChange={(v) => { setDictType(v); setPreview(null) }}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {dictionaryTypes.map((t) => (
-                      <SelectItem key={t} value={t}>{t}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label>格式</Label>
-                <Select value={format} onValueChange={(v) => { setFormat(v); setPreview(null) }}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="text">文本（每行一条）</SelectItem>
-                    <SelectItem value="csv">CSV（取第一列）</SelectItem>
-                    <SelectItem value="tsv">TSV（取第一列）</SelectItem>
-                    <SelectItem value="xlsx">Excel（.xlsx，取第一列）</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            {format === 'xlsx' ? (
-              <div className="space-y-1">
-                <Label>词表文件（取第一列，首行表头自动跳过）</Label>
-                {/* 原生 file 控件不可样式化，隐藏后由 Button 触发，与其它上传入口保持一致 */}
-                <input
-                  id="dict-xlsx-file"
-                  type="file"
-                  accept=".xlsx"
-                  className="hidden"
-                  onChange={(e) => {
-                    setXlsxFile(e.target.files?.[0] ?? null)
-                    setPreview(null)
-                  }}
-                />
-                <div className="flex items-center gap-2">
-                  <Button variant="outline" size="sm" asChild>
-                    <label htmlFor="dict-xlsx-file" className="cursor-pointer">
-                      <Paperclip className="mr-2 h-4 w-4" />
-                      选择文件
-                    </label>
-                  </Button>
-                  <p className="text-xs text-muted-foreground">
-                    {xlsxFile ? xlsxFile.name : '选择一个 .xlsx 文件'}
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-1">
-                <Label>词表（每行一条）</Label>
-                <Textarea
-                  className="min-h-[180px] font-mono text-sm"
-                  value={text}
-                  onChange={(e) => { setText(e.target.value); setPreview(null) }}
-                  placeholder={'www\napi\nmail'}
-                />
-              </div>
-            )}
-            {preview && (
-              <div className="rounded-md border bg-muted/30 p-3 text-sm">
-                <div className="flex flex-wrap gap-4">
-                  <span>总行数 <b>{preview.total}</b></span>
-                  <span>去重后 <b>{preview.unique}</b></span>
-                  <span>重复 <b>{preview.duplicates}</b></span>
-                  <span>分段 <b>{preview.segments}</b></span>
-                </div>
-                <div className="mt-2 font-mono text-xs text-muted-foreground">
-                  {preview.sample.join(' · ')}
-                  {preview.unique > preview.sample.length ? ' …' : ''}
-                </div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  预览 {formatDate(preview.expires_at)} 前有效
-                </div>
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setImportOpen(false)}>取消</Button>
+      <Modal
+        open={importOpen}
+        title="导入词表"
+        width={672}
+        onCancel={() => { setImportOpen(false); setPreview(null) }}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setImportOpen(false)}>取消</Button>
             <Button
-              variant="secondary"
               onClick={() => previewMutation.mutate()}
               disabled={
                 !name.trim() ||
@@ -338,50 +248,141 @@ export default function DictionariesPage() {
               <Plus className="mr-1 h-4 w-4" /> 预览
             </Button>
             <Button
+              type="primary"
               onClick={() => preview && importMutation.mutate(preview.token)}
               disabled={!preview || importMutation.isPending}
             >
               确认导入
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </div>
+        }
+      >
+        <div className="space-y-3 py-2">
+          <div className="grid grid-cols-3 gap-3">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">名称 *</label>
+              <Input
+                value={name}
+                onChange={(e) => { setName(e.target.value); setPreview(null) }}
+                placeholder="例如：常用子域-2026"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">类型</label>
+              <Select
+                value={dictType}
+                onChange={(v) => { setDictType(v); setPreview(null) }}
+                options={dictionaryTypes.map((t) => ({ value: t, label: t }))}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">格式</label>
+              <Select
+                value={format}
+                onChange={(v) => { setFormat(v); setPreview(null) }}
+                options={[
+                  { value: 'text', label: '文本（每行一条）' },
+                  { value: 'csv', label: 'CSV（取第一列）' },
+                  { value: 'tsv', label: 'TSV（取第一列）' },
+                  { value: 'xlsx', label: 'Excel（.xlsx，取第一列）' },
+                ]}
+              />
+            </div>
+          </div>
+          {format === 'xlsx' ? (
+            <div className="space-y-1">
+              <label className="text-sm font-medium">词表文件（取第一列，首行表头自动跳过）</label>
+              {/* 原生 file 控件不可样式化，隐藏后由按钮触发，与其它上传入口保持一致 */}
+              <input
+                id="dict-xlsx-file"
+                type="file"
+                accept=".xlsx"
+                className="hidden"
+                onChange={(e) => {
+                  setXlsxFile(e.target.files?.[0] ?? null)
+                  setPreview(null)
+                }}
+              />
+              <div className="flex items-center gap-2">
+                <Button
+                  size="small"
+                  onClick={() => document.getElementById('dict-xlsx-file')?.click()}
+                >
+                  <Paperclip className="mr-2 h-4 w-4" />
+                  选择文件
+                </Button>
+                <p className="text-xs text-muted-foreground">
+                  {xlsxFile ? xlsxFile.name : '选择一个 .xlsx 文件'}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-1">
+              <label className="text-sm font-medium">词表（每行一条）</label>
+              <Input.TextArea
+                className="min-h-[180px] font-mono text-sm"
+                value={text}
+                onChange={(e) => { setText(e.target.value); setPreview(null) }}
+                placeholder={'www\napi\nmail'}
+              />
+            </div>
+          )}
+          {preview && (
+            <div className="rounded-md border bg-muted/30 p-3 text-sm">
+              <div className="flex flex-wrap gap-4">
+                <span>总行数 <b>{preview.total}</b></span>
+                <span>去重后 <b>{preview.unique}</b></span>
+                <span>重复 <b>{preview.duplicates}</b></span>
+                <span>分段 <b>{preview.segments}</b></span>
+              </div>
+              <div className="mt-2 font-mono text-xs text-muted-foreground">
+                {preview.sample.join(' · ')}
+                {preview.unique > preview.sample.length ? ' …' : ''}
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                预览 {formatDate(preview.expires_at)} 前有效
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
 
       {/* 条目 */}
-      <Dialog open={!!entriesOf} onOpenChange={(v) => !v && setEntriesOf(null)}>
-        <DialogContent className="max-w-xl">
-          <DialogHeader>
-            <DialogTitle>{entriesOf?.name} · 词表条目</DialogTitle>
-          </DialogHeader>
-          <div className="max-h-[50vh] overflow-auto rounded border p-3 font-mono text-sm">
-            {(entries.data?.data ?? []).map((v) => (
-              <div key={v} className="border-b py-0.5 last:border-0">{v}</div>
-            ))}
-            {entries.isLoading && <div className="text-muted-foreground">加载中…</div>}
-            {!entries.isLoading && (entries.data?.data ?? []).length === 0 && (
-              <div className="text-muted-foreground">没有条目</div>
-            )}
-          </div>
-          <DialogFooter className="items-center justify-between">
+      <Modal
+        open={!!entriesOf}
+        title={`${entriesOf?.name} · 词表条目`}
+        width={576}
+        onCancel={() => setEntriesOf(null)}
+        footer={
+          <div className="flex items-center justify-between">
             <span className="text-xs text-muted-foreground">
               共 {entries.data?.total ?? 0} 条 · 第 {entryPage} 页
             </span>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" disabled={entryPage <= 1} onClick={() => setEntryPage(entryPage - 1)}>
+              <Button size="small" disabled={entryPage <= 1} onClick={() => setEntryPage(entryPage - 1)}>
                 上一页
               </Button>
               <Button
-                variant="outline"
-                size="sm"
+                size="small"
                 disabled={(entries.data?.total ?? 0) <= entryPage * 100}
                 onClick={() => setEntryPage(entryPage + 1)}
               >
                 下一页
               </Button>
             </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </div>
+        }
+      >
+        <div className="max-h-[50vh] overflow-auto rounded border p-3 font-mono text-sm">
+          {(entries.data?.data ?? []).map((v) => (
+            <div key={v} className="border-b py-0.5 last:border-0">{v}</div>
+          ))}
+          {entries.isLoading && <div className="text-muted-foreground">加载中…</div>}
+          {!entries.isLoading && (entries.data?.data ?? []).length === 0 && (
+            <div className="text-muted-foreground">没有条目</div>
+          )}
+        </div>
+      </Modal>
     </div>
   )
 }

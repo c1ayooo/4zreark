@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { FileUp, Paperclip, RefreshCw, Undo2 } from 'lucide-react'
+import { Button, Card, Select, Tag } from 'antd'
 
 import { projectApi } from '@/api/projects'
 import {
@@ -9,20 +10,20 @@ import {
   type LocalDocCommit,
   type LocalDocPreview,
 } from '@/api/digital'
-import { Badge } from '@/components/ui/badge'
 import { useConfirm } from '@/components/common/confirm-provider'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 
 const ACCEPT = '.har,.json,.csv,.txt,.xlsx'
+
+// shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
+const badgeCls = (variant: 'default' | 'secondary' | 'destructive' | 'outline') =>
+  variant === 'default'
+    ? 'border-transparent bg-primary text-primary-foreground'
+    : variant === 'secondary'
+      ? 'border-transparent bg-secondary text-secondary-foreground'
+      : variant === 'destructive'
+        ? 'border-transparent bg-destructive text-destructive-foreground'
+        : ''
 
 export default function LocalDocumentsPage() {
   const confirm = useConfirm()
@@ -96,31 +97,22 @@ export default function LocalDocumentsPage() {
           </p>
         </div>
         <Select
+          className="w-48"
           value={projectId}
-          onValueChange={(v) => {
+          placeholder="选择归属项目"
+          onChange={(v) => {
             setProjectId(v)
             setPreview(null)
           }}
-        >
-          <SelectTrigger className="w-48">
-            <SelectValue placeholder="选择归属项目" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="0">选择归属项目</SelectItem>
-            {(projects.data?.data ?? []).map((p) => (
-              <SelectItem key={p.id} value={String(p.id)}>
-                {p.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          options={[
+            { value: '0', label: '选择归属项目' },
+            ...(projects.data?.data ?? []).map((p) => ({ value: String(p.id), label: p.name })),
+          ]}
+        />
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">上传与预览</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      <Card title={<span className="text-base">上传与预览</span>}>
+        <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-3">
             {/* 原生 file input 只做隐藏载体，可见入口统一走 Button，避免出现浏览器默认的丑控件 */}
             <input
@@ -135,7 +127,7 @@ export default function LocalDocumentsPage() {
                 setCommitted(null)
               }}
             />
-            <Button variant="outline" onClick={() => fileRef.current?.click()}>
+            <Button onClick={() => fileRef.current?.click()}>
               <Paperclip className="mr-2 h-4 w-4" />
               选择文件
             </Button>
@@ -145,6 +137,7 @@ export default function LocalDocumentsPage() {
               <span className="text-muted-foreground text-sm">支持 HAR / JSON / CSV / TXT / XLSX，最大 4 MiB</span>
             )}
             <Button
+              type="primary"
               onClick={() => previewMutation.mutate()}
               disabled={!canRun || previewMutation.isPending}
             >
@@ -152,7 +145,7 @@ export default function LocalDocumentsPage() {
               {previewMutation.isPending ? '解析中…' : '解析并预览'}
             </Button>
             {(preview || committed) && (
-              <Button variant="outline" onClick={discard}>
+              <Button onClick={discard}>
                 <RefreshCw className="mr-2 h-4 w-4" /> 重新选择
               </Button>
             )}
@@ -166,12 +159,12 @@ export default function LocalDocumentsPage() {
           {preview && (
             <div className="space-y-3 rounded-md border bg-muted/30 p-4">
               <div className="flex flex-wrap items-center gap-2 text-sm">
-                <Badge variant="outline">{preview.format.toUpperCase()}</Badge>
+                <Tag>{preview.format.toUpperCase()}</Tag>
                 <span className="text-muted-foreground">{preview.filename}</span>
-                <Badge variant="secondary">host {preview.hosts}</Badge>
-                <Badge variant="secondary">名称 {preview.names}</Badge>
-                <Badge variant="outline">重复 {preview.duplicates}</Badge>
-                <Badge variant="outline">无效 {preview.invalid}</Badge>
+                <Tag className={badgeCls('secondary')}>host {preview.hosts}</Tag>
+                <Tag className={badgeCls('secondary')}>名称 {preview.names}</Tag>
+                <Tag>重复 {preview.duplicates}</Tag>
+                <Tag>无效 {preview.invalid}</Tag>
               </div>
 
               {preview.sample_hosts.length > 0 && (
@@ -194,7 +187,7 @@ export default function LocalDocumentsPage() {
                 </div>
               )}
 
-              <Button onClick={() => commit.mutate()} disabled={commit.isPending}>
+              <Button type="primary" onClick={() => commit.mutate()} disabled={commit.isPending}>
                 {commit.isPending
                   ? '导入中…'
                   : `确认导入（host ${preview.hosts} · 名称 ${preview.names}）`}
@@ -215,8 +208,7 @@ export default function LocalDocumentsPage() {
               </div>
               {committed.batch && (
                 <Button
-                  size="sm"
-                  variant="outline"
+                  size="small"
                   onClick={async () => {
                     if (
                       await confirm(
@@ -238,7 +230,7 @@ export default function LocalDocumentsPage() {
             与 CSV 同一套列识别规则（host/url/domain、name/app、kind/company/platform）。
             撤销只回滚该批次新增的名单，host 记录按资产生命周期处理。
           </div>
-        </CardContent>
+        </div>
       </Card>
     </div>
   )

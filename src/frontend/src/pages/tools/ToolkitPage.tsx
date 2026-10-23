@@ -1,21 +1,10 @@
 import { useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Checkbox } from '@/components/ui/checkbox'
-import { Textarea } from '@/components/ui/textarea'
-import { Badge } from '@/components/ui/badge'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Button, Card, Checkbox, Input, Select, Tabs, Tag } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
 import { toolsApi, type ComponentCVE, type GithubDork, type GithubLeakCandidate, type EnterpriseProvider, type EnterpriseRef, type NucleiRuntimeStatus, type VerifyStats } from '@/api/tools'
-import { Loader2, Radio, KeyRound, GitCompare, Code2, Quote, Boxes, ScrollText, Github, Building2, PackageSearch, Terminal } from 'lucide-react'
+import { Radio, KeyRound, GitCompare, Code2, Quote, Boxes, ScrollText, Github, Building2, PackageSearch, Terminal } from 'lucide-react'
+
+const { TextArea } = Input
 
 function ResultBlock({ value }: { value: unknown }) {
   if (value === null || value === undefined) return null
@@ -36,33 +25,22 @@ export default function ToolkitPage() {
         </p>
       </div>
 
-      <Tabs defaultValue="oob">
-        <TabsList className="flex-wrap">
-          <TabsTrigger value="oob" className="gap-2"><Radio className="h-4 w-4" />带外验证</TabsTrigger>
-          <TabsTrigger value="creds" className="gap-2"><KeyRound className="h-4 w-4" />凭据验证</TabsTrigger>
-          <TabsTrigger value="diff" className="gap-2"><GitCompare className="h-4 w-4" />差分组</TabsTrigger>
-          <TabsTrigger value="web" className="gap-2"><Code2 className="h-4 w-4" />JS 侦察</TabsTrigger>
-          <TabsTrigger value="quote" className="gap-2"><Quote className="h-4 w-4" />引文校验</TabsTrigger>
-          <TabsTrigger value="component" className="gap-2"><Boxes className="h-4 w-4" />组件 CVE</TabsTrigger>
-          <TabsTrigger value="playbook" className="gap-2"><ScrollText className="h-4 w-4" />验证剧本</TabsTrigger>
-          <TabsTrigger value="ghleak" className="gap-2"><Github className="h-4 w-4" />GitHub 泄露</TabsTrigger>
-          <TabsTrigger value="enterprise" className="gap-2"><Building2 className="h-4 w-4" />企业检索</TabsTrigger>
-          <TabsTrigger value="extract" className="gap-2"><PackageSearch className="h-4 w-4" />报文提取</TabsTrigger>
-          <TabsTrigger value="runtime" className="gap-2"><Terminal className="h-4 w-4" />运行时</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="oob"><OOBPanel /></TabsContent>
-        <TabsContent value="creds"><CredsPanel /></TabsContent>
-        <TabsContent value="diff"><DiffPanel /></TabsContent>
-        <TabsContent value="web"><WebReconPanel /></TabsContent>
-        <TabsContent value="quote"><QuotePanel /></TabsContent>
-        <TabsContent value="component"><ComponentPanel /></TabsContent>
-        <TabsContent value="playbook"><PlaybookPanel /></TabsContent>
-        <TabsContent value="ghleak"><GithubLeakPanel /></TabsContent>
-        <TabsContent value="enterprise"><EnterprisePanel /></TabsContent>
-        <TabsContent value="extract"><ExtractPanel /></TabsContent>
-        <TabsContent value="runtime"><RuntimePanel /></TabsContent>
-      </Tabs>
+      <Tabs
+        defaultActiveKey="oob"
+        items={[
+          { key: 'oob', label: <span className="flex items-center gap-2"><Radio className="h-4 w-4" />带外验证</span>, children: <OOBPanel /> },
+          { key: 'creds', label: <span className="flex items-center gap-2"><KeyRound className="h-4 w-4" />凭据验证</span>, children: <CredsPanel /> },
+          { key: 'diff', label: <span className="flex items-center gap-2"><GitCompare className="h-4 w-4" />差分组</span>, children: <DiffPanel /> },
+          { key: 'web', label: <span className="flex items-center gap-2"><Code2 className="h-4 w-4" />JS 侦察</span>, children: <WebReconPanel /> },
+          { key: 'quote', label: <span className="flex items-center gap-2"><Quote className="h-4 w-4" />引文校验</span>, children: <QuotePanel /> },
+          { key: 'component', label: <span className="flex items-center gap-2"><Boxes className="h-4 w-4" />组件 CVE</span>, children: <ComponentPanel /> },
+          { key: 'playbook', label: <span className="flex items-center gap-2"><ScrollText className="h-4 w-4" />验证剧本</span>, children: <PlaybookPanel /> },
+          { key: 'ghleak', label: <span className="flex items-center gap-2"><Github className="h-4 w-4" />GitHub 泄露</span>, children: <GithubLeakPanel /> },
+          { key: 'enterprise', label: <span className="flex items-center gap-2"><Building2 className="h-4 w-4" />企业检索</span>, children: <EnterprisePanel /> },
+          { key: 'extract', label: <span className="flex items-center gap-2"><PackageSearch className="h-4 w-4" />报文提取</span>, children: <ExtractPanel /> },
+          { key: 'runtime', label: <span className="flex items-center gap-2"><Terminal className="h-4 w-4" />运行时</span>, children: <RuntimePanel /> },
+        ]}
+      />
     </div>
   )
 }
@@ -100,13 +78,12 @@ function OOBPanel() {
   }
 
   return (
-    <Card>
-      <CardHeader><CardTitle className="text-base">DNSLog 带外验证</CardTitle></CardHeader>
-      <CardContent className="space-y-3">
+    <Card title="DNSLog 带外验证">
+      <div className="space-y-3">
         <Input placeholder="dnslog 服务地址（留空用 dnslog.cn，可填自建）" value={base} onChange={(e) => setBase(e.target.value)} />
         <div className="flex flex-wrap gap-2">
-          <Button onClick={getDomain} disabled={busy}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}申请域名</Button>
-          <Button variant="outline" onClick={query} disabled={!domain || busy}>查询记录</Button>
+          <Button type="primary" onClick={getDomain} loading={busy}>申请域名</Button>
+          <Button onClick={query} disabled={!domain || busy}>查询记录</Button>
         </div>
         {domain && <div className="text-sm">临时域名：<code className="font-mono">{domain}</code></div>}
         {records.length > 0 && (
@@ -114,7 +91,7 @@ function OOBPanel() {
             {records.map((r, i) => <div key={i} className="rounded border px-2 py-1 font-mono text-xs">{r}</div>)}
           </div>
         )}
-      </CardContent>
+      </div>
     </Card>
   )
 }
@@ -160,34 +137,35 @@ function CredsPanel() {
   }
 
   return (
-    <Card>
-      <CardHeader><CardTitle className="text-base">凭据只读验证</CardTitle></CardHeader>
-      <CardContent className="space-y-3">
+    <Card title="凭据只读验证">
+      <div className="space-y-3">
         <div className="grid gap-3 md:grid-cols-2">
           <div>
             <div className="mb-1 text-xs text-muted-foreground">类型</div>
-            <Select value={kind} onValueChange={setKind}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="db">数据库</SelectItem>
-                <SelectItem value="ssh">SSH</SelectItem>
-                <SelectItem value="cloud">云 AK/SK</SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+              value={kind}
+              onChange={(v) => setKind(v)}
+              options={[
+                { value: 'db', label: '数据库' },
+                { value: 'ssh', label: 'SSH' },
+                { value: 'cloud', label: '云 AK/SK' },
+              ]}
+            />
           </div>
           {kind === 'cloud' ? (
             <div>
               <div className="mb-1 text-xs text-muted-foreground">云厂商</div>
-              <Select value={provider} onValueChange={setProvider}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="aliyun">阿里云</SelectItem>
-                  <SelectItem value="tencent">腾讯云</SelectItem>
-                  <SelectItem value="aws">AWS</SelectItem>
-                  <SelectItem value="huawei">华为云</SelectItem>
-                  <SelectItem value="volc">火山引擎</SelectItem>
-                </SelectContent>
-              </Select>
+              <Select
+                value={provider}
+                onChange={(v) => setProvider(v)}
+                options={[
+                  { value: 'aliyun', label: '阿里云' },
+                  { value: 'tencent', label: '腾讯云' },
+                  { value: 'aws', label: 'AWS' },
+                  { value: 'huawei', label: '华为云' },
+                  { value: 'volc', label: '火山引擎' },
+                ]}
+              />
             </div>
           ) : (
             <div>
@@ -205,13 +183,14 @@ function CredsPanel() {
         ) : (
           <div className="grid gap-3 md:grid-cols-3">
             {kind === 'db' && (
-              <Select value={dbType} onValueChange={setDbType}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="postgres">PostgreSQL</SelectItem>
-                  <SelectItem value="redis">Redis</SelectItem>
-                </SelectContent>
-              </Select>
+              <Select
+                value={dbType}
+                onChange={(v) => setDbType(v)}
+                options={[
+                  { value: 'postgres', label: 'PostgreSQL' },
+                  { value: 'redis', label: 'Redis' },
+                ]}
+              />
             )}
             <Input placeholder="主机" value={host} onChange={(e) => setHost(e.target.value)} />
             <Input placeholder="端口（可空）" value={port} onChange={(e) => setPort(e.target.value)} />
@@ -221,9 +200,9 @@ function CredsPanel() {
           </div>
         )}
 
-        <Button onClick={submit} disabled={busy}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}验证</Button>
+        <Button type="primary" onClick={submit} loading={busy}>验证</Button>
         <ResultBlock value={result} />
-      </CardContent>
+      </div>
     </Card>
   )
 }
@@ -251,16 +230,15 @@ function DiffPanel() {
   }
 
   return (
-    <Card>
-      <CardHeader><CardTitle className="text-base">HTTP 差分测量</CardTitle></CardHeader>
-      <CardContent className="space-y-3">
+    <Card title="HTTP 差分测量">
+      <div className="space-y-3">
         <p className="text-xs text-muted-foreground">
           输入 baseline 与 variants，输出状态/长度/相似度/时延/DBMS 错误特征。只给建议性信号，不直接下漏洞结论。
         </p>
-        <Textarea className="min-h-52 font-mono text-xs" value={json} onChange={(e) => setJson(e.target.value)} />
-        <Button onClick={run} disabled={busy}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}运行差分</Button>
+        <TextArea className="min-h-52 font-mono text-xs" value={json} onChange={(e) => setJson(e.target.value)} />
+        <Button type="primary" onClick={run} loading={busy}>运行差分</Button>
         <ResultBlock value={result} />
-      </CardContent>
+      </div>
     </Card>
   )
 }
@@ -289,20 +267,19 @@ function WebReconPanel() {
   }
 
   return (
-    <Card>
-      <CardHeader><CardTitle className="text-base">JS 端点与敏感信息侦察</CardTitle></CardHeader>
-      <CardContent className="space-y-3">
+    <Card title="JS 端点与敏感信息侦察">
+      <div className="space-y-3">
         <div className="grid gap-3 md:grid-cols-3">
           <Input placeholder="项目 ID（scope 依据）" value={projectID} onChange={(e) => setProjectID(e.target.value)} />
           <Input placeholder="https://target.example.com" value={baseURL} onChange={(e) => setBaseURL(e.target.value)} />
           <label className="flex items-center gap-2 text-sm">
-            <Checkbox checked={unauth} onCheckedChange={(v) => setUnauth(v === true)} />
+            <Checkbox checked={unauth} onChange={(e) => setUnauth(e.target.checked)} />
             同时跑未授权端点字典
           </label>
         </div>
-        <Button onClick={run} disabled={busy}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}开始侦察</Button>
+        <Button type="primary" onClick={run} loading={busy}>开始侦察</Button>
         <ResultBlock value={result} />
-      </CardContent>
+      </div>
     </Card>
   )
 }
@@ -326,16 +303,15 @@ function QuotePanel() {
   }
 
   return (
-    <Card>
-      <CardHeader><CardTitle className="text-base">证据引文校验</CardTitle></CardHeader>
-      <CardContent className="space-y-3">
-        <Textarea placeholder="引文（proof/evidence 摘录）" value={quote} onChange={(e) => setQuote(e.target.value)} />
-        <Textarea className="min-h-40 font-mono text-xs" placeholder="回执原文（请求/响应报文）" value={text} onChange={(e) => setText(e.target.value)} />
+    <Card title="证据引文校验">
+      <div className="space-y-3">
+        <TextArea placeholder="引文（proof/evidence 摘录）" value={quote} onChange={(e) => setQuote(e.target.value)} />
+        <TextArea className="min-h-40 font-mono text-xs" placeholder="回执原文（请求/响应报文）" value={text} onChange={(e) => setText(e.target.value)} />
         <div className="flex items-center gap-3">
-          <Button onClick={run} disabled={busy || !text}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}校验</Button>
-          {found !== null && <Badge variant={found ? 'success' : 'destructive'}>{found ? '命中（引文在回执中）' : '未命中'}</Badge>}
+          <Button type="primary" onClick={run} disabled={!text} loading={busy}>校验</Button>
+          {found !== null && <Tag color={found ? 'success' : 'error'}>{found ? '命中（引文在回执中）' : '未命中'}</Tag>}
         </div>
-      </CardContent>
+      </div>
     </Card>
   )
 }
@@ -358,12 +334,11 @@ function ComponentPanel() {
   }
 
   return (
-    <Card>
-      <CardHeader><CardTitle className="text-base">组件 → CVE</CardTitle></CardHeader>
-      <CardContent className="space-y-3">
+    <Card title="组件 → CVE">
+      <div className="space-y-3">
         <div className="flex gap-2">
           <Input placeholder="产品名，如 apache-tomcat / nginx" value={product} onChange={(e) => setProduct(e.target.value)} />
-          <Button onClick={run} disabled={busy || !product}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}查询</Button>
+          <Button type="primary" onClick={run} disabled={!product} loading={busy}>查询</Button>
         </div>
         {items.length === 0 && !busy && <p className="text-xs text-muted-foreground">暂无结果。索引来自本机 POC 库的 template-id/tags 与指纹规则名。</p>}
         {items.length > 0 && (
@@ -376,7 +351,7 @@ function ComponentPanel() {
             ))}
           </div>
         )}
-      </CardContent>
+      </div>
     </Card>
   )
 }
@@ -420,31 +395,31 @@ function PlaybookPanel() {
   }
 
   return (
-    <Card>
-      <CardHeader><CardTitle className="text-base">验证剧本</CardTitle></CardHeader>
-      <CardContent className="space-y-3">
+    <Card title="验证剧本">
+      <div className="space-y-3">
         <p className="text-xs text-muted-foreground">
           确定性只读剧本（actuator/env 暴露、git 泄露、ES 未授权等）。限速由剧本 limits 硬顶，串行执行。
         </p>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={load}>加载剧本列表</Button>
-          <Select value={playbook} onValueChange={setPlaybook}>
-            <SelectTrigger className="w-64"><SelectValue placeholder="选择剧本" /></SelectTrigger>
-            <SelectContent>
-              {items.map((it) => <SelectItem key={it.id} value={it.id}>{it.name || it.id}</SelectItem>)}
-            </SelectContent>
-          </Select>
+          <Button onClick={load}>加载剧本列表</Button>
+          <Select
+            className="w-64"
+            value={playbook || undefined}
+            onChange={(v) => setPlaybook(v)}
+            placeholder="选择剧本"
+            options={items.map((it) => ({ value: it.id, label: it.name || it.id }))}
+          />
         </div>
         <div className="grid gap-3 md:grid-cols-2">
           <Input placeholder="项目 ID（scope 依据）" value={projectID} onChange={(e) => setProjectID(e.target.value)} />
           <Input placeholder="https://target.example.com" value={baseURL} onChange={(e) => setBaseURL(e.target.value)} />
         </div>
-        <Textarea className="min-h-20 font-mono text-xs" value={vars} onChange={(e) => setVars(e.target.value)} placeholder='变量 JSON，如 {"host":"target.example.com"}' />
-        <Button onClick={run} disabled={busy || !playbook || !baseURL || !projectID}>
-          {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}执行剧本
+        <TextArea className="min-h-20 font-mono text-xs" value={vars} onChange={(e) => setVars(e.target.value)} placeholder='变量 JSON，如 {"host":"target.example.com"}' />
+        <Button type="primary" onClick={run} disabled={!playbook || !baseURL || !projectID} loading={busy}>
+          执行剧本
         </Button>
         <ResultBlock value={result} />
-      </CardContent>
+      </div>
     </Card>
   )
 }
@@ -491,20 +466,20 @@ function GithubLeakPanel() {
   }
 
   return (
-    <Card>
-      <CardHeader><CardTitle className="text-base">GitHub 泄露检索</CardTitle></CardHeader>
-      <CardContent className="space-y-3">
+    <Card title="GitHub 泄露检索">
+      <div className="space-y-3">
         <p className="text-xs text-muted-foreground">
           需要 GITHUB_TOKEN。只返回脱敏片段，原始密钥不会回传。
         </p>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={load}>加载 dork 模板</Button>
-          <Select value={dorkID} onValueChange={setDorkID}>
-            <SelectTrigger className="w-72"><SelectValue placeholder="选择 dork（可留空手写 query）" /></SelectTrigger>
-            <SelectContent>
-              {dorks.map((d) => <SelectItem key={d.id} value={d.id}>{d.title}</SelectItem>)}
-            </SelectContent>
-          </Select>
+          <Button onClick={load}>加载 dork 模板</Button>
+          <Select
+            className="w-72"
+            value={dorkID || undefined}
+            onChange={(v) => setDorkID(v)}
+            placeholder="选择 dork（可留空手写 query）"
+            options={dorks.map((d) => ({ value: d.id, label: d.title }))}
+          />
         </div>
         <Input placeholder="自定义查询（dork 为空时使用）" value={query} onChange={(e) => setQuery(e.target.value)} />
         <div className="grid gap-3 md:grid-cols-3">
@@ -512,14 +487,14 @@ function GithubLeakPanel() {
           <Input placeholder="domain（可选）" value={domain} onChange={(e) => setDomain(e.target.value)} />
           <Input placeholder="最大结果数" value={maxResults} onChange={(e) => setMaxResults(e.target.value)} />
         </div>
-        <Button onClick={run} disabled={busy || (!dorkID && !query)}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}开始检索</Button>
+        <Button type="primary" onClick={run} disabled={(!dorkID && !query)} loading={busy}>开始检索</Button>
         {meta && <div className="text-xs text-muted-foreground">{meta}</div>}
         {items.length > 0 && (
           <div className="divide-y rounded border">
             {items.map((c, i) => (
               <div key={i} className="space-y-1 px-3 py-2 text-sm">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant={c.Severity === 'high' || c.Severity === 'critical' ? 'destructive' : 'secondary'}>{c.SecretType || c.RuleName}</Badge>
+                  <Tag color={c.Severity === 'high' || c.Severity === 'critical' ? 'error' : undefined}>{c.SecretType || c.RuleName}</Tag>
                   <span className="text-xs text-muted-foreground">{c.Confidence}</span>
                   <a className="ml-auto text-xs text-blue-600 hover:underline" href={c.HTMLURL} target="_blank" rel="noreferrer">打开文件</a>
                 </div>
@@ -528,7 +503,7 @@ function GithubLeakPanel() {
             ))}
           </div>
         )}
-      </CardContent>
+      </div>
     </Card>
   )
 }
@@ -569,20 +544,21 @@ function EnterprisePanel() {
   }
 
   return (
-    <Card>
-      <CardHeader><CardTitle className="text-base">企业数据源检索</CardTitle></CardHeader>
-      <CardContent className="space-y-3">
+    <Card title="企业数据源检索">
+      <div className="space-y-3">
         <p className="text-xs text-muted-foreground">会话凭据只在本次请求内使用，不落库。小蓝本/风鸟支持账号密码，其余用网页 Cookie。</p>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={load}>加载数据源</Button>
-          <Select value={provider} onValueChange={setProvider}>
-            <SelectTrigger className="w-52"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {(providers.length ? providers : [{ Name: 'aqc', Label: '爱企查', Auth: '', Available: true, Hint: '' }]).map((p) => (
-                <SelectItem key={p.Name} value={p.Name} disabled={!p.Available}>{p.Label}{p.Available ? '' : '（未启用）'}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Button onClick={load}>加载数据源</Button>
+          <Select
+            className="w-52"
+            value={provider}
+            onChange={(v) => setProvider(v)}
+            options={(providers.length ? providers : [{ Name: 'aqc', Label: '爱企查', Auth: '', Available: true, Hint: '' }]).map((p) => ({
+              value: p.Name,
+              label: `${p.Label}${p.Available ? '' : '（未启用）'}`,
+              disabled: !p.Available,
+            }))}
+          />
         </div>
         <Input placeholder="Cookie（aqc/tyc/kuaicha/风鸟）" value={cookie} onChange={(e) => setCookie(e.target.value)} />
         <div className="grid gap-3 md:grid-cols-2">
@@ -591,7 +567,7 @@ function EnterprisePanel() {
         </div>
         <div className="flex gap-2">
           <Input placeholder="企业关键词" value={keyword} onChange={(e) => setKeyword(e.target.value)} />
-          <Button onClick={run} disabled={busy || !keyword}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}检索</Button>
+          <Button type="primary" onClick={run} disabled={!keyword} loading={busy}>检索</Button>
         </div>
         {items.length > 0 && (
           <div className="divide-y rounded border">
@@ -604,7 +580,7 @@ function EnterprisePanel() {
           </div>
         )}
         <ResultBlock value={detail} />
-      </CardContent>
+      </div>
     </Card>
   )
 }
@@ -627,15 +603,14 @@ function ExtractPanel() {
   }
 
   return (
-    <Card>
-      <CardHeader><CardTitle className="text-base">命中报文提取</CardTitle></CardHeader>
-      <CardContent className="space-y-3">
+    <Card title="命中报文提取">
+      <div className="space-y-3">
         <p className="text-xs text-muted-foreground">已注册：git-config、phpinfo、备份文件、SFTP 配置等。只解析已有报文，不额外下载。</p>
         <Input placeholder="模板 ID，如 git-config" value={templateID} onChange={(e) => setTemplateID(e.target.value)} />
-        <Textarea className="min-h-40 font-mono text-xs" placeholder="命中响应原文" value={response} onChange={(e) => setResponse(e.target.value)} />
-        <Button onClick={run} disabled={busy || !templateID || !response}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}提取</Button>
+        <TextArea className="min-h-40 font-mono text-xs" placeholder="命中响应原文" value={response} onChange={(e) => setResponse(e.target.value)} />
+        <Button type="primary" onClick={run} disabled={!templateID || !response} loading={busy}>提取</Button>
         <ResultBlock value={result} />
-      </CardContent>
+      </div>
     </Card>
   )
 }
@@ -682,36 +657,34 @@ function RuntimePanel() {
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
-      <Card>
-        <CardHeader><CardTitle className="text-base">nuclei 运行时</CardTitle></CardHeader>
-        <CardContent className="space-y-3">
+      <Card title="nuclei 运行时">
+        <div className="space-y-3">
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" onClick={load} disabled={busy}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}刷新状态</Button>
-            <Button variant="outline" onClick={ensure} disabled={busy}>检查/补齐</Button>
-            <Button onClick={update} disabled={busy}>更新二进制与模板</Button>
+            <Button onClick={load} loading={busy}>刷新状态</Button>
+            <Button onClick={ensure} disabled={busy}>检查/补齐</Button>
+            <Button type="primary" onClick={update} disabled={busy}>更新二进制与模板</Button>
           </div>
           {status && (
             <div className="space-y-1 text-sm">
-              <div>二进制：<code className="font-mono text-xs">{status.BinaryPath}</code> <Badge variant={status.BinaryExists ? 'success' : 'destructive'}>{status.BinaryExists ? status.BinaryVersion || '已安装' : '缺失'}</Badge></div>
-              <div>官方模板：{status.TemplateCount} 个 <Badge variant={status.TemplatesExists ? 'success' : 'destructive'}>{status.TemplatesExists ? '已同步' : '缺失'}</Badge></div>
+              <div>二进制：<code className="font-mono text-xs">{status.BinaryPath}</code> <Tag color={status.BinaryExists ? 'success' : 'error'}>{status.BinaryExists ? status.BinaryVersion || '已安装' : '缺失'}</Tag></div>
+              <div>官方模板：{status.TemplateCount} 个 <Tag color={status.TemplatesExists ? 'success' : 'error'}>{status.TemplatesExists ? '已同步' : '缺失'}</Tag></div>
               <div>自定义模板：{status.CustomTemplateCount} 个</div>
               <div className="text-xs text-muted-foreground">自动更新：{status.AutoUpdate ? '开' : '关'} · 间隔 {status.UpdateIntervalHours}h · 引导版本 {status.VersionSetting}</div>
               {status.Warnings?.map((w, i) => <div key={i} className="text-xs text-amber-600">{w}</div>)}
             </div>
           )}
-        </CardContent>
+        </div>
       </Card>
 
-      <Card>
-        <CardHeader><CardTitle className="text-base">自动验证统计（近 30 天）</CardTitle></CardHeader>
-        <CardContent className="space-y-2 text-sm">
+      <Card title="自动验证统计（近 30 天）">
+        <div className="space-y-2 text-sm">
           {stats ? (
             <>
               <div>完结任务：{stats.finished} · 命中 {stats.hits} · 未命中 {stats.misses} · 失败 {stats.failures} · 跳过 {stats.skipped}</div>
               <div className="text-xs text-muted-foreground">状态分布：{Object.entries(stats.by_status || {}).map(([k, v]) => `${k}=${v}`).join(' · ') || '无'}</div>
             </>
           ) : <p className="text-xs text-muted-foreground">点击刷新读取统计。</p>}
-        </CardContent>
+        </div>
       </Card>
     </div>
   )

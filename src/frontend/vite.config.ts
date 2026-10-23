@@ -32,7 +32,19 @@ export default defineConfig(({ command }) => ({
           if (!id.includes('node_modules')) return
           if (id.includes('@xyflow')) return 'vendor-flow'
           if (id.includes('recharts') || id.includes('d3-') || id.includes('victory')) return 'vendor-charts'
-          if (id.includes('@radix-ui')) return 'vendor-radix'
+          // antd 全家（antd / rc-* / @ant-design / dayjs）独立分块，只被用到它的页面加载
+          if (
+            id.includes('/antd/') ||
+            id.includes('/rc-') ||
+            id.includes('@rc-component') ||
+            id.includes('@ant-design') ||
+            id.includes('/dayjs/') ||
+            id.includes('async-validator') ||
+            id.includes('rc-util')
+          )
+            return 'vendor-antd'
+          if (id.includes('framer-motion') || id.includes('motion-dom') || id.includes('motion-utils'))
+            return 'vendor-motion'
           if (id.includes('@tanstack')) return 'vendor-query'
           // React / react-dom / react-router 留在 vendor：单独拆 vendor-react 会与
           // vendor 互相 import，形成 chunk 环，运行时抛 forwardRef undefined。

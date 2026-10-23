@@ -4,40 +4,12 @@ import { vulnApi } from '@/api/vulnerabilities'
 import { reportApi, type ReportProfile } from '@/api/reports'
 import { vulnStatusLabel, type VulnStatus } from '@/api/vulnerabilities'
 import { ReportGenerateDialog } from '@/components/reports/ReportGenerateDialog'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
-import { Checkbox } from '@/components/ui/checkbox'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from '@/components/ui/tabs'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+import { Button, Dropdown, Input, Select, Table, Tabs, Tag } from 'antd'
+import type { TableProps } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
+import EmptyState from '@/components/common/EmptyState'
 import { cn, formatDate, getSeverityColor, getStatusColor } from '@/lib/utils'
-import { Search, Eye, Download, RefreshCw, CheckCircle, MoreHorizontal, BarChart3, List, Loader2, Shield } from 'lucide-react'
+import { Search, Eye, Download, RefreshCw, CheckCircle, MoreHorizontal, BarChart3, List, Shield } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import VulnDashboard from '@/components/vulnerabilities/VulnDashboard'
 
@@ -76,7 +48,7 @@ export default function VulnerabilitiesPage() {
   const verifyMutation = useMutation({
     mutationFn: vulnApi.verifyVulnerability,
     onSuccess: (result) => {
-      toast({ 
+      toast({
         title: result.data.verified ? '漏洞已验证存在' : '漏洞无法复现',
         variant: result.data.verified ? 'default' : 'destructive',
       })
@@ -104,7 +76,6 @@ export default function VulnerabilitiesPage() {
 
   const vulnerabilities = data?.data?.list || []
   const total = data?.data?.total || 0
-  const totalPages = Math.ceil(total / 10)
 
   const getSeverityLabel = (severity: string) => {
     const labels: Record<string, string> = {
@@ -120,22 +91,6 @@ export default function VulnerabilitiesPage() {
   const getStatusLabel = (status: string) =>
     vulnStatusLabel[status as VulnStatus] || status
 
-  const handleSelectAll = (checked: boolean) => {
-    if (checked) {
-      setSelectedIds(vulnerabilities.map((v) => v.id))
-    } else {
-      setSelectedIds([])
-    }
-  }
-
-  const handleSelectOne = (id: string, checked: boolean) => {
-    if (checked) {
-      setSelectedIds([...selectedIds, id])
-    } else {
-      setSelectedIds(selectedIds.filter((i) => i !== id))
-    }
-  }
-
   const handleBatchAction = (status: string) => {
     if (selectedIds.length === 0) {
       toast({ title: '请先选择漏洞', variant: 'destructive' })
@@ -144,186 +99,171 @@ export default function VulnerabilitiesPage() {
     batchUpdateMutation.mutate({ ids: selectedIds, status })
   }
 
-  const VulnListContent = () => (
-    <div className="space-y-4">
-      {/* Filters */}
-      <div className="flex gap-4 flex-wrap">
-        <div className="relative flex-1 min-w-[200px] max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="搜索漏洞..."
-            className="pl-9"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+  const VulnListContent = () => {
+    const columns: TableProps<(typeof vulnerabilities)[number]>['columns'] = [
+      {
+        title: '漏洞名称',
+        dataIndex: 'name',
+        key: 'name',
+        ellipsis: true,
+        render: (v: string) => <span className="font-medium">{v}</span>,
+      },
+      {
+        title: '严重程度',
+        dataIndex: 'severity',
+        key: 'severity',
+        width: 90,
+        render: (v: string) => (
+          <Tag className={cn(getSeverityColor(v))}>
+            {getSeverityLabel(v)}
+          </Tag>
+        ),
+      },
+      {
+        title: '状态',
+        dataIndex: 'status',
+        key: 'status',
+        width: 90,
+        render: (v: string) => (
+          <Tag className={cn(getStatusColor(v))}>
+            {getStatusLabel(v)}
+          </Tag>
+        ),
+      },
+      {
+        title: '目标',
+        dataIndex: 'target',
+        key: 'target',
+        ellipsis: true,
+        render: (v: string) => <span className="font-mono text-sm">{v}</span>,
+      },
+      {
+        title: 'CVE',
+        dataIndex: 'cve',
+        key: 'cve',
+        width: 120,
+        render: (_, vuln) => vuln.cve || '-',
+      },
+      {
+        title: '发现时间',
+        dataIndex: 'createdAt',
+        key: 'createdAt',
+        width: 170,
+        render: (v: string) => formatDate(v),
+      },
+      {
+        title: '操作',
+        key: 'actions',
+        width: 110,
+        render: (_, vuln) => (
+          <div className="flex gap-1">
+            {vuln.status === 'new' && (
+              <Button
+                type="text"
+                title="验证漏洞"
+                loading={verifyMutation.isPending}
+                icon={<CheckCircle className="h-4 w-4 text-green-500" />}
+                onClick={() => verifyMutation.mutate(vuln.id)}
+              />
+            )}
+            <Link to={`/vulnerabilities/${vuln.id}`}>
+              <Button type="text" icon={<Eye className="h-4 w-4" />} />
+            </Link>
+          </div>
+        ),
+      },
+    ]
+
+    return (
+      <div className="space-y-4">
+        {/* Filters */}
+        <div className="flex gap-4 flex-wrap">
+          <div className="relative flex-1 min-w-[200px] max-w-sm">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground z-10" />
+            <Input
+              placeholder="搜索漏洞..."
+              className="pl-9"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <Select
+            className="w-32"
+            value={severityFilter}
+            placeholder="严重程度"
+            onChange={(v) => setSeverityFilter(v)}
+            options={[
+              { value: 'all', label: '全部' },
+              { value: 'critical', label: '严重' },
+              { value: 'high', label: '高危' },
+              { value: 'medium', label: '中危' },
+              { value: 'low', label: '低危' },
+              { value: 'info', label: '信息' },
+            ]}
           />
-        </div>
-        <Select value={severityFilter} onValueChange={setSeverityFilter}>
-          <SelectTrigger className="w-32">
-            <SelectValue placeholder="严重程度" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">全部</SelectItem>
-            <SelectItem value="critical">严重</SelectItem>
-            <SelectItem value="high">高危</SelectItem>
-            <SelectItem value="medium">中危</SelectItem>
-            <SelectItem value="low">低危</SelectItem>
-            <SelectItem value="info">信息</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-32">
-            <SelectValue placeholder="状态" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">全部</SelectItem>
-            <SelectItem value="new">待复核</SelectItem>
-            <SelectItem value="confirmed">已确认</SelectItem>
-            <SelectItem value="fixed">已修复</SelectItem>
-            <SelectItem value="ignored">已忽略</SelectItem>
-            <SelectItem value="false_positive">误报</SelectItem>
-          </SelectContent>
-        </Select>
-        
-        {/* Batch Actions：常驻渲染按需禁用，勾选变化不引起工具栏重排 */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" disabled={selectedIds.length === 0}>
+          <Select
+            className="w-32"
+            value={statusFilter}
+            placeholder="状态"
+            onChange={(v) => setStatusFilter(v)}
+            options={[
+              { value: 'all', label: '全部' },
+              { value: 'new', label: '待复核' },
+              { value: 'confirmed', label: '已确认' },
+              { value: 'fixed', label: '已修复' },
+              { value: 'ignored', label: '已忽略' },
+              { value: 'false_positive', label: '误报' },
+            ]}
+          />
+
+          {/* Batch Actions：常驻渲染按需禁用，勾选变化不引起工具栏重排 */}
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              items: [
+                { key: 'confirmed', label: '标记为已确认', onClick: () => handleBatchAction('confirmed') },
+                { key: 'fixed', label: '标记为已修复', onClick: () => handleBatchAction('fixed') },
+                { key: 'ignored', label: '标记为已忽略', onClick: () => handleBatchAction('ignored') },
+                { key: 'false_positive', label: '标记为误报', onClick: () => handleBatchAction('false_positive') },
+              ],
+            }}
+          >
+            <Button size="small" disabled={selectedIds.length === 0}>
               批量操作{selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}
               <MoreHorizontal className="ml-2 h-4 w-4" />
             </Button>
-          </DropdownMenuTrigger>
-            <DropdownMenuContent>
-              <DropdownMenuItem onClick={() => handleBatchAction('confirmed')}>
-                标记为已确认
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleBatchAction('fixed')}>
-                标记为已修复
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleBatchAction('ignored')}>
-                标记为已忽略
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleBatchAction('false_positive')}>
-                标记为误报
-              </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-
-      {/* Table */}
-      <div className="border rounded-lg">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-[40px]">
-                <Checkbox
-                  checked={selectedIds.length === vulnerabilities.length && vulnerabilities.length > 0}
-                  onCheckedChange={handleSelectAll}
-                />
-              </TableHead>
-              <TableHead>漏洞名称</TableHead>
-              <TableHead>严重程度</TableHead>
-              <TableHead>状态</TableHead>
-              <TableHead>目标</TableHead>
-              <TableHead>CVE</TableHead>
-              <TableHead>发现时间</TableHead>
-              <TableHead>操作</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              <TableRow>
-                <TableCell colSpan={8} className="text-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin mx-auto" />
-                </TableCell>
-              </TableRow>
-            ) : vulnerabilities.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-                  暂无数据
-                </TableCell>
-              </TableRow>
-            ) : (
-              vulnerabilities.map((vuln) => (
-                <TableRow key={vuln.id}>
-                  <TableCell>
-                    <Checkbox
-                      checked={selectedIds.includes(vuln.id)}
-                      onCheckedChange={(checked) => handleSelectOne(vuln.id, checked as boolean)}
-                    />
-                  </TableCell>
-                  <TableCell className="font-medium max-w-xs truncate">{vuln.name}</TableCell>
-                  <TableCell>
-                    <Badge className={cn(getSeverityColor(vuln.severity))}>
-                      {getSeverityLabel(vuln.severity)}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline" className={cn(getStatusColor(vuln.status))}>
-                      {getStatusLabel(vuln.status)}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="font-mono text-sm max-w-xs truncate">
-                    {vuln.target}
-                  </TableCell>
-                  <TableCell>{vuln.cve || '-'}</TableCell>
-                  <TableCell>{formatDate(vuln.createdAt)}</TableCell>
-                  <TableCell>
-                    <div className="flex gap-1">
-                      {vuln.status === 'new' && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          disabled={verifyMutation.isPending}
-                          onClick={() => verifyMutation.mutate(vuln.id)}
-                          title="验证漏洞"
-                        >
-                          {verifyMutation.isPending ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <CheckCircle className="h-4 w-4 text-green-500" />
-                          )}
-                        </Button>
-                      )}
-                      <Button variant="ghost" size="icon" asChild>
-                        <Link to={`/vulnerabilities/${vuln.id}`}>
-                          <Eye className="h-4 w-4" />
-                        </Link>
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </div>
-
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex justify-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page === 1}
-            onClick={() => setPage(page - 1)}
-          >
-            上一页
-          </Button>
-          <span className="py-2 px-4 text-sm">
-            {page} / {totalPages}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page === totalPages}
-            onClick={() => setPage(page + 1)}
-          >
-            下一页
-          </Button>
+          </Dropdown>
         </div>
-      )}
-    </div>
-  )
+
+        {/* Table */}
+        <div className="rounded-lg border">
+          <Table
+            rowSelection={{
+              selectedRowKeys: selectedIds,
+              onChange: (keys) => setSelectedIds(keys as string[]),
+            }}
+            columns={columns}
+            dataSource={vulnerabilities}
+            rowKey="id"
+            loading={isLoading}
+            locale={{
+              emptyText: <EmptyState title="暂无数据" className="border-0" />,
+            }}
+            pagination={{
+              current: page,
+              pageSize: 10,
+              total,
+              showQuickJumper: true,
+              // page_size 固定 10、无独立 pageSize 状态，不展示切换器
+              showSizeChanger: false,
+              hideOnSinglePage: true,
+              onChange: (p) => setPage(p),
+            }}
+          />
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">
@@ -333,13 +273,12 @@ export default function VulnerabilitiesPage() {
           漏洞管理
         </h1>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => refetch()}>
+          <Button size="small" onClick={() => refetch()}>
             <RefreshCw className="h-4 w-4 mr-2" />
             刷新
           </Button>
           <Button
-            variant="outline"
-            size="sm"
+            size="small"
             onClick={() => setReportOpen(true)}
           >
             <Download className="h-4 w-4 mr-2" />
@@ -355,26 +294,32 @@ export default function VulnerabilitiesPage() {
         templates={reportTemplates}
       />
 
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList>
-          <TabsTrigger value="dashboard" className="flex items-center gap-2">
-            <BarChart3 className="h-4 w-4" />
-            统计面板
-          </TabsTrigger>
-          <TabsTrigger value="list" className="flex items-center gap-2">
-            <List className="h-4 w-4" />
-            漏洞列表
-          </TabsTrigger>
-        </TabsList>
-        
-        <TabsContent value="dashboard" className="mt-6">
-          <VulnDashboard />
-        </TabsContent>
-        
-        <TabsContent value="list" className="mt-6">
-          <VulnListContent />
-        </TabsContent>
-      </Tabs>
+      <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
+        items={[
+          {
+            key: 'dashboard',
+            label: (
+              <span className="flex items-center gap-2">
+                <BarChart3 className="h-4 w-4" />
+                统计面板
+              </span>
+            ),
+            children: <VulnDashboard />,
+          },
+          {
+            key: 'list',
+            label: (
+              <span className="flex items-center gap-2">
+                <List className="h-4 w-4" />
+                漏洞列表
+              </span>
+            ),
+            children: <VulnListContent />,
+          },
+        ]}
+      />
     </div>
   )
 }

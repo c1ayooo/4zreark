@@ -1,26 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { templateApi, TaskTemplate, TaskTemplateInput } from '@/api/tasks'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
-import { Badge } from '@/components/ui/badge'
-import { Checkbox } from '@/components/ui/checkbox'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { Button, Checkbox, Input, Modal, Select, Tag } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
 import { Pencil, Plus, Trash2 } from 'lucide-react'
 
@@ -160,179 +141,172 @@ export default function TaskTemplatesDialog({ open, onOpenChange }: TaskTemplate
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>任务模板</DialogTitle>
-          <DialogDescription>
-            模板只描述「扫哪些模块 + 扫多快」，创建任务时可直接套用。
-          </DialogDescription>
-        </DialogHeader>
+    <Modal
+      open={open}
+      onCancel={() => onOpenChange(false)}
+      title="任务模板"
+      width={768}
+      footer={null}
+    >
+      <p className="mb-4 text-sm text-muted-foreground">
+        模板只描述「扫哪些模块 + 扫多快」，创建任务时可直接套用。
+      </p>
 
-        {formOpen ? (
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">模板名称</Label>
-                <Input
-                  value={form.name}
-                  placeholder="例如：信息收集（不含漏洞）"
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">任务类型</Label>
-                <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {TEMPLATE_TYPES.map((t) => (
-                      <SelectItem key={t.id} value={t.id}>
-                        {t.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
+      {formOpen ? (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">描述</Label>
-              <Textarea
-                rows={2}
-                value={form.description}
-                placeholder="说明这个模板适合什么场景"
-                onChange={(e) => setForm({ ...form, description: e.target.value })}
+              <label className="text-xs font-medium text-muted-foreground">模板名称</label>
+              <Input
+                value={form.name}
+                placeholder="例如：信息收集（不含漏洞）"
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
               />
             </div>
-
-            <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">扫描模块</Label>
-              <div className="grid grid-cols-3 gap-2">
-                {MODULE_OPTIONS.map((m) => (
-                  <label
-                    key={m.id}
-                    className="flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-muted/50"
-                  >
-                    <Checkbox
-                      checked={form.scan_types.includes(m.id)}
-                      onCheckedChange={() => toggleModule(m.id)}
-                    />
-                    {m.label}
-                  </label>
-                ))}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                指纹、爬虫、目录、漏洞会自动补齐端口与指纹上游模块。
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">每秒请求上限</Label>
-                <Input
-                  type="number"
-                  min={1}
-                  max={200}
-                  value={form.rate_per_sec}
-                  onChange={(e) => setForm({ ...form, rate_per_sec: Number(e.target.value) || 1 })}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">单目标间隔（毫秒）</Label>
-                <Input
-                  type="number"
-                  min={0}
-                  max={5000}
-                  step={50}
-                  value={form.target_delay_ms}
-                  onChange={(e) => setForm({ ...form, target_delay_ms: Number(e.target.value) })}
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  setFormOpen(false)
-                  setEditing(null)
-                }}
-              >
-                取消
-              </Button>
-              <Button type="button" onClick={submit} disabled={saveMutation.isPending}>
-                {editing ? '保存修改' : '创建模板'}
-              </Button>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">任务类型</label>
+              <Select
+                className="w-full"
+                value={form.type}
+                onChange={(v) => setForm({ ...form, type: v })}
+                options={TEMPLATE_TYPES.map((t) => ({ value: t.id, label: t.label }))}
+              />
             </div>
           </div>
-        ) : (
-          <div className="space-y-3">
-            <div className="flex justify-end">
-              <Button type="button" size="sm" onClick={startCreate}>
-                <Plus className="mr-1.5 h-4 w-4" />
-                新建模板
-              </Button>
-            </div>
 
-            {isLoading ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">加载中…</p>
-            ) : templates.length === 0 ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">
-                还没有模板，点「新建模板」创建第一个。
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {templates.map((t) => {
-                  const cfg = t.config || {}
-                  return (
-                    <div
-                      key={t.id}
-                      className="flex items-start justify-between gap-3 rounded-lg border p-3"
-                    >
-                      <div className="min-w-0 space-y-1.5">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium">{t.name}</span>
-                          <Badge variant="secondary">{t.type}</Badge>
-                          <Badge variant="outline">
-                            {cfg.rate_per_sec ?? 20}/秒 · {cfg.target_delay_ms ?? 200}ms
-                          </Badge>
-                        </div>
-                        {t.description ? (
-                          <p className="text-xs text-muted-foreground">{t.description}</p>
-                        ) : null}
-                        <div className="flex flex-wrap gap-1">
-                          {(cfg.scan_types || cfg.scanTypes || []).map((m) => (
-                            <Badge key={m} variant="outline" className="text-xs">
-                              {m}
-                            </Badge>
-                          ))}
-                        </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground">描述</label>
+            <Input.TextArea
+              rows={2}
+              value={form.description}
+              placeholder="说明这个模板适合什么场景"
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-muted-foreground">扫描模块</label>
+            <div className="grid grid-cols-3 gap-2">
+              {MODULE_OPTIONS.map((m) => (
+                <label
+                  key={m.id}
+                  className="flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-muted/50"
+                >
+                  <Checkbox
+                    checked={form.scan_types.includes(m.id)}
+                    onChange={() => toggleModule(m.id)}
+                  />
+                  {m.label}
+                </label>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              指纹、爬虫、目录、漏洞会自动补齐端口与指纹上游模块。
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">每秒请求上限</label>
+              <Input
+                type="number"
+                min={1}
+                max={200}
+                value={form.rate_per_sec}
+                onChange={(e) => setForm({ ...form, rate_per_sec: Number(e.target.value) || 1 })}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">单目标间隔（毫秒）</label>
+              <Input
+                type="number"
+                min={0}
+                max={5000}
+                step={50}
+                value={form.target_delay_ms}
+                onChange={(e) => setForm({ ...form, target_delay_ms: Number(e.target.value) })}
+              />
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button
+              onClick={() => {
+                setFormOpen(false)
+                setEditing(null)
+              }}
+            >
+              取消
+            </Button>
+            <Button onClick={submit} loading={saveMutation.isPending} disabled={saveMutation.isPending}>
+              {editing ? '保存修改' : '创建模板'}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="flex justify-end">
+            <Button size="small" icon={<Plus className="h-4 w-4" />} onClick={startCreate}>
+              新建模板
+            </Button>
+          </div>
+
+          {isLoading ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">加载中…</p>
+          ) : templates.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              还没有模板，点「新建模板」创建第一个。
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {templates.map((t) => {
+                const cfg = t.config || {}
+                return (
+                  <div
+                    key={t.id}
+                    className="flex items-start justify-between gap-3 rounded-lg border p-3"
+                  >
+                    <div className="min-w-0 space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium">{t.name}</span>
+                        <Tag>{t.type}</Tag>
+                        <Tag>
+                          {cfg.rate_per_sec ?? 20}/秒 · {cfg.target_delay_ms ?? 200}ms
+                        </Tag>
                       </div>
-                      <div className="flex shrink-0 gap-1">
-                        <Button type="button" size="sm" variant="ghost" onClick={() => startEdit(t)}>
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          className="text-destructive hover:text-destructive"
-                          onClick={() => deleteMutation.mutate(t.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                      {t.description ? (
+                        <p className="text-xs text-muted-foreground">{t.description}</p>
+                      ) : null}
+                      <div className="flex flex-wrap gap-1">
+                        {(cfg.scan_types || cfg.scanTypes || []).map((m) => (
+                          <Tag key={m} className="text-xs">
+                            {m}
+                          </Tag>
+                        ))}
                       </div>
                     </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
+                    <div className="flex shrink-0 gap-1">
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<Pencil className="h-4 w-4" />}
+                        onClick={() => startEdit(t)}
+                      />
+                      <Button
+                        type="text"
+                        size="small"
+                        className="text-destructive hover:text-destructive"
+                        icon={<Trash2 className="h-4 w-4" />}
+                        onClick={() => deleteMutation.mutate(t.id)}
+                      />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </Modal>
   )
 }

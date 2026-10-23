@@ -1,33 +1,8 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import {keepPreviousData, useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import { intelApi, IntelItem } from '@/api/intel'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { PaginationWithInput } from '@/components/ui/pagination-with-input'
+import { Button, Card, Input, Modal, Pagination, Select, Skeleton, Table, Tag } from 'antd'
+import type { TableProps } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate, getSeverityColor } from '@/lib/utils'
 import {
@@ -98,7 +73,6 @@ export default function IntelPage() {
 
   const items = data?.items || []
   const total = data?.total || 0
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
   const sources = stats?.by_source || []
 
@@ -168,22 +142,115 @@ export default function IntelPage() {
     },
   ]
 
+  const columns: TableProps<IntelItem>['columns'] = [
+    {
+      title: '等级',
+      dataIndex: 'severity',
+      key: 'severity',
+      width: 110,
+      render: (v: string) => (
+        <Tag className={cn('font-normal', getSeverityColor(v))}>
+          {SEVERITY_LABEL[v] || v}
+        </Tag>
+      ),
+    },
+    {
+      title: '标题',
+      dataIndex: 'title',
+      key: 'title',
+      ellipsis: true,
+      render: (v: string, item) => (
+        <button
+          type="button"
+          onClick={() => setSelected(item)}
+          className="text-left font-medium hover:underline line-clamp-1"
+          title={v}
+        >
+          {v}
+        </button>
+      ),
+    },
+    {
+      title: 'CVE',
+      dataIndex: 'cve',
+      key: 'cve',
+      width: 150,
+      render: (v: string) => (
+        <span className="font-mono text-xs text-muted-foreground">{v || '—'}</span>
+      ),
+    },
+    {
+      title: '来源',
+      key: 'source',
+      width: 130,
+      render: (_, item) => (
+        <span className="text-sm text-muted-foreground">
+          {item.source_name || item.source || '—'}
+        </span>
+      ),
+    },
+    {
+      title: '披露时间',
+      key: 'disclosure',
+      width: 150,
+      render: (_, item) => (
+        <span className="text-sm text-muted-foreground">
+          {item.disclosure || (item.created_at ? formatDate(item.created_at) : '—')}
+        </span>
+      ),
+    },
+    {
+      title: 'PoC',
+      dataIndex: 'has_poc',
+      key: 'has_poc',
+      width: 90,
+      render: (v: boolean, item) =>
+        v ? (
+          <Tag className="border-transparent bg-primary font-normal text-primary-foreground">
+            {item.github_poc?.length || 0} 个
+          </Tag>
+        ) : item.enriched_at ? (
+          <span className="text-xs text-muted-foreground">无</span>
+        ) : (
+          <span className="text-xs text-muted-foreground">未查</span>
+        ),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 100,
+      align: 'right',
+      render: (_, item) => (
+        <Button
+          type="text"
+          size="small"
+          disabled={!item.cve || enrich.isPending}
+          onClick={() => enrich.mutate(item.unique_key)}
+          title={item.cve ? '检索 GitHub PoC 并分诊' : '没有 CVE 编号，无法检索'}
+          icon={
+            enrich.isPending && enrich.variables === item.unique_key ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Github className="h-4 w-4" />
+            )
+          }
+        />
+      ),
+    },
+  ]
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">漏洞情报</h1>
         <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => refetch()}
-            disabled={isFetching}
-          >
+          <Button size="small" onClick={() => refetch()} disabled={isFetching}>
             <RefreshCw className={cn('h-4 w-4 mr-2', isFetching && 'animate-spin')} />
             刷新
           </Button>
           <Button
-            size="sm"
+            type="primary"
+            size="small"
             onClick={() => poll.mutate()}
             disabled={poll.isPending}
           >
@@ -202,22 +269,20 @@ export default function IntelPage() {
         {statCards.map((item) => {
           const Icon = item.icon
           return (
-            <Card key={item.key}>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">{item.label}</CardTitle>
+            <Card key={item.key} styles={{ body: { paddingTop: 12, paddingBottom: 12 } }}>
+              <div className="flex items-center justify-between pb-2">
+                <span className="text-sm font-medium">{item.label}</span>
                 <Icon
                   className={cn(
                     'h-4 w-4',
                     SEVERITY_ACCENT[item.key] || 'text-muted-foreground'
                   )}
                 />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{item.count}</div>
-                <p className="text-xs text-muted-foreground">
-                  {item.hint ?? '占比 ' + percent(item.count, stats?.total || 0) + '%'}
-                </p>
-              </CardContent>
+              </div>
+              <div className="text-2xl font-bold">{item.count}</div>
+              <p className="text-xs text-muted-foreground">
+                {item.hint ?? '占比 ' + percent(item.count, stats?.total || 0) + '%'}
+              </p>
             </Card>
           )
         })}
@@ -225,159 +290,84 @@ export default function IntelPage() {
 
       {/* 筛选 */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative flex-1 min-w-[220px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="搜索标题 / 描述，回车确认"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                setKeyword(searchInput.trim())
-                setPage(1)
-              }
-            }}
-            className="pl-9"
-          />
-        </div>
+        <Input
+          className="min-w-[220px] flex-1"
+          placeholder="搜索标题 / 描述，回车确认"
+          prefix={<Search className="h-4 w-4 text-muted-foreground" />}
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              setKeyword(searchInput.trim())
+              setPage(1)
+            }
+          }}
+        />
         <Select
+          className="w-[140px]"
+          placeholder="严重度"
           value={severity}
-          onValueChange={(v) => {
+          onChange={(v) => {
             setSeverity(v)
             setPage(1)
           }}
-        >
-          <SelectTrigger className="w-[140px]">
-            <SelectValue placeholder="严重度" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">全部等级</SelectItem>
-            <SelectItem value="critical">严重</SelectItem>
-            <SelectItem value="high">高危</SelectItem>
-            <SelectItem value="medium">中危</SelectItem>
-            <SelectItem value="low">低危</SelectItem>
-            <SelectItem value="info">信息</SelectItem>
-          </SelectContent>
-        </Select>
+          options={[
+            { value: 'all', label: '全部等级' },
+            { value: 'critical', label: '严重' },
+            { value: 'high', label: '高危' },
+            { value: 'medium', label: '中危' },
+            { value: 'low', label: '低危' },
+            { value: 'info', label: '信息' },
+          ]}
+        />
         <Select
+          className="w-[180px]"
+          placeholder="来源"
           value={sourceName}
-          onValueChange={(v) => {
+          onChange={(v) => {
             setSourceName(v)
             setPage(1)
           }}
-        >
-          <SelectTrigger className="w-[180px]">
-            <SelectValue placeholder="来源" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">全部来源</SelectItem>
-            {sources.map((s) => (
-              <SelectItem key={s.source_name} value={s.source_name}>
-                {s.source_name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          options={[
+            { value: 'all', label: '全部来源' },
+            ...sources.map((s) => ({ value: s.source_name, label: s.source_name })),
+          ]}
+        />
       </div>
 
       {/* 列表 */}
-      <Card>
-        <CardContent className="p-0">
-          {isLoading ? (
-            <div className="p-6 space-y-3">
-              {Array.from({ length: 8 }).map((_, i) => (
-                <Skeleton key={i} className="h-10 w-full" />
-              ))}
-            </div>
-          ) : items.length === 0 ? (
-            <div className="p-12 text-center text-muted-foreground">
-              <ShieldCheck className="h-10 w-10 mx-auto mb-3 opacity-40" />
-              <p>没有匹配的情报</p>
-              <p className="text-xs mt-1">
-                点「立即轮询」从 9 个公开源拉取；采集器默认只收中危及以上
-              </p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[110px]">等级</TableHead>
-                  <TableHead>标题</TableHead>
-                  <TableHead className="w-[150px]">CVE</TableHead>
-                  <TableHead className="w-[130px]">来源</TableHead>
-                  <TableHead className="w-[150px]">披露时间</TableHead>
-                  <TableHead className="w-[90px]">PoC</TableHead>
-                  <TableHead className="w-[100px] text-right">操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {items.map((item) => (
-                  <TableRow key={item.unique_key}>
-                    <TableCell>
-                      <Badge className={cn('font-normal', getSeverityColor(item.severity))}>
-                        {SEVERITY_LABEL[item.severity] || item.severity}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <button
-                        type="button"
-                        onClick={() => setSelected(item)}
-                        className="text-left font-medium hover:underline line-clamp-1"
-                        title={item.title}
-                      >
-                        {item.title}
-                      </button>
-                    </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
-                      {item.cve || '—'}
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {item.source_name || item.source || '—'}
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {item.disclosure || (item.created_at ? formatDate(item.created_at) : '—')}
-                    </TableCell>
-                    <TableCell>
-                      {item.has_poc ? (
-                        <Badge variant="success" className="font-normal">
-                          {item.github_poc?.length || 0} 个
-                        </Badge>
-                      ) : item.enriched_at ? (
-                        <span className="text-xs text-muted-foreground">无</span>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">未查</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        disabled={!item.cve || enrich.isPending}
-                        onClick={() => enrich.mutate(item.unique_key)}
-                        title={item.cve ? '检索 GitHub PoC 并分诊' : '没有 CVE 编号，无法检索'}
-                      >
-                        {enrich.isPending && enrich.variables === item.unique_key ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Github className="h-4 w-4" />
-                        )}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
+      <Card styles={{ body: { padding: 0 } }}>
+        {isLoading ? (
+          <div className="p-6">
+            <Skeleton loading active paragraph={{ rows: 8 }} />
+          </div>
+        ) : items.length === 0 ? (
+          <div className="p-12 text-center text-muted-foreground">
+            <ShieldCheck className="h-10 w-10 mx-auto mb-3 opacity-40" />
+            <p>没有匹配的情报</p>
+            <p className="text-xs mt-1">
+              点「立即轮询」从 9 个公开源拉取；采集器默认只收中危及以上
+            </p>
+          </div>
+        ) : (
+          <Table<IntelItem>
+            columns={columns}
+            dataSource={items}
+            rowKey="unique_key"
+            pagination={false}
+          />
+        )}
       </Card>
 
       {total > pageSize && (
-        <PaginationWithInput
-          page={page}
-          totalPages={totalPages}
-          total={total}
+        <Pagination
+          current={page}
           pageSize={pageSize}
-          onPageChange={setPage}
+          total={total}
+          showQuickJumper
+          // page_size 固定 20、无独立 pageSize 状态，不展示切换器
+          showSizeChanger={false}
+          onChange={(p) => setPage(p)}
         />
       )}
 
@@ -409,17 +399,19 @@ function IntelDetailDialog({
 }) {
   if (!item) return null
   return (
-    <Dialog open={!!item} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="pr-8 leading-snug">{item.title}</DialogTitle>
-        </DialogHeader>
-
+    <Modal
+      open={!!item}
+      onCancel={() => onClose()}
+      width={768}
+      footer={null}
+      title={<span className="pr-8 leading-snug">{item.title}</span>}
+    >
+      <div className="max-h-[85vh] space-y-5 overflow-y-auto">
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          <Badge className={cn('font-normal', getSeverityColor(item.severity))}>
+          <Tag className={cn('font-normal', getSeverityColor(item.severity))}>
             {SEVERITY_LABEL[item.severity] || item.severity}
-          </Badge>
-          {item.cve && <Badge variant="outline" className="font-mono">{item.cve}</Badge>}
+          </Tag>
+          {item.cve && <Tag className="font-mono">{item.cve}</Tag>}
           <span className="text-muted-foreground">{item.source_name || item.source}</span>
           {item.disclosure && (
             <span className="text-muted-foreground">披露 {item.disclosure}</span>
@@ -452,9 +444,9 @@ function IntelDetailDialog({
           <Section title="影响组件">
             <div className="flex flex-wrap gap-1.5">
               {item.affected.map((a) => (
-                <Badge key={a} variant="secondary" className="font-mono text-xs font-normal">
+                <Tag key={a} className="bg-secondary font-mono text-xs font-normal text-secondary-foreground">
                   {a}
-                </Badge>
+                </Tag>
               ))}
             </div>
           </Section>
@@ -505,8 +497,7 @@ function IntelDetailDialog({
             <div className="flex items-center gap-3 text-sm text-muted-foreground">
               <span>{item.enriched_at ? '未找到通过分诊的公开 PoC' : '尚未检索'}</span>
               <Button
-                size="sm"
-                variant="outline"
+                size="small"
                 disabled={!item.cve || enriching}
                 onClick={() => onEnrich(item.unique_key)}
               >
@@ -539,8 +530,8 @@ function IntelDetailDialog({
             </ul>
           </Section>
         )}
-      </DialogContent>
-    </Dialog>
+      </div>
+    </Modal>
   )
 }
 

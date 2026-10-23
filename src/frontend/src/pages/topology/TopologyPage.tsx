@@ -2,19 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { RefreshCw, Search } from 'lucide-react'
+import { Button, Card, Input, Select } from 'antd'
 
 import { assetApi, type AssetGraphData } from '@/api/assets'
 import { AssetGraphCanvas } from '@/components/assets/AssetGraphCanvas'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 
 export default function TopologyPage() {
@@ -132,48 +123,40 @@ export default function TopologyPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Select value={String(projectID)} onValueChange={changeProject}>
-            <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder="全部项目" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="0">全部项目</SelectItem>
-              {projects.map((p) => (
-                <SelectItem key={p.id} value={String(p.id)}>
-                  {p.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <div className="relative">
-            <Search className="text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
-            <Input
-              placeholder="搜索主机 / DSL，回车确认"
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') setKeyword(searchInput.trim())
-              }}
-              className="w-[220px] pl-9"
-            />
-          </div>
-          <Button variant="outline" size="sm" onClick={() => fetchGraph(showAll ? 'full' : 'summary')} disabled={loading || fullLoading}>
+          <Select
+            className="w-[180px]"
+            value={String(projectID)}
+            onChange={(v) => changeProject(v)}
+            options={[
+              { value: '0', label: '全部项目' },
+              ...projects.map((p) => ({ value: String(p.id), label: p.name })),
+            ]}
+          />
+          <Input
+            className="w-[220px]"
+            placeholder="搜索主机 / DSL，回车确认"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') setKeyword(searchInput.trim())
+            }}
+            prefix={<Search className="h-4 w-4 text-muted-foreground" />}
+          />
+          <Button size="small" onClick={() => fetchGraph(showAll ? 'full' : 'summary')} disabled={loading || fullLoading}>
             <RefreshCw className={cn('mr-2 h-4 w-4', loading && 'animate-spin')} />
             刷新
           </Button>
         </div>
       </div>
 
-      <Card>
-        <CardContent className="p-0">
-          <AssetGraphCanvas
-            data={data}
-            loading={loading}
-            showAll={showAll}
-            onShowAllChange={changeShowAll}
-            loadingFull={fullLoading}
-          />
-        </CardContent>
+      <Card styles={{ body: { padding: 0 } }}>
+        <AssetGraphCanvas
+          data={data}
+          loading={loading}
+          showAll={showAll}
+          onShowAllChange={changeShowAll}
+          loadingFull={fullLoading}
+        />
       </Card>
     </div>
   )

@@ -1,21 +1,19 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Activity, Globe2, Layers, RefreshCw, Server, TrendingUp } from 'lucide-react'
+import { Button, Card, Table, Tag } from 'antd'
+import type { TableProps } from 'antd'
 
-import { assetApi, type OverviewData } from '@/api/assets'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { assetApi, type AssetProject, type OverviewData } from '@/api/assets'
+import EmptyState from '@/components/common/EmptyState'
 
 const nf = new Intl.NumberFormat('zh-CN')
+
+// shadcn Badge variant → antd Tag 主题配色（沿用原 CSS 变量，保持视觉不变）
+const badgeCls = (variant: 'default' | 'secondary') =>
+  variant === 'default'
+    ? 'border-transparent bg-primary text-primary-foreground'
+    : 'border-transparent bg-secondary text-secondary-foreground'
 
 /**
  * 资产总览。
@@ -35,7 +33,67 @@ export default function AssetOverviewPage() {
   const d: OverviewData | undefined = overview.data?.data
   const tech = (d?.technology_counts || []).slice(0, 8)
   const maxTech = tech.reduce((m, t) => Math.max(m, t.site_count ?? 0), 0) || 1
-  const projectList = projects.data?.data || []
+  const projectList: AssetProject[] = projects.data?.data || []
+
+  const projectColumns: TableProps<AssetProject>['columns'] = [
+    {
+      title: '项目',
+      key: 'name',
+      render: (_, p) => (
+        <div>
+          <Link to={`/projects/${p.id}`} className="font-medium hover:underline">
+            {p.name}
+          </Link>
+          <div className="text-muted-foreground font-mono text-[11px]">{p.code}</div>
+        </div>
+      ),
+    },
+    {
+      title: '资产',
+      dataIndex: 'asset_count',
+      key: 'asset_count',
+      width: 96,
+      align: 'right',
+      render: (v: number) => <span className="font-mono tabular-nums">{nf.format(v ?? 0)}</span>,
+    },
+    {
+      title: '记录',
+      dataIndex: 'record_count',
+      key: 'record_count',
+      width: 96,
+      align: 'right',
+      render: (v: number) => <span className="font-mono tabular-nums">{nf.format(v ?? 0)}</span>,
+    },
+    {
+      title: '丢失',
+      dataIndex: 'lost_count',
+      key: 'lost_count',
+      width: 80,
+      align: 'right',
+      render: (v: number) => <span className="font-mono tabular-nums">{nf.format(v ?? 0)}</span>,
+    },
+    {
+      title: '采集周期',
+      dataIndex: 'cycle_interval_days',
+      key: 'cycle_interval_days',
+      width: 96,
+      render: (v: number) => (
+        <span className="text-muted-foreground text-xs">{v ? `${v} 天` : '—'}</span>
+      ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'collection_paused',
+      key: 'collection_paused',
+      width: 88,
+      render: (v: boolean) =>
+        v ? (
+          <Tag className={badgeCls('secondary')}>已暂停</Tag>
+        ) : (
+          <Tag className={badgeCls('default')}>采集中</Tag>
+        ),
+    },
+  ]
 
   const cards = [
     { icon: Layers, label: '资产总数', value: d?.assets, hint: `去重后的站点与 IP` },
@@ -58,7 +116,7 @@ export default function AssetOverviewPage() {
           <span className="text-muted-foreground text-xs">
             {overview.dataUpdatedAt ? new Date(overview.dataUpdatedAt).toLocaleTimeString() : '—'} 更新 · 每分钟自动刷新
           </span>
-          <Button variant="outline" size="sm" onClick={() => overview.refetch()} disabled={overview.isFetching}>
+          <Button size="small" onClick={() => overview.refetch()} disabled={overview.isFetching}>
             <RefreshCw className={overview.isFetching ? 'mr-1 h-4 w-4 animate-spin' : 'mr-1 h-4 w-4'} />
             刷新
           </Button>
@@ -67,86 +125,40 @@ export default function AssetOverviewPage() {
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         {cards.map((c) => (
-          <Card key={c.label}>
-            <CardContent className="p-4">
-              <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
-                <c.icon className="h-3.5 w-3.5" />
-                {c.label}
-              </div>
-              <div className="mt-2 font-mono text-2xl font-semibold tabular-nums">
-                {overview.isLoading ? '—' : nf.format(c.value ?? 0)}
-              </div>
-              <div className="text-muted-foreground mt-1 text-[11px]">{c.hint}</div>
-            </CardContent>
+          <Card key={c.label} styles={{ body: { padding: 16 } }}>
+            <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
+              <c.icon className="h-3.5 w-3.5" />
+              {c.label}
+            </div>
+            <div className="mt-2 font-mono text-2xl font-semibold tabular-nums">
+              {overview.isLoading ? '—' : nf.format(c.value ?? 0)}
+            </div>
+            <div className="text-muted-foreground mt-1 text-[11px]">{c.hint}</div>
           </Card>
         ))}
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">项目产出</CardTitle>
-          </CardHeader>
-          <CardContent className="px-0 pb-2">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="pl-6">项目</TableHead>
-                  <TableHead className="w-24 text-right">资产</TableHead>
-                  <TableHead className="w-24 text-right">记录</TableHead>
-                  <TableHead className="w-20 text-right">丢失</TableHead>
-                  <TableHead className="w-24">采集周期</TableHead>
-                  <TableHead className="w-20">状态</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {projectList.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="text-muted-foreground py-8 text-center text-sm">
-                      还没有项目，先在「项目管理」里建一个。
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  projectList.map((p) => (
-                    <TableRow key={p.id}>
-                      <TableCell className="pl-6">
-                        <Link to={`/projects/${p.id}`} className="font-medium hover:underline">
-                          {p.name}
-                        </Link>
-                        <div className="text-muted-foreground font-mono text-[11px]">{p.code}</div>
-                      </TableCell>
-                      <TableCell className="text-right font-mono tabular-nums">
-                        {nf.format(p.asset_count ?? 0)}
-                      </TableCell>
-                      <TableCell className="text-right font-mono tabular-nums">
-                        {nf.format(p.record_count ?? 0)}
-                      </TableCell>
-                      <TableCell className="text-right font-mono tabular-nums">
-                        {nf.format(p.lost_count ?? 0)}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground text-xs">
-                        {p.cycle_interval_days ? `${p.cycle_interval_days} 天` : '—'}
-                      </TableCell>
-                      <TableCell>
-                        {p.collection_paused ? (
-                          <Badge variant="secondary">已暂停</Badge>
-                        ) : (
-                          <Badge variant="default">采集中</Badge>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </CardContent>
+        <Card
+          className="lg:col-span-2"
+          title={<span className="text-sm">项目产出</span>}
+          styles={{ body: { paddingTop: 4, paddingBottom: 4 } }}
+        >
+          <Table
+            columns={projectColumns}
+            dataSource={projectList}
+            rowKey="id"
+            pagination={false}
+            locale={{
+              emptyText: (
+                <EmptyState title="还没有项目，先在「项目管理」里建一个。" className="border-0" />
+              ),
+            }}
+          />
         </Card>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">技术栈 Top 8</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2.5">
+        <Card title={<span className="text-sm">技术栈 Top 8</span>}>
+          <div className="space-y-2.5">
             {tech.length === 0 ? (
               <p className="text-muted-foreground py-6 text-center text-sm">还没有识别出技术栈</p>
             ) : (
@@ -165,15 +177,12 @@ export default function AssetOverviewPage() {
                 </div>
               ))
             )}
-          </CardContent>
+          </div>
         </Card>
       </div>
 
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm">最近变更</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
+      <Card title={<span className="text-sm">最近变更</span>}>
+        <div className="space-y-2">
           {(d?.recent_events || []).length === 0 ? (
             <p className="text-muted-foreground py-4 text-center text-sm">最近没有变更事件</p>
           ) : (
@@ -192,7 +201,7 @@ export default function AssetOverviewPage() {
               </div>
             ))
           )}
-        </CardContent>
+        </div>
       </Card>
     </div>
   )

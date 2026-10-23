@@ -1,37 +1,10 @@
 import { useState } from 'react'
 import {keepPreviousData, useQuery, useMutation, useQueryClient} from '@tanstack/react-query'
-import { monitorApi, MonitorType } from '@/api/monitor'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
-import { Switch } from '@/components/ui/switch'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from '@/components/ui/dialog'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { Label } from '@/components/ui/label'
+import { monitorApi, MonitorType, type ChangeRecord, type MonitoredPage } from '@/api/monitor'
+import { Button, Card, Input, Modal, Select, Switch, Table, Tabs, Tag } from 'antd'
+import type { TableProps } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
-import { formatDate } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
 import {
   Eye,
   Plus,
@@ -68,6 +41,16 @@ const statusConfig: Record<string, { label: string; variant: 'default' | 'destru
   error: { label: '错误', variant: 'destructive', icon: <XCircle className="h-3 w-3" /> },
   pending: { label: '待检查', variant: 'outline', icon: <Clock className="h-3 w-3" /> },
 }
+
+// shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
+const badgeCls = (variant: 'default' | 'secondary' | 'destructive' | 'outline') =>
+  variant === 'default'
+    ? 'border-transparent bg-primary text-primary-foreground'
+    : variant === 'secondary'
+      ? 'border-transparent bg-secondary text-secondary-foreground'
+      : variant === 'destructive'
+        ? 'border-transparent bg-destructive text-destructive-foreground'
+        : ''
 
 export default function MonitorPage() {
   const { toast } = useToast()
@@ -169,7 +152,6 @@ export default function MonitorPage() {
   const pages = pagesData?.data?.list || []
   const changes = changesData?.data?.list || []
   const changesTotal = changesData?.data?.total || 0
-  const changesTotalPages = Math.ceil(changesTotal / 10)
 
   // 统计
   const stats = {
@@ -207,6 +189,162 @@ export default function MonitorPage() {
     }
   }
 
+  const pagesColumns: TableProps<MonitoredPage>['columns'] = [
+    {
+      title: '名称',
+      dataIndex: 'name',
+      key: 'name',
+      render: (v: string) => <span className="font-medium">{v}</span>,
+    },
+    {
+      title: 'URL',
+      dataIndex: 'url',
+      key: 'url',
+      render: (v: string) => (
+        <a
+          href={v}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block max-w-xs truncate text-primary hover:underline"
+        >
+          {v}
+        </a>
+      ),
+    },
+    {
+      title: '监控类型',
+      dataIndex: 'monitorTypes',
+      key: 'monitorTypes',
+      render: (types: MonitorType[]) => (
+        <div className="flex flex-wrap gap-1">
+          {types.map((type) => (
+            <Tag key={type} className="text-xs">
+              {monitorTypeLabels[type]}
+            </Tag>
+          ))}
+        </div>
+      ),
+    },
+    {
+      title: '检查间隔',
+      dataIndex: 'interval',
+      key: 'interval',
+      render: (v: number) => `${v}分钟`,
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      render: (v: string) => {
+        const status = statusConfig[v] || statusConfig.pending
+        return (
+          <Tag className={cn('flex w-fit items-center gap-1', badgeCls(status.variant))}>
+            {status.icon}
+            {status.label}
+          </Tag>
+        )
+      },
+    },
+    {
+      title: '最后检查',
+      dataIndex: 'lastCheck',
+      key: 'lastCheck',
+      render: (v?: string) => (v ? formatDate(v) : '-'),
+    },
+    {
+      title: '启用',
+      dataIndex: 'enabled',
+      key: 'enabled',
+      render: (v: boolean, page) => (
+        <Switch
+          checked={v}
+          onChange={(checked) => toggleMutation.mutate({ id: page.id, enabled: checked })}
+        />
+      ),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      render: (_, page) => (
+        <div className="flex gap-1">
+          <Button
+            type="text"
+            size="small"
+            title="立即检查"
+            icon={<Play className="h-4 w-4 text-green-500" />}
+            onClick={() => checkMutation.mutate(page.id)}
+            disabled={checkMutation.isPending}
+          />
+          <Button
+            type="text"
+            size="small"
+            danger
+            title="删除"
+            icon={<Trash2 className="h-4 w-4" />}
+            onClick={() => deleteMutation.mutate(page.id)}
+          />
+        </div>
+      ),
+    },
+  ]
+
+  const changesColumns: TableProps<ChangeRecord>['columns'] = [
+    {
+      title: '页面',
+      key: 'page',
+      render: (_, change) => (
+        <div>
+          <p className="font-medium">{change.pageName}</p>
+          <p className="max-w-xs truncate text-xs text-muted-foreground">{change.url}</p>
+        </div>
+      ),
+    },
+    {
+      title: '变化类型',
+      dataIndex: 'changeType',
+      key: 'changeType',
+      render: (v: MonitorType) => (
+        <Tag className="flex w-fit items-center gap-1">
+          {monitorTypeIcons[v]}
+          {monitorTypeLabels[v]}
+        </Tag>
+      ),
+    },
+    {
+      title: '检测时间',
+      dataIndex: 'detectedAt',
+      key: 'detectedAt',
+      render: (v: string) => formatDate(v),
+    },
+    {
+      title: '状态',
+      dataIndex: 'acknowledged',
+      key: 'acknowledged',
+      render: (v: boolean) =>
+        v ? (
+          <Tag className="flex w-fit items-center gap-1">
+            <CheckCircle className="h-3 w-3 mr-1" />
+            已确认
+          </Tag>
+        ) : (
+          <Tag className={cn('flex w-fit items-center gap-1', badgeCls('destructive'))}>
+            <AlertTriangle className="h-3 w-3 mr-1" />
+            待确认
+          </Tag>
+        ),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      render: (_, change) =>
+        !change.acknowledged ? (
+          <Button size="small" onClick={() => acknowledgeMutation.mutate(change.id)}>
+            确认
+          </Button>
+        ) : null,
+    },
+  ]
+
   return (
     <div className="space-y-6">
       {/* 页面头部 */}
@@ -216,11 +354,11 @@ export default function MonitorPage() {
           <h1 className="text-2xl font-bold">页面监控</h1>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => refetchPages()}>
+          <Button size="small" onClick={() => refetchPages()}>
             <RefreshCw className="h-4 w-4 mr-2" />
             刷新
           </Button>
-          <Button size="sm" onClick={() => setShowAddDialog(true)}>
+          <Button type="primary" size="small" onClick={() => setShowAddDialog(true)}>
             <Plus className="h-4 w-4 mr-2" />
             添加监控
           </Button>
@@ -229,337 +367,172 @@ export default function MonitorPage() {
 
       {/* 统计卡片 */}
       <div className="grid gap-4 md:grid-cols-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">总监控数</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.total}</div>
-          </CardContent>
+        <Card styles={{ body: { paddingTop: 12, paddingBottom: 12 } }}>
+          <span className="text-sm font-medium">总监控数</span>
+          <div className="text-2xl font-bold">{stats.total}</div>
         </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-green-600">正常</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600">{stats.normal}</div>
-          </CardContent>
+        <Card styles={{ body: { paddingTop: 12, paddingBottom: 12 } }}>
+          <span className="text-sm font-medium text-green-600">正常</span>
+          <div className="text-2xl font-bold text-green-600">{stats.normal}</div>
         </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-orange-600">已变化</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-orange-600">{stats.changed}</div>
-          </CardContent>
+        <Card styles={{ body: { paddingTop: 12, paddingBottom: 12 } }}>
+          <span className="text-sm font-medium text-orange-600">已变化</span>
+          <div className="text-2xl font-bold text-orange-600">{stats.changed}</div>
         </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-red-600">错误</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-red-600">{stats.error}</div>
-          </CardContent>
+        <Card styles={{ body: { paddingTop: 12, paddingBottom: 12 } }}>
+          <span className="text-sm font-medium text-red-600">错误</span>
+          <div className="text-2xl font-bold text-red-600">{stats.error}</div>
         </Card>
       </div>
 
       {/* 标签页 */}
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList>
-          <TabsTrigger value="pages">监控列表</TabsTrigger>
-          <TabsTrigger value="changes">
-            变化记录
-            {stats.changed > 0 && (
-              <Badge variant="destructive" className="ml-2 h-5 w-5 p-0 justify-center">
-                {stats.changed}
-              </Badge>
-            )}
-          </TabsTrigger>
-        </TabsList>
-
-        {/* 监控列表 */}
-        <TabsContent value="pages">
-          <div className="border rounded-lg">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>名称</TableHead>
-                  <TableHead>URL</TableHead>
-                  <TableHead>监控类型</TableHead>
-                  <TableHead>检查间隔</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>最后检查</TableHead>
-                  <TableHead>启用</TableHead>
-                  <TableHead>操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {pagesLoading ? (
-                  <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8">
-                      加载中...
-                    </TableCell>
-                  </TableRow>
-                ) : pages.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-                      暂无监控页面，点击"添加监控"开始
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  pages.map((page) => {
-                    const status = statusConfig[page.status] || statusConfig.pending
-                    return (
-                      <TableRow key={page.id}>
-                        <TableCell className="font-medium">{page.name}</TableCell>
-                        <TableCell className="max-w-xs truncate">
-                          <a
-                            href={page.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-primary hover:underline"
-                          >
-                            {page.url}
-                          </a>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex flex-wrap gap-1">
-                            {page.monitorTypes.map((type) => (
-                              <Badge key={type} variant="outline" className="text-xs">
-                                {monitorTypeLabels[type]}
-                              </Badge>
-                            ))}
-                          </div>
-                        </TableCell>
-                        <TableCell>{page.interval}分钟</TableCell>
-                        <TableCell>
-                          <Badge variant={status.variant} className="flex items-center gap-1 w-fit">
-                            {status.icon}
-                            {status.label}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          {page.lastCheck ? formatDate(page.lastCheck) : '-'}
-                        </TableCell>
-                        <TableCell>
-                          <Switch
-                            checked={page.enabled}
-                            onCheckedChange={(checked) =>
-                              toggleMutation.mutate({ id: page.id, enabled: checked })
-                            }
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex gap-1">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              title="立即检查"
-                              onClick={() => checkMutation.mutate(page.id)}
-                              disabled={checkMutation.isPending}
-                            >
-                              <Play className="h-4 w-4 text-green-500" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              title="删除"
-                              onClick={() => deleteMutation.mutate(page.id)}
-                            >
-                              <Trash2 className="h-4 w-4 text-destructive" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })
-                )}
-              </TableBody>
-            </Table>
-          </div>
-        </TabsContent>
-
-        {/* 变化记录 */}
-        <TabsContent value="changes">
-          <div className="border rounded-lg">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>页面</TableHead>
-                  <TableHead>变化类型</TableHead>
-                  <TableHead>检测时间</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {changesLoading ? (
-                  <TableRow>
-                    <TableCell colSpan={5} className="text-center py-8">
-                      加载中...
-                    </TableCell>
-                  </TableRow>
-                ) : changes.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
-                      暂无变化记录
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  changes.map((change) => (
-                    <TableRow key={change.id}>
-                      <TableCell>
-                        <div>
-                          <p className="font-medium">{change.pageName}</p>
-                          <p className="text-xs text-muted-foreground truncate max-w-xs">
-                            {change.url}
-                          </p>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="flex items-center gap-1 w-fit">
-                          {monitorTypeIcons[change.changeType]}
-                          {monitorTypeLabels[change.changeType]}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{formatDate(change.detectedAt)}</TableCell>
-                      <TableCell>
-                        {change.acknowledged ? (
-                          <Badge variant="outline">
-                            <CheckCircle className="h-3 w-3 mr-1" />
-                            已确认
-                          </Badge>
-                        ) : (
-                          <Badge variant="destructive">
-                            <AlertTriangle className="h-3 w-3 mr-1" />
-                            待确认
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {!change.acknowledged && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => acknowledgeMutation.mutate(change.id)}
-                          >
-                            确认
-                          </Button>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </div>
-
-          {/* 分页 */}
-          {changesTotalPages > 1 && (
-            <div className="flex justify-center gap-2 mt-4">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={changesPage === 1}
-                onClick={() => setChangesPage(changesPage - 1)}
-              >
-                上一页
-              </Button>
-              <span className="py-2 px-4 text-sm">
-                {changesPage} / {changesTotalPages}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={changesPage === changesTotalPages}
-                onClick={() => setChangesPage(changesPage + 1)}
-              >
-                下一页
-              </Button>
-            </div>
-          )}
-        </TabsContent>
-      </Tabs>
-
-      {/* 添加监控对话框 */}
-      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>添加页面监控</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>监控名称</Label>
-              <Input
-                placeholder="输入监控名称"
-                value={newPage.name}
-                onChange={(e) => setNewPage({ ...newPage, name: e.target.value })}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>页面 URL</Label>
-              <Input
-                placeholder="https://example.com"
-                value={newPage.url}
-                onChange={(e) => setNewPage({ ...newPage, url: e.target.value })}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>检查间隔 (分钟)</Label>
-              <Select
-                value={String(newPage.interval)}
-                onValueChange={(value) => setNewPage({ ...newPage, interval: Number(value) })}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="5">5分钟</SelectItem>
-                  <SelectItem value="15">15分钟</SelectItem>
-                  <SelectItem value="30">30分钟</SelectItem>
-                  <SelectItem value="60">1小时</SelectItem>
-                  <SelectItem value="360">6小时</SelectItem>
-                  <SelectItem value="1440">24小时</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>监控类型</Label>
-              <div className="flex flex-wrap gap-2">
-                {(Object.keys(monitorTypeLabels) as MonitorType[]).map((type) => (
-                  <Button
-                    key={type}
-                    variant={newPage.monitorTypes.includes(type) ? 'default' : 'outline'}
-                    size="sm"
-                    onClick={() => toggleMonitorType(type)}
-                  >
-                    {monitorTypeIcons[type]}
-                    <span className="ml-1">{monitorTypeLabels[type]}</span>
-                  </Button>
-                ))}
-              </div>
-            </div>
-            {newPage.monitorTypes.includes('keywords') && (
-              <div className="space-y-2">
-                <Label>关键词 (逗号分隔)</Label>
-                <Input
-                  placeholder="关键词1, 关键词2"
-                  value={newPage.keywords}
-                  onChange={(e) => setNewPage({ ...newPage, keywords: e.target.value })}
+      <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
+        items={[
+          {
+            key: 'pages',
+            label: '监控列表',
+            children: (
+              <div className="overflow-hidden rounded-lg border">
+                <Table<MonitoredPage>
+                  columns={pagesColumns}
+                  dataSource={pages}
+                  rowKey="id"
+                  loading={pagesLoading}
+                  locale={{
+                    emptyText: (
+                      <div className="py-8 text-center text-muted-foreground">
+                        暂无监控页面，点击&quot;添加监控&quot;开始
+                      </div>
+                    ),
+                  }}
+                  pagination={false}
                 />
               </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowAddDialog(false)}>
-              取消
-            </Button>
-            <Button onClick={handleAdd} disabled={addMutation.isPending}>
+            ),
+          },
+          {
+            key: 'changes',
+            label: (
+              <>
+                变化记录
+                {stats.changed > 0 && (
+                  <Tag
+                    className={cn(
+                      'ml-2 inline-flex h-5 w-5 items-center justify-center p-0',
+                      badgeCls('destructive')
+                    )}
+                  >
+                    {stats.changed}
+                  </Tag>
+                )}
+              </>
+            ),
+            children: (
+              <div className="overflow-hidden rounded-lg border">
+                <Table<ChangeRecord>
+                  columns={changesColumns}
+                  dataSource={changes}
+                  rowKey="id"
+                  loading={changesLoading}
+                  locale={{
+                    emptyText: (
+                      <div className="py-8 text-center text-muted-foreground">暂无变化记录</div>
+                    ),
+                  }}
+                  pagination={{
+                    current: changesPage,
+                    pageSize: 10,
+                    total: changesTotal,
+                    showQuickJumper: true,
+                    // page_size 固定 10、无独立 pageSize 状态，不展示切换器
+                    showSizeChanger: false,
+                    hideOnSinglePage: true,
+                    onChange: (p) => setChangesPage(p),
+                  }}
+                />
+              </div>
+            ),
+          },
+        ]}
+      />
+
+      {/* 添加监控对话框 */}
+      <Modal
+        open={showAddDialog}
+        onCancel={() => setShowAddDialog(false)}
+        title="添加页面监控"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setShowAddDialog(false)}>取消</Button>
+            <Button type="primary" onClick={handleAdd} disabled={addMutation.isPending}>
               添加
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">监控名称</label>
+            <Input
+              placeholder="输入监控名称"
+              value={newPage.name}
+              onChange={(e) => setNewPage({ ...newPage, name: e.target.value })}
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">页面 URL</label>
+            <Input
+              placeholder="https://example.com"
+              value={newPage.url}
+              onChange={(e) => setNewPage({ ...newPage, url: e.target.value })}
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">检查间隔 (分钟)</label>
+            <Select
+              className="w-full"
+              value={String(newPage.interval)}
+              onChange={(value) => setNewPage({ ...newPage, interval: Number(value) })}
+              options={[
+                { value: '5', label: '5分钟' },
+                { value: '15', label: '15分钟' },
+                { value: '30', label: '30分钟' },
+                { value: '60', label: '1小时' },
+                { value: '360', label: '6小时' },
+                { value: '1440', label: '24小时' },
+              ]}
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">监控类型</label>
+            <div className="flex flex-wrap gap-2">
+              {(Object.keys(monitorTypeLabels) as MonitorType[]).map((type) => (
+                <Button
+                  key={type}
+                  type={newPage.monitorTypes.includes(type) ? 'primary' : 'default'}
+                  size="small"
+                  onClick={() => toggleMonitorType(type)}
+                >
+                  {monitorTypeIcons[type]}
+                  <span className="ml-1">{monitorTypeLabels[type]}</span>
+                </Button>
+              ))}
+            </div>
+          </div>
+          {newPage.monitorTypes.includes('keywords') && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium">关键词 (逗号分隔)</label>
+              <Input
+                placeholder="关键词1, 关键词2"
+                value={newPage.keywords}
+                onChange={(e) => setNewPage({ ...newPage, keywords: e.target.value })}
+              />
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   )
 }

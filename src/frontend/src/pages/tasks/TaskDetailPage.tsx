@@ -1,60 +1,30 @@
 import { useState, useEffect } from 'react'
-import { useParams, Link, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import {keepPreviousData, useQuery, useMutation, useQueryClient} from '@tanstack/react-query'
+import {
+  Button,
+  Checkbox,
+  Dropdown,
+  Input,
+  Modal,
+  Progress,
+  Select,
+  Table,
+  Tabs,
+  Tag,
+} from 'antd'
+import type { ColumnsType } from 'antd/es/table'
 import { taskApi, type Task } from '@/api/tasks'
 import { resultApi, type SubdomainResult, type ResultType } from '@/api/results'
 import TaskTopologyView from '@/components/tasks/TaskTopologyView'
 import TaskAssetsView from '@/components/tasks/TaskAssetsView'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
-import { Checkbox } from '@/components/ui/checkbox'
-import { Progress } from '@/components/ui/progress'
 import { useToast } from '@/components/ui/use-toast'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
+import { useConfirm } from '@/components/common/confirm-provider'
 import { cn, formatDate, getSeverityColor, getStatusColor } from '@/lib/utils'
 import { 
   ArrowLeft, Play, Pause, Square, Trash2, RotateCcw, 
   Search, Download, Settings, ChevronDown,
-  RefreshCw, ExternalLink, Eye, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Pencil
+  RefreshCw, ExternalLink, Eye, Pencil
 } from 'lucide-react'
 
 // Tab 配置 - ID 对应后端 ResultType；assets 是任务级资产视图（非结果类型）
@@ -75,10 +45,16 @@ const tabConfig: { id: TaskTabId; label: string }[] = [
   { id: 'topology', label: '资产星图' },
 ]
 
+// shadcn Badge 变体 → antd Tag 的等价 className 映射（保持原视觉语义）
+const TAG_PRIMARY = 'border-transparent bg-primary text-primary-foreground'
+const TAG_SECONDARY = 'border-transparent bg-secondary text-secondary-foreground'
+const TAG_DESTRUCTIVE = 'border-transparent bg-destructive text-destructive-foreground'
+
 export default function TaskDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { toast } = useToast()
+  const confirm = useConfirm()
   const queryClient = useQueryClient()
   
   const [activeTab, setActiveTab] = useState<TaskTabId | null>(null)
@@ -98,7 +74,7 @@ export default function TaskDetailPage() {
   const [projectFilter, setProjectFilter] = useState<string>('all')
   const [statusCodeFilter, setStatusCodeFilter] = useState<string>('all')
   const [page, setPage] = useState(1)
-  const pageSize = 20
+  const [pageSize, setPageSize] = useState(20)
 
   // 所有 hooks 必须在条件返回之前调用
   const { data, isLoading } = useQuery({
@@ -135,7 +111,7 @@ export default function TaskDetailPage() {
   
   // 端口数据使用聚合 API
   const { data: portResultsData, isLoading: portResultsLoading } = useQuery({
-    queryKey: ['task-port-results', id, page, search],
+    queryKey: ['task-port-results', id, page, pageSize, search],
     // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
     placeholderData: keepPreviousData,
     queryFn: () => resultApi.getPortResults(id!, { page, pageSize, search }),
@@ -144,7 +120,7 @@ export default function TaskDetailPage() {
 
   // 其他类型使用通用 API
   const { data: resultsData, isLoading: resultsLoading } = useQuery({
-    queryKey: ['task-results', id, currentTab, page, search, statusCodeFilter],
+    queryKey: ['task-results', id, currentTab, page, pageSize, search, statusCodeFilter],
     // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
     placeholderData: keepPreviousData,
     queryFn: () => resultApi.getTaskResults(id!, { 
@@ -332,9 +308,7 @@ export default function TaskDetailPage() {
           <br />
           <span className="text-xs text-muted-foreground/70">任务ID: {id}</span>
         </p>
-        <Button asChild>
-          <Link to="/tasks">返回任务列表</Link>
-        </Button>
+        <Button type="primary" onClick={() => navigate('/tasks')}>返回任务列表</Button>
       </div>
     )
   }
@@ -349,22 +323,6 @@ export default function TaskDetailPage() {
       cancelled: '已取消',
     }
     return labels[status] || status
-  }
-
-  const toggleSelectAll = () => {
-    if (selectedRows.length === results.length) {
-      setSelectedRows([])
-    } else {
-      setSelectedRows(results.map((item: { id: string }) => item.id))
-    }
-  }
-
-  const toggleSelectRow = (rowId: string) => {
-    if (selectedRows.includes(rowId)) {
-      setSelectedRows(selectedRows.filter(r => r !== rowId))
-    } else {
-      setSelectedRows([...selectedRows, rowId])
-    }
   }
 
   const handleSearch = () => {
@@ -401,6 +359,39 @@ export default function TaskDetailPage() {
     return [headers.join(','), ...rows].join('\n')
   }
 
+  // 删除任务：危险操作，先确认（替代原 AlertDialog）
+  const handleDeleteTask = async () => {
+    const ok = await confirm({
+      title: '确认删除任务？',
+      description: '此操作不可撤销。删除后，该任务及其所有相关数据将被永久删除。',
+      confirmText: '删除',
+      cancelText: '取消',
+      destructive: true,
+    })
+    if (ok) deleteMutation.mutate()
+  }
+
+  // antd Table 服务端分页：接现有 page/pageSize 状态（替代原手写分页 footer）
+  const tablePagination = {
+    current: page,
+    pageSize,
+    total,
+    showQuickJumper: true,
+    showSizeChanger: true,
+    showTotal: (t: number) => `共 ${t} 条结果`,
+    onChange: (p: number, s: number) => {
+      setPage(p)
+      setPageSize(s)
+    },
+  }
+
+  // 行选择：key 统一为 string（port 表为 ip，其余为 id）
+  const tableRowSelection = {
+    selectedRowKeys: selectedRows,
+    onChange: (keys: React.Key[]) => setSelectedRows(keys.map(String)),
+    columnWidth: 48,
+  }
+
   // 渲染不同类型的表格
   const renderTable = () => {
     switch (currentTab) {
@@ -427,757 +418,703 @@ export default function TaskDetailPage() {
     }
   }
 
-  const renderSubdomainTable = () => (
-    <Table>
-      <TableHeader className="sticky top-0 bg-background">
-        <TableRow>
-          <TableHead className="w-12">
-            <Checkbox 
-              checked={selectedRows.length === results.length && results.length > 0}
-              onCheckedChange={toggleSelectAll}
-            />
-          </TableHead>
-          <TableHead className="w-16">序号</TableHead>
-          <TableHead>子域名</TableHead>
-          <TableHead>IP</TableHead>
-          <TableHead>标题</TableHead>
-          <TableHead>状态码</TableHead>
-          <TableHead>CDN</TableHead>
-          <TableHead>指纹</TableHead>
-          <TableHead>时间</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {results.length === 0 ? (
-          <TableRow>
-            <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
-              {resultsLoading ? '加载中...' : '暂无数据'}
-            </TableCell>
-          </TableRow>
-        ) : (
-          results.map((item: SubdomainResult, index: number) => {
-            // 兼容不同数据格式：subdomain 或 domain 字段
-            const subdomainName = item.subdomain || item.domain || '-'
-            return (
-              <TableRow 
-                key={item.id}
-                className={cn(selectedRows.includes(item.id) && 'bg-muted/50')}
-              >
-                <TableCell>
-                  <Checkbox 
-                    checked={selectedRows.includes(item.id)}
-                    onCheckedChange={() => toggleSelectRow(item.id)}
-                  />
-                </TableCell>
-                <TableCell className="text-muted-foreground">{(page - 1) * pageSize + index + 1}</TableCell>
-                <TableCell>
-                  <a 
-                    href={`https://${subdomainName}`} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="text-primary hover:underline flex items-center gap-1"
-                  >
-                    {subdomainName}
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                </TableCell>
-                <TableCell className="text-muted-foreground font-mono text-xs">
-                  {item.ips?.join(', ') || (item as unknown as { ip?: string }).ip || '-'}
-                </TableCell>
-                <TableCell className="max-w-[200px] truncate">{item.title || '-'}</TableCell>
-                <TableCell>
-                  {item.statusCode && item.statusCode > 0 ? (
-                    <Badge variant={item.statusCode === 200 ? 'default' : 'secondary'}>
-                      {item.statusCode}
-                    </Badge>
-                  ) : (
-                    <Badge variant="outline" className="text-muted-foreground">-</Badge>
-                  )}
-                </TableCell>
-                <TableCell>
-                  {item.cdn ? (
-                    <Badge variant="outline">{item.cdnName || item.cdnProvider || 'CDN'}</Badge>
-                  ) : '-'}
-                </TableCell>
-                <TableCell>
-                  {(item.technologies?.slice(0, 2) || item.fingerprint?.slice(0, 2))?.map((fp: string) => (
-                    <Badge key={fp} variant="outline" className="mr-1 text-xs">{fp}</Badge>
-                  )) || '-'}
-                </TableCell>
-                <TableCell className="text-muted-foreground">{formatDate(item.createdAt)}</TableCell>
-              </TableRow>
-            )
-          })
-        )}
-      </TableBody>
-    </Table>
-  )
+  const renderSubdomainTable = () => {
+    const columns: ColumnsType<SubdomainResult> = [
+      { title: '序号', key: 'index', width: 64, className: 'text-muted-foreground', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
+      {
+        title: '子域名',
+        key: 'subdomain',
+        render: (_, item) => {
+          // 兼容不同数据格式：subdomain 或 domain 字段
+          const subdomainName = item.subdomain || item.domain || '-'
+          return (
+            <a 
+              href={`https://${subdomainName}`} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="text-primary hover:underline flex items-center gap-1"
+            >
+              {subdomainName}
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          )
+        },
+      },
+      {
+        title: 'IP',
+        key: 'ips',
+        width: 150,
+        className: 'text-muted-foreground font-mono text-xs',
+        render: (_, item) => item.ips?.join(', ') || (item as unknown as { ip?: string }).ip || '-',
+      },
+      { title: '标题', key: 'title', width: 200, ellipsis: true, render: (_, item) => item.title || '-' },
+      {
+        title: '状态码',
+        key: 'statusCode',
+        width: 90,
+        render: (_, item) => (
+          item.statusCode && item.statusCode > 0 ? (
+            <Tag className={item.statusCode === 200 ? TAG_PRIMARY : TAG_SECONDARY}>
+              {item.statusCode}
+            </Tag>
+          ) : (
+            <Tag className="text-muted-foreground">-</Tag>
+          )
+        ),
+      },
+      {
+        title: 'CDN',
+        key: 'cdn',
+        width: 120,
+        render: (_, item) => (
+          item.cdn ? (
+            <Tag>{item.cdnName || item.cdnProvider || 'CDN'}</Tag>
+          ) : '-'
+        ),
+      },
+      {
+        title: '指纹',
+        key: 'fingerprint',
+        width: 200,
+        render: (_, item) => (
+          (item.technologies?.slice(0, 2) || item.fingerprint?.slice(0, 2))?.map((fp: string) => (
+            <Tag key={fp} className="mr-1 text-xs">{fp}</Tag>
+          )) || '-'
+        ),
+      },
+      { title: '时间', key: 'createdAt', width: 160, className: 'text-muted-foreground', render: (_, item) => formatDate(item.createdAt) },
+    ]
+    return (
+      <Table
+        rowKey="id"
+        columns={columns}
+        dataSource={results}
+        rowSelection={tableRowSelection}
+        pagination={tablePagination}
+        locale={{ emptyText: resultsLoading ? '加载中...' : '暂无数据' }}
+        sticky
+        scroll={{ x: 1000 }}
+      />
+    )
+  }
 
   // 子域名接管检测结果表格
-  const renderTakeoverTable = () => (
-    <Table>
-      <TableHeader className="sticky top-0 bg-background">
-        <TableRow>
-          <TableHead className="w-12">
-            <Checkbox 
-              checked={selectedRows.length === results.length && results.length > 0}
-              onCheckedChange={toggleSelectAll}
-            />
-          </TableHead>
-          <TableHead className="w-16">序号</TableHead>
-          <TableHead>子域名</TableHead>
-          <TableHead>CNAME</TableHead>
-          <TableHead>服务商</TableHead>
-          <TableHead>风险等级</TableHead>
-          <TableHead>原因</TableHead>
-          <TableHead>时间</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {results.length === 0 ? (
-          <TableRow>
-            <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-              {resultsLoading ? '加载中...' : '暂无数据'}
-            </TableCell>
-          </TableRow>
-        ) : (
-          results.map((item: Record<string, unknown>, index: number) => (
-            <TableRow 
-              key={item.id as string}
-              className={cn(
-                selectedRows.includes(item.id as string) && 'bg-muted/50',
-                (item.vulnerable as boolean) && 'bg-destructive/5'
+  const renderTakeoverTable = () => {
+    const columns: ColumnsType<Record<string, unknown>> = [
+      { title: '序号', key: 'index', width: 64, className: 'text-muted-foreground', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
+      { title: '子域名', key: 'subdomain', width: 220, className: 'font-mono', render: (_, item) => item.subdomain as string },
+      { title: 'CNAME', key: 'cname', width: 200, ellipsis: true, className: 'font-mono text-xs', render: (_, item) => item.cname as string || '-' },
+      { title: '服务商', key: 'provider', width: 120, render: (_, item) => <Tag>{item.provider as string || '-'}</Tag> },
+      {
+        title: '风险等级',
+        key: 'severity',
+        width: 100,
+        render: (_, item) => (
+          <Tag 
+            className={
+              (item.severity as string) === 'high' 
+                ? TAG_DESTRUCTIVE
+                : (item.severity as string) === 'medium'
+                  ? TAG_SECONDARY
+                  : undefined
+            }
+          >
+            {(item.severity as string) || '高'}
+          </Tag>
+        ),
+      },
+      {
+        title: '原因',
+        key: 'reason',
+        width: 300,
+        ellipsis: true,
+        render: (_, item) => <span title={item.reason as string}>{item.reason as string || '-'}</span>,
+      },
+      { title: '时间', key: 'createdAt', width: 160, className: 'text-muted-foreground', render: (_, item) => formatDate(item.createdAt as string) },
+    ]
+    return (
+      <Table
+        rowKey="id"
+        columns={columns}
+        dataSource={results}
+        rowSelection={tableRowSelection}
+        pagination={tablePagination}
+        locale={{ emptyText: resultsLoading ? '加载中...' : '暂无数据' }}
+        rowClassName={(item) => ((item.vulnerable as boolean) ? 'bg-destructive/5' : '')}
+        sticky
+        scroll={{ x: 1000 }}
+      />
+    )
+  }
+
+  const renderURLTable = () => {
+    const columns: ColumnsType<Record<string, unknown>> = [
+      { title: '序号', key: 'index', width: 64, className: 'text-muted-foreground', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
+      {
+        title: 'URL',
+        key: 'url',
+        width: 400,
+        ellipsis: true,
+        render: (_, item) => (
+          <a 
+            href={item.url as string} 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="text-primary hover:underline"
+          >
+            {item.url as string}
+          </a>
+        ),
+      },
+      { title: '方法', key: 'method', width: 90, render: (_, item) => <Tag>{(item.method as string) || 'GET'}</Tag> },
+      {
+        title: '状态码',
+        key: 'statusCode',
+        width: 90,
+        render: (_, item) => (
+          <Tag className={(item.statusCode as number) === 200 ? TAG_PRIMARY : TAG_SECONDARY}>
+            {item.statusCode as number || '-'}
+          </Tag>
+        ),
+      },
+      { title: '类型', key: 'contentType', width: 160, className: 'text-muted-foreground', render: (_, item) => item.contentType as string || '-' },
+      { title: '长度', key: 'length', width: 90, className: 'text-muted-foreground', render: (_, item) => item.length as number || '-' },
+      { title: '时间', key: 'createdAt', width: 160, className: 'text-muted-foreground', render: (_, item) => formatDate(item.createdAt as string) },
+    ]
+    return (
+      <Table
+        rowKey="id"
+        columns={columns}
+        dataSource={results}
+        rowSelection={tableRowSelection}
+        pagination={tablePagination}
+        locale={{ emptyText: resultsLoading ? '加载中...' : '暂无数据' }}
+        sticky
+        scroll={{ x: 1000 }}
+      />
+    )
+  }
+
+  const renderSensitiveTable = () => {
+    const columns: ColumnsType<Record<string, unknown>> = [
+      { title: '序号', key: 'index', width: 64, className: 'text-muted-foreground', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
+      {
+        title: 'URL',
+        key: 'url',
+        width: 300,
+        ellipsis: true,
+        render: (_, item) => (
+          <a 
+            href={item.url as string} 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="text-primary hover:underline"
+          >
+            {item.url as string}
+          </a>
+        ),
+      },
+      { title: '类型', key: 'type', width: 110, render: (_, item) => <Tag>{item.type as string}</Tag> },
+      { title: '模式', key: 'pattern', width: 140, className: 'text-muted-foreground', render: (_, item) => item.pattern as string },
+      {
+        title: '匹配内容',
+        key: 'matches',
+        width: 200,
+        ellipsis: true,
+        className: 'font-mono text-xs',
+        render: (_, item) => (
+          <span title={Array.isArray(item.matches) ? (item.matches as string[]).join(', ') : ''}>
+            {Array.isArray(item.matches) ? (item.matches as string[]).slice(0, 2).join(', ') : '-'}
+            {Array.isArray(item.matches) && (item.matches as string[]).length > 2 && '...'}
+          </span>
+        ),
+      },
+      {
+        title: '级别',
+        key: 'severity',
+        width: 100,
+        render: (_, item) => (
+          <Tag 
+            className={
+              (item.severity as string) === 'critical' || (item.severity as string) === 'high' ? TAG_DESTRUCTIVE :
+              (item.severity as string) === 'medium' ? TAG_PRIMARY : TAG_SECONDARY
+            }
+          >
+            {item.severity as string}
+          </Tag>
+        ),
+      },
+      { title: '位置', key: 'location', width: 110, className: 'text-muted-foreground', render: (_, item) => item.location as string },
+      { title: '时间', key: 'createdAt', width: 160, className: 'text-muted-foreground', render: (_, item) => formatDate(item.createdAt as string) },
+    ]
+    return (
+      <Table
+        rowKey="id"
+        columns={columns}
+        dataSource={results}
+        rowSelection={tableRowSelection}
+        pagination={tablePagination}
+        locale={{ emptyText: resultsLoading ? '加载中...' : '暂无数据' }}
+        sticky
+        scroll={{ x: 1100 }}
+      />
+    )
+  }
+
+  const renderPortTable = () => {
+    const columns: ColumnsType<Record<string, unknown>> = [
+      { title: '序号', key: 'index', width: 64, className: 'text-muted-foreground', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
+      { title: 'IP', key: 'ip', width: 160, className: 'font-mono', render: (_, item) => item.ip as string },
+      {
+        title: '端口',
+        key: 'ports',
+        render: (_, item) => {
+          const ports = (item.ports as string[]) || []
+          return (
+            <div className="flex flex-wrap gap-1">
+              {ports.slice(0, 10).map((port, i) => (
+                <Tag key={i} className="text-xs">
+                  {port}
+                </Tag>
+              ))}
+              {ports.length > 10 && (
+                <Tag className={cn(TAG_SECONDARY, 'text-xs')}>+{ports.length - 10}</Tag>
               )}
-            >
-              <TableCell>
-                <Checkbox 
-                  checked={selectedRows.includes(item.id as string)}
-                  onCheckedChange={() => toggleSelectRow(item.id as string)}
-                />
-              </TableCell>
-              <TableCell className="text-muted-foreground">{(page - 1) * pageSize + index + 1}</TableCell>
-              <TableCell className="font-mono">{item.subdomain as string}</TableCell>
-              <TableCell className="font-mono text-xs max-w-[200px] truncate">
-                {item.cname as string || '-'}
-              </TableCell>
-              <TableCell>
-                <Badge variant="outline">{item.provider as string || '-'}</Badge>
-              </TableCell>
-              <TableCell>
-                <Badge 
-                  variant={
-                    (item.severity as string) === 'high' 
-                      ? 'destructive' 
-                      : (item.severity as string) === 'medium'
-                        ? 'secondary'
-                        : 'outline'
-                  }
-                >
-                  {(item.severity as string) || '高'}
-                </Badge>
-              </TableCell>
-              <TableCell className="max-w-[300px] truncate" title={item.reason as string}>
-                {item.reason as string || '-'}
-              </TableCell>
-              <TableCell className="text-muted-foreground">{formatDate(item.createdAt as string)}</TableCell>
-            </TableRow>
+            </div>
+          )
+        },
+      },
+      {
+        title: '服务',
+        key: 'services',
+        render: (_, item) => {
+          const services = (item.services as string[]) || []
+          return (
+            <div className="flex flex-wrap gap-1">
+              {[...new Set(services.filter(Boolean))].slice(0, 5).map((s: string, i) => (
+                <Tag key={i} className={cn(TAG_SECONDARY, 'text-xs')}>{s}</Tag>
+              ))}
+              {[...new Set(services.filter(Boolean))].length > 5 && (
+                <Tag className="text-xs">+{[...new Set(services.filter(Boolean))].length - 5}</Tag>
+              )}
+            </div>
+          )
+        },
+      },
+      { title: '时间', key: 'created_at', width: 160, className: 'text-muted-foreground', render: (_, item) => formatDate(item.created_at as string) },
+    ]
+    return (
+      <Table
+        rowKey="ip"
+        columns={columns}
+        dataSource={results}
+        rowSelection={tableRowSelection}
+        pagination={tablePagination}
+        locale={{ emptyText: isResultsLoading ? '加载中...' : '暂无数据' }}
+        sticky
+        scroll={{ x: 900 }}
+      />
+    )
+  }
+
+  const renderServiceTable = () => {
+    const columns: ColumnsType<Record<string, unknown>> = [
+      { title: '序号', key: 'index', width: 64, className: 'text-muted-foreground', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
+      {
+        title: 'URL',
+        key: 'url',
+        render: (_, item) => (
+          <a 
+            href={item.url as string} 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="text-primary hover:underline flex items-center gap-1 max-w-xs truncate"
+          >
+            {item.url as string}
+            <ExternalLink className="h-3 w-3 flex-shrink-0" />
+          </a>
+        ),
+      },
+      {
+        title: '标题',
+        key: 'title',
+        width: 200,
+        ellipsis: true,
+        render: (_, item) => <span title={item.title as string}>{item.title as string || '-'}</span>,
+      },
+      {
+        title: '状态码',
+        key: 'status_code',
+        width: 90,
+        render: (_, item) => (
+          <Tag 
+            className={
+              (item.status_code as number) >= 200 && (item.status_code as number) < 300 ? TAG_PRIMARY :
+              (item.status_code as number) >= 300 && (item.status_code as number) < 400 ? TAG_SECONDARY :
+              (item.status_code as number) >= 400 ? TAG_DESTRUCTIVE : undefined
+            }
+          >
+            {item.status_code as number || '-'}
+          </Tag>
+        ),
+      },
+      { title: 'Server', key: 'server', width: 140, className: 'text-muted-foreground', render: (_, item) => item.server as string || '-' },
+      {
+        title: '技术栈',
+        key: 'technologies',
+        width: 180,
+        render: (_, item) => (
+          (item.technologies as string[])?.slice(0, 3).map((tech: string) => (
+            <Tag key={tech} className="mr-1 text-xs">{tech}</Tag>
           ))
-        )}
-      </TableBody>
-    </Table>
-  )
-
-  const renderURLTable = () => (
-    <Table>
-      <TableHeader className="sticky top-0 bg-background">
-        <TableRow>
-          <TableHead className="w-12">
-            <Checkbox 
-              checked={selectedRows.length === results.length && results.length > 0}
-              onCheckedChange={toggleSelectAll}
-            />
-          </TableHead>
-          <TableHead className="w-16">序号</TableHead>
-          <TableHead>URL</TableHead>
-          <TableHead>方法</TableHead>
-          <TableHead>状态码</TableHead>
-          <TableHead>类型</TableHead>
-          <TableHead>长度</TableHead>
-          <TableHead>时间</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {results.length === 0 ? (
-          <TableRow>
-            <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-              {resultsLoading ? '加载中...' : '暂无数据'}
-            </TableCell>
-          </TableRow>
-        ) : (
-          results.map((item: Record<string, unknown>, index: number) => (
-            <TableRow 
-              key={item.id as string}
-              className={cn(selectedRows.includes(item.id as string) && 'bg-muted/50')}
-            >
-              <TableCell>
-                <Checkbox 
-                  checked={selectedRows.includes(item.id as string)}
-                  onCheckedChange={() => toggleSelectRow(item.id as string)}
-                />
-              </TableCell>
-              <TableCell className="text-muted-foreground">{(page - 1) * pageSize + index + 1}</TableCell>
-              <TableCell className="max-w-[400px] truncate">
-                <a 
-                  href={item.url as string} 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="text-primary hover:underline"
-                >
-                  {item.url as string}
-                </a>
-              </TableCell>
-              <TableCell>
-                <Badge variant="outline">{(item.method as string) || 'GET'}</Badge>
-              </TableCell>
-              <TableCell>
-                <Badge variant={(item.statusCode as number) === 200 ? 'default' : 'secondary'}>
-                  {item.statusCode as number || '-'}
-                </Badge>
-              </TableCell>
-              <TableCell className="text-muted-foreground">{item.contentType as string || '-'}</TableCell>
-              <TableCell className="text-muted-foreground">{item.length as number || '-'}</TableCell>
-              <TableCell className="text-muted-foreground">{formatDate(item.createdAt as string)}</TableCell>
-            </TableRow>
+        ),
+      },
+      {
+        title: '指纹',
+        key: 'fingerprints',
+        width: 160,
+        render: (_, item) => (
+          (item.fingerprints as string[])?.slice(0, 2).map((fp: string) => (
+            <Tag key={fp} className={cn(TAG_SECONDARY, 'mr-1 text-xs')}>{fp}</Tag>
           ))
-        )}
-      </TableBody>
-    </Table>
-  )
+        ),
+      },
+      { title: '时间', key: 'createdAt', width: 160, className: 'text-muted-foreground', render: (_, item) => formatDate(item.createdAt as string) },
+    ]
+    return (
+      <Table
+        rowKey="id"
+        columns={columns}
+        dataSource={results}
+        rowSelection={tableRowSelection}
+        pagination={tablePagination}
+        locale={{ emptyText: resultsLoading ? '加载中...' : '暂无数据' }}
+        sticky
+        scroll={{ x: 1100 }}
+      />
+    )
+  }
 
-  const renderSensitiveTable = () => (
-    <Table>
-      <TableHeader className="sticky top-0 bg-background">
-        <TableRow>
-          <TableHead className="w-12">
-            <Checkbox 
-              checked={selectedRows.length === results.length && results.length > 0}
-              onCheckedChange={toggleSelectAll}
-            />
-          </TableHead>
-          <TableHead className="w-16">序号</TableHead>
-          <TableHead>URL</TableHead>
-          <TableHead>类型</TableHead>
-          <TableHead>模式</TableHead>
-          <TableHead>匹配内容</TableHead>
-          <TableHead>级别</TableHead>
-          <TableHead>位置</TableHead>
-          <TableHead>时间</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {results.length === 0 ? (
-          <TableRow>
-            <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
-              {resultsLoading ? '加载中...' : '暂无数据'}
-            </TableCell>
-          </TableRow>
-        ) : (
-          results.map((item: Record<string, unknown>, index: number) => (
-            <TableRow 
-              key={item.id as string}
-              className={cn(selectedRows.includes(item.id as string) && 'bg-muted/50')}
+  const renderDirScanTable = () => {
+    const columns: ColumnsType<Record<string, unknown>> = [
+      { title: '序号', key: 'index', width: 64, className: 'text-muted-foreground', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
+      {
+        title: 'URL',
+        key: 'url',
+        width: 400,
+        ellipsis: true,
+        render: (_, item) => {
+          // 从 data 字段中提取数据
+          const data = (item.data || item) as Record<string, unknown>
+          return (
+            <a 
+              href={data.url as string} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="text-primary hover:underline"
             >
-              <TableCell>
-                <Checkbox 
-                  checked={selectedRows.includes(item.id as string)}
-                  onCheckedChange={() => toggleSelectRow(item.id as string)}
-                />
-              </TableCell>
-              <TableCell className="text-muted-foreground">{(page - 1) * pageSize + index + 1}</TableCell>
-              <TableCell className="max-w-[250px] truncate">
-                <a 
-                  href={item.url as string} 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="text-primary hover:underline"
-                >
-                  {item.url as string}
-                </a>
-              </TableCell>
-              <TableCell>
-                <Badge variant="outline">{item.type as string}</Badge>
-              </TableCell>
-              <TableCell className="text-muted-foreground">{item.pattern as string}</TableCell>
-              <TableCell className="font-mono text-xs max-w-[200px] truncate" title={Array.isArray(item.matches) ? (item.matches as string[]).join(', ') : ''}>
-                {Array.isArray(item.matches) ? (item.matches as string[]).slice(0, 2).join(', ') : '-'}
-                {Array.isArray(item.matches) && (item.matches as string[]).length > 2 && '...'}
-              </TableCell>
-              <TableCell>
-                <Badge 
-                  variant={
-                    (item.severity as string) === 'critical' ? 'destructive' :
-                    (item.severity as string) === 'high' ? 'destructive' : 
-                    (item.severity as string) === 'medium' ? 'default' : 'secondary'
-                  }
-                >
-                  {item.severity as string}
-                </Badge>
-              </TableCell>
-              <TableCell className="text-muted-foreground">{item.location as string}</TableCell>
-              <TableCell className="text-muted-foreground">{formatDate(item.createdAt as string)}</TableCell>
-            </TableRow>
-          ))
-        )}
-      </TableBody>
-    </Table>
-  )
-
-  const renderPortTable = () => (
-    <Table>
-      <TableHeader className="sticky top-0 bg-background">
-        <TableRow>
-          <TableHead className="w-12">
-            <Checkbox 
-              checked={selectedRows.length === results.length && results.length > 0}
-              onCheckedChange={toggleSelectAll}
-            />
-          </TableHead>
-          <TableHead className="w-16">序号</TableHead>
-          <TableHead>IP</TableHead>
-          <TableHead>端口</TableHead>
-          <TableHead>服务</TableHead>
-          <TableHead>时间</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {results.length === 0 ? (
-          <TableRow>
-            <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-              {isResultsLoading ? '加载中...' : '暂无数据'}
-            </TableCell>
-          </TableRow>
-        ) : (
-          results.map((item: Record<string, unknown>, index: number) => {
-            const ports = (item.ports as string[]) || []
-            const services = (item.services as string[]) || []
-            return (
-              <TableRow 
-                key={item.ip as string}
-                className={cn(selectedRows.includes(item.ip as string) && 'bg-muted/50')}
-              >
-                <TableCell>
-                  <Checkbox 
-                    checked={selectedRows.includes(item.ip as string)}
-                    onCheckedChange={() => toggleSelectRow(item.ip as string)}
-                  />
-                </TableCell>
-                <TableCell className="text-muted-foreground">{(page - 1) * pageSize + index + 1}</TableCell>
-                <TableCell className="font-mono">{item.ip as string}</TableCell>
-                <TableCell>
-                  <div className="flex flex-wrap gap-1">
-                    {ports.slice(0, 10).map((port, i) => (
-                      <Badge key={i} variant="outline" className="text-xs">
-                        {port}
-                      </Badge>
-                    ))}
-                    {ports.length > 10 && (
-                      <Badge variant="secondary" className="text-xs">+{ports.length - 10}</Badge>
-                    )}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <div className="flex flex-wrap gap-1">
-                    {[...new Set(services.filter(Boolean))].slice(0, 5).map((s: string, i: number) => (
-                      <Badge key={i} variant="secondary" className="text-xs">{s}</Badge>
-                    ))}
-                    {[...new Set(services.filter(Boolean))].length > 5 && (
-                      <Badge variant="outline" className="text-xs">+{[...new Set(services.filter(Boolean))].length - 5}</Badge>
-                    )}
-                  </div>
-                </TableCell>
-                <TableCell className="text-muted-foreground">{formatDate(item.created_at as string)}</TableCell>
-              </TableRow>
-            )
-          })
-        )}
-      </TableBody>
-    </Table>
-  )
-
-  const renderServiceTable = () => (
-    <Table>
-      <TableHeader className="sticky top-0 bg-background">
-        <TableRow>
-          <TableHead className="w-12">
-            <Checkbox 
-              checked={selectedRows.length === results.length && results.length > 0}
-              onCheckedChange={toggleSelectAll}
-            />
-          </TableHead>
-          <TableHead className="w-16">序号</TableHead>
-          <TableHead>URL</TableHead>
-          <TableHead>标题</TableHead>
-          <TableHead>状态码</TableHead>
-          <TableHead>Server</TableHead>
-          <TableHead>技术栈</TableHead>
-          <TableHead>指纹</TableHead>
-          <TableHead>时间</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {results.length === 0 ? (
-          <TableRow>
-            <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
-              {resultsLoading ? '加载中...' : '暂无数据'}
-            </TableCell>
-          </TableRow>
-        ) : (
-          results.map((item: Record<string, unknown>, index: number) => (
-            <TableRow 
-              key={item.id as string}
-              className={cn(selectedRows.includes(item.id as string) && 'bg-muted/50')}
+              {data.url as string}
+            </a>
+          )
+        },
+      },
+      {
+        title: '状态码',
+        key: 'status',
+        width: 90,
+        render: (_, item) => {
+          const data = (item.data || item) as Record<string, unknown>
+          return data.status ? (
+            <Tag 
+              className={
+                (data.status as number) >= 200 && (data.status as number) < 300 ? TAG_PRIMARY : 
+                (data.status as number) >= 400 ? TAG_DESTRUCTIVE : TAG_SECONDARY
+              }
             >
-              <TableCell>
-                <Checkbox 
-                  checked={selectedRows.includes(item.id as string)}
-                  onCheckedChange={() => toggleSelectRow(item.id as string)}
-                />
-              </TableCell>
-              <TableCell className="text-muted-foreground">{(page - 1) * pageSize + index + 1}</TableCell>
-              <TableCell>
-                <a 
-                  href={item.url as string} 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="text-primary hover:underline flex items-center gap-1 max-w-xs truncate"
-                >
-                  {item.url as string}
-                  <ExternalLink className="h-3 w-3 flex-shrink-0" />
-                </a>
-              </TableCell>
-              <TableCell className="max-w-[200px] truncate" title={item.title as string}>
-                {item.title as string || '-'}
-              </TableCell>
-              <TableCell>
-                <Badge variant={
-                  (item.status_code as number) >= 200 && (item.status_code as number) < 300 ? 'default' :
-                  (item.status_code as number) >= 300 && (item.status_code as number) < 400 ? 'secondary' :
-                  (item.status_code as number) >= 400 ? 'destructive' : 'outline'
-                }>
-                  {item.status_code as number || '-'}
-                </Badge>
-              </TableCell>
-              <TableCell className="text-muted-foreground">{item.server as string || '-'}</TableCell>
-              <TableCell>
-                {(item.technologies as string[])?.slice(0, 3).map((tech: string) => (
-                  <Badge key={tech} variant="outline" className="mr-1 text-xs">{tech}</Badge>
-                ))}
-              </TableCell>
-              <TableCell>
-                {(item.fingerprints as string[])?.slice(0, 2).map((fp: string) => (
-                  <Badge key={fp} variant="secondary" className="mr-1 text-xs">{fp}</Badge>
-                ))}
-              </TableCell>
-              <TableCell className="text-muted-foreground">{formatDate(item.createdAt as string)}</TableCell>
-            </TableRow>
-          ))
-        )}
-      </TableBody>
-    </Table>
-  )
+              {data.status as number}
+            </Tag>
+          ) : '-'
+        },
+      },
+      {
+        title: '大小',
+        key: 'size',
+        width: 90,
+        className: 'text-muted-foreground',
+        render: (_, item) => {
+          const data = (item.data || item) as Record<string, unknown>
+          return data.size ? `${data.size}` : '-'
+        },
+      },
+      {
+        title: '类型',
+        key: 'content_type',
+        width: 140,
+        className: 'text-muted-foreground text-xs',
+        render: (_, item) => {
+          const data = (item.data || item) as Record<string, unknown>
+          return data.content_type as string || '-'
+        },
+      },
+      {
+        title: '目标',
+        key: 'target',
+        width: 150,
+        ellipsis: true,
+        className: 'text-muted-foreground',
+        render: (_, item) => {
+          const data = (item.data || item) as Record<string, unknown>
+          return data.target as string || '-'
+        },
+      },
+      {
+        title: '时间',
+        key: 'createdAt',
+        width: 160,
+        className: 'text-muted-foreground',
+        render: (_, item) => formatDate(item.createdAt as string),
+      },
+    ]
+    return (
+      <Table
+        rowKey="id"
+        columns={columns}
+        dataSource={results}
+        rowSelection={tableRowSelection}
+        pagination={tablePagination}
+        locale={{ emptyText: resultsLoading ? '加载中...' : '暂无数据' }}
+        sticky
+        scroll={{ x: 1000 }}
+      />
+    )
+  }
 
-  const renderDirScanTable = () => (
-    <Table>
-      <TableHeader className="sticky top-0 bg-background">
-        <TableRow>
-          <TableHead className="w-12">
-            <Checkbox 
-              checked={selectedRows.length === results.length && results.length > 0}
-              onCheckedChange={toggleSelectAll}
-            />
-          </TableHead>
-          <TableHead className="w-16">序号</TableHead>
-          <TableHead>URL</TableHead>
-          <TableHead>状态码</TableHead>
-          <TableHead>大小</TableHead>
-          <TableHead>类型</TableHead>
-          <TableHead>目标</TableHead>
-          <TableHead>时间</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {results.length === 0 ? (
-          <TableRow>
-            <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-              {resultsLoading ? '加载中...' : '暂无数据'}
-            </TableCell>
-          </TableRow>
-        ) : (
-          results.map((item: Record<string, unknown>, index: number) => {
-            // 从 data 字段中提取数据
-            const data = (item.data || item) as Record<string, unknown>
-            return (
-              <TableRow 
-                key={item.id as string}
-                className={cn(selectedRows.includes(item.id as string) && 'bg-muted/50')}
-              >
-                <TableCell>
-                  <Checkbox 
-                    checked={selectedRows.includes(item.id as string)}
-                    onCheckedChange={() => toggleSelectRow(item.id as string)}
-                  />
-                </TableCell>
-                <TableCell className="text-muted-foreground">{(page - 1) * pageSize + index + 1}</TableCell>
-                <TableCell className="max-w-[400px] truncate">
-                  <a 
-                    href={data.url as string} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="text-primary hover:underline"
-                  >
-                    {data.url as string}
-                  </a>
-                </TableCell>
-                <TableCell>
-                  {data.status ? (
-                    <Badge 
-                      variant={
-                        (data.status as number) >= 200 && (data.status as number) < 300 ? 'default' : 
-                        (data.status as number) >= 400 ? 'destructive' : 'secondary'
-                      }
-                    >
-                      {data.status as number}
-                    </Badge>
-                  ) : '-'}
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {data.size ? `${data.size}` : '-'}
-                </TableCell>
-                <TableCell className="text-muted-foreground text-xs">
-                  {data.content_type as string || '-'}
-                </TableCell>
-                <TableCell className="text-muted-foreground max-w-[150px] truncate">
-                  {data.target as string || '-'}
-                </TableCell>
-                <TableCell className="text-muted-foreground">{formatDate(item.createdAt as string)}</TableCell>
-              </TableRow>
-            )
-          })
-        )}
-      </TableBody>
-    </Table>
-  )
-
-  const renderCrawlerTable = () => (
-    <Table>
-      <TableHeader className="sticky top-0 bg-background">
-        <TableRow>
-          <TableHead className="w-12">
-            <Checkbox 
-              checked={selectedRows.length === results.length && results.length > 0}
-              onCheckedChange={toggleSelectAll}
-            />
-          </TableHead>
-          <TableHead className="w-16">序号</TableHead>
-          <TableHead>URL</TableHead>
-          <TableHead>方法</TableHead>
-          <TableHead>状态码</TableHead>
-          <TableHead>爬虫</TableHead>
-          <TableHead>目标</TableHead>
-          <TableHead>时间</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {results.length === 0 ? (
-          <TableRow>
-            <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-              {resultsLoading ? '加载中...' : '暂无数据'}
-            </TableCell>
-          </TableRow>
-        ) : (
-          results.map((item: Record<string, unknown>, index: number) => {
-            const data = (item.data || item) as Record<string, unknown>
-            return (
-              <TableRow 
-                key={item.id as string}
-                className={cn(selectedRows.includes(item.id as string) && 'bg-muted/50')}
-              >
-                <TableCell>
-                  <Checkbox 
-                    checked={selectedRows.includes(item.id as string)}
-                    onCheckedChange={() => toggleSelectRow(item.id as string)}
-                  />
-                </TableCell>
-                <TableCell className="text-muted-foreground">{(page - 1) * pageSize + index + 1}</TableCell>
-                <TableCell className="max-w-[400px] truncate">
-                  <a 
-                    href={data.url as string} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="text-primary hover:underline"
-                  >
-                    {data.url as string}
-                  </a>
-                </TableCell>
-                <TableCell>
-                  <Badge variant="outline">{(data.method as string) || 'GET'}</Badge>
-                </TableCell>
-                <TableCell>
-                  {data.status_code ? (
-                    <Badge 
-                      variant={
-                        (data.status_code as number) === 200 ? 'default' : 
-                        (data.status_code as number) >= 400 ? 'destructive' : 'secondary'
-                      }
-                    >
-                      {data.status_code as number}
-                    </Badge>
-                  ) : '-'}
-                </TableCell>
-                <TableCell>
-                  <Badge variant="outline" className="text-xs">
-                    {(data.crawler as string) || (item.source as string) || '-'}
-                  </Badge>
-                </TableCell>
-                <TableCell className="text-muted-foreground max-w-[150px] truncate">
-                  {data.target as string || '-'}
-                </TableCell>
-                <TableCell className="text-muted-foreground">{formatDate(item.createdAt as string)}</TableCell>
-              </TableRow>
-            )
-          })
-        )}
-      </TableBody>
-    </Table>
-  )
-
-  const renderVulnTable = () => (
-    <Table>
-      <TableHeader className="sticky top-0 bg-background">
-        <TableRow>
-          <TableHead className="w-12">
-            <Checkbox
-              checked={selectedRows.length === results.length && results.length > 0}
-              onCheckedChange={toggleSelectAll}
-            />
-          </TableHead>
-          <TableHead className="w-20">等级</TableHead>
-          <TableHead>漏洞名称</TableHead>
-          <TableHead>目标</TableHead>
-          <TableHead className="w-36">匹配位置</TableHead>
-          <TableHead className="w-28">来源</TableHead>
-          <TableHead className="w-24">操作</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {results.length === 0 ? (
-          <TableRow>
-            <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-              {resultsLoading ? '加载中...' : '暂无漏洞'}
-            </TableCell>
-          </TableRow>
-        ) : (
-          results.map((item: Record<string, unknown>) => {
-            const data = (item.data || item) as Record<string, unknown>
-            const severity = String(data.severity || '').toLowerCase()
-            return (
-              <TableRow key={item.id as string}>
-                <TableCell>
-                  <Checkbox
-                    checked={selectedRows.includes(item.id as string)}
-                    onCheckedChange={() => toggleSelectRow(item.id as string)}
-                  />
-                </TableCell>
-                <TableCell>
-                  <Badge className={cn(getSeverityColor(severity), 'text-xs')}>
-                    {severity || 'unknown'}
-                  </Badge>
-                </TableCell>
-                <TableCell className="max-w-[320px] truncate font-medium">
-                  {(data.name as string) || (data.vuln_id as string) || '-'}
-                </TableCell>
-                <TableCell className="max-w-[240px] truncate font-mono text-xs">
-                  {(data.target as string) || '-'}
-                </TableCell>
-                <TableCell className="max-w-[260px] truncate font-mono text-xs text-muted-foreground">
-                  {(data.matched_at as string) || '-'}
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {(item.source as string) || (data.source as string) || '-'}
-                </TableCell>
-                <TableCell>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setSelectedVuln(data)}
-                  >
-                    <Eye className="h-4 w-4 mr-1" />
-                    详情
-                  </Button>
-                </TableCell>
-              </TableRow>
-            )
-          })
-        )}
-      </TableBody>
-    </Table>
-  )
-
-  const renderGenericTable = () => (
-    <Table>
-      <TableHeader className="sticky top-0 bg-background">
-        <TableRow>
-          <TableHead className="w-12">
-            <Checkbox 
-              checked={selectedRows.length === results.length && results.length > 0}
-              onCheckedChange={toggleSelectAll}
-            />
-          </TableHead>
-          <TableHead className="w-16">序号</TableHead>
-          <TableHead>数据</TableHead>
-          <TableHead>项目</TableHead>
-          <TableHead>TAG</TableHead>
-          <TableHead>时间</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {results.length === 0 ? (
-          <TableRow>
-            <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-              {resultsLoading ? '加载中...' : '暂无数据'}
-            </TableCell>
-          </TableRow>
-        ) : (
-          results.map((item: Record<string, unknown>, index: number) => (
-            <TableRow 
-              key={item.id as string}
-              className={cn(selectedRows.includes(item.id as string) && 'bg-muted/50')}
+  const renderCrawlerTable = () => {
+    const columns: ColumnsType<Record<string, unknown>> = [
+      { title: '序号', key: 'index', width: 64, className: 'text-muted-foreground', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
+      {
+        title: 'URL',
+        key: 'url',
+        width: 400,
+        ellipsis: true,
+        render: (_, item) => {
+          const data = (item.data || item) as Record<string, unknown>
+          return (
+            <a 
+              href={data.url as string} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="text-primary hover:underline"
             >
-              <TableCell>
-                <Checkbox 
-                  checked={selectedRows.includes(item.id as string)}
-                  onCheckedChange={() => toggleSelectRow(item.id as string)}
-                />
-              </TableCell>
-              <TableCell className="text-muted-foreground">{(page - 1) * pageSize + index + 1}</TableCell>
-              <TableCell className="max-w-[400px] truncate font-mono text-xs">
-                {JSON.stringify(item.data || item)}
-              </TableCell>
-              <TableCell>{item.project as string || '-'}</TableCell>
-              <TableCell>
-                {(item.tags as string[])?.length > 0 ? (
-                  (item.tags as string[]).map((tag: string) => (
-                    <Badge key={tag} variant="outline" className="mr-1">{tag}</Badge>
-                  ))
-                ) : '-'}
-              </TableCell>
-              <TableCell className="text-muted-foreground">{formatDate(item.createdAt as string)}</TableCell>
-            </TableRow>
-          ))
-        )}
-      </TableBody>
-    </Table>
-  )
+              {data.url as string}
+            </a>
+          )
+        },
+      },
+      {
+        title: '方法',
+        key: 'method',
+        width: 90,
+        render: (_, item) => {
+          const data = (item.data || item) as Record<string, unknown>
+          return <Tag>{(data.method as string) || 'GET'}</Tag>
+        },
+      },
+      {
+        title: '状态码',
+        key: 'status_code',
+        width: 90,
+        render: (_, item) => {
+          const data = (item.data || item) as Record<string, unknown>
+          return data.status_code ? (
+            <Tag 
+              className={
+                (data.status_code as number) === 200 ? TAG_PRIMARY : 
+                (data.status_code as number) >= 400 ? TAG_DESTRUCTIVE : TAG_SECONDARY
+              }
+            >
+              {data.status_code as number}
+            </Tag>
+          ) : '-'
+        },
+      },
+      {
+        title: '爬虫',
+        key: 'crawler',
+        width: 120,
+        render: (_, item) => {
+          const data = (item.data || item) as Record<string, unknown>
+          return (
+            <Tag className="text-xs">
+              {(data.crawler as string) || (item.source as string) || '-'}
+            </Tag>
+          )
+        },
+      },
+      {
+        title: '目标',
+        key: 'target',
+        width: 150,
+        ellipsis: true,
+        className: 'text-muted-foreground',
+        render: (_, item) => {
+          const data = (item.data || item) as Record<string, unknown>
+          return data.target as string || '-'
+        },
+      },
+      {
+        title: '时间',
+        key: 'createdAt',
+        width: 160,
+        className: 'text-muted-foreground',
+        render: (_, item) => formatDate(item.createdAt as string),
+      },
+    ]
+    return (
+      <Table
+        rowKey="id"
+        columns={columns}
+        dataSource={results}
+        rowSelection={tableRowSelection}
+        pagination={tablePagination}
+        locale={{ emptyText: resultsLoading ? '加载中...' : '暂无数据' }}
+        sticky
+        scroll={{ x: 1000 }}
+      />
+    )
+  }
+
+  const renderVulnTable = () => {
+    const columns: ColumnsType<Record<string, unknown>> = [
+      {
+        title: '等级',
+        key: 'severity',
+        width: 80,
+        render: (_, item) => {
+          const data = (item.data || item) as Record<string, unknown>
+          const severity = String(data.severity || '').toLowerCase()
+          return (
+            <Tag className={cn(getSeverityColor(severity), 'text-xs')}>
+              {severity || 'unknown'}
+            </Tag>
+          )
+        },
+      },
+      {
+        title: '漏洞名称',
+        key: 'name',
+        width: 320,
+        ellipsis: true,
+        className: 'font-medium',
+        render: (_, item) => {
+          const data = (item.data || item) as Record<string, unknown>
+          return (data.name as string) || (data.vuln_id as string) || '-'
+        },
+      },
+      {
+        title: '目标',
+        key: 'target',
+        width: 240,
+        ellipsis: true,
+        className: 'font-mono text-xs',
+        render: (_, item) => {
+          const data = (item.data || item) as Record<string, unknown>
+          return (data.target as string) || '-'
+        },
+      },
+      {
+        title: '匹配位置',
+        key: 'matched_at',
+        width: 260,
+        ellipsis: true,
+        className: 'font-mono text-xs text-muted-foreground',
+        render: (_, item) => {
+          const data = (item.data || item) as Record<string, unknown>
+          return (data.matched_at as string) || '-'
+        },
+      },
+      {
+        title: '来源',
+        key: 'source',
+        width: 112,
+        className: 'text-muted-foreground',
+        render: (_, item) => {
+          const data = (item.data || item) as Record<string, unknown>
+          return (item.source as string) || (data.source as string) || '-'
+        },
+      },
+      {
+        title: '操作',
+        key: 'actions',
+        width: 96,
+        render: (_, item) => {
+          const data = (item.data || item) as Record<string, unknown>
+          return (
+            <Button
+              type="text"
+              size="small"
+              onClick={() => setSelectedVuln(data)}
+            >
+              <Eye className="h-4 w-4 mr-1" />
+              详情
+            </Button>
+          )
+        },
+      },
+    ]
+    return (
+      <Table
+        rowKey="id"
+        columns={columns}
+        dataSource={results}
+        rowSelection={tableRowSelection}
+        pagination={tablePagination}
+        locale={{ emptyText: resultsLoading ? '加载中...' : '暂无漏洞' }}
+        sticky
+        scroll={{ x: 1100 }}
+      />
+    )
+  }
+
+  const renderGenericTable = () => {
+    const columns: ColumnsType<Record<string, unknown>> = [
+      { title: '序号', key: 'index', width: 64, className: 'text-muted-foreground', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
+      {
+        title: '数据',
+        key: 'data',
+        width: 400,
+        ellipsis: true,
+        className: 'font-mono text-xs',
+        render: (_, item) => JSON.stringify(item.data || item),
+      },
+      { title: '项目', key: 'project', width: 140, render: (_, item) => item.project as string || '-' },
+      {
+        title: 'TAG',
+        key: 'tags',
+        width: 200,
+        render: (_, item) => (
+          (item.tags as string[])?.length > 0 ? (
+            (item.tags as string[]).map((tag: string) => (
+              <Tag key={tag} className="mr-1">{tag}</Tag>
+            ))
+          ) : '-'
+        ),
+      },
+      { title: '时间', key: 'createdAt', width: 160, className: 'text-muted-foreground', render: (_, item) => formatDate(item.createdAt as string) },
+    ]
+    return (
+      <Table
+        rowKey="id"
+        columns={columns}
+        dataSource={results}
+        rowSelection={tableRowSelection}
+        pagination={tablePagination}
+        locale={{ emptyText: resultsLoading ? '加载中...' : '暂无数据' }}
+        sticky
+        scroll={{ x: 1000 }}
+      />
+    )
+  }
 
   return (
     <div className="h-full flex flex-col -m-6">
@@ -1185,11 +1122,12 @@ export default function TaskDetailPage() {
       <div className="border-b bg-background px-6 py-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" asChild aria-label="返回任务列表">
-              <Link to="/tasks">
-                <ArrowLeft className="h-5 w-5" />
-              </Link>
-            </Button>
+            <Button
+              type="text"
+              aria-label="返回任务列表"
+              icon={<ArrowLeft className="h-5 w-5" />}
+              onClick={() => navigate('/tasks')}
+            />
             <div>
               <h1 className="text-xl font-semibold">{task.name}</h1>
               <div className="text-muted-foreground mt-1 max-w-[720px] truncate text-sm">
@@ -1199,9 +1137,9 @@ export default function TaskDetailPage() {
                 </span>
               </div>
               <div className="flex items-center gap-2 mt-1">
-                <Badge className={cn(getStatusColor(task.status), 'text-xs')}>
+                <Tag className={cn(getStatusColor(task.status), 'text-xs')}>
                   {getStatusLabel(task.status)}
-                </Badge>
+                </Tag>
                 {task.status === 'running' && (
                   <span className="text-sm text-blue-500 font-medium">
                     {task.progress}%
@@ -1241,7 +1179,7 @@ export default function TaskDetailPage() {
               {/* 运行中时显示进度条 */}
               {task.status === 'running' && (
                 <div className="mt-2 w-64">
-                  <Progress value={task.progress} className="h-2" />
+                  <Progress percent={task.progress} showInfo={false} strokeWidth={8} />
                 </div>
               )}
             </div>
@@ -1249,12 +1187,11 @@ export default function TaskDetailPage() {
           
           {/* 操作按钮 */}
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => setSettingsOpen(true)}>
+            <Button onClick={() => setSettingsOpen(true)}>
               <Settings className="h-4 w-4 mr-2" />
               任务设置
             </Button>
             <Button
-              variant="outline"
               onClick={openEditConfig}
               disabled={isOperating || task.status === 'running'}
               title={task.status === 'running' ? '运行中不能改配置，请先点「停止」' : '修改任务目标与扫描配置'}
@@ -1263,18 +1200,18 @@ export default function TaskDetailPage() {
               编辑配置
             </Button>
             {task.status === 'pending' && (
-              <Button onClick={() => startMutation.mutate()} disabled={isOperating}>
+              <Button type="primary" onClick={() => startMutation.mutate()} disabled={isOperating}>
                 <Play className="h-4 w-4 mr-2" />
                 开始
               </Button>
             )}
             {task.status === 'running' && (
               <>
-                <Button variant="outline" onClick={() => pauseMutation.mutate()} disabled={isOperating}>
+                <Button onClick={() => pauseMutation.mutate()} disabled={isOperating}>
                   <Pause className="h-4 w-4 mr-2" />
                   暂停
                 </Button>
-                <Button variant="destructive" onClick={() => cancelMutation.mutate()} disabled={isOperating}>
+                <Button danger onClick={() => cancelMutation.mutate()} disabled={isOperating}>
                   <Square className="h-4 w-4 mr-2" />
                   停止
                 </Button>
@@ -1282,95 +1219,72 @@ export default function TaskDetailPage() {
             )}
             {task.status === 'paused' && (
               <>
-                <Button onClick={() => resumeMutation.mutate()} disabled={isOperating}>
+                <Button type="primary" onClick={() => resumeMutation.mutate()} disabled={isOperating}>
                   <Play className="h-4 w-4 mr-2" />
                   继续
                 </Button>
-                <Button variant="destructive" onClick={() => cancelMutation.mutate()} disabled={isOperating}>
+                <Button danger onClick={() => cancelMutation.mutate()} disabled={isOperating}>
                   <Square className="h-4 w-4 mr-2" />
                   停止
                 </Button>
               </>
             )}
             {(task.status === 'failed' || task.status === 'cancelled') && (
-              <Button onClick={() => retryMutation.mutate()} disabled={isOperating}>
+              <Button type="primary" onClick={() => retryMutation.mutate()} disabled={isOperating}>
                 <RotateCcw className="h-4 w-4 mr-2" />
                 重试
               </Button>
             )}
             {(task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" disabled={isOperating}>
-                    <RefreshCw className="h-4 w-4 mr-2" />
-                    重新扫描
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent>
-                  <DropdownMenuItem onClick={() => rescanMutation.mutate(false)}>
-                    继续未完成部分
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => rescanMutation.mutate(true)}>
-                    从头开始扫描（清空进度）
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="outline" size="icon" disabled={isOperating || task.status === 'running'}>
-                  <Trash2 className="h-4 w-4" />
+              <Dropdown
+                trigger={['click']}
+                menu={{
+                  items: [
+                    { key: 'continue', label: '继续未完成部分', onClick: () => rescanMutation.mutate(false) },
+                    { key: 'scratch', label: '从头开始扫描（清空进度）', onClick: () => rescanMutation.mutate(true) },
+                  ],
+                }}
+              >
+                <Button disabled={isOperating}>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  重新扫描
                 </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>确认删除任务？</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    此操作不可撤销。删除后，该任务及其所有相关数据将被永久删除。
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>取消</AlertDialogCancel>
-                  <AlertDialogAction 
-                    onClick={() => deleteMutation.mutate()}
-                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                  >
-                    删除
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+              </Dropdown>
+            )}
+            <Button
+              danger
+              aria-label="删除任务"
+              icon={<Trash2 className="h-4 w-4" />}
+              disabled={isOperating || task.status === 'running'}
+              onClick={handleDeleteTask}
+            />
           </div>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="border-b bg-background">
-        <div className="flex overflow-x-auto px-6">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => {
-                setActiveTab(tab.id as ResultType)
-                setPage(1)
-                setSelectedRows([])
-              }}
-              className={cn(
-                'px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-colors',
-                currentTab === tab.id
-                  ? 'border-primary text-primary'
-                  : 'border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30'
-              )}
-            >
-              {tab.label}
-              {tab.count > 0 && (
-                <span className="ml-2 text-xs bg-muted px-1.5 py-0.5 rounded">
-                  {tab.count}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
+      <div className="bg-background px-6">
+        <Tabs
+          activeKey={currentTab}
+          onChange={(key) => {
+            setActiveTab(key as TaskTabId)
+            setPage(1)
+            setSelectedRows([])
+          }}
+          items={tabs.map((tab) => ({
+            key: tab.id,
+            label: (
+              <span className="inline-flex items-center">
+                {tab.label}
+                {tab.count > 0 && (
+                  <span className="ml-2 text-xs bg-muted px-1.5 py-0.5 rounded">
+                    {tab.count}
+                  </span>
+                )}
+              </span>
+            ),
+          }))}
+        />
       </div>
 
       {/* Toolbar - 资产星图与本任务资产自带工具条 */}
@@ -1378,7 +1292,7 @@ export default function TaskDetailPage() {
       <div className="border-b bg-background px-6 py-3">
         <div className="flex items-center gap-3">
           <div className="relative flex-1 max-w-md">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Search className="absolute left-3 top-1/2 z-10 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="搜索"
               className="pl-9"
@@ -1387,45 +1301,46 @@ export default function TaskDetailPage() {
               onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
             />
           </div>
-          <Button variant="outline" size="sm" onClick={handleSearch}>
+          <Button size="small" onClick={handleSearch}>
             <Search className="h-4 w-4 mr-2" />
             搜索
           </Button>
-          <Button variant="default" size="sm" onClick={handleExport}>
+          <Button type="primary" size="small" onClick={handleExport}>
             <Download className="h-4 w-4 mr-2" />
             导出
           </Button>
-          <Select value={projectFilter} onValueChange={setProjectFilter}>
-            <SelectTrigger className="w-32">
-              <SelectValue placeholder="项目筛选" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">全部项目</SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+            value={projectFilter}
+            onChange={(v) => setProjectFilter(v)}
+            className="w-32"
+            placeholder="项目筛选"
+            options={[{ value: 'all', label: '全部项目' }]}
+          />
           {(() => {
             // 常驻渲染按需禁用：切 Tab 时工具栏几何形状不变
             const statusApplicable = currentTab === 'dirscan'
             return (
             <div className="flex items-center gap-1" title={statusApplicable ? undefined : '仅目录扫描结果支持按状态码筛选'}>
-              <Select value={statusCodeFilter} onValueChange={setStatusCodeFilter} disabled={!statusApplicable}>
-                <SelectTrigger className="w-28">
-                  <SelectValue placeholder="状态码" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">全部</SelectItem>
-                  <SelectItem value="200">200</SelectItem>
-                  <SelectItem value="301">301</SelectItem>
-                  <SelectItem value="302">302</SelectItem>
-                  <SelectItem value="400">400</SelectItem>
-                  <SelectItem value="401">401</SelectItem>
-                  <SelectItem value="403">403</SelectItem>
-                  <SelectItem value="404">404</SelectItem>
-                  <SelectItem value="500">500</SelectItem>
-                  <SelectItem value="502">502</SelectItem>
-                  <SelectItem value="503">503</SelectItem>
-                </SelectContent>
-              </Select>
+              <Select
+                value={statusCodeFilter}
+                onChange={(v) => setStatusCodeFilter(v)}
+                className="w-28"
+                placeholder="状态码"
+                disabled={!statusApplicable}
+                options={[
+                  { value: 'all', label: '全部' },
+                  { value: '200', label: '200' },
+                  { value: '301', label: '301' },
+                  { value: '302', label: '302' },
+                  { value: '400', label: '400' },
+                  { value: '401', label: '401' },
+                  { value: '403', label: '403' },
+                  { value: '404', label: '404' },
+                  { value: '500', label: '500' },
+                  { value: '502', label: '502' },
+                  { value: '503', label: '503' },
+                ]}
+              />
               <Input
                 type="number"
                 placeholder="自定义"
@@ -1442,345 +1357,280 @@ export default function TaskDetailPage() {
             </div>
             )
           })()}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" disabled={selectedRows.length === 0}>
-                操作{selectedRows.length > 0 ? ` (${selectedRows.length})` : ''}
-                <ChevronDown className="h-4 w-4 ml-2" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent>
-              <DropdownMenuItem onClick={() => {
-                resultApi.batchDelete(selectedRows).then(() => {
-                  toast({ title: '删除成功' })
-                  setSelectedRows([])
-                  queryClient.invalidateQueries({ queryKey: ['task-results', id] })
-                })
-              }}>批量删除</DropdownMenuItem>
-              <DropdownMenuItem>批量导出</DropdownMenuItem>
-              <DropdownMenuItem>批量标记</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title="任务设置">
-            <Settings className="h-4 w-4" />
-          </Button>
-        </div>
-        <div className="mt-2 flex items-center justify-between text-sm text-muted-foreground">
-          <span>
-            共 <span className="font-medium text-foreground">{total}</span> 条结果
-          </span>
-          {total > pageSize && (
-            <div className="flex items-center gap-1">
-              {/* 首页 */}
-              <Button 
-                variant="outline" 
-                size="icon"
-                className="h-8 w-8"
-                disabled={page === 1}
-                onClick={() => setPage(1)}
-                title="首页"
-              >
-                <ChevronsLeft className="h-4 w-4" />
-              </Button>
-              
-              {/* 上一页 */}
-              <Button 
-                variant="outline" 
-                size="icon"
-                className="h-8 w-8"
-                disabled={page === 1}
-                onClick={() => setPage(p => p - 1)}
-                title="上一页"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-
-              {/* 页码输入 */}
-              <div className="flex items-center gap-1 px-2">
-                <span className="text-sm whitespace-nowrap">第</span>
-                <input
-                  type="text"
-                  placeholder={String(page)}
-                  className="h-8 w-14 text-center px-1 border rounded-md text-sm"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      const val = parseInt((e.target as HTMLInputElement).value, 10)
-                      const maxPage = Math.ceil(total / pageSize)
-                      if (!isNaN(val) && val >= 1 && val <= maxPage) {
-                        setPage(val)
-                        ;(e.target as HTMLInputElement).value = ''
-                      }
-                    }
-                  }}
-                />
-                <span className="text-sm whitespace-nowrap">/ {Math.ceil(total / pageSize)} 页</span>
-              </div>
-              
-              {/* 下一页 */}
-              <Button 
-                variant="outline" 
-                size="icon"
-                className="h-8 w-8"
-                disabled={page >= Math.ceil(total / pageSize)}
-                onClick={() => setPage(p => p + 1)}
-                title="下一页"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-              
-              {/* 末页 */}
-              <Button 
-                variant="outline" 
-                size="icon"
-                className="h-8 w-8"
-                disabled={page >= Math.ceil(total / pageSize)}
-                onClick={() => setPage(Math.ceil(total / pageSize))}
-                title="末页"
-              >
-                <ChevronsRight className="h-4 w-4" />
-              </Button>
-            </div>
-          )}
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              items: [
+                {
+                  key: 'batch-delete',
+                  label: '批量删除',
+                  onClick: () => {
+                    resultApi.batchDelete(selectedRows).then(() => {
+                      toast({ title: '删除成功' })
+                      setSelectedRows([])
+                      queryClient.invalidateQueries({ queryKey: ['task-results', id] })
+                    })
+                  },
+                },
+                { key: 'batch-export', label: '批量导出' },
+                { key: 'batch-mark', label: '批量标记' },
+              ],
+            }}
+          >
+            <Button size="small" disabled={selectedRows.length === 0}>
+              操作{selectedRows.length > 0 ? ` (${selectedRows.length})` : ''}
+              <ChevronDown className="h-4 w-4 ml-2" />
+            </Button>
+          </Dropdown>
+          <Button
+            type="text"
+            icon={<Settings className="h-4 w-4" />}
+            onClick={() => setSettingsOpen(true)}
+            title="任务设置"
+          />
         </div>
       </div>
       )}
 
       {/* 漏洞详情 */}
-      <Dialog open={selectedVuln !== null} onOpenChange={(o) => !o && setSelectedVuln(null)}>
-        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="pr-8">
-              {(selectedVuln?.name as string) || '漏洞详情'}
-            </DialogTitle>
-          </DialogHeader>
-          {selectedVuln && (
-            <div className="space-y-4 text-sm">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge className={cn(getSeverityColor(String(selectedVuln.severity || '')), 'text-xs')}>
-                  {String(selectedVuln.severity || 'unknown')}
-                </Badge>
-                {(selectedVuln.vuln_id as string) && (
-                  <Badge variant="outline" className="font-mono">
-                    {selectedVuln.vuln_id as string}
-                  </Badge>
-                )}
-                <span className="text-muted-foreground">
-                  {(selectedVuln.source as string) || 'nuclei'}
-                </span>
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-2">
-                <DetailBlock label="目标" value={(selectedVuln.target as string) || '-'} />
-                <DetailBlock label="匹配位置" value={(selectedVuln.matched_at as string) || '-'} />
-              </div>
-
-              {(selectedVuln.description as string) && (
-                <Section title="漏洞描述">
-                  <p className="text-muted-foreground whitespace-pre-wrap">
-                    {selectedVuln.description as string}
-                  </p>
-                </Section>
+      <Modal
+        open={selectedVuln !== null}
+        onCancel={() => setSelectedVuln(null)}
+        title={(selectedVuln?.name as string) || '漏洞详情'}
+        width={672}
+        footer={null}
+      >
+        {selectedVuln && (
+          <div className="max-h-[75vh] space-y-4 overflow-y-auto text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <Tag className={cn(getSeverityColor(String(selectedVuln.severity || '')), 'text-xs')}>
+                {String(selectedVuln.severity || 'unknown')}
+              </Tag>
+              {(selectedVuln.vuln_id as string) && (
+                <Tag className="font-mono">
+                  {selectedVuln.vuln_id as string}
+                </Tag>
               )}
+              <span className="text-muted-foreground">
+                {(selectedVuln.source as string) || 'nuclei'}
+              </span>
+            </div>
 
-              {(selectedVuln.evidence as string) && (
-                <Section title="证据">
-                  <pre className="bg-muted/50 rounded-md border p-3 font-mono text-xs whitespace-pre-wrap break-all">
-                    {selectedVuln.evidence as string}
-                  </pre>
-                </Section>
-              )}
+            <div className="grid gap-3 md:grid-cols-2">
+              <DetailBlock label="目标" value={(selectedVuln.target as string) || '-'} />
+              <DetailBlock label="匹配位置" value={(selectedVuln.matched_at as string) || '-'} />
+            </div>
 
-              {(selectedVuln.remediation as string) && (
-                <Section title="修复建议">
-                  <p className="text-muted-foreground whitespace-pre-wrap">
-                    {selectedVuln.remediation as string}
-                  </p>
-                </Section>
-              )}
+            {(selectedVuln.description as string) && (
+              <Section title="漏洞描述">
+                <p className="text-muted-foreground whitespace-pre-wrap">
+                  {selectedVuln.description as string}
+                </p>
+              </Section>
+            )}
 
-              {Array.isArray(selectedVuln.reference) && (selectedVuln.reference as string[]).length > 0 && (
-                <Section title="参考链接">
-                  <ul className="space-y-1">
-                    {(selectedVuln.reference as string[]).map((r) => (
-                      <li key={r}>
-                        <a
-                          href={r}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-primary break-all hover:underline"
-                        >
-                          {r}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                </Section>
-              )}
-
-              <Section title="原始数据">
-                <pre className="bg-muted/50 max-h-56 overflow-auto rounded-md border p-3 font-mono text-xs whitespace-pre-wrap break-all">
-                  {JSON.stringify(selectedVuln, null, 2)}
+            {(selectedVuln.evidence as string) && (
+              <Section title="证据">
+                <pre className="bg-muted/50 rounded-md border p-3 font-mono text-xs whitespace-pre-wrap break-all">
+                  {selectedVuln.evidence as string}
                 </pre>
               </Section>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+            )}
+
+            {(selectedVuln.remediation as string) && (
+              <Section title="修复建议">
+                <p className="text-muted-foreground whitespace-pre-wrap">
+                  {selectedVuln.remediation as string}
+                </p>
+              </Section>
+            )}
+
+            {Array.isArray(selectedVuln.reference) && (selectedVuln.reference as string[]).length > 0 && (
+              <Section title="参考链接">
+                <ul className="space-y-1">
+                  {(selectedVuln.reference as string[]).map((r) => (
+                    <li key={r}>
+                      <a
+                        href={r}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-primary break-all hover:underline"
+                      >
+                        {r}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </Section>
+            )}
+
+            <Section title="原始数据">
+              <pre className="bg-muted/50 max-h-56 overflow-auto rounded-md border p-3 font-mono text-xs whitespace-pre-wrap break-all">
+                {JSON.stringify(selectedVuln, null, 2)}
+              </pre>
+            </Section>
+          </div>
+        )}
+      </Modal>
 
       {/* 编辑配置：运行中只读，先停止再改 */}
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>编辑任务配置</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
+      <Modal
+        open={editOpen}
+        onCancel={() => setEditOpen(false)}
+        title="编辑任务配置"
+        width={672}
+        footer={null}
+      >
+        <div className="space-y-3 py-2">
+          <div className="space-y-1">
+            <label className="text-sm font-medium">扫描目标（每行一个）</label>
+            <Input.TextArea
+              rows={3}
+              className="font-mono text-xs"
+              value={editTargets}
+              onChange={(e) => setEditTargets(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium">扫描类型</label>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {Object.entries(scanTypeLabels).map(([id, label]) => (
+                <label key={id} className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-sm">
+                  <Checkbox
+                    checked={editScanTypes.includes(id)}
+                    onChange={(e) =>
+                      setEditScanTypes((prev) =>
+                        e.target.checked ? [...prev, id] : prev.filter((x) => x !== id)
+                      )
+                    }
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
             <div className="space-y-1">
-              <label className="text-sm font-medium">扫描目标（每行一个）</label>
-              <Textarea
-                rows={3}
-                className="font-mono text-xs"
-                value={editTargets}
-                onChange={(e) => setEditTargets(e.target.value)}
+              <label className="text-sm font-medium">端口模式</label>
+              <Select
+                value={editPortMode}
+                onChange={(v) => setEditPortMode(v)}
+                className="w-full"
+                options={[
+                  { value: 'quick', label: '快速' },
+                  { value: 'top1000', label: 'Top 1000' },
+                  { value: 'full', label: '全端口' },
+                ]}
               />
             </div>
             <div className="space-y-1">
-              <label className="text-sm font-medium">扫描类型</label>
-              <div className="grid gap-2 sm:grid-cols-3">
-                {Object.entries(scanTypeLabels).map(([id, label]) => (
-                  <label key={id} className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-sm">
-                    <Checkbox
-                      checked={editScanTypes.includes(id)}
-                      onCheckedChange={(v) =>
-                        setEditScanTypes((prev) =>
-                          v === true ? [...prev, id] : prev.filter((x) => x !== id)
-                        )
-                      }
-                    />
-                    {label}
-                  </label>
-                ))}
-              </div>
+              <label className="text-sm font-medium">限速（req/s）</label>
+              <Input value={editRate} onChange={(e) => setEditRate(e.target.value)} />
             </div>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className="space-y-1">
-                <label className="text-sm font-medium">端口模式</label>
-                <Select value={editPortMode} onValueChange={setEditPortMode}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="quick">快速</SelectItem>
-                    <SelectItem value="top1000">Top 1000</SelectItem>
-                    <SelectItem value="full">全端口</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <label className="text-sm font-medium">限速（req/s）</label>
-                <Input value={editRate} onChange={(e) => setEditRate(e.target.value)} />
-              </div>
-              <div className="space-y-1">
-                <label className="text-sm font-medium">目标间隔（ms）</label>
-                <Input value={editDelay} onChange={(e) => setEditDelay(e.target.value)} />
-              </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">目标间隔（ms）</label>
+              <Input value={editDelay} onChange={(e) => setEditDelay(e.target.value)} />
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1">
-                <label className="text-sm font-medium">子域字典 ID（留空内置）</label>
-                <Input value={editSubDict} onChange={(e) => setEditSubDict(e.target.value)} placeholder="dictionaries.id" />
-              </div>
-              <div className="space-y-1">
-                <label className="text-sm font-medium">目录字典 ID（留空 spray 默认）</label>
-                <Input value={editDirDict} onChange={(e) => setEditDirDict(e.target.value)} placeholder="dictionaries.id" />
-              </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">子域字典 ID（留空内置）</label>
+              <Input value={editSubDict} onChange={(e) => setEditSubDict(e.target.value)} placeholder="dictionaries.id" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">目录字典 ID（留空 spray 默认）</label>
+              <Input value={editDirDict} onChange={(e) => setEditDirDict(e.target.value)} placeholder="dictionaries.id" />
             </div>
           </div>
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setEditOpen(false)}>取消</Button>
-            <Button onClick={() => updateConfigMutation.mutate()} disabled={updateConfigMutation.isPending}>
+            <Button onClick={() => setEditOpen(false)}>取消</Button>
+            <Button type="primary" onClick={() => updateConfigMutation.mutate()} disabled={updateConfigMutation.isPending}>
               保存配置
             </Button>
           </div>
-        </DialogContent>
-      </Dialog>
+        </div>
+      </Modal>
 
       {/* Table Content or Topology View */}
-      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>任务设置</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 py-2 text-sm">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <DetailBlock label="任务类型" value={task.type} />
-              <DetailBlock label="当前状态" value={getStatusLabel(task.status)} />
-              <DetailBlock label="归属项目" value={`#${task.projectId ?? 0}`} />
-              <DetailBlock label="执行节点" value={task.nodeId || '自动选择'} />
-              <DetailBlock
-                label="扫描节奏"
-                value={
-                  task.config.rate_per_sec
-                    ? `${task.config.rate_per_sec} req/s · 目标间隔 ${task.config.target_delay_ms ?? 0}ms`
-                    : '默认（未显式限速）'
-                }
-              />
-              <DetailBlock label="端口模式" value={task.config.port_scan_mode || 'quick'} />
-              <DetailBlock label="超时 / 并发" value={`${task.config.timeout ?? '默认'}s / ${task.config.concurrent ?? '默认'}`} />
-              <DetailBlock label="创建时间" value={formatDate(task.createdAt)} />
-            </div>
-
-            <div>
-              <div className="text-muted-foreground text-xs">扫描类型</div>
-              <div className="mt-1 flex flex-wrap gap-1">
-                {(task.config.scanTypes || []).length === 0 ? (
-                  <span className="text-muted-foreground text-xs">未显式配置</span>
-                ) : (
-                  (task.config.scanTypes || []).map((t) => (
-                    <Badge key={t} variant="secondary" className="text-xs">
-                      {scanTypeLabels[t] || t}
-                    </Badge>
-                  ))
-                )}
-              </div>
-            </div>
-
-            <div>
-              <div className="text-muted-foreground text-xs">扫描目标</div>
-              <div className="mt-1 flex flex-wrap gap-1">
-                {task.targets.map((t) => (
-                  <Badge key={t} variant="outline" className="font-mono text-xs">
-                    {t}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <DetailBlock
-                label="子域字典"
-                value={
-                  task.config.subdomain_dict_id
-                    ? `${task.config.subdomain_dict_id} · ${task.config.subdomain_wordlist?.length ?? 0} 条`
-                    : '内置词表'
-                }
-              />
-              <DetailBlock
-                label="目录字典"
-                value={
-                  task.config.dir_dict_id
-                    ? `${task.config.dir_dict_id} · ${task.config.dir_wordlist?.length ?? 0} 条`
-                    : 'spray 默认字典'
-                }
-              />
-            </div>
-
-            <details className="rounded-md border p-3">
-              <summary className="text-muted-foreground cursor-pointer text-xs">原始配置 JSON</summary>
-              <pre className="bg-muted/50 mt-2 max-h-64 overflow-auto rounded p-2 font-mono text-xs">
-                {JSON.stringify(task.config, null, 2)}
-              </pre>
-            </details>
+      <Modal
+        open={settingsOpen}
+        onCancel={() => setSettingsOpen(false)}
+        title="任务设置"
+        width={672}
+        footer={null}
+      >
+        <div className="space-y-3 py-2 text-sm">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <DetailBlock label="任务类型" value={task.type} />
+            <DetailBlock label="当前状态" value={getStatusLabel(task.status)} />
+            <DetailBlock label="归属项目" value={`#${task.projectId ?? 0}`} />
+            <DetailBlock label="执行节点" value={task.nodeId || '自动选择'} />
+            <DetailBlock
+              label="扫描节奏"
+              value={
+                task.config.rate_per_sec
+                  ? `${task.config.rate_per_sec} req/s · 目标间隔 ${task.config.target_delay_ms ?? 0}ms`
+                  : '默认（未显式限速）'
+              }
+            />
+            <DetailBlock label="端口模式" value={task.config.port_scan_mode || 'quick'} />
+            <DetailBlock label="超时 / 并发" value={`${task.config.timeout ?? '默认'}s / ${task.config.concurrent ?? '默认'}`} />
+            <DetailBlock label="创建时间" value={formatDate(task.createdAt)} />
           </div>
-        </DialogContent>
-      </Dialog>
+
+          <div>
+            <div className="text-muted-foreground text-xs">扫描类型</div>
+            <div className="mt-1 flex flex-wrap gap-1">
+              {(task.config.scanTypes || []).length === 0 ? (
+                <span className="text-muted-foreground text-xs">未显式配置</span>
+              ) : (
+                (task.config.scanTypes || []).map((t) => (
+                  <Tag key={t} className={cn(TAG_SECONDARY, 'text-xs')}>
+                    {scanTypeLabels[t] || t}
+                  </Tag>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div>
+            <div className="text-muted-foreground text-xs">扫描目标</div>
+            <div className="mt-1 flex flex-wrap gap-1">
+              {task.targets.map((t) => (
+                <Tag key={t} className="font-mono text-xs">
+                  {t}
+                </Tag>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <DetailBlock
+              label="子域字典"
+              value={
+                task.config.subdomain_dict_id
+                  ? `${task.config.subdomain_dict_id} · ${task.config.subdomain_wordlist?.length ?? 0} 条`
+                  : '内置词表'
+              }
+            />
+            <DetailBlock
+              label="目录字典"
+              value={
+                task.config.dir_dict_id
+                  ? `${task.config.dir_dict_id} · ${task.config.dir_wordlist?.length ?? 0} 条`
+                  : 'spray 默认字典'
+              }
+            />
+          </div>
+
+          <details className="rounded-md border p-3">
+            <summary className="text-muted-foreground cursor-pointer text-xs">原始配置 JSON</summary>
+            <pre className="bg-muted/50 mt-2 max-h-64 overflow-auto rounded p-2 font-mono text-xs">
+              {JSON.stringify(task.config, null, 2)}
+            </pre>
+          </details>
+        </div>
+      </Modal>
 
       <div className={currentTab === 'topology' ? 'flex-1 overflow-hidden' : 'flex-1 overflow-auto'}>
         {currentTab === 'topology' ? (

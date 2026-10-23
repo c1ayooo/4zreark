@@ -1,29 +1,13 @@
 import { useMemo, useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { ExternalLink, RefreshCw, Search, Sprout } from 'lucide-react'
+import { Button, Input, Select, Table, Tag } from 'antd'
+import type { TableProps } from 'antd'
 
 import { assetApi } from '@/api/assets'
 import { seedsApi, type Seed, type SeedKind } from '@/api/seeds'
 import EmptyState from '@/components/common/EmptyState'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 
 const KIND_LABEL: Record<SeedKind, string> = {
   domain: '域名',
@@ -42,6 +26,7 @@ const KIND_LABEL: Record<SeedKind, string> = {
  * 这里做只读汇总。同一件事若保留两个写入口，校验、提示和权限判断必然逐渐分叉。
  */
 export default function SeedsPage() {
+  const navigate = useNavigate()
   const [projectId, setProjectId] = useState('0')
   const [keyword, setKeyword] = useState('')
 
@@ -73,6 +58,67 @@ export default function SeedsPage() {
   }, [countQueries])
   const coverage = (seed: Seed) => countMap.get(seed.id) ?? 0
 
+  // /seeds 无排序参数，覆盖站点数与创建时间走客户端排序
+  const columns: TableProps<Seed>['columns'] = [
+    {
+      title: '种子值',
+      dataIndex: 'value',
+      key: 'value',
+      render: (v: string) => <span className="block max-w-[320px] truncate font-mono text-sm">{v}</span>,
+    },
+    {
+      title: '类型',
+      dataIndex: 'kind',
+      key: 'kind',
+      width: 96,
+      render: (v: string) => <Tag>{KIND_LABEL[v as SeedKind] ?? v}</Tag>,
+    },
+    {
+      title: '项目',
+      key: 'project',
+      width: 160,
+      render: (_, s) => <span className="text-sm">{projectName(s.project_id)}</span>,
+    },
+    {
+      title: '覆盖站点',
+      key: 'coverage',
+      width: 112,
+      render: (_, s) => <span className="text-sm">{coverage(s)}</span>,
+      sorter: (a, b) => coverage(a) - coverage(b),
+    },
+    {
+      title: '状态',
+      dataIndex: 'enabled',
+      key: 'enabled',
+      width: 96,
+      render: (v: boolean) => (
+        <Tag className={v ? 'border-primary/30 bg-primary/10 text-primary' : undefined}>
+          {v ? '启用' : '停用'}
+        </Tag>
+      ),
+    },
+    {
+      title: '创建时间',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      width: 160,
+      render: (v: string) => (
+        <span className="text-xs text-muted-foreground">{v ? new Date(v).toLocaleString() : '—'}</span>
+      ),
+      sorter: (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 96,
+      render: (_, s) => (
+        <Button type="link" size="small" className="px-0" onClick={() => navigate(`/projects/${s.project_id}`)}>
+          项目详情
+        </Button>
+      ),
+    },
+  ]
+
   return (
     <div className="space-y-4 p-6">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -82,40 +128,32 @@ export default function SeedsPage() {
             所有项目正在盯的目标总览。种子决定持续监控的范围，新增与删除在对应项目详情页完成。
           </p>
         </div>
-        <Button variant="outline" asChild>
-          <Link to="/projects">
-            去项目管理添加
-            <ExternalLink className="ml-1 h-3.5 w-3.5" />
-          </Link>
+        <Button onClick={() => navigate('/projects')}>
+          去项目管理添加
+          <ExternalLink className="ml-1 h-3.5 w-3.5" />
         </Button>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <Select value={projectId} onValueChange={setProjectId}>
-          <SelectTrigger className="h-9 w-[220px]">
-            <SelectValue placeholder="全部项目" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="0">全部项目</SelectItem>
-            {(projects.data?.data || []).map((p) => (
-              <SelectItem key={p.id} value={String(p.id)}>
-                {p.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <Select
+          className="w-[220px]"
+          value={projectId}
+          onChange={(v) => setProjectId(v)}
+          options={[
+            { value: '0', label: '全部项目' },
+            ...(projects.data?.data || []).map((p) => ({ value: String(p.id), label: p.name })),
+          ]}
+        />
 
-        <div className="relative">
-          <Search className="text-muted-foreground absolute top-1/2 left-2 h-4 w-4 -translate-y-1/2" />
-          <Input
-            value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
-            placeholder="搜索种子值"
-            className="h-9 w-64 pl-8"
-          />
-        </div>
+        <Input
+          className="w-64"
+          value={keyword}
+          onChange={(e) => setKeyword(e.target.value)}
+          placeholder="搜索种子值"
+          prefix={<Search className="h-4 w-4 text-muted-foreground" />}
+        />
 
-        <Button variant="outline" size="sm" onClick={() => seeds.refetch()} disabled={seeds.isFetching}>
+        <Button size="small" onClick={() => seeds.refetch()} disabled={seeds.isFetching}>
           <RefreshCw className={seeds.isFetching ? 'mr-1 h-4 w-4 animate-spin' : 'mr-1 h-4 w-4'} />
           刷新
         </Button>
@@ -124,70 +162,33 @@ export default function SeedsPage() {
       </div>
 
       <div className="bg-background overflow-hidden rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>种子值</TableHead>
-              <TableHead className="w-24">类型</TableHead>
-              <TableHead className="w-40">项目</TableHead>
-              <TableHead className="w-28">覆盖站点</TableHead>
-              <TableHead className="w-24">状态</TableHead>
-              <TableHead className="w-40">创建时间</TableHead>
-              <TableHead className="w-24">操作</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {seeds.isLoading ? (
-              <TableRow>
-                <TableCell colSpan={7} className="text-muted-foreground py-10 text-center">
-                  加载中…
-                </TableCell>
-              </TableRow>
-            ) : items.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} className="p-0">
-                  <EmptyState
-                    icon={Sprout}
-                    title={keyword ? '没有匹配的种子' : '这里还没有种子'}
-                    description={
-                      keyword
-                        ? '换个关键词试试，或清空搜索查看全部。'
-                        : '种子在项目详情页里维护：进项目，添加域名或网段，监控计划会自动按时展开。'
-                    }
-                    hints={['域名种子展开子域与站点', '网段种子用于 IP 资产', '种子本身不发请求，由计划与批次执行']}
-                    actions={
-                      <Button size="sm" asChild>
-                        <Link to="/projects">打开项目管理</Link>
-                      </Button>
-                    }
-                  />
-                </TableCell>
-              </TableRow>
-            ) : (
-              items.map((s: Seed) => (
-                <TableRow key={s.id}>
-                  <TableCell className="max-w-[320px] truncate font-mono text-sm">{s.value}</TableCell>
-                  <TableCell>
-                    <Badge variant="outline">{KIND_LABEL[s.kind] ?? s.kind}</Badge>
-                  </TableCell>
-                  <TableCell className="text-sm">{projectName(s.project_id)}</TableCell>
-                  <TableCell className="text-sm">{coverage(s)}</TableCell>
-                  <TableCell>
-                    <Badge variant={s.enabled ? 'default' : 'secondary'}>{s.enabled ? '启用' : '停用'}</Badge>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground text-xs">
-                    {s.created_at ? new Date(s.created_at).toLocaleString() : '—'}
-                  </TableCell>
-                  <TableCell>
-                    <Button variant="ghost" size="sm" asChild>
-                      <Link to={`/projects/${s.project_id}`}>项目详情</Link>
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
+        <Table<Seed>
+          columns={columns}
+          dataSource={items}
+          rowKey="id"
+          loading={seeds.isLoading}
+          pagination={false}
+          locale={{
+            emptyText: (
+              <EmptyState
+                className="my-8"
+                icon={Sprout}
+                title={keyword ? '没有匹配的种子' : '这里还没有种子'}
+                description={
+                  keyword
+                    ? '换个关键词试试，或清空搜索查看全部。'
+                    : '种子在项目详情页里维护：进项目，添加域名或网段，监控计划会自动按时展开。'
+                }
+                hints={['域名种子展开子域与站点', '网段种子用于 IP 资产', '种子本身不发请求，由计划与批次执行']}
+                actions={
+                  <Button size="small" onClick={() => navigate('/projects')}>
+                    打开项目管理
+                  </Button>
+                }
+              />
+            ),
+          }}
+        />
       </div>
     </div>
   )

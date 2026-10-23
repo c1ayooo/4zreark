@@ -2,7 +2,8 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { dashboardApi, type DashboardStats, type TrendData } from '@/api/dashboard'
 import RealTimeMonitor from '@/components/dashboard/RealTimeMonitor'
-import { Button } from '@/components/ui/button'
+import { Button, Card } from 'antd'
+import { Statistic } from 'antd'
 import { cn, formatDate, formatNumber } from '@/lib/utils'
 import { ArrowUpRight } from 'lucide-react'
 import {
@@ -121,6 +122,20 @@ function Distribution({
   )
 }
 
+
+// 统计卡数字：antd Statistic 自带 count-up（动效层），样式对齐原 text-3xl 卡片
+function CountUp({ value, className }: { value: number; className?: string }) {
+  return (
+    <div className={cn('mt-2', className)}>
+      <Statistic
+        value={value}
+        formatter={(v) => formatNumber(Number(v))}
+        valueStyle={{ fontSize: '1.875rem', fontWeight: 600, lineHeight: '2.25rem', fontVariantNumeric: 'tabular-nums' }}
+      />
+    </div>
+  )
+}
+
 export default function DashboardPage() {
   const { data: statsData, isLoading: statsLoading } = useQuery({
     queryKey: ['dashboard-stats'],
@@ -192,58 +207,51 @@ export default function DashboardPage() {
           <h1 className="text-2xl font-semibold tracking-tight">仪表盘</h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">{finding}。</p>
         </div>
-        <Button asChild>
-          <Link to="/tasks/new">
+        <Link to="/tasks/new">
+          <Button type="primary">
             新建侦察任务
             <ArrowUpRight className="ml-1.5 h-4 w-4" />
-          </Link>
-        </Button>
+          </Button>
+        </Link>
       </div>
 
       <section
         aria-label="当前概览"
-        className="grid grid-cols-2 gap-px overflow-hidden border-y bg-border md:grid-cols-4"
+        className="grid grid-cols-2 gap-4 md:grid-cols-4"
       >
-        <div className="bg-background px-0 py-5 md:px-6">
+        <Card>
           <p className="text-[13px] text-muted-foreground">运行中任务</p>
-          <p className="mt-2 text-3xl font-semibold tabular-nums">{formatNumber(running)}</p>
+          <CountUp value={running} />
           <p className="mt-1 text-[13px] text-muted-foreground">
             共 {formatNumber(stats?.tasks?.total ?? 0)} 个任务
           </p>
-        </div>
-        <div className="bg-background px-4 py-5 md:px-6">
+        </Card>
+        <Card>
           <p className="text-[13px] text-muted-foreground">待修复漏洞</p>
-          <p
-            className={cn(
-              'mt-2 text-3xl font-semibold tabular-nums',
-              openVulns > 0 && 'text-destructive'
-            )}
-          >
-            {formatNumber(openVulns)}
-          </p>
+          <CountUp value={openVulns} className={openVulns > 0 ? 'text-destructive' : undefined} />
           <p className="mt-1 text-[13px] text-muted-foreground">
             近期新增 {formatNumber(stats?.vulnerabilities?.recentlyFound ?? 0)} 个
           </p>
-        </div>
-        <div className="bg-background px-0 py-5 md:px-6">
+        </Card>
+        <Card>
           <p className="text-[13px] text-muted-foreground">在线节点</p>
-          <p className="mt-2 text-3xl font-semibold tabular-nums">
-            {formatNumber(onlineNodes)}
-            <span className="ml-1 text-base font-normal text-muted-foreground">
+          <div className="mt-2 flex items-baseline gap-1">
+            <CountUp value={onlineNodes} />
+            <span className="text-base font-normal text-muted-foreground">
               / {formatNumber(totalNodes)}
             </span>
-          </p>
+          </div>
           <p className="mt-1 text-[13px] text-muted-foreground">
             {offlineNodes > 0 ? `${offlineNodes} 个离线` : '全部在线'}
           </p>
-        </div>
-        <div className="bg-background px-4 py-5 md:px-6">
+        </Card>
+        <Card>
           <p className="text-[13px] text-muted-foreground">资产总量</p>
-          <p className="mt-2 text-3xl font-semibold tabular-nums">{formatNumber(totalAssets)}</p>
+          <CountUp value={totalAssets} />
           <p className="mt-1 text-[13px] text-muted-foreground">
             新增 {formatNumber(recentAssets)} 个
           </p>
-        </div>
+        </Card>
       </section>
 
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">

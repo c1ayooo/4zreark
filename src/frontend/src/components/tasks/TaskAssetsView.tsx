@@ -1,23 +1,13 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Button, Checkbox, Input, Table, Tag } from 'antd'
+import type { ColumnsType } from 'antd/es/table'
 import { Check, Copy, Download, ExternalLink, Radar, RefreshCw, Rocket, Search, X } from 'lucide-react'
 
 import { taskAssetApi, type TaskAsset } from '@/api/tasks'
 import EmptyState from '@/components/common/EmptyState'
 import CreateTaskFromAssetsDialog from '@/components/tasks/CreateTaskFromAssetsDialog'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
-import { Input } from '@/components/ui/input'
 import { useToast } from '@/components/ui/use-toast'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 
 interface TaskAssetsViewProps {
   taskId: string
@@ -179,7 +169,7 @@ export default function TaskAssetsView({ taskId, taskStatus, stats, onOpenTab, p
       ]}
       actions={
         firstResultTab && onOpenTab ? (
-          <Button variant="outline" size="sm" onClick={() => onOpenTab(firstResultTab)}>
+          <Button size="small" onClick={() => onOpenTab(firstResultTab)}>
             查看原始结果（{rawResultCount} 条）
           </Button>
         ) : undefined
@@ -197,7 +187,7 @@ export default function TaskAssetsView({ taskId, taskStatus, stats, onOpenTab, p
       ]}
       actions={
         firstResultTab && onOpenTab ? (
-          <Button variant="outline" size="sm" onClick={() => onOpenTab(firstResultTab)}>
+          <Button size="small" onClick={() => onOpenTab(firstResultTab)}>
             查看原始结果（{rawResultCount} 条）
           </Button>
         ) : undefined
@@ -212,6 +202,98 @@ export default function TaskAssetsView({ taskId, taskStatus, stats, onOpenTab, p
     />
   )
 
+  const columns: ColumnsType<TaskAsset> = [
+    {
+      title: (
+        <Checkbox
+          checked={allOnPage}
+          indeterminate={someOnPage}
+          onChange={togglePage}
+          aria-label="选中本页"
+        />
+      ),
+      width: 40,
+      onCell: () => ({ onClick: (e) => e.stopPropagation() }),
+      render: (_, item) => (
+        <Checkbox
+          checked={selected.has(item.id)}
+          onChange={() => toggleRow(item.id)}
+          aria-label={`选择 ${item.host}`}
+        />
+      ),
+    },
+    {
+      title: '站点',
+      className: 'font-mono text-xs',
+      render: (_, item) => (
+        <a
+          href={`${item.protocol}://${item.host}${item.port && item.port !== 80 && item.port !== 443 ? `:${item.port}` : ''}`}
+          target="_blank"
+          rel="noreferrer"
+          className="text-primary inline-flex items-center gap-1 hover:underline"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {item.host}
+          <ExternalLink className="h-3 w-3" />
+        </a>
+      ),
+    },
+    {
+      title: '协议/端口',
+      width: 96,
+      className: 'text-xs',
+      render: (_, item) => `${item.protocol}/${item.port}`,
+    },
+    {
+      title: '状态码',
+      width: 80,
+      className: 'text-xs',
+      render: (_, item) => item.http_status || '-',
+    },
+    {
+      title: '标题',
+      render: (_, item) => (
+        <span className="block max-w-[280px] truncate text-xs" title={item.title}>
+          {item.title || '-'}
+        </span>
+      ),
+    },
+    {
+      title: '技术栈',
+      width: 256,
+      render: (_, item) => (
+        <div className="flex flex-wrap gap-1">
+          {(item.technology_stack || []).slice(0, 4).map((t) => (
+            <Tag key={t} className="text-[10px]">
+              {t}
+            </Tag>
+          ))}
+          {(item.technology_stack || []).length === 0 && (
+            <span className="text-muted-foreground text-xs">-</span>
+          )}
+        </div>
+      ),
+    },
+    {
+      title: '入口数',
+      width: 80,
+      className: 'text-xs',
+      render: (_, item) => item.endpoints,
+    },
+    {
+      title: '本任务证据',
+      width: 96,
+      className: 'text-xs',
+      render: (_, item) => item.task_hits,
+    },
+    {
+      title: '最近发现',
+      width: 160,
+      className: 'text-muted-foreground text-xs',
+      render: (_, item) => (item.last_seen ? new Date(item.last_seen).toLocaleString() : '-'),
+    },
+  ]
+
   return (
     <div className="flex h-full flex-col gap-3 p-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -220,24 +302,21 @@ export default function TaskAssetsView({ taskId, taskStatus, stats, onOpenTab, p
           资产按 host 归并，同一 host 的多协议/端口算一个站点。
         </p>
         <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search className="text-muted-foreground absolute top-1/2 left-2 h-4 w-4 -translate-y-1/2" />
-            <Input
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  setPage(1)
-                  setSearch(searchInput.trim())
-                }
-              }}
-              placeholder="按 host 过滤"
-              className="h-8 w-56 pl-8"
-            />
-          </div>
+          <Input
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                setPage(1)
+                setSearch(searchInput.trim())
+              }
+            }}
+            placeholder="按 host 过滤"
+            className="h-8 w-56"
+            prefix={<Search className="text-muted-foreground h-4 w-4" />}
+          />
           <Button
-            variant="outline"
-            size="sm"
+            size="small"
             onClick={() => {
               setPage(1)
               setSearch(searchInput.trim())
@@ -245,8 +324,12 @@ export default function TaskAssetsView({ taskId, taskStatus, stats, onOpenTab, p
           >
             查询
           </Button>
-          <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
-            <RefreshCw className={isFetching ? 'mr-1 h-4 w-4 animate-spin' : 'mr-1 h-4 w-4'} />
+          <Button
+            size="small"
+            onClick={() => refetch()}
+            disabled={isFetching}
+            icon={<RefreshCw className={isFetching ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />}
+          >
             刷新
           </Button>
         </div>
@@ -257,121 +340,60 @@ export default function TaskAssetsView({ taskId, taskStatus, stats, onOpenTab, p
         <span className="text-muted-foreground">
           已选 <span className="text-foreground font-medium">{selected.size}</span> / {total}
         </span>
-        <Button variant="outline" size="sm" onClick={togglePage} disabled={pageIds.length === 0}>
+        <Button size="small" onClick={togglePage} disabled={pageIds.length === 0}>
           {allOnPage ? '取消本页' : '选中本页'}
         </Button>
-        <Button variant="outline" size="sm" onClick={selectAllMatching} disabled={busy || total === 0}>
+        <Button size="small" onClick={selectAllMatching} disabled={busy || total === 0}>
           {busy ? '全选中…' : `全选全部 ${total}`}
         </Button>
-        <Button variant="outline" size="sm" onClick={() => setSelected(new Set())} disabled={selected.size === 0}>
-          <X className="mr-1 h-4 w-4" />
+        <Button
+          size="small"
+          onClick={() => setSelected(new Set())}
+          disabled={selected.size === 0}
+          icon={<X className="h-4 w-4" />}
+        >
           清空选择
         </Button>
         <div className="grow" />
-        <Button variant="outline" size="sm" onClick={copyHosts} disabled={items.length === 0}>
-          <Copy className="mr-1 h-4 w-4" />
+        <Button
+          size="small"
+          onClick={copyHosts}
+          disabled={items.length === 0}
+          icon={<Copy className="h-4 w-4" />}
+        >
           复制 host
         </Button>
-        <Button variant="outline" size="sm" onClick={exportCSV} disabled={items.length === 0}>
-          <Download className="mr-1 h-4 w-4" />
+        <Button
+          size="small"
+          onClick={exportCSV}
+          disabled={items.length === 0}
+          icon={<Download className="h-4 w-4" />}
+        >
           导出 CSV
         </Button>
-        <Button size="sm" onClick={() => setCreateOpen(true)} disabled={selected.size === 0}>
-          <Rocket className="mr-1 h-4 w-4" />
+        <Button
+          size="small"
+          onClick={() => setCreateOpen(true)}
+          disabled={selected.size === 0}
+          icon={<Rocket className="h-4 w-4" />}
+        >
           用选中资产创建任务{selected.size > 0 ? `（${selected.size}）` : ''}
         </Button>
       </div>
 
       <div className="bg-background flex-1 overflow-auto rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-10">
-                <Checkbox
-                  checked={allOnPage ? true : someOnPage ? 'indeterminate' : false}
-                  onCheckedChange={togglePage}
-                  aria-label="选中本页"
-                />
-              </TableHead>
-              <TableHead>站点</TableHead>
-              <TableHead className="w-24">协议/端口</TableHead>
-              <TableHead className="w-20">状态码</TableHead>
-              <TableHead>标题</TableHead>
-              <TableHead className="w-64">技术栈</TableHead>
-              <TableHead className="w-20">入口数</TableHead>
-              <TableHead className="w-24">本任务证据</TableHead>
-              <TableHead className="w-40">最近发现</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              <TableRow>
-                <TableCell colSpan={9} className="text-muted-foreground py-10 text-center">
-                  加载中…
-                </TableCell>
-              </TableRow>
-            ) : items.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={9} className="p-0">
-                  {emptyState}
-                </TableCell>
-              </TableRow>
-            ) : (
-              items.map((item) => (
-                <TableRow
-                  key={item.id}
-                  data-state={selected.has(item.id) ? 'selected' : undefined}
-                  className="cursor-pointer"
-                  onClick={() => toggleRow(item.id)}
-                >
-                  <TableCell onClick={(e) => e.stopPropagation()}>
-                    <Checkbox
-                      checked={selected.has(item.id)}
-                      onCheckedChange={() => toggleRow(item.id)}
-                      aria-label={`选择 ${item.host}`}
-                    />
-                  </TableCell>
-                  <TableCell className="font-mono text-xs">
-                    <a
-                      href={`${item.protocol}://${item.host}${item.port && item.port !== 80 && item.port !== 443 ? `:${item.port}` : ''}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-primary inline-flex items-center gap-1 hover:underline"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      {item.host}
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
-                  </TableCell>
-                  <TableCell className="text-xs">
-                    {item.protocol}/{item.port}
-                  </TableCell>
-                  <TableCell className="text-xs">{item.http_status || '-'}</TableCell>
-                  <TableCell className="max-w-[280px] truncate text-xs" title={item.title}>
-                    {item.title || '-'}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-wrap gap-1">
-                      {(item.technology_stack || []).slice(0, 4).map((t) => (
-                        <Badge key={t} variant="secondary" className="text-[10px]">
-                          {t}
-                        </Badge>
-                      ))}
-                      {(item.technology_stack || []).length === 0 && (
-                        <span className="text-muted-foreground text-xs">-</span>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-xs">{item.endpoints}</TableCell>
-                  <TableCell className="text-xs">{item.task_hits}</TableCell>
-                  <TableCell className="text-muted-foreground text-xs">
-                    {item.last_seen ? new Date(item.last_seen).toLocaleString() : '-'}
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
+        <Table<TaskAsset>
+          columns={columns}
+          dataSource={items}
+          rowKey="id"
+          pagination={false}
+          loading={isLoading}
+          locale={{ emptyText: emptyState }}
+          rowClassName={(record) =>
+            `cursor-pointer${selected.has(record.id) ? ' bg-muted/40' : ''}`
+          }
+          onRow={(record) => ({ onClick: () => toggleRow(record.id) })}
+        />
       </div>
 
       <div className="flex items-center justify-between text-sm">
@@ -384,10 +406,10 @@ export default function TaskAssetsView({ taskId, taskStatus, stats, onOpenTab, p
           )}
         </span>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+          <Button size="small" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
             上一页
           </Button>
-          <Button variant="outline" size="sm" disabled={page >= maxPage} onClick={() => setPage((p) => p + 1)}>
+          <Button size="small" disabled={page >= maxPage} onClick={() => setPage((p) => p + 1)}>
             下一页
           </Button>
         </div>

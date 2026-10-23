@@ -1,21 +1,12 @@
 import { useState } from 'react'
 import {keepPreviousData, useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import { RefreshCw, RotateCcw, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
+import { Button, Card, Input, Select, Table, Tag } from 'antd'
+import type { TableProps } from 'antd'
 
 import { projectApi } from '@/api/projects'
 import { verificationApi, type VerificationRow } from '@/api/verifications'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import EmptyState from '@/components/common/EmptyState'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
@@ -40,6 +31,16 @@ const statusVariant = (status: string): 'default' | 'secondary' | 'destructive' 
   if (status === 'inconclusive') return 'outline'
   return 'secondary'
 }
+
+// shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
+const badgeCls = (variant: 'default' | 'secondary' | 'destructive' | 'outline') =>
+  variant === 'default'
+    ? 'border-transparent bg-primary text-primary-foreground'
+    : variant === 'secondary'
+      ? 'border-transparent bg-secondary text-secondary-foreground'
+      : variant === 'destructive'
+        ? 'border-transparent bg-destructive text-destructive-foreground'
+        : ''
 
 export default function VerificationsPage() {
   const { toast } = useToast()
@@ -111,7 +112,6 @@ export default function VerificationsPage() {
 
   const rows: VerificationRow[] = list.data?.data?.items ?? []
   const total = list.data?.data?.total ?? 0
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const byStatus = stats.data?.data?.by_status ?? []
   const countOf = (key: string) => byStatus.find((s) => s.key === key)?.count ?? 0
   const allCount = byStatus.reduce((sum, s) => sum + s.count, 0)
@@ -121,6 +121,69 @@ export default function VerificationsPage() {
     { key: 'verified', label: '可达', value: countOf('verified'), icon: ShieldCheck },
     { key: 'failed', label: '失败', value: countOf('failed'), icon: ShieldAlert },
     { key: 'inconclusive', label: '不确定', value: countOf('inconclusive'), icon: ShieldQuestion },
+  ]
+
+  const columns: TableProps<VerificationRow>['columns'] = [
+    {
+      title: '时间',
+      dataIndex: 'observed_at',
+      key: 'observed_at',
+      width: 170,
+      render: (v: string) => (
+        <span className="text-muted-foreground whitespace-nowrap text-xs">{formatDate(v)}</span>
+      ),
+    },
+    {
+      title: '站点',
+      dataIndex: 'host',
+      key: 'host',
+      render: (v: string) => <span className="font-mono text-xs">{v}</span>,
+    },
+    {
+      title: '结果',
+      dataIndex: 'status',
+      key: 'status',
+      width: 100,
+      render: (v: string) => (
+        <Tag className={badgeCls(statusVariant(v))}>{statusLabel[v] || v}</Tag>
+      ),
+    },
+    {
+      title: '原因',
+      dataIndex: 'reason_code',
+      key: 'reason_code',
+      render: (v: string) => <span className="text-xs">{v || '—'}</span>,
+    },
+    {
+      title: 'HTTP',
+      dataIndex: 'http_status',
+      key: 'http_status',
+      width: 90,
+      render: (v: number) => <span className="text-xs">{v || '—'}</span>,
+    },
+    {
+      title: '尝试',
+      dataIndex: 'attempts',
+      key: 'attempts',
+      width: 70,
+      render: (v: number) => <span className="text-xs">{v}</span>,
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      align: 'right',
+      render: (_, r) =>
+        isAdmin && (
+          <Button
+            type="text"
+            size="small"
+            disabled={singleRecheck.isPending}
+            onClick={() => singleRecheck.mutate(r.site_id)}
+          >
+            复验
+          </Button>
+        ),
+    },
   ]
 
   return (
@@ -134,25 +197,19 @@ export default function VerificationsPage() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Select
+            className="w-44"
             value={projectId}
-            onValueChange={(v) => {
+            placeholder="全部项目"
+            onChange={(v) => {
               setProjectId(v)
               setPage(1)
             }}
-          >
-            <SelectTrigger className="w-44">
-              <SelectValue placeholder="全部项目" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="0">全部项目</SelectItem>
-              {(projects.data?.data ?? []).map((p) => (
-                <SelectItem key={p.id} value={String(p.id)}>
-                  {p.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button variant="outline" onClick={() => list.refetch()}>
+            options={[
+              { value: '0', label: '全部项目' },
+              ...(projects.data?.data ?? []).map((p) => ({ value: String(p.id), label: p.name })),
+            ]}
+          />
+          <Button onClick={() => list.refetch()}>
             <RefreshCw className="mr-2 h-4 w-4" /> 刷新
           </Button>
         </div>
@@ -162,17 +219,15 @@ export default function VerificationsPage() {
         {cards.map((c) => {
           const Icon = c.icon
           return (
-            <Card key={c.key}>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">{c.label}</CardTitle>
-                <Icon className="text-muted-foreground h-4 w-4" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{c.value}</div>
-                <p className="text-muted-foreground text-xs">
-                  {c.key === 'all' ? '按当前项目筛选' : '占全部流水的比例'}
-                </p>
-              </CardContent>
+            <Card
+              key={c.key}
+              title={<span className="text-sm font-medium">{c.label}</span>}
+              extra={<Icon className="h-4 w-4 text-muted-foreground" />}
+            >
+              <div className="text-2xl font-bold">{c.value}</div>
+              <p className="text-muted-foreground text-xs">
+                {c.key === 'all' ? '按当前项目筛选' : '占全部流水的比例'}
+              </p>
             </Card>
           )
         })}
@@ -180,23 +235,14 @@ export default function VerificationsPage() {
 
       <div className="flex flex-wrap items-center gap-2">
         <Select
+          className="w-40"
           value={status}
-          onValueChange={(v) => {
+          onChange={(v) => {
             setStatus(v)
             setPage(1)
           }}
-        >
-          <SelectTrigger className="w-40">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {STATUS_OPTIONS.map((o) => (
-              <SelectItem key={o.value} value={o.value}>
-                {o.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          options={STATUS_OPTIONS}
+        />
         <Input
           className="w-48"
           placeholder="失败原因，如 conn_fail"
@@ -208,10 +254,10 @@ export default function VerificationsPage() {
         />
         {isAdmin && (
           <>
-            <Button variant="outline" size="sm" onClick={() => preview.mutate()}>
+            <Button size="small" onClick={() => preview.mutate()}>
               预览批量复验
             </Button>
-            <Button size="sm" onClick={() => execute.mutate()} disabled={execute.isPending}>
+            <Button type="primary" size="small" onClick={() => execute.mutate()} disabled={execute.isPending}>
               <RotateCcw className="mr-2 h-4 w-4" />
               执行批量复验
             </Button>
@@ -220,80 +266,21 @@ export default function VerificationsPage() {
       </div>
 
       <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>时间</TableHead>
-              <TableHead>站点</TableHead>
-              <TableHead>结果</TableHead>
-              <TableHead>原因</TableHead>
-              <TableHead>HTTP</TableHead>
-              <TableHead>尝试</TableHead>
-              <TableHead className="text-right">操作</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((r) => (
-              <TableRow key={r.id}>
-                <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
-                  {formatDate(r.observed_at)}
-                </TableCell>
-                <TableCell className="font-mono text-xs">{r.host}</TableCell>
-                <TableCell>
-                  <Badge variant={statusVariant(r.status)}>
-                    {statusLabel[r.status] || r.status}
-                  </Badge>
-                </TableCell>
-                <TableCell className="text-xs">{r.reason_code || '—'}</TableCell>
-                <TableCell className="text-xs">{r.http_status || '—'}</TableCell>
-                <TableCell className="text-xs">{r.attempts}</TableCell>
-                <TableCell className="text-right">
-                  {isAdmin && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      disabled={singleRecheck.isPending}
-                      onClick={() => singleRecheck.mutate(r.site_id)}
-                    >
-                      复验
-                    </Button>
-                  )}
-                </TableCell>
-              </TableRow>
-            ))}
-            {rows.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={7} className="text-muted-foreground py-10 text-center text-sm">
-                  暂无验证流水
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </div>
-
-      <div className="text-muted-foreground flex items-center justify-between text-xs">
-        <span>
-          共 {total} 条 · 第 {page}/{totalPages} 页
-        </span>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-          >
-            上一页
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page >= totalPages}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            下一页
-          </Button>
-        </div>
+        <Table
+          columns={columns}
+          dataSource={rows}
+          rowKey="id"
+          loading={list.isLoading}
+          locale={{ emptyText: <EmptyState title="暂无验证流水" className="border-0" /> }}
+          pagination={{
+            current: page,
+            pageSize,
+            total,
+            showQuickJumper: true,
+            showTotal: (t) => `共 ${t} 条`,
+            onChange: (p) => setPage(p),
+          }}
+        />
       </div>
     </div>
   )

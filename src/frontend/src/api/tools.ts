@@ -212,3 +212,71 @@ export const toolsApi = {
     return raw.data.items || []
   },
 }
+
+// ---------------------------------------------------------------------------
+// 扫描工具运行时（gogo/spray/katana/rem 的版本与更新管理）
+// ---------------------------------------------------------------------------
+
+export interface ToolRuntimeStatus {
+  name: string
+  repo: string
+  description: string
+  pinned_version: string
+  installed_version: string
+  latest_version: string
+  auto_update: boolean
+  check_interval_hours: number
+  status: 'ok' | 'stale' | 'missing' | 'needs_review'
+  status_note: string
+  path: string
+  managed: boolean
+  disk_version: string
+  update_available: boolean
+}
+
+export interface ToolsRuntimeOverview {
+  tools: ToolRuntimeStatus[]
+  nuclei?: NucleiRuntimeStatus | null
+}
+
+export interface EngineUsageStatus {
+  available: boolean
+  limits?: Record<string, number>
+  today?: Record<string, number>
+  history?: { day: string; engine: string; queries: number }[]
+}
+
+export const toolRuntimeApi = {
+  async list(): Promise<ToolsRuntimeOverview> {
+    const raw = (await api.get('/tools')) as unknown as ApiResponse<ToolsRuntimeOverview>
+    return raw.data
+  },
+  async check(name: string): Promise<ToolRuntimeStatus> {
+    const raw = (await api.post(`/tools/${name}/check`, {}, { timeout: 60000 })) as unknown as ApiResponse<ToolRuntimeStatus>
+    return raw.data
+  },
+  async update(name: string, force = false): Promise<ToolRuntimeStatus> {
+    const raw = (await api.post(`/tools/${name}/update`, { force }, { timeout: 600000 })) as unknown as ApiResponse<ToolRuntimeStatus>
+    return raw.data
+  },
+  async rollback(name: string): Promise<ToolRuntimeStatus> {
+    const raw = (await api.post(`/tools/${name}/rollback`, {}, { timeout: 60000 })) as unknown as ApiResponse<ToolRuntimeStatus>
+    return raw.data
+  },
+  async setSettings(name: string, body: { pinned_version?: string; auto_update?: boolean; check_interval_hours?: number }): Promise<ToolRuntimeStatus> {
+    const raw = (await api.put(`/tools/${name}/settings`, body)) as unknown as ApiResponse<ToolRuntimeStatus>
+    return raw.data
+  },
+  async history(name: string): Promise<unknown[]> {
+    const raw = (await api.get(`/tools/${name}/history`)) as unknown as ApiResponse<unknown[]>
+    return raw.data ?? []
+  },
+  async engineUsage(): Promise<EngineUsageStatus> {
+    const raw = (await api.get('/governance/engine-usage')) as unknown as ApiResponse<EngineUsageStatus>
+    return raw.data
+  },
+  async setEngineLimits(limits: Record<string, number>): Promise<EngineUsageStatus> {
+    const raw = (await api.put('/governance/engine-usage/limits', limits)) as unknown as ApiResponse<EngineUsageStatus>
+    return raw.data
+  },
+}

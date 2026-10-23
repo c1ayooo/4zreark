@@ -1,11 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { RefreshCw } from 'lucide-react'
+import { Button, Table, Tag } from 'antd'
+import type { TableProps } from 'antd'
 
-import { assetEventApi, eventTypeLabel, eventTypeVariant } from '@/api/relations'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { assetEventApi, eventTypeLabel, eventTypeVariant, type AssetEvent } from '@/api/relations'
 import { formatDate } from '@/lib/utils'
 
 const eventFilter = [
@@ -14,6 +13,14 @@ const eventFilter = [
   { value: 'attribute_change', label: '属性变化' },
   { value: 'reappear', label: '重新出现' },
 ]
+
+// shadcn Badge variant → Tag 的类名配色（Tag 无 variant，用 Tailwind 类保留原色）
+const variantClass: Record<string, string> = {
+  default: 'border-transparent bg-primary/15 text-primary',
+  secondary: 'border-transparent bg-muted text-muted-foreground',
+  destructive: 'border-transparent bg-red-500/15 text-red-500',
+  outline: '',
+}
 
 export default function EventsPage() {
   const [type, setType] = useState('')
@@ -41,6 +48,60 @@ export default function EventsPage() {
     return rows
   }
 
+  // /events 只有 limit 参数、无服务端排序，时间列走客户端排序
+  const columns: TableProps<AssetEvent>['columns'] = [
+    {
+      title: '时间',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      width: 150,
+      render: (v: string) => <span className="text-xs text-muted-foreground">{formatDate(v)}</span>,
+      sorter: (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+    },
+    {
+      title: '类型',
+      dataIndex: 'event_type',
+      key: 'event_type',
+      width: 120,
+      render: (v: string) => (
+        <Tag className={variantClass[eventTypeVariant(v)]}>{eventTypeLabel[v] ?? v}</Tag>
+      ),
+    },
+    {
+      title: '站点',
+      dataIndex: 'site_id',
+      key: 'site_id',
+      width: 90,
+      render: (v: number) => <span className="font-mono text-sm">#{v}</span>,
+    },
+    {
+      title: '说明',
+      dataIndex: 'title',
+      key: 'title',
+      render: (v: string) => <span className="text-sm">{v}</span>,
+    },
+    {
+      title: '变化',
+      key: 'diff',
+      render: (_, e) => {
+        const rows = e.event_type === 'attribute_change' ? diff(e.before ?? {}, e.after ?? {}) : []
+        if (rows.length === 0) {
+          return <span className="text-xs text-muted-foreground">—</span>
+        }
+        return (
+          <div className="space-y-0.5 text-xs text-muted-foreground">
+            {rows.slice(0, 3).map((r) => (
+              <div key={r.key}>
+                <span className="font-medium">{r.key}</span> {r.from} → {r.to}
+              </div>
+            ))}
+            {rows.length > 3 && <div>…共 {rows.length} 项</div>}
+          </div>
+        )
+      },
+    },
+  ]
+
   return (
     <div className="space-y-5 p-6">
       <div className="flex items-start justify-between">
@@ -50,7 +111,7 @@ export default function EventsPage() {
             站点首次发现、属性变化、失联后重现；保留最近 1 万条 / 7 天（策略随资产治理配置）
           </p>
         </div>
-        <Button variant="outline" onClick={() => refetch()}>
+        <Button onClick={() => refetch()}>
           <RefreshCw className="mr-2 h-4 w-4" /> 刷新
         </Button>
       </div>
@@ -73,65 +134,21 @@ export default function EventsPage() {
         <span className="ml-auto text-sm text-muted-foreground">{items.length} 条</span>
       </div>
 
-      <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-[150px]">时间</TableHead>
-              <TableHead className="w-[120px]">类型</TableHead>
-              <TableHead className="w-[90px]">站点</TableHead>
-              <TableHead>说明</TableHead>
-              <TableHead>变化</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading && (
-              <TableRow>
-                <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
-                  加载中…
-                </TableCell>
-              </TableRow>
-            )}
-            {!isLoading && items.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
-                  没有事件（导入资产或探测站点后会产生 first_seen / attribute_change）
-                </TableCell>
-              </TableRow>
-            )}
-            {items.map((e) => {
-              const rows = e.event_type === 'attribute_change' ? diff(e.before ?? {}, e.after ?? {}) : []
-              return (
-                <TableRow key={e.id}>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {formatDate(e.created_at)}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={eventTypeVariant(e.event_type)}>
-                      {eventTypeLabel[e.event_type] ?? e.event_type}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-sm font-mono">#{e.site_id}</TableCell>
-                  <TableCell className="text-sm">{e.title}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {rows.length === 0 ? (
-                      <span className="text-muted-foreground">—</span>
-                    ) : (
-                      <div className="space-y-0.5">
-                        {rows.slice(0, 3).map((r) => (
-                          <div key={r.key}>
-                            <span className="font-medium">{r.key}</span> {r.from} → {r.to}
-                          </div>
-                        ))}
-                        {rows.length > 3 && <div>…共 {rows.length} 项</div>}
-                      </div>
-                    )}
-                  </TableCell>
-                </TableRow>
-              )
-            })}
-          </TableBody>
-        </Table>
+      <div className="overflow-hidden rounded-md border">
+        <Table<AssetEvent>
+          columns={columns}
+          dataSource={items}
+          rowKey="id"
+          loading={isLoading}
+          pagination={false}
+          locale={{
+            emptyText: (
+              <div className="py-8 text-center text-sm text-muted-foreground">
+                没有事件（导入资产或探测站点后会产生 first_seen / attribute_change）
+              </div>
+            ),
+          }}
+        />
       </div>
     </div>
   )

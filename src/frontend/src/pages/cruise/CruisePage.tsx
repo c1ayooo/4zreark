@@ -2,35 +2,9 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { cruiseApi, CruiseTask, CruiseCreateRequest, CruiseTargetPreview } from '@/api/cruise'
 import { projectApi } from '@/api/projects'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
-import { Switch } from '@/components/ui/switch'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
+import { Button, Input, Modal, Select, Switch, Table, Tag } from 'antd'
+import type { TableProps } from 'antd'
+import EmptyState from '@/components/common/EmptyState'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
 import {
@@ -84,6 +58,7 @@ export default function CruisePage() {
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [editingCruise, setEditingCruise] = useState<CruiseTask | null>(null)
   const [logsDialogCruise, setLogsDialogCruise] = useState<CruiseTask | null>(null)
@@ -116,8 +91,8 @@ export default function CruisePage() {
     TARGET_TYPES.find((t) => t.value === formData.target_type)?.label || formData.target_type
 
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['cruises', page, search],
-    queryFn: () => cruiseApi.getCruises({ page, pageSize: 10, search }),
+    queryKey: ['cruises', page, pageSize, search],
+    queryFn: () => cruiseApi.getCruises({ page, pageSize, search }),
     refetchInterval: 10000,
   })
 
@@ -322,13 +297,13 @@ export default function CruisePage() {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'enabled':
-        return <Badge className="bg-green-500">已启用</Badge>
+        return <Tag className="border-transparent bg-green-500 text-white">已启用</Tag>
       case 'disabled':
-        return <Badge variant="secondary">已禁用</Badge>
+        return <Tag className="border-transparent bg-secondary text-secondary-foreground">已禁用</Tag>
       case 'running':
-        return <Badge className="bg-blue-500">执行中</Badge>
+        return <Tag className="border-transparent bg-blue-500 text-white">执行中</Tag>
       default:
-        return <Badge variant="outline">{status}</Badge>
+        return <Tag>{status}</Tag>
     }
   }
 
@@ -344,6 +319,168 @@ export default function CruisePage() {
         return <Clock className="h-4 w-4 text-gray-400" />
     }
   }
+
+  // antd Table 服务端分页：接现有 page/pageSize 状态（替代原手写分页 footer）
+  const tablePagination = {
+    current: page,
+    pageSize,
+    total: data?.total ?? 0,
+    showQuickJumper: true,
+    showSizeChanger: true,
+    showTotal: (t: number) => `共 ${t} 条记录`,
+    onChange: (p: number, s: number) => {
+      setPage(p)
+      setPageSize(s)
+    },
+  }
+
+  const columns: TableProps<CruiseTask>['columns'] = [
+    {
+      title: '名称',
+      dataIndex: 'name',
+      key: 'name',
+      render: (_, cruise) => (
+        <div>
+          <div className="font-medium">{cruise.name}</div>
+          {cruise.description && (
+            <div className="text-sm text-muted-foreground truncate max-w-[200px]">
+              {cruise.description}
+            </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      title: '归属项目',
+      dataIndex: 'project_id',
+      key: 'project_id',
+      render: (_, cruise) => (
+        <div>
+          <div className="text-sm font-medium">{projectName(cruise.project_id)}</div>
+          <Tag className="mt-1 text-xs">
+            {cruise.target_source === 'project' ? '项目派生' : '固定目标'}
+          </Tag>
+        </div>
+      ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 90,
+      render: (v: string) => getStatusBadge(v),
+    },
+    {
+      title: '执行周期',
+      dataIndex: 'cron_expr',
+      key: 'cron_expr',
+      width: 110,
+      render: (v: string) => (
+        <code className="text-xs bg-muted px-1.5 py-0.5 rounded">{v}</code>
+      ),
+    },
+    {
+      title: '目标数量',
+      dataIndex: 'targets',
+      key: 'targets',
+      width: 130,
+      render: (_, cruise) =>
+        cruise.target_source === 'project' ? (
+          <span className="text-sm text-muted-foreground">执行时自动派生</span>
+        ) : (
+          cruise.targets?.length || 0
+        ),
+    },
+    {
+      title: '任务类型',
+      dataIndex: 'task_type',
+      key: 'task_type',
+      width: 100,
+      render: (v: string) => TASK_TYPES.find((t) => t.value === v)?.label || v,
+    },
+    {
+      title: '上次执行',
+      dataIndex: 'last_run_at',
+      key: 'last_run_at',
+      width: 170,
+      render: (_, cruise) => (
+        <div className="flex items-center space-x-1">
+          {getLastStatusIcon(cruise.last_status)}
+          <span className="text-sm">
+            {cruise.last_run_at ? formatDate(cruise.last_run_at) : '-'}
+          </span>
+        </div>
+      ),
+    },
+    {
+      title: '下次执行',
+      dataIndex: 'next_run_at',
+      key: 'next_run_at',
+      width: 170,
+      render: (v: string) => <span className="text-sm">{v ? formatDate(v) : '-'}</span>,
+    },
+    {
+      title: '执行统计',
+      key: 'stats',
+      width: 110,
+      render: (_, cruise) => (
+        <div className="text-sm">
+          <span className="text-green-600">{cruise.success_count}</span>
+          {' / '}
+          <span className="text-red-600">{cruise.fail_count}</span>
+          {' / '}
+          <span>{cruise.run_count}</span>
+        </div>
+      ),
+    },
+    {
+      title: '启用',
+      key: 'enabled',
+      width: 70,
+      render: (_, cruise) => (
+        <Switch
+          checked={cruise.status === 'enabled' || cruise.status === 'running'}
+          onChange={() => handleToggle(cruise)}
+          disabled={cruise.status === 'running'}
+        />
+      ),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 160,
+      render: (_, cruise) => (
+        <div className="flex items-center justify-end gap-1">
+          <Button
+            type="text"
+            title="立即执行"
+            icon={<Play className="h-4 w-4" />}
+            onClick={() => runMutation.mutate(cruise.id)}
+            disabled={cruise.status === 'running'}
+          />
+          <Button
+            type="text"
+            title="执行日志"
+            icon={<History className="h-4 w-4" />}
+            onClick={() => setLogsDialogCruise(cruise)}
+          />
+          <Button
+            type="text"
+            title="编辑"
+            icon={<Edit className="h-4 w-4" />}
+            onClick={() => openEditDialog(cruise)}
+          />
+          <Button
+            type="text"
+            danger
+            title="删除"
+            icon={<Trash2 className="h-4 w-4" />}
+            onClick={() => deleteMutation.mutate(cruise.id)}
+          />
+        </div>
+      ),
+    },
+  ]
 
   return (
     <div className="space-y-6">
@@ -381,11 +518,11 @@ export default function CruisePage() {
           </div>
         </div>
         <div className="flex items-center space-x-2">
-          <Button variant="outline" onClick={() => refetch()}>
+          <Button onClick={() => refetch()}>
             <RefreshCw className="mr-2 h-4 w-4" />
             刷新
           </Button>
-          <Button onClick={() => setCreateDialogOpen(true)}>
+          <Button type="primary" onClick={() => setCreateDialogOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
             新建巡航
           </Button>
@@ -393,432 +530,232 @@ export default function CruisePage() {
       </div>
 
       {/* 表格 */}
-      <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>名称</TableHead>
-              <TableHead>归属项目</TableHead>
-              <TableHead>状态</TableHead>
-              <TableHead>执行周期</TableHead>
-              <TableHead>目标数量</TableHead>
-              <TableHead>任务类型</TableHead>
-              <TableHead>上次执行</TableHead>
-              <TableHead>下次执行</TableHead>
-              <TableHead>执行统计</TableHead>
-              <TableHead>启用</TableHead>
-              <TableHead className="text-right">操作</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              <TableRow>
-                <TableCell colSpan={11} className="text-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin mx-auto" />
-                </TableCell>
-              </TableRow>
-            ) : data?.items?.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
-                  暂无巡航任务
-                </TableCell>
-              </TableRow>
-            ) : (
-              data?.items?.map((cruise) => (
-                <TableRow key={cruise.id}>
-                  <TableCell>
-                    <div>
-                      <div className="font-medium">{cruise.name}</div>
-                      {cruise.description && (
-                        <div className="text-sm text-muted-foreground truncate max-w-[200px]">
-                          {cruise.description}
+      <Table
+        columns={columns}
+        dataSource={data?.items ?? []}
+        rowKey="id"
+        loading={isLoading}
+        locale={{ emptyText: <EmptyState title="暂无巡航任务" className="border-0" /> }}
+        pagination={tablePagination}
+      />
+
+      {/* 创建/编辑对话框 */}
+      <Modal
+        open={createDialogOpen}
+        onCancel={() => closeDialog()}
+        title={editingCruise ? '编辑巡航任务' : '新建巡航任务'}
+        width={672}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button onClick={closeDialog}>取消</Button>
+            <Button
+              type="primary"
+              onClick={handleSubmit}
+              loading={createMutation.isPending || updateMutation.isPending}
+            >
+              保存
+            </Button>
+          </div>
+        }
+      >
+        <p className="text-sm text-muted-foreground mb-4">
+          配置定时自动扫描任务，系统将按照设定的周期自动执行扫描
+        </p>
+
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">任务名称 *</label>
+              <Input
+                placeholder="例如：每日资产巡航"
+                value={formData.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">任务类型</label>
+              <Select
+                className="w-full"
+                placeholder="选择任务类型"
+                options={TASK_TYPES}
+                value={formData.task_type}
+                onChange={(value) => setFormData({ ...formData, task_type: value })}
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">归属项目 *</label>
+              <Select
+                className="w-full"
+                placeholder="选择资产项目"
+                value={formData.project_id ? String(formData.project_id) : undefined}
+                options={projectList.map((project) => ({
+                  value: String(project.id),
+                  label: project.name,
+                }))}
+                onChange={(value) => {
+                  setFormData({ ...formData, project_id: Number(value) })
+                  setPreview(null)
+                }}
+              />
+              {projectList.length === 0 && (
+                <div className="text-xs text-amber-600">
+                  还没有资产项目，请先到「资产项目」创建
+                </div>
+              )}
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">目标来源</label>
+              <Select
+                className="w-full"
+                placeholder="选择目标来源"
+                value={formData.target_source || 'static'}
+                options={[
+                  { value: 'static', label: '固定目标列表' },
+                  { value: 'project', label: '项目整体资产（自动派生）' },
+                ]}
+                onChange={(value) => {
+                  setFormData({
+                    ...formData,
+                    target_source: value as 'static' | 'project',
+                  })
+                  setPreview(null)
+                }}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium">描述</label>
+            <Input
+              placeholder="任务描述（可选）"
+              value={formData.description}
+              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">执行周期 *</label>
+              <Select
+                className="w-full"
+                placeholder="选择执行周期"
+                options={CRON_PRESETS}
+                value={formData.cron_expr}
+                onChange={(value) => setFormData({ ...formData, cron_expr: value })}
+              />
+              <div className="text-xs text-muted-foreground">
+                当前: <code className="bg-muted px-1 rounded">{formData.cron_expr}</code>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">目标类型</label>
+              <Select
+                className="w-full"
+                placeholder="选择目标类型"
+                options={TARGET_TYPES}
+                value={formData.target_type}
+                onChange={(value) => {
+                  setFormData({ ...formData, target_type: value })
+                  setPreview(null)
+                }}
+              />
+              {isProjectSource && (
+                <div className="text-xs text-muted-foreground">
+                  派生维度：域名会归并到根域，IP / URL / CIDR 会去重
+                </div>
+              )}
+            </div>
+          </div>
+
+          {isProjectSource ? (
+            <div className="space-y-3 rounded-md border bg-muted/30 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium">执行时自动派生</div>
+                  <div className="text-xs text-muted-foreground">
+                    每次执行都会重新读取该项目的种子、站点、原始记录和任务结果，按「
+                    {targetTypeLabel}」归并去重后生成扫描目标。
+                  </div>
+                </div>
+                <Button
+                  size="small"
+                  onClick={handlePreview}
+                  loading={previewLoading}
+                  icon={<RefreshCw className="h-4 w-4" />}
+                >
+                  预览
+                </Button>
+              </div>
+              {preview && (
+                <div className="space-y-2">
+                  <div className="text-xs text-muted-foreground">
+                    共派生 {preview.total} 个{targetTypeLabel}
+                    {preview.truncated && `，执行时取前 ${preview.targets.length} 个`}
+                  </div>
+                  {preview.targets.length === 0 ? (
+                    <div className="rounded bg-background p-2 text-xs text-muted-foreground">
+                      项目里还没有可用的{targetTypeLabel}资产
+                    </div>
+                  ) : (
+                    <div className="max-h-40 overflow-y-auto rounded bg-background p-2 font-mono text-xs">
+                      {preview.targets.slice(0, 50).map((target) => (
+                        <div key={target} className="truncate">
+                          {target}
+                        </div>
+                      ))}
+                      {preview.targets.length > 50 && (
+                        <div className="pt-1 text-muted-foreground">
+                          ... 还有 {preview.targets.length - 50} 个
                         </div>
                       )}
                     </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="text-sm font-medium">{projectName(cruise.project_id)}</div>
-                    <Badge variant="outline" className="mt-1 text-xs">
-                      {cruise.target_source === 'project' ? '项目派生' : '固定目标'}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>{getStatusBadge(cruise.status)}</TableCell>
-                  <TableCell>
-                    <code className="text-xs bg-muted px-1.5 py-0.5 rounded">
-                      {cruise.cron_expr}
-                    </code>
-                  </TableCell>
-                  <TableCell>
-                    {cruise.target_source === 'project' ? (
-                      <span className="text-sm text-muted-foreground">执行时自动派生</span>
-                    ) : (
-                      cruise.targets?.length || 0
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {TASK_TYPES.find((t) => t.value === cruise.task_type)?.label ||
-                      cruise.task_type}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center space-x-1">
-                      {getLastStatusIcon(cruise.last_status)}
-                      <span className="text-sm">
-                        {cruise.last_run_at ? formatDate(cruise.last_run_at) : '-'}
-                      </span>
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-sm">
-                    {cruise.next_run_at ? formatDate(cruise.next_run_at) : '-'}
-                  </TableCell>
-                  <TableCell>
-                    <div className="text-sm">
-                      <span className="text-green-600">{cruise.success_count}</span>
-                      {' / '}
-                      <span className="text-red-600">{cruise.fail_count}</span>
-                      {' / '}
-                      <span>{cruise.run_count}</span>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <Switch
-                      checked={cruise.status === 'enabled' || cruise.status === 'running'}
-                      onCheckedChange={() => handleToggle(cruise)}
-                      disabled={cruise.status === 'running'}
-                    />
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex items-center justify-end space-x-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => runMutation.mutate(cruise.id)}
-                        title="立即执行"
-                        disabled={cruise.status === 'running'}
-                      >
-                        <Play className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setLogsDialogCruise(cruise)}
-                        title="执行日志"
-                      >
-                        <History className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => openEditDialog(cruise)}
-                        title="编辑"
-                      >
-                        <Edit className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => deleteMutation.mutate(cruise.id)}
-                        title="删除"
-                      >
-                        <Trash2 className="h-4 w-4 text-red-500" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <label className="text-sm font-medium">扫描目标 *</label>
+              <Input.TextArea
+                placeholder={'每行一个目标，例如：\nexample.com\n192.168.1.1\n10.0.0.0/24'}
+                rows={6}
+                value={targetsText}
+                onChange={(e) => setTargetsText(e.target.value)}
+              />
+              <div className="text-xs text-muted-foreground">
+                已输入 {targetsText.split('\n').filter((t) => t.trim()).length} 个目标
+              </div>
+            </div>
+          )}
 
-      {/* 分页 */}
-      {data && data.total > 10 && (
-        <div className="flex items-center justify-between">
-          <div className="text-sm text-muted-foreground">
-            共 {data.total} 条记录
-          </div>
-          <div className="flex items-center space-x-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page === 1}
-            >
-              上一页
-            </Button>
-            <span className="text-sm">第 {page} 页</span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setPage((p) => p + 1)}
-              disabled={page * 10 >= data.total}
-            >
-              下一页
-            </Button>
+          <div className="space-y-3">
+            <label className="text-sm font-medium">通知设置</label>
+            <div className="flex items-center space-x-6">
+              <div className="flex items-center space-x-2">
+                <Switch
+                  checked={formData.notify_on_complete}
+                  onChange={(checked) =>
+                    setFormData({ ...formData, notify_on_complete: checked })
+                  }
+                />
+                <label className="text-sm font-normal">完成时通知</label>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Switch
+                  checked={formData.notify_on_vuln}
+                  onChange={(checked) =>
+                    setFormData({ ...formData, notify_on_vuln: checked })
+                  }
+                />
+                <label className="text-sm font-normal">发现漏洞时通知</label>
+              </div>
+            </div>
           </div>
         </div>
-      )}
-
-      {/* 创建/编辑对话框 */}
-      <Dialog open={createDialogOpen} onOpenChange={(open) => !open && closeDialog()}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{editingCruise ? '编辑巡航任务' : '新建巡航任务'}</DialogTitle>
-            <DialogDescription>
-              配置定时自动扫描任务，系统将按照设定的周期自动执行扫描
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4 py-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>任务名称 *</Label>
-                <Input
-                  placeholder="例如：每日资产巡航"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>任务类型</Label>
-                <Select
-                  value={formData.task_type}
-                  onValueChange={(value) => setFormData({ ...formData, task_type: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="选择任务类型" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {TASK_TYPES.map((type) => (
-                      <SelectItem key={type.value} value={type.value}>
-                        {type.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>归属项目 *</Label>
-                <Select
-                  value={formData.project_id ? String(formData.project_id) : ''}
-                  onValueChange={(value) => {
-                    setFormData({ ...formData, project_id: Number(value) })
-                    setPreview(null)
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="选择资产项目" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {projectList.map((project) => (
-                      <SelectItem key={project.id} value={String(project.id)}>
-                        {project.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {projectList.length === 0 && (
-                  <div className="text-xs text-amber-600">
-                    还没有资产项目，请先到「资产项目」创建
-                  </div>
-                )}
-              </div>
-              <div className="space-y-2">
-                <Label>目标来源</Label>
-                <Select
-                  value={formData.target_source || 'static'}
-                  onValueChange={(value) => {
-                    setFormData({
-                      ...formData,
-                      target_source: value as 'static' | 'project',
-                    })
-                    setPreview(null)
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="选择目标来源" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="static">固定目标列表</SelectItem>
-                    <SelectItem value="project">项目整体资产（自动派生）</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label>描述</Label>
-              <Input
-                placeholder="任务描述（可选）"
-                value={formData.description}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>执行周期 *</Label>
-                <Select
-                  value={formData.cron_expr}
-                  onValueChange={(value) => setFormData({ ...formData, cron_expr: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="选择执行周期" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CRON_PRESETS.map((preset) => (
-                      <SelectItem key={preset.value} value={preset.value}>
-                        {preset.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <div className="text-xs text-muted-foreground">
-                  当前: <code className="bg-muted px-1 rounded">{formData.cron_expr}</code>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label>目标类型</Label>
-                <Select
-                  value={formData.target_type}
-                  onValueChange={(value) => {
-                    setFormData({ ...formData, target_type: value })
-                    setPreview(null)
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="选择目标类型" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {TARGET_TYPES.map((type) => (
-                      <SelectItem key={type.value} value={type.value}>
-                        {type.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {isProjectSource && (
-                  <div className="text-xs text-muted-foreground">
-                    派生维度：域名会归并到根域，IP / URL / CIDR 会去重
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {isProjectSource ? (
-              <div className="space-y-3 rounded-md border bg-muted/30 p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-medium">执行时自动派生</div>
-                    <div className="text-xs text-muted-foreground">
-                      每次执行都会重新读取该项目的种子、站点、原始记录和任务结果，按「
-                      {targetTypeLabel}」归并去重后生成扫描目标。
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handlePreview}
-                    disabled={previewLoading}
-                  >
-                    {previewLoading ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <RefreshCw className="mr-2 h-4 w-4" />
-                    )}
-                    预览
-                  </Button>
-                </div>
-                {preview && (
-                  <div className="space-y-2">
-                    <div className="text-xs text-muted-foreground">
-                      共派生 {preview.total} 个{targetTypeLabel}
-                      {preview.truncated && `，执行时取前 ${preview.targets.length} 个`}
-                    </div>
-                    {preview.targets.length === 0 ? (
-                      <div className="rounded bg-background p-2 text-xs text-muted-foreground">
-                        项目里还没有可用的{targetTypeLabel}资产
-                      </div>
-                    ) : (
-                      <div className="max-h-40 overflow-y-auto rounded bg-background p-2 font-mono text-xs">
-                        {preview.targets.slice(0, 50).map((target) => (
-                          <div key={target} className="truncate">
-                            {target}
-                          </div>
-                        ))}
-                        {preview.targets.length > 50 && (
-                          <div className="pt-1 text-muted-foreground">
-                            ... 还有 {preview.targets.length - 50} 个
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <Label>扫描目标 *</Label>
-                <Textarea
-                  placeholder="每行一个目标，例如：&#10;example.com&#10;192.168.1.1&#10;10.0.0.0/24"
-                  rows={6}
-                  value={targetsText}
-                  onChange={(e) => setTargetsText(e.target.value)}
-                />
-                <div className="text-xs text-muted-foreground">
-                  已输入 {targetsText.split('\n').filter((t) => t.trim()).length} 个目标
-                </div>
-              </div>
-            )}
-
-            <div className="space-y-3">
-              <Label>通知设置</Label>
-              <div className="flex items-center space-x-6">
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    checked={formData.notify_on_complete}
-                    onCheckedChange={(checked) =>
-                      setFormData({ ...formData, notify_on_complete: checked })
-                    }
-                  />
-                  <Label className="font-normal">完成时通知</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    checked={formData.notify_on_vuln}
-                    onCheckedChange={(checked) =>
-                      setFormData({ ...formData, notify_on_vuln: checked })
-                    }
-                  />
-                  <Label className="font-normal">发现漏洞时通知</Label>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={closeDialog}>
-              取消
-            </Button>
-            <Button
-              onClick={handleSubmit}
-              disabled={createMutation.isPending || updateMutation.isPending}
-            >
-              {createMutation.isPending || updateMutation.isPending ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  保存中...
-                </>
-              ) : (
-                '保存'
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      </Modal>
 
       {/* 执行日志对话框 */}
       {logsDialogCruise && (

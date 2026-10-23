@@ -1,45 +1,23 @@
 import { useState, useRef } from 'react'
 import {keepPreviousData, useQuery, useMutation, useQueryClient} from '@tanstack/react-query'
 import { pocApi, POC, CreatePOCRequest } from '@/api/pocs'
-import { Button } from '@/components/ui/button'
+import { Button, Dropdown, Input, Modal, Select, Switch, Table, Tag } from 'antd'
+import type { TableProps } from 'antd'
 import { useConfirm } from '@/components/common/confirm-provider'
-import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
-import { Switch } from '@/components/ui/switch'
-import { Label } from '@/components/ui/label'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from '@/components/ui/dialog'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { Textarea } from '@/components/ui/textarea'
+import EmptyState from '@/components/common/EmptyState'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate, getSeverityColor } from '@/lib/utils'
 import { Search, Plus, Eye, Upload, RefreshCw, Trash2, FileArchive, FileText, ChevronDown } from 'lucide-react'
-import { Checkbox } from '@/components/ui/checkbox'
+
+// shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
+const badgeCls = (variant: 'default' | 'secondary' | 'destructive' | 'outline') =>
+  variant === 'default'
+    ? 'border-transparent bg-primary text-primary-foreground'
+    : variant === 'secondary'
+      ? 'border-transparent bg-secondary text-secondary-foreground'
+      : variant === 'destructive'
+        ? 'border-transparent bg-destructive text-destructive-foreground'
+        : ''
 
 export default function POCsPage() {
   const confirm = useConfirm()
@@ -127,7 +105,7 @@ export default function POCsPage() {
     mutationFn: pocApi.batchDelete,
     onSuccess: (response) => {
       const result = response.data || response
-      toast({ 
+      toast({
         title: '批量删除完成',
         description: `成功删除 ${result.deleted} 个，失败 ${result.failed} 个`
       })
@@ -138,22 +116,6 @@ export default function POCsPage() {
       toast({ title: '批量删除失败', variant: 'destructive' })
     },
   })
-
-  const handleSelectAll = (checked: boolean) => {
-    if (checked) {
-      setSelectedIds(pocs.map(p => p.id))
-    } else {
-      setSelectedIds([])
-    }
-  }
-
-  const handleSelectOne = (id: string, checked: boolean) => {
-    if (checked) {
-      setSelectedIds(prev => [...prev, id])
-    } else {
-      setSelectedIds(prev => prev.filter(i => i !== id))
-    }
-  }
 
   const handleBatchDelete = async () => {
     if (selectedIds.length === 0) {
@@ -169,7 +131,7 @@ export default function POCsPage() {
     mutationFn: pocApi.clearAll,
     onSuccess: (response) => {
       const result = response.data || response
-      toast({ 
+      toast({
         title: '清除完成',
         description: `已删除 ${result.deleted} 个POC`
       })
@@ -215,10 +177,10 @@ export default function POCsPage() {
     const reader = new FileReader()
     reader.onload = (event) => {
       const content = event.target?.result as string
-      
+
       // 尝试解析 Nuclei YAML 模板
       const parsedPOC = parseNucleiTemplate(content, file.name)
-      
+
       setNewPOC(parsedPOC)
       setIsCreateDialogOpen(true)
     }
@@ -243,27 +205,27 @@ export default function POCsPage() {
     try {
       // 简单解析 YAML（不使用库，手动匹配关键字段）
       const lines = content.split('\n')
-      
+
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim()
-        
+
         // 解析 id
         if (line.startsWith('id:')) {
           const id = line.replace('id:', '').trim().replace(/['"]/g, '')
           result.name = id
         }
-        
+
         // 解析 name
         if (line.startsWith('name:')) {
           const name = line.replace('name:', '').trim().replace(/['"]/g, '')
           if (name) result.name = name
         }
-        
+
         // 解析 author
         if (line.startsWith('author:')) {
           result.author = line.replace('author:', '').trim().replace(/['"]/g, '')
         }
-        
+
         // 解析 severity
         if (line.startsWith('severity:')) {
           const severity = line.replace('severity:', '').trim().toLowerCase().replace(/['"]/g, '')
@@ -271,7 +233,7 @@ export default function POCsPage() {
             result.severity = severity
           }
         }
-        
+
         // 解析 description
         if (line.startsWith('description:')) {
           let desc = line.replace('description:', '').trim()
@@ -289,7 +251,7 @@ export default function POCsPage() {
           }
           result.description = desc.replace(/['"]/g, '').trim()
         }
-        
+
         // 解析 tags
         if (line.startsWith('tags:')) {
           const tagsStr = line.replace('tags:', '').trim().replace(/['"]/g, '')
@@ -297,7 +259,7 @@ export default function POCsPage() {
             result.tags = tagsStr.split(',').map(t => t.trim()).filter(Boolean)
           }
         }
-        
+
         // 解析 cve-id
         if (line.includes('cve-id:') || line.includes('cveid:')) {
           // 可能是数组格式
@@ -319,7 +281,7 @@ export default function POCsPage() {
           }
         }
       }
-      
+
       // 如果在 content 中找到 CVE 但没解析到，尝试全文搜索
       if (!result.cveId) {
         const cveMatch = content.match(/CVE-\d{4}-\d+/i)
@@ -351,8 +313,8 @@ export default function POCsPage() {
       const imported = result.imported ?? 0
       const failed = result.failed ?? 0
       const skipped = result.skipped ?? 0
-      
-      toast({ 
+
+      toast({
         title: 'ZIP 导入完成',
         description: `成功导入 ${imported} 个POC，失败 ${failed} 个，跳过 ${skipped} 个`,
       })
@@ -369,7 +331,6 @@ export default function POCsPage() {
 
   const pocs = data?.data?.list || []
   const total = data?.data?.total || 0
-  const totalPages = Math.ceil(total / 10)
 
   const getSeverityLabel = (severity: string) => {
     const labels: Record<string, string> = {
@@ -381,6 +342,97 @@ export default function POCsPage() {
     }
     return labels[severity] || severity
   }
+
+  const columns: TableProps<POC>['columns'] = [
+    {
+      title: '名称',
+      dataIndex: 'name',
+      key: 'name',
+      ellipsis: true,
+      render: (v: string) => <span className="font-medium max-w-xs truncate">{v}</span>,
+    },
+    {
+      title: '类型',
+      dataIndex: 'type',
+      key: 'type',
+      width: 100,
+      render: (v: string) => <Tag>{v}</Tag>,
+    },
+    {
+      title: '严重程度',
+      dataIndex: 'severity',
+      key: 'severity',
+      width: 100,
+      render: (v: string) => <Tag className={cn(getSeverityColor(v))}>{getSeverityLabel(v)}</Tag>,
+    },
+    {
+      title: 'CVE',
+      dataIndex: 'cveId',
+      key: 'cveId',
+      width: 130,
+      render: (v: string) => v || '-',
+    },
+    {
+      title: '标签',
+      key: 'tags',
+      width: 160,
+      render: (_, poc) => (
+        <div className="flex gap-1 flex-wrap max-w-32">
+          {poc.tags?.slice(0, 2).map((tag) => (
+            <Tag key={tag} className={cn('text-xs', badgeCls('secondary'))}>
+              {tag}
+            </Tag>
+          ))}
+          {poc.tags && poc.tags.length > 2 && (
+            <Tag className={cn('text-xs', badgeCls('secondary'))}>+{poc.tags.length - 2}</Tag>
+          )}
+        </div>
+      ),
+    },
+    {
+      title: '启用',
+      dataIndex: 'enabled',
+      key: 'enabled',
+      width: 80,
+      render: (v: boolean, poc) => (
+        <Switch
+          checked={v}
+          onChange={(checked) => toggleMutation.mutate({ id: poc.id, enabled: checked })}
+        />
+      ),
+    },
+    {
+      title: '更新时间',
+      dataIndex: 'updatedAt',
+      key: 'updatedAt',
+      width: 150,
+      render: (v: string) => formatDate(v),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 100,
+      render: (_, poc) => (
+        <div className="flex gap-1">
+          <Button
+            type="text"
+            size="small"
+            aria-label="查看POC"
+            icon={<Eye className="h-4 w-4" />}
+            onClick={() => setSelectedPOC(poc)}
+          />
+          <Button
+            type="text"
+            size="small"
+            danger
+            aria-label="删除POC"
+            icon={<Trash2 className="h-4 w-4" />}
+            onClick={() => deleteMutation.mutate(poc.id)}
+          />
+        </div>
+      ),
+    },
+  ]
 
   return (
     <div className="space-y-6">
@@ -404,39 +456,44 @@ export default function POCsPage() {
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold">POC管理</h1>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => refetch()}>
+          <Button size="small" onClick={() => refetch()}>
             <RefreshCw className="h-4 w-4 mr-2" />
             刷新
           </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" disabled={isImporting}>
-                <Upload className="h-4 w-4 mr-2" />
-                {isImporting ? '导入中...' : '导入'}
-                <ChevronDown className="h-4 w-4 ml-2" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onSelect={(e) => { e.preventDefault(); handleImport(); }}>
-                <FileText className="h-4 w-4 mr-2" />
-                导入单个文件 (YAML/JSON)
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={(e) => { e.preventDefault(); handleZipImport(); }}>
-                <FileArchive className="h-4 w-4 mr-2" />
-                批量导入 (ZIP包)
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Button size="sm" onClick={() => setIsCreateDialogOpen(true)}>
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              items: [
+                {
+                  key: 'file',
+                  icon: <FileText className="h-4 w-4" style={{ fontSize: 0 }} />,
+                  label: '导入单个文件 (YAML/JSON)',
+                  onClick: () => handleImport(),
+                },
+                {
+                  key: 'zip',
+                  icon: <FileArchive className="h-4 w-4" style={{ fontSize: 0 }} />,
+                  label: '批量导入 (ZIP包)',
+                  onClick: () => handleZipImport(),
+                },
+              ],
+            }}
+          >
+            <Button size="small" disabled={isImporting}>
+              <Upload className="h-4 w-4 mr-2" />
+              {isImporting ? '导入中...' : '导入'}
+              <ChevronDown className="h-4 w-4 ml-2" />
+            </Button>
+          </Dropdown>
+          <Button size="small" type="primary" onClick={() => setIsCreateDialogOpen(true)}>
             <Plus className="h-4 w-4 mr-2" />
             新建POC
           </Button>
-          <Button 
-            variant="outline" 
-            size="sm" 
+          <Button
+            danger
+            size="small"
             onClick={handleClearAll}
             disabled={clearAllMutation.isPending || total === 0}
-            className="text-destructive hover:text-destructive"
           >
             <Trash2 className="h-4 w-4 mr-2" />
             {clearAllMutation.isPending ? '清除中...' : '清除所有'}
@@ -447,7 +504,7 @@ export default function POCsPage() {
       {/* Search */}
       <div className="flex gap-4 items-center">
         <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground z-10" />
           <Input
             placeholder="搜索POC..."
             className="pl-9"
@@ -456,9 +513,10 @@ export default function POCsPage() {
           />
         </div>
         {selectedIds.length > 0 && (
-          <Button 
-            variant="destructive" 
-            size="sm"
+          <Button
+            type="primary"
+            danger
+            size="small"
             onClick={handleBatchDelete}
             disabled={batchDeleteMutation.isPending}
           >
@@ -470,274 +528,170 @@ export default function POCsPage() {
 
       {/* Table */}
       <div className="border rounded-lg">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-12">
-                <Checkbox
-                  checked={pocs.length > 0 && selectedIds.length === pocs.length}
-                  onCheckedChange={handleSelectAll}
-                />
-              </TableHead>
-              <TableHead>名称</TableHead>
-              <TableHead>类型</TableHead>
-              <TableHead>严重程度</TableHead>
-              <TableHead>CVE</TableHead>
-              <TableHead>标签</TableHead>
-              <TableHead>启用</TableHead>
-              <TableHead>更新时间</TableHead>
-              <TableHead>操作</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              <TableRow>
-                <TableCell colSpan={9} className="text-center py-8">
-                  加载中...
-                </TableCell>
-              </TableRow>
-            ) : pocs.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
-                  暂无数据
-                </TableCell>
-              </TableRow>
-            ) : (
-              pocs.map((poc) => (
-                <TableRow key={poc.id}>
-                  <TableCell>
-                    <Checkbox
-                      checked={selectedIds.includes(poc.id)}
-                      onCheckedChange={(checked) => handleSelectOne(poc.id, !!checked)}
-                    />
-                  </TableCell>
-                  <TableCell className="font-medium max-w-xs truncate">{poc.name}</TableCell>
-                  <TableCell>
-                    <Badge variant="outline">{poc.type}</Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Badge className={cn(getSeverityColor(poc.severity))}>
-                      {getSeverityLabel(poc.severity)}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>{poc.cveId || '-'}</TableCell>
-                  <TableCell>
-                    <div className="flex gap-1 flex-wrap max-w-32">
-                      {poc.tags?.slice(0, 2).map((tag) => (
-                        <Badge key={tag} variant="secondary" className="text-xs">
-                          {tag}
-                        </Badge>
-                      ))}
-                      {poc.tags && poc.tags.length > 2 && (
-                        <Badge variant="secondary" className="text-xs">+{poc.tags.length - 2}</Badge>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <Switch
-                      checked={poc.enabled}
-                      onCheckedChange={(checked) =>
-                        toggleMutation.mutate({ id: poc.id, enabled: checked })
-                      }
-                    />
-                  </TableCell>
-                  <TableCell>{formatDate(poc.updatedAt)}</TableCell>
-                  <TableCell>
-                    <div className="flex gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setSelectedPOC(poc)}
-                      >
-                        <Eye className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => deleteMutation.mutate(poc.id)}
-                      >
-                        <Trash2 className="h-4 w-4 text-destructive" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
+        <Table
+          rowSelection={{
+            selectedRowKeys: selectedIds,
+            onChange: (keys) => setSelectedIds(keys as string[]),
+          }}
+          columns={columns}
+          dataSource={pocs}
+          rowKey="id"
+          loading={isLoading}
+          locale={{ emptyText: <EmptyState title="暂无数据" className="border-0" /> }}
+          pagination={{
+            current: page,
+            pageSize: 10,
+            total,
+            showQuickJumper: true,
+            // page_size 固定 10、无独立 pageSize 状态，不展示切换器
+            showSizeChanger: false,
+            hideOnSinglePage: true,
+            onChange: (p) => setPage(p),
+          }}
+        />
       </div>
 
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex justify-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page === 1}
-            onClick={() => setPage(page - 1)}
-          >
-            上一页
-          </Button>
-          <span className="py-2 px-4 text-sm">
-            {page} / {totalPages}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page === totalPages}
-            onClick={() => setPage(page + 1)}
-          >
-            下一页
-          </Button>
-        </div>
-      )}
-
       {/* POC Detail Dialog */}
-      <Dialog open={!!selectedPOC} onOpenChange={() => setSelectedPOC(null)}>
-        <DialogContent className="max-w-3xl max-h-[80vh] overflow-auto">
-          <DialogHeader>
-            <DialogTitle>{selectedPOC?.name}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="grid grid-cols-3 gap-4">
-              <div>
-                <p className="text-sm text-muted-foreground">类型</p>
-                <p className="font-medium">{selectedPOC?.type}</p>
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">CVE</p>
-                <p className="font-medium">{selectedPOC?.cveId || '-'}</p>
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">作者</p>
-                <p className="font-medium">{selectedPOC?.author || '-'}</p>
-              </div>
-            </div>
-            {selectedPOC?.description && (
-              <div>
-                <p className="text-sm text-muted-foreground mb-1">描述</p>
-                <p className="text-sm">{selectedPOC.description}</p>
-              </div>
-            )}
-            {selectedPOC?.tags && selectedPOC.tags.length > 0 && (
-              <div>
-                <p className="text-sm text-muted-foreground mb-1">标签</p>
-                <div className="flex gap-1 flex-wrap">
-                  {selectedPOC.tags.map((tag) => (
-                    <Badge key={tag} variant="outline">
-                      {tag}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-            )}
+      <Modal
+        open={!!selectedPOC}
+        title={selectedPOC?.name}
+        width={768}
+        footer={null}
+        onCancel={() => setSelectedPOC(null)}
+      >
+        <div className="space-y-4 py-2">
+          <div className="grid grid-cols-3 gap-4">
             <div>
-              <p className="text-sm text-muted-foreground mb-1">代码</p>
-              <Textarea
-                value={selectedPOC?.content || ''}
-                readOnly
-                className="font-mono text-sm h-64"
-              />
+              <p className="text-sm text-muted-foreground">类型</p>
+              <p className="font-medium">{selectedPOC?.type}</p>
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground">CVE</p>
+              <p className="font-medium">{selectedPOC?.cveId || '-'}</p>
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground">作者</p>
+              <p className="font-medium">{selectedPOC?.author || '-'}</p>
             </div>
           </div>
-        </DialogContent>
-      </Dialog>
+          {selectedPOC?.description && (
+            <div>
+              <p className="text-sm text-muted-foreground mb-1">描述</p>
+              <p className="text-sm">{selectedPOC.description}</p>
+            </div>
+          )}
+          {selectedPOC?.tags && selectedPOC.tags.length > 0 && (
+            <div>
+              <p className="text-sm text-muted-foreground mb-1">标签</p>
+              <div className="flex gap-1 flex-wrap">
+                {selectedPOC.tags.map((tag) => (
+                  <Tag key={tag}>{tag}</Tag>
+                ))}
+              </div>
+            </div>
+          )}
+          <div>
+            <p className="text-sm text-muted-foreground mb-1">代码</p>
+            <Input.TextArea
+              value={selectedPOC?.content || ''}
+              readOnly
+              rows={10}
+              className="font-mono text-sm"
+            />
+          </div>
+        </div>
+      </Modal>
 
       {/* Create POC Dialog */}
-      <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-        <DialogContent className="max-w-3xl max-h-[80vh] overflow-auto">
-          <DialogHeader>
-            <DialogTitle>新建 POC</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>名称 *</Label>
-                <Input
-                  value={newPOC.name}
-                  onChange={(e) => setNewPOC({ ...newPOC, name: e.target.value })}
-                  placeholder="POC 名称"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>类型</Label>
-                <Select
-                  value={newPOC.type}
-                  onValueChange={(v) => setNewPOC({ ...newPOC, type: v })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="nuclei">Nuclei</SelectItem>
-                    <SelectItem value="xray">Xray</SelectItem>
-                    <SelectItem value="custom">自定义</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>严重程度</Label>
-                <Select
-                  value={newPOC.severity}
-                  onValueChange={(v) => setNewPOC({ ...newPOC, severity: v })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="critical">严重</SelectItem>
-                    <SelectItem value="high">高危</SelectItem>
-                    <SelectItem value="medium">中危</SelectItem>
-                    <SelectItem value="low">低危</SelectItem>
-                    <SelectItem value="info">信息</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>CVE ID</Label>
-                <Input
-                  value={newPOC.cveId}
-                  onChange={(e) => setNewPOC({ ...newPOC, cveId: e.target.value })}
-                  placeholder="CVE-XXXX-XXXX"
-                />
-              </div>
-            </div>
+      <Modal
+        open={isCreateDialogOpen}
+        title="新建 POC"
+        width={768}
+        onCancel={() => setIsCreateDialogOpen(false)}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setIsCreateDialogOpen(false)}>取消</Button>
+            <Button type="primary" onClick={handleCreate} loading={createMutation.isPending}>
+              创建
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-4 py-2">
+          <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>描述</Label>
+              <label className="text-sm font-medium">名称 *</label>
               <Input
-                value={newPOC.description}
-                onChange={(e) => setNewPOC({ ...newPOC, description: e.target.value })}
-                placeholder="POC 描述"
+                value={newPOC.name}
+                onChange={(e) => setNewPOC({ ...newPOC, name: e.target.value })}
+                placeholder="POC 名称"
               />
             </div>
             <div className="space-y-2">
-              <Label>标签 (逗号分隔)</Label>
-              <Input
-                value={newPOC.tags?.join(', ')}
-                onChange={(e) => setNewPOC({ ...newPOC, tags: e.target.value.split(',').map(t => t.trim()).filter(Boolean) })}
-                placeholder="web, rce, sql"
+              <label className="text-sm font-medium">类型</label>
+              <Select
+                className="w-full"
+                value={newPOC.type}
+                onChange={(v) => setNewPOC({ ...newPOC, type: v })}
+                options={[
+                  { value: 'nuclei', label: 'Nuclei' },
+                  { value: 'xray', label: 'Xray' },
+                  { value: 'custom', label: '自定义' },
+                ]}
               />
             </div>
             <div className="space-y-2">
-              <Label>POC 内容 *</Label>
-              <Textarea
-                value={newPOC.content}
-                onChange={(e) => setNewPOC({ ...newPOC, content: e.target.value })}
-                placeholder="POC YAML/JSON 内容"
-                className="font-mono text-sm h-64"
+              <label className="text-sm font-medium">严重程度</label>
+              <Select
+                className="w-full"
+                value={newPOC.severity}
+                onChange={(v) => setNewPOC({ ...newPOC, severity: v })}
+                options={[
+                  { value: 'critical', label: '严重' },
+                  { value: 'high', label: '高危' },
+                  { value: 'medium', label: '中危' },
+                  { value: 'low', label: '低危' },
+                  { value: 'info', label: '信息' },
+                ]}
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">CVE ID</label>
+              <Input
+                value={newPOC.cveId}
+                onChange={(e) => setNewPOC({ ...newPOC, cveId: e.target.value })}
+                placeholder="CVE-XXXX-XXXX"
               />
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsCreateDialogOpen(false)}>
-              取消
-            </Button>
-            <Button onClick={handleCreate} disabled={createMutation.isPending}>
-              创建
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">描述</label>
+            <Input
+              value={newPOC.description}
+              onChange={(e) => setNewPOC({ ...newPOC, description: e.target.value })}
+              placeholder="POC 描述"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">标签 (逗号分隔)</label>
+            <Input
+              value={newPOC.tags?.join(', ')}
+              onChange={(e) => setNewPOC({ ...newPOC, tags: e.target.value.split(',').map(t => t.trim()).filter(Boolean) })}
+              placeholder="web, rce, sql"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">POC 内容 *</label>
+            <Input.TextArea
+              value={newPOC.content}
+              onChange={(e) => setNewPOC({ ...newPOC, content: e.target.value })}
+              placeholder="POC YAML/JSON 内容"
+              rows={10}
+              className="font-mono text-sm"
+            />
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }

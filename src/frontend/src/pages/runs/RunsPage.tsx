@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import {keepPreviousData, useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import { Activity, Play, RefreshCw } from 'lucide-react'
+import { Button, Card, Select, Table, Tag } from 'antd'
+import type { TableProps } from 'antd'
 
 import { projectApi } from '@/api/projects'
 import {
@@ -10,17 +12,7 @@ import {
   targetStateLabel,
   type RunTarget,
 } from '@/api/runs'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import EmptyState from '@/components/common/EmptyState'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
@@ -49,6 +41,16 @@ const TARGET_STATES = [
   { value: 'failed', label: '失败' },
   { value: 'skipped', label: '跳过' },
 ]
+
+// shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
+const badgeCls = (variant: 'default' | 'secondary' | 'destructive' | 'outline') =>
+  variant === 'default'
+    ? 'border-transparent bg-primary text-primary-foreground'
+    : variant === 'secondary'
+      ? 'border-transparent bg-secondary text-secondary-foreground'
+      : variant === 'destructive'
+        ? 'border-transparent bg-destructive text-destructive-foreground'
+        : ''
 
 export default function RunsPage() {
   const { toast } = useToast()
@@ -104,6 +106,72 @@ export default function RunsPage() {
   const targetStats = detail.data?.data?.target_stats ?? {}
   const targetList: RunTarget[] = targets.data?.data ?? []
 
+  const runColumns: TableProps<(typeof list)[number]>['columns'] = [
+    {
+      title: '批次',
+      dataIndex: 'id',
+      key: 'id',
+      width: 70,
+      render: (v: number) => <span className="font-mono text-sm">#{v}</span>,
+    },
+    {
+      title: '项目',
+      dataIndex: 'project_id',
+      key: 'project_id',
+      render: (v: number) => <span className="text-sm">{projectName(v)}</span>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 100,
+      render: (v: string) => (
+        <Tag className={badgeCls(runStatusVariant(v))}>{runStatusLabel[v] ?? v}</Tag>
+      ),
+    },
+    {
+      title: '周期开始',
+      dataIndex: 'cycle_start',
+      key: 'cycle_start',
+      width: 140,
+      render: (v: string) => (
+        <span className="text-xs text-muted-foreground">{formatDate(v)}</span>
+      ),
+    },
+    {
+      title: '目标',
+      key: 'targets',
+      width: 90,
+      render: (_, r) => <span className="text-sm">{targetTotal(r.stats) ?? '—'}</span>,
+    },
+  ]
+
+  const targetColumns: TableProps<RunTarget>['columns'] = [
+    {
+      title: '目标',
+      key: 'host_port',
+      render: (_, t) => <span className="font-mono text-xs">{t.host}:{t.port}</span>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'state',
+      key: 'state',
+      width: 80,
+      render: (v: string) => (
+        <Tag className={badgeCls(v === 'failed' ? 'destructive' : 'outline')}>
+          {targetStateLabel[v] ?? v}
+        </Tag>
+      ),
+    },
+    {
+      title: '尝试',
+      dataIndex: 'attempts',
+      key: 'attempts',
+      width: 60,
+      render: (v: number) => <span className="text-xs">{v}</span>,
+    },
+  ]
+
   return (
     <div className="space-y-5 p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -114,20 +182,17 @@ export default function RunsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Select value={projectId} onValueChange={(v) => setProjectId(v)}>
-            <SelectTrigger className="w-44">
-              <SelectValue placeholder="全部项目" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="0">全部项目</SelectItem>
-              {(projects.data?.data ?? []).map((p) => (
-                <SelectItem key={p.id} value={String(p.id)}>
-                  {p.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button variant="outline" onClick={() => runs.refetch()}>
+          <Select
+            className="w-44"
+            value={projectId}
+            placeholder="全部项目"
+            onChange={(v) => setProjectId(v)}
+            options={[
+              { value: '0', label: '全部项目' },
+              ...(projects.data?.data ?? []).map((p) => ({ value: String(p.id), label: p.name })),
+            ]}
+          />
+          <Button onClick={() => runs.refetch()}>
             <RefreshCw className="mr-2 h-4 w-4" /> 刷新
           </Button>
         </div>
@@ -135,67 +200,37 @@ export default function RunsPage() {
 
       <div className="grid gap-4 xl:grid-cols-5">
         <div className="rounded-md border xl:col-span-3">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-[70px]">批次</TableHead>
-                <TableHead>项目</TableHead>
-                <TableHead className="w-[100px]">状态</TableHead>
-                <TableHead className="w-[140px]">周期开始</TableHead>
-                <TableHead className="w-[90px]">目标</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {runs.isLoading && (
-                <TableRow>
-                  <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
-                    加载中…
-                  </TableCell>
-                </TableRow>
-              )}
-              {!runs.isLoading && list.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
-                    还没有批次（计划到点或手动触发后会生成）
-                  </TableCell>
-                </TableRow>
-              )}
-              {list.map((r) => {
-                const targetCount = targetTotal(r.stats)
-                return (
-                  <TableRow
-                    key={r.id}
-                    className={
-                      'cursor-pointer ' + (selectedId === r.id ? 'bg-muted/60' : '')
-                    }
-                    onClick={() => setSelectedId(r.id)}
-                  >
-                    <TableCell className="font-mono text-sm">#{r.id}</TableCell>
-                    <TableCell className="text-sm">{projectName(r.project_id)}</TableCell>
-                    <TableCell>
-                      <Badge variant={runStatusVariant(r.status)}>
-                        {runStatusLabel[r.status] ?? r.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {formatDate(r.cycle_start)}
-                    </TableCell>
-                    <TableCell className="text-sm">{targetCount ?? '—'}</TableCell>
-                  </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
+          <Table
+            columns={runColumns}
+            dataSource={list}
+            rowKey="id"
+            loading={runs.isLoading}
+            pagination={false}
+            locale={{
+              emptyText: (
+                <EmptyState
+                  title="还没有批次（计划到点或手动触发后会生成）"
+                  className="border-0"
+                />
+              ),
+            }}
+            onRow={(r) => ({
+              onClick: () => setSelectedId(r.id),
+              className: 'cursor-pointer' + (selectedId === r.id ? ' bg-muted/60' : ''),
+            })}
+          />
         </div>
 
-        <Card className="xl:col-span-2">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
+        <Card
+          className="xl:col-span-2"
+          title={
+            <span className="flex items-center gap-2 text-base">
               <Activity className="h-4 w-4" />
               {run ? `批次 #${run.id}` : '批次详情'}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
+            </span>
+          }
+        >
+          <div className="space-y-4">
             {!run && (
               <p className="text-sm text-muted-foreground">
                 从左侧选择一个批次，查看执行单元与统计
@@ -210,9 +245,9 @@ export default function RunsPage() {
                   <dd className="font-mono">#{run.plan_id}</dd>
                   <dt className="text-muted-foreground">状态</dt>
                   <dd>
-                    <Badge variant={runStatusVariant(run.status)}>
+                    <Tag className={badgeCls(runStatusVariant(run.status))}>
                       {runStatusLabel[run.status] ?? run.status}
-                    </Badge>
+                    </Tag>
                   </dd>
                   <dt className="text-muted-foreground">周期开始</dt>
                   <dd className="text-xs">{formatDate(run.cycle_start)}</dd>
@@ -224,9 +259,9 @@ export default function RunsPage() {
 
                 <div className="flex flex-wrap gap-2">
                   {Object.entries(targetStats).map(([state, n]) => (
-                    <Badge key={state} variant="outline">
+                    <Tag key={state}>
                       {targetStateLabel[state] ?? state} {n}
-                    </Badge>
+                    </Tag>
                   ))}
                   {Object.keys(targetStats).length === 0 && (
                     <span className="text-sm text-muted-foreground">暂无执行单元统计</span>
@@ -235,6 +270,7 @@ export default function RunsPage() {
 
                 {isAdmin && (
                   <Button
+                    type="primary"
                     className="w-full"
                     onClick={() => execute.mutate()}
                     disabled={execute.isPending || run.status === 'done' || run.status === 'failed'}
@@ -265,49 +301,22 @@ export default function RunsPage() {
                     </span>
                   </div>
                   <div className="max-h-[360px] overflow-auto rounded-md border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>目标</TableHead>
-                          <TableHead className="w-[80px]">状态</TableHead>
-                          <TableHead className="w-[60px]">尝试</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {targets.isLoading && (
-                          <TableRow>
-                            <TableCell colSpan={3} className="py-6 text-center text-muted-foreground">
-                              加载中…
-                            </TableCell>
-                          </TableRow>
-                        )}
-                        {!targets.isLoading && targetList.length === 0 && (
-                          <TableRow>
-                            <TableCell colSpan={3} className="py-6 text-center text-muted-foreground">
-                              没有执行单元
-                            </TableCell>
-                          </TableRow>
-                        )}
-                        {targetList.map((t) => (
-                          <TableRow key={t.id}>
-                            <TableCell className="font-mono text-xs">
-                              {t.host}:{t.port}
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant={t.state === 'failed' ? 'destructive' : 'outline'}>
-                                {targetStateLabel[t.state] ?? t.state}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="text-xs">{t.attempts}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
+                    <Table
+                      columns={targetColumns}
+                      dataSource={targetList}
+                      rowKey="id"
+                      loading={targets.isLoading}
+                      pagination={false}
+                      size="small"
+                      locale={{
+                        emptyText: <EmptyState title="没有执行单元" className="border-0 py-6" />,
+                      }}
+                    />
                   </div>
                 </div>
               </>
             )}
-          </CardContent>
+          </div>
         </Card>
       </div>
     </div>

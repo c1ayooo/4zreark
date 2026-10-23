@@ -1,8 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { vulnApi, VulnStatistics } from '@/api/vulnerabilities'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Card, Skeleton, Statistic, Tag } from 'antd'
 import { cn, formatDate, getSeverityColor, getStatusColor } from '@/lib/utils'
 import {
   AlertTriangle,
@@ -98,10 +96,7 @@ export default function VulnDashboard({ workspaceId }: VulnDashboardProps) {
         {isLoading ? (
           Array.from({ length: 5 }).map((_, i) => (
             <Card key={i}>
-              <CardContent className="p-4">
-                <Skeleton className="h-8 w-12 mb-2" />
-                <Skeleton className="h-4 w-16" />
-              </CardContent>
+              <Skeleton loading active title={{ width: 48 }} paragraph={{ rows: 1 }} />
             </Card>
           ))
         ) : (
@@ -111,15 +106,17 @@ export default function VulnDashboard({ workspaceId }: VulnDashboardProps) {
             const total = stats?.total || 0
             const ratio = total ? Math.round((count / total) * 100) : 0
             return (
-              <Card key={item.key}>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">{item.label}漏洞</CardTitle>
-                  <Icon className={cn('h-4 w-4', item.color)} />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{count}</div>
-                  <p className="text-xs text-muted-foreground">占比 {ratio}%</p>
-                </CardContent>
+              <Card
+                key={item.key}
+                title={
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium">{item.label}漏洞</span>
+                    <Icon className={cn('h-4 w-4', item.color)} />
+                  </div>
+                }
+              >
+                <Statistic value={count} valueStyle={{ fontSize: '1.5rem', fontWeight: 700 }} />
+                <p className="text-xs text-muted-foreground">占比 {ratio}%</p>
               </Card>
             )
           })
@@ -128,177 +125,164 @@ export default function VulnDashboard({ workspaceId }: VulnDashboardProps) {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* 状态分布 */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <Bug className="h-5 w-5" />
-              漏洞状态分布
-            </CardTitle>
-            <CardDescription>
-              按处理状态统计漏洞数量
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <div className="space-y-3">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <div key={i} className="flex items-center gap-4">
-                    <Skeleton className="h-4 w-16" />
-                    <Skeleton className="h-3 flex-1" />
-                    <Skeleton className="h-4 w-8" />
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {Object.entries(stats?.statusCounts || {}).map(([status, count]) => {
-                  const percentage = stats?.total ? Math.round((count / stats.total) * 100) : 0
-                  return (
-                    <div key={status} className="flex items-center gap-4">
-                      <Badge
-                        variant="outline"
-                        className={cn('w-20 justify-center', getStatusColor(status))}
-                      >
-                        {getStatusLabel(status)}
-                      </Badge>
-                      <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
-                        <div
-                          className={cn(
-                            'h-full transition-all',
-                            status === 'open' && 'bg-yellow-500',
-                            status === 'confirmed' && 'bg-red-500',
-                            status === 'fixed' && 'bg-green-500',
-                            status === 'ignored' && 'bg-gray-500',
-                            status === 'false_positive' && 'bg-blue-500'
-                          )}
-                          style={{ width: `${percentage}%` }}
-                        />
-                      </div>
-                      <span className="text-sm font-medium w-12 text-right">{count}</span>
+        <Card
+          title={
+            <div className="flex flex-col gap-1">
+              <span className="flex items-center gap-2 text-lg font-semibold">
+                <Bug className="h-5 w-5" />
+                漏洞状态分布
+              </span>
+              <span className="text-xs font-normal text-muted-foreground">
+                按处理状态统计漏洞数量
+              </span>
+            </div>
+          }
+        >
+          {isLoading ? (
+            <Skeleton loading active title={false} paragraph={{ rows: 5 }} />
+          ) : (
+            <div className="space-y-3">
+              {Object.entries(stats?.statusCounts || {}).map(([status, count]) => {
+                const percentage = stats?.total ? Math.round((count / stats.total) * 100) : 0
+                return (
+                  <div key={status} className="flex items-center gap-4">
+                    <Tag
+                      className={cn('inline-flex w-20 justify-center', getStatusColor(status))}
+                    >
+                      {getStatusLabel(status)}
+                    </Tag>
+                    <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                      <div
+                        className={cn(
+                          'h-full transition-all',
+                          status === 'open' && 'bg-yellow-500',
+                          status === 'confirmed' && 'bg-red-500',
+                          status === 'fixed' && 'bg-green-500',
+                          status === 'ignored' && 'bg-gray-500',
+                          status === 'false_positive' && 'bg-blue-500'
+                        )}
+                        style={{ width: `${percentage}%` }}
+                      />
                     </div>
-                  )
-                })}
-              </div>
-            )}
-          </CardContent>
+                    <span className="text-sm font-medium w-12 text-right">{count}</span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </Card>
 
         {/* 最近漏洞 */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <TrendingUp className="h-5 w-5" />
-              最新发现
-            </CardTitle>
-            <CardDescription>
-              最近发现的漏洞
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <div className="space-y-3">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <div key={i} className="flex items-center gap-3 p-2 rounded">
-                    <Skeleton className="h-6 w-14" />
-                    <Skeleton className="h-4 flex-1" />
-                    <Skeleton className="h-4 w-24" />
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {(stats?.recentVulnerabilities || []).slice(0, 5).map((vuln) => (
-                  <Link
-                    key={vuln.id}
-                    to={`/vulnerabilities/${vuln.id}`}
-                    className="flex items-center gap-3 p-2 rounded hover:bg-muted transition-colors"
-                  >
-                    <Badge className={cn('text-xs', getSeverityColor(vuln.severity))}>
-                      {getSeverityLabel(vuln.severity)}
-                    </Badge>
-                    <span className="flex-1 truncate text-sm">{vuln.name}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {formatDate(vuln.createdAt)}
-                    </span>
-                    <Eye className="h-4 w-4 text-muted-foreground" />
-                  </Link>
-                ))}
-                {(!stats?.recentVulnerabilities || stats.recentVulnerabilities.length === 0) && (
-                  <div className="text-center py-4 text-muted-foreground">
-                    暂无漏洞数据
-                  </div>
-                )}
-              </div>
-            )}
-          </CardContent>
+        <Card
+          title={
+            <div className="flex flex-col gap-1">
+              <span className="flex items-center gap-2 text-lg font-semibold">
+                <TrendingUp className="h-5 w-5" />
+                最新发现
+              </span>
+              <span className="text-xs font-normal text-muted-foreground">
+                最近发现的漏洞
+              </span>
+            </div>
+          }
+        >
+          {isLoading ? (
+            <Skeleton loading active title={false} paragraph={{ rows: 5 }} />
+          ) : (
+            <div className="space-y-2">
+              {(stats?.recentVulnerabilities || []).slice(0, 5).map((vuln) => (
+                <Link
+                  key={vuln.id}
+                  to={`/vulnerabilities/${vuln.id}`}
+                  className="flex items-center gap-3 p-2 rounded hover:bg-muted transition-colors"
+                >
+                  <Tag className={cn('text-xs', getSeverityColor(vuln.severity))}>
+                    {getSeverityLabel(vuln.severity)}
+                  </Tag>
+                  <span className="flex-1 truncate text-sm">{vuln.name}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {formatDate(vuln.createdAt)}
+                  </span>
+                  <Eye className="h-4 w-4 text-muted-foreground" />
+                </Link>
+              ))}
+              {(!stats?.recentVulnerabilities || stats.recentVulnerabilities.length === 0) && (
+                <div className="text-center py-4 text-muted-foreground">
+                  暂无漏洞数据
+                </div>
+              )}
+            </div>
+          )}
         </Card>
       </div>
 
       {/* 漏洞趋势图 */}
       {stats?.trend && stats.trend.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">漏洞趋势</CardTitle>
-            <CardDescription>最近30天漏洞发现趋势</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="h-[200px] flex items-end gap-1">
-              {stats.trend.map((item, index) => {
-                const maxTotal = Math.max(...stats.trend.map(t => t.total), 1)
-                const height = (item.total / maxTotal) * 100
-                return (
+        <Card
+          title={
+            <div className="flex flex-col gap-1">
+              <span className="text-lg font-semibold">漏洞趋势</span>
+              <span className="text-xs font-normal text-muted-foreground">最近30天漏洞发现趋势</span>
+            </div>
+          }
+        >
+          <div className="h-[200px] flex items-end gap-1">
+            {stats.trend.map((item, index) => {
+              const maxTotal = Math.max(...stats.trend.map(t => t.total), 1)
+              const height = (item.total / maxTotal) * 100
+              return (
+                <div
+                  key={index}
+                  className="flex-1 flex flex-col items-center gap-1 group relative"
+                >
                   <div
-                    key={index}
-                    className="flex-1 flex flex-col items-center gap-1 group relative"
-                  >
-                    <div
-                      className="w-full bg-primary/80 rounded-t hover:bg-primary transition-colors"
-                      style={{ height: `${Math.max(height, 2)}%` }}
-                    />
-                    {/* Tooltip */}
-                    <div className="absolute bottom-full mb-2 hidden group-hover:block z-10">
-                      <div className="bg-popover text-popover-foreground text-xs p-2 rounded shadow-lg whitespace-nowrap">
-                        <div className="font-medium">{item.date}</div>
-                        <div>总计: {item.total}</div>
-                        {item.critical > 0 && <div className="text-red-500">严重: {item.critical}</div>}
-                        {item.high > 0 && <div className="text-orange-500">高危: {item.high}</div>}
-                        {item.medium > 0 && <div className="text-yellow-500">中危: {item.medium}</div>}
-                      </div>
+                    className="w-full bg-primary/80 rounded-t hover:bg-primary transition-colors"
+                    style={{ height: `${Math.max(height, 2)}%` }}
+                  />
+                  {/* Tooltip */}
+                  <div className="absolute bottom-full mb-2 hidden group-hover:block z-10">
+                    <div className="bg-popover text-popover-foreground text-xs p-2 rounded shadow-lg whitespace-nowrap">
+                      <div className="font-medium">{item.date}</div>
+                      <div>总计: {item.total}</div>
+                      {item.critical > 0 && <div className="text-red-500">严重: {item.critical}</div>}
+                      {item.high > 0 && <div className="text-orange-500">高危: {item.high}</div>}
+                      {item.medium > 0 && <div className="text-yellow-500">中危: {item.medium}</div>}
                     </div>
                   </div>
-                )
-              })}
-            </div>
-            <div className="flex justify-between text-xs text-muted-foreground mt-2">
-              <span>{stats.trend[0]?.date}</span>
-              <span>{stats.trend[stats.trend.length - 1]?.date}</span>
-            </div>
-          </CardContent>
+                </div>
+              )
+            })}
+          </div>
+          <div className="flex justify-between text-xs text-muted-foreground mt-2">
+            <span>{stats.trend[0]?.date}</span>
+            <span>{stats.trend[stats.trend.length - 1]?.date}</span>
+          </div>
         </Card>
       )}
 
       {/* 漏洞类型分布 */}
       {stats?.typeCounts && Object.keys(stats.typeCounts).length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">漏洞类型分布</CardTitle>
-            <CardDescription>按漏洞类型统计</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-wrap gap-2">
-              {Object.entries(stats.typeCounts)
-                .sort((a, b) => b[1] - a[1])
-                .slice(0, 20)
-                .map(([type, count]) => (
-                  <Badge key={type} variant="secondary" className="text-sm">
-                    {type}
-                    <span className="ml-1 bg-background px-1.5 py-0.5 rounded text-xs">
-                      {count}
-                    </span>
-                  </Badge>
-                ))}
+        <Card
+          title={
+            <div className="flex flex-col gap-1">
+              <span className="text-lg font-semibold">漏洞类型分布</span>
+              <span className="text-xs font-normal text-muted-foreground">按漏洞类型统计</span>
             </div>
-          </CardContent>
+          }
+        >
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(stats.typeCounts)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 20)
+              .map(([type, count]) => (
+                <Tag key={type} className="text-sm">
+                  {type}
+                  <span className="ml-1 bg-background px-1.5 py-0.5 rounded text-xs">
+                    {count}
+                  </span>
+                </Tag>
+              ))}
+          </div>
         </Card>
       )}
     </div>

@@ -14,6 +14,8 @@ import {
   Server,
   ShieldAlert,
 } from 'lucide-react'
+import { Button, Card, Descriptions, Skeleton, Table, Tag } from 'antd'
+import type { TableProps } from 'antd'
 
 import {
   assetApi,
@@ -24,20 +26,24 @@ import {
   type AssetVerification,
   type Site,
 } from '@/api/assets'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate } from '@/lib/utils'
+
+type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info'
+
+// shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
+const badgeCls = (variant: BadgeVariant) =>
+  variant === 'default' || variant === 'success'
+    ? 'border-transparent bg-primary text-primary-foreground'
+    : variant === 'secondary'
+      ? 'border-transparent bg-secondary text-secondary-foreground'
+      : variant === 'destructive'
+        ? 'border-transparent bg-destructive text-destructive-foreground'
+        : variant === 'warning'
+          ? 'border-transparent bg-yellow-500 text-black'
+          : variant === 'info'
+            ? 'border-transparent bg-blue-500 text-white'
+            : ''
 
 const stateLabel: Record<string, string> = {
   reachable: '可访问',
@@ -46,14 +52,14 @@ const stateLabel: Record<string, string> = {
   pending: '待验证',
 }
 
-const stateVariant = (state: string): 'default' | 'secondary' | 'destructive' | 'outline' => {
+const stateVariant = (state: string): BadgeVariant => {
   if (state === 'reachable') return 'default'
   if (state === 'lost') return 'destructive'
   if (state === 'archived') return 'outline'
   return 'secondary'
 }
 
-const priorityVariant = (p: string): 'default' | 'secondary' | 'destructive' | 'outline' => {
+const priorityVariant = (p: string): BadgeVariant => {
   if (p === 'p0' || p === 'p1') return 'destructive'
   if (p === 'p2') return 'default'
   if (p === 'p3') return 'secondary'
@@ -69,9 +75,7 @@ const verificationLabel: Record<string, string> = {
   failed: '验证失败',
 }
 
-const verificationVariant = (
-  status: string,
-): 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' => {
+const verificationVariant = (status: string): BadgeVariant => {
   if (status === 'verified' || status === 'reachable') return 'success'
   if (status === 'unreachable' || status === 'failed') return 'destructive'
   if (status === 'inconclusive') return 'warning'
@@ -129,8 +133,8 @@ function Stat({
   tone?: 'danger' | 'success'
 }) {
   return (
-    <Card>
-      <CardContent className="flex items-center gap-3 p-4">
+    <Card styles={{ body: { padding: 16 } }}>
+      <div className="flex items-center gap-3">
         <span
           className={cn(
             'flex size-9 shrink-0 items-center justify-center rounded-lg',
@@ -147,7 +151,7 @@ function Stat({
           <div className="text-muted-foreground text-xs">{label}</div>
           <div className="truncate text-lg font-semibold tabular-nums">{value}</div>
         </div>
-      </CardContent>
+      </div>
     </Card>
   )
 }
@@ -164,17 +168,18 @@ function SectionCard({
   children: ReactNode
 }) {
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div>
-            <CardTitle className="text-base">{title}</CardTitle>
-            {description && <p className="text-muted-foreground mt-1 text-xs">{description}</p>}
-          </div>
-          {action}
+    <Card
+      title={
+        <div>
+          <div className="text-base font-medium">{title}</div>
+          {description && (
+            <p className="text-muted-foreground mt-1 text-xs font-normal">{description}</p>
+          )}
         </div>
-      </CardHeader>
-      <CardContent>{children}</CardContent>
+      }
+      extra={action}
+    >
+      {children}
     </Card>
   )
 }
@@ -189,9 +194,9 @@ function Verifications({ items }: { items: AssetVerification[] }) {
         <div key={v.id} className="rounded-md border p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <Badge variant={verificationVariant(v.status)}>
+              <Tag className={badgeCls(verificationVariant(v.status))}>
                 {verificationLabel[v.status] ?? v.status}
-              </Badge>
+              </Tag>
               {v.http_status > 0 && <span className="font-mono text-xs">HTTP {v.http_status}</span>}
               <span className="text-muted-foreground text-xs">第 {v.attempts} 次</span>
             </div>
@@ -224,7 +229,7 @@ function Fingerprints({ items }: { items: AssetFingerprintHit[] }) {
             <div className="flex min-w-0 items-center gap-2">
               <Fingerprint className="text-muted-foreground size-3.5 shrink-0" />
               <span className="truncate text-sm font-medium">{f.rule_name}</span>
-              {f.category && <Badge variant="outline">{f.category}</Badge>}
+              {f.category && <Tag>{f.category}</Tag>}
             </div>
             <span className="text-muted-foreground text-xs">{fmtDate(f.observed_at)}</span>
           </div>
@@ -259,7 +264,7 @@ function Events({ items }: { items: AssetEvent[] }) {
           <div key={e.id} className="rounded-md border p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <Badge variant="outline">{eventLabel[e.event_type] ?? e.event_type}</Badge>
+                <Tag>{eventLabel[e.event_type] ?? e.event_type}</Tag>
                 <span className="text-sm font-medium">{e.title}</span>
               </div>
               <span className="text-muted-foreground text-xs">{fmtDate(e.created_at)}</span>
@@ -285,50 +290,70 @@ function Events({ items }: { items: AssetEvent[] }) {
   )
 }
 
+const recordColumns: TableProps<AssetRawRecord>['columns'] = [
+  {
+    title: '来源',
+    dataIndex: 'source',
+    key: 'source',
+    render: (v: string) => <span className="text-xs">{v}</span>,
+  },
+  {
+    title: '入口',
+    dataIndex: 'value',
+    key: 'value',
+    ellipsis: true,
+    render: (v: string) => <span className="max-w-[260px] truncate font-mono text-xs">{v}</span>,
+  },
+  {
+    title: '状态码',
+    dataIndex: 'status_code',
+    key: 'status_code',
+    render: (v: number) => (
+      <Tag className={badgeCls(v >= 200 && v < 400 ? 'default' : 'secondary')}>{v || '—'}</Tag>
+    ),
+  },
+  {
+    title: '标题',
+    dataIndex: 'title',
+    key: 'title',
+    ellipsis: true,
+    render: (v: string) => <span className="max-w-[220px] truncate text-sm">{v || '—'}</span>,
+  },
+  {
+    title: '观测时间',
+    dataIndex: 'observed_at',
+    key: 'observed_at',
+    render: (v: string) => (
+      <span className="text-muted-foreground whitespace-nowrap text-xs">{fmtDate(v)}</span>
+    ),
+  },
+  {
+    title: '',
+    key: 'evidence',
+    width: 64,
+    render: (_, r) =>
+      hasKeys(r.evidence) ? (
+        <details>
+          <summary className="text-muted-foreground cursor-pointer text-xs">证据</summary>
+          <pre className="bg-muted mt-1 max-h-40 w-64 overflow-auto rounded p-2 text-[11px]">
+            {JSON.stringify(r.evidence, null, 2)}
+          </pre>
+        </details>
+      ) : null,
+  },
+]
+
 function Records({ items }: { items: AssetRawRecord[] }) {
   if (items.length === 0) {
     return <p className="text-muted-foreground py-4 text-sm">还没有原始记录</p>
   }
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>来源</TableHead>
-          <TableHead>入口</TableHead>
-          <TableHead>状态码</TableHead>
-          <TableHead>标题</TableHead>
-          <TableHead>观测时间</TableHead>
-          <TableHead className="w-16" />
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {items.map((r) => (
-          <TableRow key={r.id}>
-            <TableCell className="text-xs">{r.source}</TableCell>
-            <TableCell className="max-w-[260px] truncate font-mono text-xs">{r.value}</TableCell>
-            <TableCell>
-              <Badge variant={r.status_code >= 200 && r.status_code < 400 ? 'default' : 'secondary'}>
-                {r.status_code || '—'}
-              </Badge>
-            </TableCell>
-            <TableCell className="max-w-[220px] truncate text-sm">{r.title || '—'}</TableCell>
-            <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
-              {fmtDate(r.observed_at)}
-            </TableCell>
-            <TableCell>
-              {hasKeys(r.evidence) && (
-                <details>
-                  <summary className="text-muted-foreground cursor-pointer text-xs">证据</summary>
-                  <pre className="bg-muted mt-1 max-h-40 w-64 overflow-auto rounded p-2 text-[11px]">
-                    {JSON.stringify(r.evidence, null, 2)}
-                  </pre>
-                </details>
-              )}
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+    <Table
+      columns={recordColumns}
+      dataSource={items}
+      rowKey="id"
+      pagination={false}
+    />
   )
 }
 
@@ -346,7 +371,7 @@ function Relations({ items }: { items: AssetRelation[] }) {
         <div key={r.id} className="rounded-md border p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-2">
-              <Badge variant="info">{relationLabel[r.type] ?? r.type}</Badge>
+              <Tag className={badgeCls('info')}>{relationLabel[r.type] ?? r.type}</Tag>
               <Link
                 to={`/assets/${r.peer.id}`}
                 className="text-primary min-w-0 truncate font-mono text-sm hover:underline"
@@ -426,12 +451,12 @@ export default function AssetDetailPage() {
   if (!validId) {
     return (
       <Card>
-        <CardContent className="text-muted-foreground flex flex-col items-center gap-3 py-16">
+        <div className="text-muted-foreground flex flex-col items-center gap-3 py-16">
           资产 ID 不合法
-          <Button asChild variant="outline" size="sm">
-            <Link to="/assets">返回资产列表</Link>
-          </Button>
-        </CardContent>
+          <Link to="/assets">
+            <Button size="small">返回资产列表</Button>
+          </Link>
+        </div>
       </Card>
     )
   }
@@ -439,13 +464,19 @@ export default function AssetDetailPage() {
   if (detailQuery.isLoading) {
     return (
       <div className="space-y-4">
-        <Skeleton className="h-20 w-full" />
+        <Card styles={{ body: { padding: 16 } }}>
+          <Skeleton active title={false} paragraph={{ rows: 2 }} />
+        </Card>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           {Array.from({ length: 5 }).map((_, i) => (
-            <Skeleton key={i} className="h-20" />
+            <Card key={i} styles={{ body: { padding: 16 } }}>
+              <Skeleton active title={false} paragraph={{ rows: 1 }} />
+            </Card>
           ))}
         </div>
-        <Skeleton className="h-72 w-full" />
+        <Card styles={{ body: { padding: 16 } }}>
+          <Skeleton active title={false} paragraph={{ rows: 8 }} />
+        </Card>
       </div>
     )
   }
@@ -454,13 +485,13 @@ export default function AssetDetailPage() {
   if (!detail) {
     return (
       <Card>
-        <CardContent className="text-muted-foreground flex flex-col items-center gap-3 py-16">
+        <div className="text-muted-foreground flex flex-col items-center gap-3 py-16">
           <AlertTriangle className="text-destructive h-8 w-8" />
           {detailQuery.isError ? '资产详情加载失败' : '资产不存在'}
-          <Button asChild variant="outline" size="sm">
-            <Link to="/assets">返回资产列表</Link>
-          </Button>
-        </CardContent>
+          <Link to="/assets">
+            <Button size="small">返回资产列表</Button>
+          </Link>
+        </div>
       </Card>
     )
   }
@@ -473,11 +504,9 @@ export default function AssetDetailPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-3">
-          <Button variant="ghost" size="icon" asChild aria-label="返回资产列表">
-            <Link to={`/assets?project_id=${site.project_id}`} aria-label="返回资产列表">
-              <ArrowLeft className="h-5 w-5" />
-            </Link>
-          </Button>
+          <Link to={`/assets?project_id=${site.project_id}`} aria-label="返回资产列表">
+            <Button type="text" aria-label="返回资产列表" icon={<ArrowLeft className="h-5 w-5" />} />
+          </Link>
           {iconURL ? (
             <img
               src={iconURL}
@@ -513,43 +542,38 @@ export default function AssetDetailPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" onClick={refresh} disabled={refreshing}>
+          <Button size="small" onClick={refresh} disabled={refreshing}>
             <RefreshCw className={cn('mr-2 h-4 w-4', refreshing && 'animate-spin')} />
             刷新
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => probe.mutate()}
-            disabled={probe.isPending}
-          >
+          <Button size="small" onClick={() => probe.mutate()} disabled={probe.isPending}>
             <Radar className="mr-2 h-4 w-4" />
             真实探测
           </Button>
           {site.value && (
-            <Button variant="outline" size="sm" asChild>
-              <a href={site.value} target="_blank" rel="noreferrer">
-                <ExternalLink className="mr-2 h-4 w-4" />
-                打开站点
-              </a>
+            <Button size="small" href={site.value} target="_blank" rel="noreferrer">
+              <ExternalLink className="mr-2 h-4 w-4" />
+              打开站点
             </Button>
           )}
         </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <Badge variant={stateVariant(site.state)}>{stateLabel[site.state] ?? site.state}</Badge>
-        <Badge variant={priorityVariant(site.priority)} title={`风险评分 ${site.risk_score}`}>
+        <Tag className={badgeCls(stateVariant(site.state))}>
+          {stateLabel[site.state] ?? site.state}
+        </Tag>
+        <Tag className={badgeCls(priorityVariant(site.priority))} title={`风险评分 ${site.risk_score}`}>
           {site.priority ? site.priority.toUpperCase() : '—'} · {site.risk_score}
-        </Badge>
-        <Badge variant={verificationVariant(site.verification_status)}>
+        </Tag>
+        <Tag className={badgeCls(verificationVariant(site.verification_status))}>
           {verificationLabel[site.verification_status] ?? site.verification_status}
-        </Badge>
+        </Tag>
         {endpoints.map((e) => (
-          <Badge key={`${e.scheme}-${e.port}`} variant="outline" className="font-mono">
+          <Tag key={`${e.scheme}-${e.port}`} className="font-mono">
             {e.scheme}:{e.port}
             {e.status_code > 0 && ` · ${e.status_code}`}
-          </Badge>
+          </Tag>
         ))}
       </div>
 
@@ -582,28 +606,33 @@ export default function AssetDetailPage() {
             {endpoints.length === 0 ? (
               <p className="text-muted-foreground py-4 text-sm">还没有入口记录</p>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>协议</TableHead>
-                    <TableHead>端口</TableHead>
-                    <TableHead>最近状态码</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {endpoints.map((e) => (
-                    <TableRow key={`${e.scheme}-${e.port}`}>
-                      <TableCell className="font-mono text-sm">{e.scheme}</TableCell>
-                      <TableCell className="font-mono text-sm">{e.port}</TableCell>
-                      <TableCell>
-                        <Badge variant={e.status_code > 0 ? 'default' : 'secondary'}>
-                          {e.status_code || '—'}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <Table
+                columns={[
+                  {
+                    title: '协议',
+                    dataIndex: 'scheme',
+                    key: 'scheme',
+                    render: (v: string) => <span className="font-mono text-sm">{v}</span>,
+                  },
+                  {
+                    title: '端口',
+                    dataIndex: 'port',
+                    key: 'port',
+                    render: (v: number) => <span className="font-mono text-sm">{v}</span>,
+                  },
+                  {
+                    title: '最近状态码',
+                    dataIndex: 'status_code',
+                    key: 'status_code',
+                    render: (v: number) => (
+                      <Tag className={badgeCls(v > 0 ? 'default' : 'secondary')}>{v || '—'}</Tag>
+                    ),
+                  },
+                ]}
+                dataSource={endpoints}
+                rowKey={(e) => `${e.scheme}-${e.port}`}
+                pagination={false}
+              />
             )}
           </SectionCard>
 
@@ -627,45 +656,42 @@ export default function AssetDetailPage() {
             title="采集状态"
             description="连通性退避与人工删除保护期。"
           >
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between gap-2">
-                <span className="text-muted-foreground">首次发现</span>
-                <span>{fmtDate(site.first_seen)}</span>
+            <Descriptions
+              column={1}
+              size="small"
+              className="text-sm"
+              items={[
+                { key: 'first_seen', label: '首次发现', children: fmtDate(site.first_seen) },
+                { key: 'last_seen', label: '最后发现', children: fmtDate(site.last_seen) },
+                {
+                  key: 'failures',
+                  label: '连续失败',
+                  children: (
+                    <span className={site.consecutive_failures > 0 ? 'text-destructive' : ''}>
+                      {site.consecutive_failures} / {site.max_attempts}
+                    </span>
+                  ),
+                },
+                { key: 'retry_step', label: '重试阶梯', children: `第 ${site.retry_step} 级` },
+                { key: 'verified_at', label: '最近验证', children: fmtDate(site.verified_at) },
+                {
+                  key: 'next_verification_at',
+                  label: '下次验证',
+                  children: fmtDate(site.next_verification_at),
+                },
+              ]}
+            />
+            {site.cleanup_eligible && (
+              <div className="text-destructive flex items-center gap-1 pt-1 text-xs">
+                <AlertTriangle className="size-3.5" />
+                已进入清理候选
               </div>
-              <div className="flex justify-between gap-2">
-                <span className="text-muted-foreground">最后发现</span>
-                <span>{fmtDate(site.last_seen)}</span>
-              </div>
-              <div className="flex justify-between gap-2">
-                <span className="text-muted-foreground">连续失败</span>
-                <span className={site.consecutive_failures > 0 ? 'text-destructive' : ''}>
-                  {site.consecutive_failures} / {site.max_attempts}
-                </span>
-              </div>
-              <div className="flex justify-between gap-2">
-                <span className="text-muted-foreground">重试阶梯</span>
-                <span>第 {site.retry_step} 级</span>
-              </div>
-              <div className="flex justify-between gap-2">
-                <span className="text-muted-foreground">最近验证</span>
-                <span>{fmtDate(site.verified_at)}</span>
-              </div>
-              <div className="flex justify-between gap-2">
-                <span className="text-muted-foreground">下次验证</span>
-                <span>{fmtDate(site.next_verification_at)}</span>
-              </div>
-              {site.cleanup_eligible && (
-                <div className="text-destructive flex items-center gap-1 pt-1 text-xs">
-                  <AlertTriangle className="size-3.5" />
-                  已进入清理候选
-                </div>
-              )}
-              {site.verification_reason && (
-                <p className="text-muted-foreground border-t pt-2 text-xs">
-                  {site.verification_reason}
-                </p>
-              )}
-            </div>
+            )}
+            {site.verification_reason && (
+              <p className="text-muted-foreground border-t pt-2 text-xs">
+                {site.verification_reason}
+              </p>
+            )}
           </SectionCard>
 
           <SectionCard title="技术栈">
@@ -674,9 +700,7 @@ export default function AssetDetailPage() {
             ) : (
               <div className="flex flex-wrap gap-1.5">
                 {site.technology_stack.map((t) => (
-                  <Badge key={t} variant="outline">
-                    {t}
-                  </Badge>
+                  <Tag key={t}>{t}</Tag>
                 ))}
               </div>
             )}

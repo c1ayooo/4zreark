@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Button, Menu } from 'antd'
+import type { MenuProps } from 'antd'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/app'
 import { useAuthStore } from '@/store/auth'
@@ -13,7 +15,6 @@ import {
   Users,
   Settings,
   ChevronLeft,
-  ChevronDown,
   Bell,
   Layers,
   Calendar,
@@ -38,7 +39,6 @@ import {
   Gauge,
   X,
 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 
 const ALL = ['admin', 'operator', 'user', 'viewer']
 const OPS = ['admin', 'operator']
@@ -151,38 +151,6 @@ const menuGroups: MenuGroup[] = [
   },
 ]
 
-function NavItem({
-  item,
-  collapsed,
-  active,
-  onNavigate,
-}: {
-  item: MenuItem
-  collapsed: boolean
-  active: boolean
-  onNavigate?: () => void
-}) {
-  return (
-    <Link
-      to={item.path}
-      onClick={onNavigate}
-      className={cn(
-        'flex items-center gap-3 rounded-sm px-3 py-1.5 text-[13px] transition-colors',
-        active
-          ? 'bg-muted text-foreground font-medium'
-          : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
-        collapsed && 'justify-center'
-      )}
-      title={collapsed ? item.label : undefined}
-    >
-      <item.icon
-        className={cn('h-5 w-5 flex-shrink-0', active ? 'text-foreground' : '')}
-      />
-      {!collapsed && <span className="truncate">{item.label}</span>}
-    </Link>
-  )
-}
-
 // 面包屑用：把当前路径映射回「分组 / 菜单名」，找不到就退回工作空间。
 export const navCurrentLabel = (pathname: string) => {
   let best: { group: string; label: string } = { group: '工作空间', label: '' }
@@ -203,13 +171,9 @@ interface SidebarProps {
 
 export default function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps = {}) {
   const location = useLocation()
-  const {
-    sidebarCollapsed,
-    toggleSidebar,
-    expandedGroups,
-    toggleGroup,
-    setGroupExpanded,
-  } = useAppStore()
+  const navigate = useNavigate()
+  const { sidebarCollapsed, toggleSidebar, expandedGroups, toggleGroup, setGroupExpanded } =
+    useAppStore()
   const { user } = useAuthStore()
   const role = user?.role ?? 'viewer'
   // 手机抽屉打开时强制展开；桌面才遵循用户的收起状态。
@@ -228,9 +192,7 @@ export default function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps
     .filter((path) => location.pathname === path || location.pathname.startsWith(`${path}/`))
     .sort((a, b) => b.length - a.length)[0]
 
-  const isActive = (item: MenuItem) => item.path === activePath
-
-  const activeGroupId = groups.find((group) => group.items.some(isActive))?.id
+  const activeGroupId = groups.find((group) => group.items.some((i) => i.path === activePath))?.id
 
   // 只在「切换到另一个分组」时自动展开，避免用户手动收起当前组后被立刻弹开。
   const lastActiveGroupRef = useRef<string | undefined>(undefined)
@@ -240,6 +202,30 @@ export default function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps
       lastActiveGroupRef.current = activeGroupId
     }
   }, [activeGroupId, setGroupExpanded])
+
+  // antd Menu items：分组 → SubMenu；收起态由 inlineCollapsed 承担（自带悬浮 tooltip）
+  const items: MenuProps['items'] = collapsed
+    ? groups.flatMap((group) =>
+        group.items.map((item) => ({
+          key: item.path,
+          icon: <item.icon className="h-[17px] w-[17px]" style={{ fontSize: 0 }} />,
+          label: item.label,
+        })),
+      )
+    : groups.map((group) => ({
+        key: group.id,
+        label: group.label,
+        children: group.items.map((item) => ({
+          key: item.path,
+          icon: <item.icon className="h-[17px] w-[17px]" style={{ fontSize: 0 }} />,
+          label: item.label,
+        })),
+      }))
+
+  const onMenuClick: MenuProps['onClick'] = ({ key }) => {
+    navigate(String(key))
+    onNavigate?.()
+  }
 
   return (
     <aside
@@ -252,103 +238,55 @@ export default function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps
       {/* Logo */}
       <div className="flex h-16 items-center justify-between border-b px-4">
         {!collapsed && (
-          <div className="flex items-center gap-2">
-            <img
-              src="/icon-192x192.png"
-              alt="4zreark"
-              className="h-8 w-8 rounded-md dark:invert"
-            />
+          <Link to="/dashboard" className="flex items-center gap-2">
+            <img src="/icon-192x192.png" alt="4zreark" className="h-8 w-8 dark:invert" />
             <span className="text-[15px] font-bold tracking-tight">4zreark</span>
-          </div>
+          </Link>
         )}
         {collapsed && (
-          <img
-            src="/icon-192x192.png"
-            alt="4zreark"
-            className="mx-auto h-8 w-8 rounded-md dark:invert"
-          />
+          <img src="/icon-192x192.png" alt="4zreark" className="mx-auto h-8 w-8 dark:invert" />
         )}
         <Button
-          variant="ghost"
-          size="icon"
+          type="text"
+          size="small"
           onClick={toggleSidebar}
           aria-label={collapsed ? '展开侧栏' : '收起侧栏'}
-          className={cn(
-            'hidden h-8 w-8 hover:bg-black/10 hover:text-inherit lg:inline-flex',
-            collapsed && 'mx-auto'
-          )}
-        >
-          <ChevronLeft
-            className={cn(
-              'h-4 w-4 transition-transform',
-              collapsed && 'rotate-180'
-            )}
-          />
-        </Button>
+          className={cn('hidden h-8 w-8 lg:inline-flex', collapsed && 'mx-auto')}
+          icon={
+            <ChevronLeft
+              className={cn('h-4 w-4 transition-transform', collapsed && 'rotate-180')}
+            />
+          }
+        />
         <Button
-          variant="ghost"
-          size="icon"
-          onClick={onNavigate}
+          type="text"
           className="h-11 w-11 lg:hidden"
+          onClick={onNavigate}
           aria-label="关闭导航"
-        >
-          <X className="h-4 w-4" />
-        </Button>
+          icon={<X className="h-4 w-4" />}
+        />
       </div>
 
       {/* Navigation：菜单项较多，必须让 nav 自己滚动，否则底部项会被裁掉。 */}
-      <nav className="h-[calc(100vh-4rem)] overflow-y-auto p-2 pb-20">
-        {collapsed ? (
-          // 收起态只留图标，分组标题没有文字无法表达，直接平铺。
-          <div className="space-y-1">
-            {groups.flatMap((group) => group.items).map((item) => (
-              <NavItem
-                key={item.path}
-                item={item}
-                collapsed
-                active={isActive(item)}
-                onNavigate={onNavigate}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="space-y-1">
-            {groups.map((group) => {
-              const expanded = expandedGroups.includes(group.id)
-              return (
-                <div key={group.id}>
-                  <button
-                    type="button"
-                    onClick={() => toggleGroup(group.id)}
-                    aria-expanded={expanded}
-                    className="flex w-full items-center justify-between gap-2 rounded-md px-3 py-1.5 text-[13px] font-semibold text-foreground transition-colors hover:bg-muted"
-                  >
-                    <span>{group.label}</span>
-                    <ChevronDown
-                      className={cn(
-                        'h-3.5 w-3.5 shrink-0 transition-transform',
-                        expanded ? 'rotate-0' : '-rotate-90'
-                      )}
-                    />
-                  </button>
-                  {expanded && (
-                    <div className="mt-0.5 space-y-0.5">
-                      {group.items.map((item) => (
-                        <NavItem
-                          key={item.path}
-                          item={item}
-                          collapsed={false}
-                          active={isActive(item)}
-                          onNavigate={onNavigate}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )}
+      <nav className="h-[calc(100vh-4rem)] overflow-y-auto pb-20">
+        <Menu
+          mode="inline"
+          inlineCollapsed={collapsed}
+          items={items}
+          selectedKeys={activePath ? [activePath] : []}
+          openKeys={collapsed ? undefined : expandedGroups}
+          onOpenChange={(keys) => {
+            // 只有点组标题才会到这里；同步回 zustand 持久化
+            for (const k of keys) {
+              if (!expandedGroups.includes(String(k))) toggleGroup(String(k))
+            }
+            for (const g of expandedGroups) {
+              if (!keys.includes(g)) toggleGroup(g)
+            }
+          }}
+          onClick={onMenuClick}
+          style={{ borderInlineEnd: 'none', background: 'transparent', fontSize: 13 }}
+        />
       </nav>
 
       {/* 底部状态区：在线点 + 当前账号，参照 ScopesHub 的侧栏收尾 */}

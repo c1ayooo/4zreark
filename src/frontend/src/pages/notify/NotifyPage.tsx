@@ -2,35 +2,9 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { notifyApi, NotifyConfig, NotifyHistory, InAppNotification } from '@/api/notify'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
-import { Switch } from '@/components/ui/switch'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from '@/components/ui/dialog'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { Label } from '@/components/ui/label'
+import { Button, Card, Input, Modal, Select, Switch, Table, Tabs, Tag } from 'antd'
+import type { TableProps } from 'antd'
+import EmptyState from '@/components/common/EmptyState'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
 import { notificationLink } from '@/lib/notifyLink'
@@ -65,6 +39,18 @@ const channelTypeLabels: Record<string, string> = {
   webhook: 'WebHook',
 }
 
+// shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
+const badgeCls = (variant: 'default' | 'secondary' | 'destructive' | 'outline' | 'warning') =>
+  variant === 'default'
+    ? 'border-transparent bg-primary text-primary-foreground'
+    : variant === 'secondary'
+      ? 'border-transparent bg-secondary text-secondary-foreground'
+      : variant === 'destructive'
+        ? 'border-transparent bg-destructive text-destructive-foreground'
+        : variant === 'warning'
+          ? 'border-transparent bg-yellow-500 text-black'
+          : ''
+
 export default function NotifyPage() {
   const navigate = useNavigate()
   const { toast } = useToast()
@@ -84,7 +70,7 @@ export default function NotifyPage() {
     setSearchParams(tab === 'inbox' ? { tab: 'inbox' } : {}, { replace: true })
   }
   const [showAddDialog, setShowAddDialog] = useState(false)
-  
+
   // 新建渠道表单
   const [newChannel, setNewChannel] = useState({
     name: '',
@@ -164,7 +150,7 @@ export default function NotifyPage() {
 
   // 删除配置
   const deleteMutation = useMutation({
-    mutationFn: ({ name, type }: { name: string; type: string }) => 
+    mutationFn: ({ name, type }: { name: string; type: string }) =>
       notifyApi.deleteConfig(name, type),
     onSuccess: () => {
       toast({ title: '删除成功' })
@@ -258,11 +244,19 @@ export default function NotifyPage() {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'success':
-        return <Badge className="bg-green-500"><CheckCircle className="h-3 w-3 mr-1" />成功</Badge>
+        return (
+          <Tag className="border-transparent bg-green-500 text-white">
+            <CheckCircle className="mr-1 inline h-3 w-3" />成功
+          </Tag>
+        )
       case 'failed':
-        return <Badge variant="destructive"><XCircle className="h-3 w-3 mr-1" />失败</Badge>
+        return (
+          <Tag className={badgeCls('destructive')}>
+            <XCircle className="mr-1 inline h-3 w-3" />失败
+          </Tag>
+        )
       default:
-        return <Badge variant="outline">{status}</Badge>
+        return <Tag>{status}</Tag>
     }
   }
 
@@ -285,6 +279,103 @@ export default function NotifyPage() {
     }
   }
 
+  const inboxColumns: TableProps<InAppNotification>['columns'] = [
+    {
+      title: '级别',
+      dataIndex: 'level',
+      key: 'level',
+      width: 80,
+      render: (v: string) => (
+        <Tag
+          className={badgeCls(
+            v === 'critical' ? 'destructive' : v === 'warning' ? 'warning' : 'outline',
+          )}
+        >
+          {v}
+        </Tag>
+      ),
+    },
+    {
+      title: '标题 / 内容',
+      key: 'title',
+      render: (_, n) => (
+        <>
+          <div className={n.read ? 'text-sm' : 'text-sm font-medium'}>{n.title}</div>
+          {n.content && (
+            <div className="mt-0.5 line-clamp-2 whitespace-pre-wrap text-xs text-muted-foreground">
+              {n.content}
+            </div>
+          )}
+        </>
+      ),
+    },
+    {
+      title: '来源',
+      dataIndex: 'source',
+      key: 'source',
+      width: 140,
+      render: (v: string) => <span className="text-xs text-muted-foreground">{v || '—'}</span>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'read',
+      key: 'read',
+      width: 90,
+      render: (v: boolean) => <Tag className={badgeCls(v ? 'outline' : 'default')}>{v ? '已读' : '未读'}</Tag>,
+    },
+    {
+      title: '时间',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      width: 160,
+      render: (v: string, n) => {
+        const target = notificationLink(n)
+        return (
+          <div className="flex items-center justify-end gap-1 text-xs text-muted-foreground">
+            {formatDate(v)}
+            {target && <ChevronRight className="size-3.5" />}
+          </div>
+        )
+      },
+    },
+  ]
+
+  const historyColumns: TableProps<NotifyHistory>['columns'] = [
+    {
+      title: '类型',
+      dataIndex: 'type',
+      key: 'type',
+      render: (v: string) => <Tag>{channelTypeLabels[v] || v}</Tag>,
+    },
+    {
+      title: '标题',
+      key: 'title',
+      ellipsis: true,
+      render: (_, item) => <span className="max-w-xs truncate">{item.message?.title}</span>,
+    },
+    {
+      title: '级别',
+      key: 'level',
+      render: (_, item) => (
+        <Tag className={badgeCls(item.message?.level === 'warning' ? 'destructive' : 'outline')}>
+          {item.message?.level}
+        </Tag>
+      ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      render: (v: string) => getStatusBadge(v),
+    },
+    {
+      title: '时间',
+      dataIndex: 'timestamp',
+      key: 'timestamp',
+      render: (v: string) => formatDate(v),
+    },
+  ]
+
   return (
     <div className="space-y-6">
       {/* 页面头部 */}
@@ -294,11 +385,11 @@ export default function NotifyPage() {
           <h1 className="text-2xl font-bold">通知管理</h1>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => refetchConfigs()}>
+          <Button size="small" onClick={() => refetchConfigs()}>
             <RefreshCw className="h-4 w-4 mr-2" />
             刷新
           </Button>
-          <Button size="sm" onClick={() => setShowAddDialog(true)}>
+          <Button size="small" type="primary" onClick={() => setShowAddDialog(true)}>
             <Plus className="h-4 w-4 mr-2" />
             添加渠道
           </Button>
@@ -306,380 +397,302 @@ export default function NotifyPage() {
       </div>
 
       {/* 标签页 */}
-      <Tabs value={activeTab} onValueChange={changeTab}>
-        <TabsList>
-          <TabsTrigger value="channels">通知渠道</TabsTrigger>
-          <TabsTrigger value="inbox">
-            站内通知
-            {unread > 0 && (
-              <span className="ml-1 rounded-full bg-destructive px-1.5 text-[10px] leading-4 text-destructive-foreground">
-                {unread > 99 ? '99+' : unread}
-              </span>
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="history">发送历史</TabsTrigger>
-        </TabsList>
-
-        {/* 渠道列表 */}
-        <TabsContent value="channels" className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {configsLoading ? (
-              <div className="col-span-full text-center py-8 text-muted-foreground">
-                加载中...
-              </div>
-            ) : configs.length === 0 ? (
-              <div className="col-span-full text-center py-8 text-muted-foreground">
-                暂无通知渠道，点击"添加渠道"创建
-              </div>
-            ) : (
-              configs.map((config, index) => (
-                <Card key={`${config.name}-${config.type}-${index}`}>
-                  <CardHeader className="pb-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        {channelTypeIcons[config.type]}
-                        <CardTitle className="text-base">{config.name}</CardTitle>
-                      </div>
-                      <Switch
-                        checked={config.enabled}
-                        onCheckedChange={(checked) =>
-                          toggleMutation.mutate({ name: config.name, type: config.type, enabled: checked })
-                        }
-                      />
-                    </div>
-                    <CardDescription>
-                      {channelTypeLabels[config.type]}
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="mb-2 truncate text-xs text-muted-foreground" title={getTargetSummary(config)}>
-                      {getTargetSummary(config) || '未配置投递目标'}
-                    </div>
-                    <div className="flex items-center justify-end">
-                      <div className="flex gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => testMutation.mutate(config)}
-                          disabled={testMutation.isPending}
-                          title="测试"
-                        >
-                          <Send className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => deleteMutation.mutate({ name: config.name, type: config.type })}
-                          title="删除"
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))
-            )}
-          </div>
-        </TabsContent>
-
-        {/* 站内通知 */}
-        <TabsContent value="inbox" className="space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">
-              所有任务完成、漏洞、资产变更等消息都会在这里留一条；飞书渠道同时外发。
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={markAllMutation.isPending || unread === 0}
-              onClick={() => markAllMutation.mutate()}
-            >
-              <CheckCheck className="mr-2 h-4 w-4" />
-              全部已读
-            </Button>
-          </div>
-          <div className="rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[80px]">级别</TableHead>
-                  <TableHead>标题 / 内容</TableHead>
-                  <TableHead className="w-[140px]">来源</TableHead>
-                  <TableHead className="w-[90px]">状态</TableHead>
-                  <TableHead className="w-[160px]">时间</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {inboxLoading ? (
-                  <TableRow>
-                    <TableCell colSpan={5} className="py-8 text-center">
-                      加载中...
-                    </TableCell>
-                  </TableRow>
-                ) : inbox.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
-                      暂无站内通知
-                    </TableCell>
-                  </TableRow>
+      <Tabs
+        activeKey={activeTab}
+        onChange={changeTab}
+        items={[
+          {
+            key: 'channels',
+            label: '通知渠道',
+            children: (
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {configsLoading ? (
+                  <div className="col-span-full text-center py-8 text-muted-foreground">
+                    加载中...
+                  </div>
+                ) : configs.length === 0 ? (
+                  <div className="col-span-full text-center py-8 text-muted-foreground">
+                    暂无通知渠道，点击"添加渠道"创建
+                  </div>
                 ) : (
-                  inbox.map((n) => {
-                    const target = notificationLink(n)
-                    const open = () => {
-                      if (!n.read) markOneMutation.mutate(n.id)
-                      if (target) navigate(target)
-                    }
-                    return (
-                      <TableRow
-                        key={n.id}
-                        className={
-                          target
-                            ? 'cursor-pointer hover:bg-muted/40'
-                            : n.read
-                              ? undefined
-                              : 'bg-muted/30'
-                        }
-                        tabIndex={target ? 0 : undefined}
-                        onClick={open}
-                        onKeyDown={(e) => {
+                  configs.map((config, index) => (
+                    <Card key={`${config.name}-${config.type}-${index}`}>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          {channelTypeIcons[config.type]}
+                          <span className="text-base font-semibold">{config.name}</span>
+                        </div>
+                        <Switch
+                          checked={config.enabled}
+                          onChange={(checked) =>
+                            toggleMutation.mutate({
+                              name: config.name,
+                              type: config.type,
+                              enabled: checked,
+                            })
+                          }
+                        />
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {channelTypeLabels[config.type]}
+                      </p>
+                      <div
+                        className="mb-2 mt-3 truncate text-xs text-muted-foreground"
+                        title={getTargetSummary(config)}
+                      >
+                        {getTargetSummary(config) || '未配置投递目标'}
+                      </div>
+                      <div className="flex items-center justify-end">
+                        <div className="flex gap-1">
+                          <Button
+                            type="text"
+                            size="small"
+                            onClick={() => testMutation.mutate(config)}
+                            disabled={testMutation.isPending}
+                            aria-label="测试"
+                            icon={<Send className="h-4 w-4" />}
+                          />
+                          <Button
+                            type="text"
+                            size="small"
+                            danger
+                            onClick={() =>
+                              deleteMutation.mutate({ name: config.name, type: config.type })
+                            }
+                            aria-label="删除"
+                            icon={<Trash2 className="h-4 w-4" />}
+                          />
+                        </div>
+                      </div>
+                    </Card>
+                  ))
+                )}
+              </div>
+            ),
+          },
+          {
+            key: 'inbox',
+            label: (
+              <span className="flex items-center gap-1">
+                站内通知
+                {unread > 0 && (
+                  <span className="rounded-full bg-destructive px-1.5 text-[10px] leading-4 text-destructive-foreground">
+                    {unread > 99 ? '99+' : unread}
+                  </span>
+                )}
+              </span>
+            ),
+            children: (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-muted-foreground">
+                    所有任务完成、漏洞、资产变更等消息都会在这里留一条；飞书渠道同时外发。
+                  </p>
+                  <Button
+                    size="small"
+                    disabled={markAllMutation.isPending || unread === 0}
+                    onClick={() => markAllMutation.mutate()}
+                  >
+                    <CheckCheck className="mr-2 h-4 w-4" />
+                    全部已读
+                  </Button>
+                </div>
+                <div className="rounded-lg border">
+                  <Table
+                    columns={inboxColumns}
+                    dataSource={inbox}
+                    rowKey="id"
+                    loading={inboxLoading}
+                    locale={{
+                      emptyText: <EmptyState title="暂无站内通知" className="border-0" />,
+                    }}
+                    onRow={(record) => {
+                      const target = notificationLink(record)
+                      const open = () => {
+                        if (!record.read) markOneMutation.mutate(record.id)
+                        if (target) navigate(target)
+                      }
+                      return {
+                        className: target
+                          ? 'cursor-pointer'
+                          : record.read
+                            ? undefined
+                            : 'bg-muted/30',
+                        tabIndex: target ? 0 : undefined,
+                        onClick: open,
+                        onKeyDown: (e: React.KeyboardEvent) => {
                           if (target && (e.key === 'Enter' || e.key === ' ')) {
                             e.preventDefault()
                             open()
                           }
-                        }}
-                      >
-                        <TableCell>
-                          <Badge
-                            variant={
-                              n.level === 'critical'
-                                ? 'destructive'
-                                : n.level === 'warning'
-                                  ? 'warning'
-                                  : 'outline'
-                            }
-                          >
-                            {n.level}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <div className={n.read ? 'text-sm' : 'text-sm font-medium'}>{n.title}</div>
-                          {n.content && (
-                            <div className="mt-0.5 line-clamp-2 whitespace-pre-wrap text-xs text-muted-foreground">
-                              {n.content}
-                            </div>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">{n.source || '—'}</TableCell>
-                        <TableCell>
-                          <Badge variant={n.read ? 'outline' : 'default'}>{n.read ? '已读' : '未读'}</Badge>
-                        </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          <div className="flex items-center justify-end gap-1">
-                            {formatDate(n.created_at)}
-                            {target && <ChevronRight className="size-3.5" />}
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })
-                )}
-              </TableBody>
-            </Table>
-          </div>
-        </TabsContent>
-
-        {/* 发送历史 */}
-        <TabsContent value="history">
-          <div className="border rounded-lg">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>类型</TableHead>
-                  <TableHead>标题</TableHead>
-                  <TableHead>级别</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>时间</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {historyLoading ? (
-                  <TableRow>
-                    <TableCell colSpan={5} className="text-center py-8">
-                      加载中...
-                    </TableCell>
-                  </TableRow>
-                ) : history.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
-                      暂无发送记录
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  history.map((item: NotifyHistory) => (
-                    <TableRow key={item.id}>
-                      <TableCell>
-                        <Badge variant="outline">{channelTypeLabels[item.type] || item.type}</Badge>
-                      </TableCell>
-                      <TableCell className="max-w-xs truncate">{item.message?.title}</TableCell>
-                      <TableCell>
-                        <Badge variant={item.message?.level === 'warning' ? 'destructive' : 'outline'}>
-                          {item.message?.level}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{getStatusBadge(item.status)}</TableCell>
-                      <TableCell>{formatDate(item.timestamp)}</TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </div>
-        </TabsContent>
-      </Tabs>
+                        },
+                      }
+                    }}
+                    pagination={false}
+                  />
+                </div>
+              </div>
+            ),
+          },
+          {
+            key: 'history',
+            label: '发送历史',
+            children: (
+              <div className="border rounded-lg">
+                <Table
+                  columns={historyColumns}
+                  dataSource={history}
+                  rowKey="id"
+                  loading={historyLoading}
+                  locale={{
+                    emptyText: <EmptyState title="暂无发送记录" className="border-0" />,
+                  }}
+                  pagination={false}
+                />
+              </div>
+            ),
+          },
+        ]}
+      />
 
       {/* 添加渠道对话框 */}
-      <Dialog
+      <Modal
         open={showAddDialog}
-        onOpenChange={(open) => {
-          setShowAddDialog(open)
-          if (!open) resetNewChannel()
+        title="添加通知渠道"
+        onCancel={() => {
+          setShowAddDialog(false)
+          resetNewChannel()
         }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>添加通知渠道</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>渠道名称</Label>
-              <Input
-                placeholder="输入渠道名称"
-                value={newChannel.name}
-                onChange={(e) => setNewChannel({ ...newChannel, name: e.target.value })}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>渠道类型</Label>
-              <Select
-                value={newChannel.type}
-                onValueChange={(value) => setNewChannel({ ...newChannel, type: value as NotifyConfig['type'] })}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="dingtalk">钉钉</SelectItem>
-                  <SelectItem value="feishu">飞书</SelectItem>
-                  <SelectItem value="wechat">企业微信</SelectItem>
-                  <SelectItem value="webhook">WebHook</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            {newChannel.type === 'feishu' && (
-              <div className="space-y-2">
-                <Label>飞书接入方式</Label>
-                <Select
-                  value={newChannel.mode}
-                  onValueChange={(value) =>
-                    setNewChannel({ ...newChannel, mode: value as 'webhook' | 'app' })
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="webhook">群机器人 Webhook</SelectItem>
-                    <SelectItem value="app">企业应用机器人</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-
-            {newChannel.type === 'feishu' && newChannel.mode === 'app' ? (
-              <>
-                <div className="space-y-2">
-                  <Label>App ID</Label>
-                  <Input
-                    placeholder="cli_xxxxxxxxxxxxxxxx"
-                    value={newChannel.appId}
-                    onChange={(e) => setNewChannel({ ...newChannel, appId: e.target.value })}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>App Secret</Label>
-                  <Input
-                    type="password"
-                    placeholder="企业应用 App Secret"
-                    value={newChannel.appSecret}
-                    onChange={(e) => setNewChannel({ ...newChannel, appSecret: e.target.value })}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>接收者类型</Label>
-                  <Select
-                    value={newChannel.receiveIdType}
-                    onValueChange={(value) =>
-                      setNewChannel({ ...newChannel, receiveIdType: value })
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="open_id">open_id（个人）</SelectItem>
-                      <SelectItem value="chat_id">chat_id（群）</SelectItem>
-                      <SelectItem value="user_id">user_id</SelectItem>
-                      <SelectItem value="union_id">union_id</SelectItem>
-                      <SelectItem value="email">email</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>接收者 ID</Label>
-                  <Input
-                    placeholder="ou_xxx / oc_xxx / 邮箱"
-                    value={newChannel.receiveId}
-                    onChange={(e) => setNewChannel({ ...newChannel, receiveId: e.target.value })}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    企业应用需要把机器人加入目标群，或使用 open_id/邮箱发给个人。
-                  </p>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="space-y-2">
-                  <Label>Webhook 地址</Label>
-                  <Input
-                    placeholder="输入 Webhook URL"
-                    value={newChannel.webhook}
-                    onChange={(e) => setNewChannel({ ...newChannel, webhook: e.target.value })}
-                  />
-                </div>
-                {(newChannel.type === 'dingtalk' || newChannel.type === 'feishu') && (
-                  <div className="space-y-2">
-                    <Label>签名密钥 (可选)</Label>
-                    <Input
-                      placeholder="输入签名密钥"
-                      value={newChannel.secret}
-                      onChange={(e) => setNewChannel({ ...newChannel, secret: e.target.value })}
-                    />
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowAddDialog(false)}>
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button
+              onClick={() => {
+                setShowAddDialog(false)
+                resetNewChannel()
+              }}
+            >
               取消
             </Button>
-            <Button onClick={handleCreate} disabled={createMutation.isPending}>
+            <Button type="primary" onClick={handleCreate} loading={createMutation.isPending}>
               创建
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </div>
+        }
+      >
+        <div className="space-y-4 py-2">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">渠道名称</label>
+            <Input
+              placeholder="输入渠道名称"
+              value={newChannel.name}
+              onChange={(e) => setNewChannel({ ...newChannel, name: e.target.value })}
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">渠道类型</label>
+            <Select
+              className="w-full"
+              value={newChannel.type}
+              onChange={(value) =>
+                setNewChannel({ ...newChannel, type: value as NotifyConfig['type'] })
+              }
+              options={[
+                { value: 'dingtalk', label: '钉钉' },
+                { value: 'feishu', label: '飞书' },
+                { value: 'wechat', label: '企业微信' },
+                { value: 'webhook', label: 'WebHook' },
+              ]}
+            />
+          </div>
+          {newChannel.type === 'feishu' && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium">飞书接入方式</label>
+              <Select
+                className="w-full"
+                value={newChannel.mode}
+                onChange={(value) =>
+                  setNewChannel({ ...newChannel, mode: value as 'webhook' | 'app' })
+                }
+                options={[
+                  { value: 'webhook', label: '群机器人 Webhook' },
+                  { value: 'app', label: '企业应用机器人' },
+                ]}
+              />
+            </div>
+          )}
+
+          {newChannel.type === 'feishu' && newChannel.mode === 'app' ? (
+            <>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">App ID</label>
+                <Input
+                  placeholder="cli_xxxxxxxxxxxxxxxx"
+                  value={newChannel.appId}
+                  onChange={(e) => setNewChannel({ ...newChannel, appId: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">App Secret</label>
+                <Input
+                  type="password"
+                  placeholder="企业应用 App Secret"
+                  value={newChannel.appSecret}
+                  onChange={(e) => setNewChannel({ ...newChannel, appSecret: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">接收者类型</label>
+                <Select
+                  className="w-full"
+                  value={newChannel.receiveIdType}
+                  onChange={(value) =>
+                    setNewChannel({ ...newChannel, receiveIdType: value })
+                  }
+                  options={[
+                    { value: 'open_id', label: 'open_id（个人）' },
+                    { value: 'chat_id', label: 'chat_id（群）' },
+                    { value: 'user_id', label: 'user_id' },
+                    { value: 'union_id', label: 'union_id' },
+                    { value: 'email', label: 'email' },
+                  ]}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">接收者 ID</label>
+                <Input
+                  placeholder="ou_xxx / oc_xxx / 邮箱"
+                  value={newChannel.receiveId}
+                  onChange={(e) => setNewChannel({ ...newChannel, receiveId: e.target.value })}
+                />
+                <p className="text-xs text-muted-foreground">
+                  企业应用需要把机器人加入目标群，或使用 open_id/邮箱发给个人。
+                </p>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Webhook 地址</label>
+                <Input
+                  placeholder="输入 Webhook URL"
+                  value={newChannel.webhook}
+                  onChange={(e) => setNewChannel({ ...newChannel, webhook: e.target.value })}
+                />
+              </div>
+              {(newChannel.type === 'dingtalk' || newChannel.type === 'feishu') && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">签名密钥 (可选)</label>
+                  <Input
+                    placeholder="输入签名密钥"
+                    value={newChannel.secret}
+                    onChange={(e) => setNewChannel({ ...newChannel, secret: e.target.value })}
+                  />
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </Modal>
     </div>
   )
 }

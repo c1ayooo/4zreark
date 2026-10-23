@@ -1,23 +1,10 @@
 import { useState } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { takeoverApi, TakeoverResult } from '@/api/takeover'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Textarea } from '@/components/ui/textarea'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import { Label } from '@/components/ui/label'
-import { Progress } from '@/components/ui/progress'
+import { Button, Card, Input, Progress, Table, Tabs, Tag } from 'antd'
+import type { TableProps } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
+import EmptyState from '@/components/common/EmptyState'
 import { formatDate } from '@/lib/utils'
 import {
   Globe,
@@ -133,6 +120,113 @@ export default function TakeoverPage() {
   const vulnerableCount = results.filter((r) => r.vulnerable).length
   const safeCount = results.filter((r) => !r.vulnerable).length
 
+  const renderVulnerableTag = (vulnerable: boolean) =>
+    vulnerable ? (
+      <Tag className="flex w-fit items-center gap-1 border-transparent bg-destructive text-destructive-foreground">
+        <AlertTriangle className="h-3 w-3" />
+        可接管
+      </Tag>
+    ) : (
+      <Tag className="flex w-fit items-center gap-1">
+        <CheckCircle className="h-3 w-3" />
+        安全
+      </Tag>
+    )
+
+  const historyColumns: TableProps<TakeoverResult>['columns'] = [
+    {
+      title: '域名',
+      dataIndex: 'domain',
+      key: 'domain',
+      render: (_, result) => <span className="font-medium">{result.domain}</span>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'vulnerable',
+      key: 'vulnerable',
+      width: 90,
+      render: (_, result) => renderVulnerableTag(result.vulnerable),
+    },
+    {
+      title: '服务商',
+      dataIndex: 'provider',
+      key: 'provider',
+      render: (_, result) => result.provider || '-',
+    },
+    {
+      title: 'CNAME',
+      dataIndex: 'cnames',
+      key: 'cnames',
+      ellipsis: true,
+      render: (_, result) => result.cnames?.join(', ') || '-',
+    },
+    {
+      title: '置信度',
+      dataIndex: 'confidence',
+      key: 'confidence',
+      width: 80,
+      render: (_, result) => {
+        const conf = confidenceConfig[result.confidence] || confidenceConfig.low
+        return result.vulnerable ? <span className={conf.color}>{conf.label}</span> : null
+      },
+    },
+    {
+      title: '检测时间',
+      dataIndex: 'checkedAt',
+      key: 'checkedAt',
+      width: 170,
+      render: (_, result) => formatDate(result.checkedAt),
+    },
+  ]
+
+  const resultColumns: TableProps<TakeoverResult>['columns'] = [
+    {
+      title: '域名',
+      dataIndex: 'domain',
+      key: 'domain',
+      render: (_, result) => <span className="font-medium">{result.domain}</span>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'vulnerable',
+      key: 'vulnerable',
+      width: 90,
+      render: (_, result) => renderVulnerableTag(result.vulnerable),
+    },
+    {
+      title: '服务商',
+      dataIndex: 'provider',
+      key: 'provider',
+      render: (_, result) => result.provider || '-',
+    },
+    {
+      title: 'CNAME',
+      dataIndex: 'cnames',
+      key: 'cnames',
+      ellipsis: true,
+      render: (_, result) => result.cnames?.join(', ') || '-',
+    },
+    {
+      title: '置信度',
+      dataIndex: 'confidence',
+      key: 'confidence',
+      width: 80,
+      render: (_, result) => {
+        const conf = confidenceConfig[result.confidence] || confidenceConfig.low
+        return result.vulnerable ? <span className={conf.color}>{conf.label}</span> : null
+      },
+    },
+    {
+      title: '指纹',
+      dataIndex: 'fingerprint',
+      key: 'fingerprint',
+      ellipsis: true,
+      render: (_, result) => (
+        <span className="text-xs text-muted-foreground">{result.fingerprint || '-'}</span>
+      ),
+    },
+  ]
+
   return (
     <div className="space-y-6">
       {/* 页面头部 */}
@@ -144,229 +238,145 @@ export default function TakeoverPage() {
       </div>
 
       {/* 支持的服务商 */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium">支持检测的服务商</CardTitle>
-          <CardDescription>
-            共支持 {providers.length} 个云服务商的接管检测
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-wrap gap-2">
-            {providers.slice(0, 20).map((provider) => (
-              <Badge key={provider.name} variant="outline">
-                {provider.name}
-              </Badge>
-            ))}
-            {providers.length > 20 && (
-              <Badge variant="outline">+{providers.length - 20} 更多</Badge>
-            )}
-          </div>
-        </CardContent>
+      <Card
+        title={<span className="text-sm font-medium">支持检测的服务商</span>}
+      >
+        <p className="text-sm text-muted-foreground">
+          共支持 {providers.length} 个云服务商的接管检测
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {providers.slice(0, 20).map((provider) => (
+            <Tag key={provider.name}>
+              {provider.name}
+            </Tag>
+          ))}
+          {providers.length > 20 && (
+            <Tag>+{providers.length - 20} 更多</Tag>
+          )}
+        </div>
       </Card>
 
       {/* 标签页 */}
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList>
-          <TabsTrigger value="single">单域名扫描</TabsTrigger>
-          <TabsTrigger value="batch">批量扫描</TabsTrigger>
-          <TabsTrigger value="history">历史记录</TabsTrigger>
-        </TabsList>
-
-        {/* 单域名扫描 */}
-        <TabsContent value="single" className="space-y-4">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex gap-4">
-                <div className="flex-1">
-                  <Input
-                    placeholder="输入子域名，如: sub.example.com"
-                    value={singleDomain}
-                    onChange={(e) => setSingleDomain(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSingleScan()}
+      <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
+        items={[
+          {
+            key: 'single',
+            label: '单域名扫描',
+            children: (
+              <Card>
+                <div className="flex gap-4">
+                  <div className="flex-1">
+                    <Input
+                      placeholder="输入子域名，如: sub.example.com"
+                      value={singleDomain}
+                      onChange={(e) => setSingleDomain(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleSingleScan()}
+                    />
+                  </div>
+                  <Button
+                    type="primary"
+                    onClick={handleSingleScan}
+                    disabled={singleMutation.isPending}
+                  >
+                    <Target className="h-4 w-4 mr-2" />
+                    开始扫描
+                  </Button>
+                </div>
+              </Card>
+            ),
+          },
+          {
+            key: 'batch',
+            label: '批量扫描',
+            children: (
+              <Card>
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">域名列表 (每行一个)</label>
+                    <Input.TextArea
+                      placeholder="sub1.example.com&#10;sub2.example.com&#10;sub3.example.com"
+                      rows={8}
+                      value={batchDomains}
+                      onChange={(e) => setBatchDomains(e.target.value)}
+                    />
+                  </div>
+                  {scanning && (
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-sm">
+                        <span>扫描进度</span>
+                        <span>{progress}%</span>
+                      </div>
+                      <Progress percent={progress} showInfo={false} />
+                    </div>
+                  )}
+                  <Button
+                    type="primary"
+                    onClick={handleBatchScan}
+                    disabled={batchMutation.isPending}
+                    className="w-full"
+                  >
+                    <Play className="h-4 w-4 mr-2" />
+                    批量扫描
+                  </Button>
+                </div>
+              </Card>
+            ),
+          },
+          {
+            key: 'history',
+            label: '历史记录',
+            children: (
+              <>
+                <div className="flex justify-end mb-4">
+                  <Button size="small" onClick={() => refetchHistory()}>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    刷新
+                  </Button>
+                </div>
+                <div className="rounded-lg border">
+                  <Table<TakeoverResult>
+                    columns={historyColumns}
+                    dataSource={history}
+                    rowKey={(_, index) => String(index)}
+                    loading={historyLoading}
+                    locale={{
+                      emptyText: <EmptyState title="暂无历史记录" className="border-0" />,
+                    }}
+                    pagination={false}
                   />
                 </div>
-                <Button
-                  onClick={handleSingleScan}
-                  disabled={singleMutation.isPending}
-                >
-                  <Target className="h-4 w-4 mr-2" />
-                  开始扫描
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* 批量扫描 */}
-        <TabsContent value="batch" className="space-y-4">
-          <Card>
-            <CardContent className="pt-6 space-y-4">
-              <div className="space-y-2">
-                <Label>域名列表 (每行一个)</Label>
-                <Textarea
-                  placeholder="sub1.example.com&#10;sub2.example.com&#10;sub3.example.com"
-                  rows={8}
-                  value={batchDomains}
-                  onChange={(e) => setBatchDomains(e.target.value)}
-                />
-              </div>
-              {scanning && (
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span>扫描进度</span>
-                    <span>{progress}%</span>
-                  </div>
-                  <Progress value={progress} />
-                </div>
-              )}
-              <Button
-                onClick={handleBatchScan}
-                disabled={batchMutation.isPending}
-                className="w-full"
-              >
-                <Play className="h-4 w-4 mr-2" />
-                批量扫描
-              </Button>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* 历史记录 */}
-        <TabsContent value="history">
-          <div className="flex justify-end mb-4">
-            <Button variant="outline" size="sm" onClick={() => refetchHistory()}>
-              <RefreshCw className="h-4 w-4 mr-2" />
-              刷新
-            </Button>
-          </div>
-          <div className="border rounded-lg">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>域名</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>服务商</TableHead>
-                  <TableHead>CNAME</TableHead>
-                  <TableHead>置信度</TableHead>
-                  <TableHead>检测时间</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {historyLoading ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="text-center py-8">
-                      加载中...
-                    </TableCell>
-                  </TableRow>
-                ) : history.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-                      暂无历史记录
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  history.map((result, index) => {
-                    const conf = confidenceConfig[result.confidence] || confidenceConfig.low
-                    return (
-                      <TableRow key={index}>
-                        <TableCell className="font-medium">{result.domain}</TableCell>
-                        <TableCell>
-                          {result.vulnerable ? (
-                            <Badge variant="destructive" className="flex items-center gap-1 w-fit">
-                              <AlertTriangle className="h-3 w-3" />
-                              可接管
-                            </Badge>
-                          ) : (
-                            <Badge variant="outline" className="flex items-center gap-1 w-fit">
-                              <CheckCircle className="h-3 w-3" />
-                              安全
-                            </Badge>
-                          )}
-                        </TableCell>
-                        <TableCell>{result.provider || '-'}</TableCell>
-                        <TableCell className="max-w-xs truncate">
-                          {result.cnames?.join(', ') || '-'}
-                        </TableCell>
-                        <TableCell>
-                          {result.vulnerable && (
-                            <span className={conf.color}>{conf.label}</span>
-                          )}
-                        </TableCell>
-                        <TableCell>{formatDate(result.checkedAt)}</TableCell>
-                      </TableRow>
-                    )
-                  })
-                )}
-              </TableBody>
-            </Table>
-          </div>
-        </TabsContent>
-      </Tabs>
+              </>
+            ),
+          },
+        ]}
+      />
 
       {/* 扫描结果 */}
       {results.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
+        <Card
+          title={
+            <span className="flex items-center gap-2">
               <Shield className="h-5 w-5" />
               扫描结果
-            </CardTitle>
-            <CardDescription>
-              共扫描 {results.length} 个域名，发现 {vulnerableCount} 个可接管，{safeCount} 个安全
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="border rounded-lg">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>域名</TableHead>
-                    <TableHead>状态</TableHead>
-                    <TableHead>服务商</TableHead>
-                    <TableHead>CNAME</TableHead>
-                    <TableHead>置信度</TableHead>
-                    <TableHead>指纹</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {results.map((result, index) => {
-                    const conf = confidenceConfig[result.confidence] || confidenceConfig.low
-                    return (
-                      <TableRow key={index} className={result.vulnerable ? 'bg-red-50 dark:bg-red-950/20' : ''}>
-                        <TableCell className="font-medium">{result.domain}</TableCell>
-                        <TableCell>
-                          {result.vulnerable ? (
-                            <Badge variant="destructive" className="flex items-center gap-1 w-fit">
-                              <AlertTriangle className="h-3 w-3" />
-                              可接管
-                            </Badge>
-                          ) : (
-                            <Badge variant="outline" className="flex items-center gap-1 w-fit">
-                              <CheckCircle className="h-3 w-3" />
-                              安全
-                            </Badge>
-                          )}
-                        </TableCell>
-                        <TableCell>{result.provider || '-'}</TableCell>
-                        <TableCell className="max-w-xs truncate">
-                          {result.cnames?.join(', ') || '-'}
-                        </TableCell>
-                        <TableCell>
-                          {result.vulnerable && (
-                            <span className={conf.color}>{conf.label}</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="max-w-xs truncate text-xs text-muted-foreground">
-                          {result.fingerprint || '-'}
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          </CardContent>
+            </span>
+          }
+        >
+          <p className="text-sm text-muted-foreground">
+            共扫描 {results.length} 个域名，发现 {vulnerableCount} 个可接管，{safeCount} 个安全
+          </p>
+          <div className="mt-4 rounded-lg border">
+            <Table<TakeoverResult>
+              columns={resultColumns}
+              dataSource={results}
+              rowKey={(_, index) => String(index)}
+              rowClassName={(result) =>
+                result.vulnerable ? 'bg-red-50 dark:bg-red-950/20' : ''
+              }
+              pagination={false}
+            />
+          </div>
         </Card>
       )}
     </div>

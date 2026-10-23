@@ -1,7 +1,9 @@
 import { Suspense, useEffect, useState } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
+import { Skeleton } from 'antd'
 import Sidebar from '@/components/layout/Sidebar'
 import Header from '@/components/layout/Header'
+import { PageTransition } from '@/components/common/PageTransition'
 import { useAppStore } from '@/store/app'
 import { cn } from '@/lib/utils'
 
@@ -33,16 +35,19 @@ export default function MainLayout() {
       >
         <Header onMenuClick={() => setMobileNavOpen(true)} />
         <main className="flex-1 p-4 md:p-6">
-          {/* Suspense 只包内容区：路由切换时侧栏与顶栏不重新挂载，避免整页闪烁。 */}
-          <Suspense
-            fallback={
-              <div className="flex h-[60vh] items-center justify-center text-sm text-muted-foreground">
-                加载中…
-              </div>
-            }
-          >
-            <Outlet />
-          </Suspense>
+          {/* Suspense 只包内容区：路由切换时侧栏与顶栏不重新挂载，避免整页闪烁。
+              PageTransition 按 pathname 做入场动效（fade + 上移）。 */}
+          <PageTransition routeKey={location.pathname}>
+            <Suspense
+              fallback={
+                <div className="space-y-4" aria-busy>
+                  <Skeleton active paragraph={{ rows: 6 }} />
+                </div>
+              }
+            >
+              <Outlet />
+            </Suspense>
+          </PageTransition>
         </main>
         <footer className="border-t px-4 py-4 md:px-6">
           <p className="text-center text-xs text-muted-foreground">4zreark · c1ayoo</p>

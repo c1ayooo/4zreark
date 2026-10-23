@@ -1,31 +1,11 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Fingerprint, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { Button, Input, Modal, Select, Switch, Table, Tag } from 'antd'
+import type { TableProps } from 'antd'
 
 import { fpApi, type FpRule } from '@/api/fingerprints'
-import { Badge } from '@/components/ui/badge'
 import { useConfirm } from '@/components/common/confirm-provider'
-import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
-import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { Switch } from '@/components/ui/switch'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
@@ -164,7 +144,6 @@ export default function FingerprintsPage() {
 
   const items = list.data?.data ?? []
   const total = list.data?.total ?? 0
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const counts = sources.data?.data?.counts ?? {}
 
   const shape = (r: FpRule) => {
@@ -173,6 +152,86 @@ export default function FingerprintsPage() {
     if (r.rules && r.rules.length > 0) return '扁平规则'
     return '—'
   }
+
+  const columns: TableProps<FpRule>['columns'] = [
+    {
+      title: '规则名',
+      dataIndex: 'name',
+      key: 'name',
+      ellipsis: true,
+      render: (v: string) => <span className="font-mono text-xs">{v}</span>,
+    },
+    {
+      title: '分类',
+      dataIndex: 'category',
+      key: 'category',
+      width: 130,
+      render: (v: string) => <span className="text-sm">{v || '—'}</span>,
+    },
+    {
+      title: '来源',
+      dataIndex: 'source',
+      key: 'source',
+      width: 100,
+      render: (v: string) => <Tag>{v || '—'}</Tag>,
+    },
+    {
+      title: '形态',
+      key: 'shape',
+      width: 100,
+      render: (_, r) => <span className="text-xs text-muted-foreground">{shape(r)}</span>,
+    },
+    {
+      title: '启用',
+      dataIndex: 'enabled',
+      key: 'enabled',
+      width: 80,
+      render: (v: boolean, r) => (
+        <Switch
+          checked={v}
+          disabled={!isAdmin || toggle.isPending}
+          onChange={(next) => toggle.mutate({ rule: r, next })}
+        />
+      ),
+    },
+    {
+      title: '更新时间',
+      dataIndex: 'updated_at',
+      key: 'updated_at',
+      width: 150,
+      render: (v: string) => (
+        <span className="text-xs text-muted-foreground">{formatDate(v)}</span>
+      ),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 100,
+      render: (_, r) => (
+        <div className="flex items-center gap-1">
+          <Button
+            type="text"
+            size="small"
+            title="编辑"
+            onClick={() => openEdit(r)}
+            icon={<Pencil className="h-4 w-4" />}
+          />
+          {isAdmin && (
+            <Button
+              type="text"
+              size="small"
+              danger
+              title="删除"
+              icon={<Trash2 className="h-4 w-4" />}
+              onClick={async () => {
+                if (await confirm(`删除规则「${r.name}」？`)) remove.mutate(r.name)
+              }}
+            />
+          )}
+        </div>
+      ),
+    },
+  ]
 
   return (
     <div className="space-y-5 p-6">
@@ -187,20 +246,20 @@ export default function FingerprintsPage() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {Object.entries(counts).map(([src, n]) => (
-            <Badge key={src} variant="outline">
+            <Tag key={src}>
               {src} {n}
-            </Badge>
+            </Tag>
           ))}
-          <Button variant="outline" onClick={() => list.refetch()}>
+          <Button onClick={() => list.refetch()}>
             <RefreshCw className="mr-2 h-4 w-4" /> 刷新
           </Button>
           {isAdmin && (
-            <Button variant="outline" onClick={() => sync.mutate()} disabled={sync.isPending}>
+            <Button onClick={() => sync.mutate()} disabled={sync.isPending}>
               {sync.isPending ? '同步中…' : '同步内置规则'}
             </Button>
           )}
           {isAdmin && (
-            <Button onClick={openCreate}>
+            <Button type="primary" onClick={openCreate}>
               <Plus className="mr-2 h-4 w-4" /> 新建规则
             </Button>
           )}
@@ -227,223 +286,148 @@ export default function FingerprintsPage() {
           }}
         />
         <Select
+          className="w-40"
           value={source || 'all'}
-          onValueChange={(v) => {
+          onChange={(v) => {
             setSource(v === 'all' ? '' : v)
             setPage(1)
           }}
-        >
-          <SelectTrigger className="w-40">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">全部来源</SelectItem>
-            <SelectItem value="dddd">dddd</SelectItem>
-            <SelectItem value="seed">seed</SelectItem>
-            <SelectItem value="governance">governance</SelectItem>
-            <SelectItem value="intel">intel</SelectItem>
-            <SelectItem value="custom">custom</SelectItem>
-          </SelectContent>
-        </Select>
+          options={[
+            { value: 'all', label: '全部来源' },
+            { value: 'dddd', label: 'dddd' },
+            { value: 'seed', label: 'seed' },
+            { value: 'governance', label: 'governance' },
+            { value: 'intel', label: 'intel' },
+            { value: 'custom', label: 'custom' },
+          ]}
+        />
         <Select
+          className="w-32"
           value={enabled || 'all'}
-          onValueChange={(v) => {
+          onChange={(v) => {
             setEnabled(v === 'all' ? '' : v)
             setPage(1)
           }}
-        >
-          <SelectTrigger className="w-32">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">启用态</SelectItem>
-            <SelectItem value="1">已启用</SelectItem>
-            <SelectItem value="0">已停用</SelectItem>
-          </SelectContent>
-        </Select>
+          options={[
+            { value: 'all', label: '启用态' },
+            { value: '1', label: '已启用' },
+            { value: '0', label: '已停用' },
+          ]}
+        />
         <span className="ml-auto text-sm text-muted-foreground">{total} 条</span>
       </div>
 
-      <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>规则名</TableHead>
-              <TableHead className="w-[130px]">分类</TableHead>
-              <TableHead className="w-[100px]">来源</TableHead>
-              <TableHead className="w-[100px]">形态</TableHead>
-              <TableHead className="w-[80px]">启用</TableHead>
-              <TableHead className="w-[150px]">更新时间</TableHead>
-              <TableHead className="w-[100px]">操作</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {list.isLoading && (
-              <TableRow>
-                <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
-                  加载中…
-                </TableCell>
-              </TableRow>
-            )}
-            {!list.isLoading && items.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
-                  没有匹配的规则
-                </TableCell>
-              </TableRow>
-            )}
-            {items.map((r) => (
-              <TableRow key={r.id || r.name}>
-                <TableCell className="max-w-[420px] truncate font-mono text-xs" title={r.name}>
-                  {r.name}
-                </TableCell>
-                <TableCell className="text-sm">{r.category || '—'}</TableCell>
-                <TableCell>
-                  <Badge variant="outline">{r.source || '—'}</Badge>
-                </TableCell>
-                <TableCell className="text-xs text-muted-foreground">{shape(r)}</TableCell>
-                <TableCell>
-                  <Switch
-                    checked={r.enabled}
-                    disabled={!isAdmin || toggle.isPending}
-                    onCheckedChange={(v) => toggle.mutate({ rule: r, next: v })}
-                  />
-                </TableCell>
-                <TableCell className="text-xs text-muted-foreground">
-                  {formatDate(r.updated_at)}
-                </TableCell>
-                <TableCell>
-                  <div className="flex items-center gap-1">
-                    <Button size="icon" variant="ghost" onClick={() => openEdit(r)} title="编辑">
-                      <Pencil className="h-4 w-4" />
-                    </Button>
-                    {isAdmin && (
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        title="删除"
-                        onClick={async () => {
-                          if (await confirm(`删除规则「${r.name}」？`)) remove.mutate(r.name)
-                        }}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    )}
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+      <div className="overflow-hidden rounded-md border">
+        <Table<FpRule>
+          columns={columns}
+          dataSource={items}
+          rowKey={(r) => r.id || r.name}
+          loading={list.isLoading}
+          locale={{
+            emptyText: (
+              <div className="py-8 text-center text-muted-foreground">没有匹配的规则</div>
+            ),
+          }}
+          pagination={{
+            current: page,
+            pageSize: PAGE_SIZE,
+            total,
+            showQuickJumper: true,
+            // page_size 固定 50、无独立 pageSize 状态，不展示切换器
+            showSizeChanger: false,
+            hideOnSinglePage: true,
+            onChange: (p) => setPage(p),
+          }}
+        />
       </div>
 
-      <div className="flex items-center justify-end gap-2 text-sm">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={page <= 1}
-          onClick={() => setPage((p) => Math.max(1, p - 1))}
-        >
-          上一页
-        </Button>
-        <span className="text-muted-foreground">
-          第 {page} / {totalPages} 页
-        </span>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={page >= totalPages}
-          onClick={() => setPage((p) => p + 1)}
-        >
-          下一页
-        </Button>
-      </div>
-
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>{editing ? `编辑规则 · ${editing.name}` : '新建指纹规则'}</DialogTitle>
-            <DialogDescription>
-              表达式使用 reconkit 语法：<code>body="word"</code>、
-              <code>header="server"="nginx"</code>、<code>status==200</code>，支持
-              <code>&amp;&amp; || !</code> 与括号。条件树为 JSON，二选一。
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label>规则名（唯一）</Label>
-                <Input
-                  value={form.name}
-                  disabled={!!editing}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label>分类</Label>
-                <Input
-                  value={form.category}
-                  placeholder="cms / framework / server ..."
-                  onChange={(e) => setForm({ ...form, category: e.target.value })}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label>版本（可选）</Label>
-                <Input
-                  value={form.version}
-                  onChange={(e) => setForm({ ...form, version: e.target.value })}
-                />
-              </div>
-              <label className="flex items-end gap-2 pb-2 text-sm">
-                <Switch
-                  checked={form.enabled}
-                  onCheckedChange={(v) => setForm({ ...form, enabled: v })}
-                />
-                启用
-              </label>
-            </div>
-
-            <div className="space-y-1">
-              <Label>表达式（reconkit）</Label>
-              <Textarea
-                className="h-28 w-full rounded-md border bg-background p-3 font-mono text-sm"
-                placeholder={'header="server"="nginx" && body="word"'}
-                value={form.expression}
-                onChange={(e) => setForm({ ...form, expression: e.target.value })}
-              />
-            </div>
-
-            <div className="space-y-1">
-              <Label>条件树 JSON（可选）</Label>
-              <Textarea
-                className="h-40 w-full rounded-md border bg-background p-3 font-mono text-xs"
-                placeholder={'{\n  "and": [\n    {"type": "body", "op": "contains", "value": "word"}\n  ]\n}'}
-                value={form.condition}
-                onChange={(e) => setForm({ ...form, condition: e.target.value })}
-              />
-            </div>
-
-            {editing && (editing.rules?.length ?? 0) > 0 && (
-              <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
-                该规则原有 {editing.rules?.length} 条扁平匹配项；保存时会以当前表达式/条件树为准。
-              </div>
-            )}
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>
-              取消
-            </Button>
+      <Modal
+        open={open}
+        onCancel={() => setOpen(false)}
+        width={768}
+        title={editing ? `编辑规则 · ${editing.name}` : '新建指纹规则'}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setOpen(false)}>取消</Button>
             <Button
+              type="primary"
               onClick={() => save.mutate()}
               disabled={save.isPending || !form.name.trim()}
             >
               {save.isPending ? '保存中…' : '保存'}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            表达式使用 reconkit 语法：<code>body="word"</code>、
+            <code>header="server"="nginx"</code>、<code>status==200</code>，支持
+            <code>&amp;&amp; || !</code> 与括号。条件树为 JSON，二选一。
+          </p>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">规则名（唯一）</label>
+              <Input
+                value={form.name}
+                disabled={!!editing}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">分类</label>
+              <Input
+                value={form.category}
+                placeholder="cms / framework / server ..."
+                onChange={(e) => setForm({ ...form, category: e.target.value })}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">版本（可选）</label>
+              <Input
+                value={form.version}
+                onChange={(e) => setForm({ ...form, version: e.target.value })}
+              />
+            </div>
+            <label className="flex items-end gap-2 pb-2 text-sm">
+              <Switch
+                checked={form.enabled}
+                onChange={(v) => setForm({ ...form, enabled: v })}
+              />
+              启用
+            </label>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-sm font-medium">表达式（reconkit）</label>
+            <Input.TextArea
+              className="font-mono text-sm"
+              rows={4}
+              placeholder={'header="server"="nginx" && body="word"'}
+              value={form.expression}
+              onChange={(e) => setForm({ ...form, expression: e.target.value })}
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-sm font-medium">条件树 JSON（可选）</label>
+            <Input.TextArea
+              className="font-mono text-xs"
+              rows={6}
+              placeholder={'{\n  "and": [\n    {"type": "body", "op": "contains", "value": "word"}\n  ]\n}'}
+              value={form.condition}
+              onChange={(e) => setForm({ ...form, condition: e.target.value })}
+            />
+          </div>
+
+          {editing && (editing.rules?.length ?? 0) > 0 && (
+            <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
+              该规则原有 {editing.rules?.length} 条扁平匹配项；保存时会以当前表达式/条件树为准。
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   )
 }

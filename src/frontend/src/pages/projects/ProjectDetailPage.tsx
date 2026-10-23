@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -22,6 +22,8 @@ import {
   Trash2,
   Zap,
 } from 'lucide-react'
+import { Button, Card, Input, Modal, Progress, Select, Skeleton, Switch, Table, Tag } from 'antd'
+import type { TableProps } from 'antd'
 
 import {
   projectApi,
@@ -36,52 +38,11 @@ import {
   type PlanTriggerMode,
 } from '@/api/projects'
 import { dictionaryApi } from '@/api/sources'
-import { taskApi } from '@/api/tasks'
+import { taskApi, type Task } from '@/api/tasks'
 import { ProjectFormDialog } from '@/components/projects/ProjectFormDialog'
 import { ReportGenerateDialog } from '@/components/reports/ReportGenerateDialog'
 import { reportApi, type ReportProfile } from '@/api/reports'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Progress } from '@/components/ui/progress'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Switch } from '@/components/ui/switch'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { useConfirm } from '@/components/common/confirm-provider'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate, formatNumber } from '@/lib/utils'
 
@@ -97,13 +58,23 @@ const regionLabel = (region: string) => {
 
 const fmtDate = (v?: string | null) => (v ? formatDate(v) : '—')
 
-const runStatusMeta: Record<
-  Run['status'],
-  {
-    label: string
-    variant: 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info'
-  }
-> = {
+type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info'
+
+// shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
+const badgeCls = (variant: BadgeVariant) =>
+  variant === 'default' || variant === 'success'
+    ? 'border-transparent bg-primary text-primary-foreground'
+    : variant === 'secondary'
+      ? 'border-transparent bg-secondary text-secondary-foreground'
+      : variant === 'destructive'
+        ? 'border-transparent bg-destructive text-destructive-foreground'
+        : variant === 'warning'
+          ? 'border-transparent bg-yellow-500 text-black'
+          : variant === 'info'
+            ? 'border-transparent bg-blue-500 text-white'
+            : ''
+
+const runStatusMeta: Record<Run['status'], { label: string; variant: BadgeVariant }> = {
   queued: { label: '排队中', variant: 'secondary' },
   running: { label: '执行中', variant: 'info' },
   partial: { label: '部分完成', variant: 'warning' },
@@ -111,13 +82,7 @@ const runStatusMeta: Record<
   failed: { label: '失败', variant: 'destructive' },
 }
 
-const taskStatusMeta: Record<
-  string,
-  {
-    label: string
-    variant: 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info'
-  }
-> = {
+const taskStatusMeta: Record<string, { label: string; variant: BadgeVariant }> = {
   pending: { label: '待开始', variant: 'secondary' },
   running: { label: '运行中', variant: 'info' },
   paused: { label: '已暂停', variant: 'warning' },
@@ -166,8 +131,8 @@ function StatCard({
   tone?: 'danger'
 }) {
   return (
-    <Card>
-      <CardContent className="flex items-center gap-3 p-4">
+    <Card styles={{ body: { padding: 16 } }}>
+      <div className="flex items-center gap-3">
         <span
           className={cn(
             'flex size-9 shrink-0 items-center justify-center rounded-lg',
@@ -180,7 +145,7 @@ function StatCard({
           <div className="text-muted-foreground text-xs">{label}</div>
           <div className="truncate text-lg font-semibold tabular-nums">{value}</div>
         </div>
-      </CardContent>
+      </div>
     </Card>
   )
 }
@@ -197,7 +162,7 @@ function SectionHeader({
   return (
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <CardTitle className="text-base">{title}</CardTitle>
+        <div className="text-base font-semibold">{title}</div>
         {description && <p className="text-muted-foreground mt-1 text-xs">{description}</p>}
       </div>
       {action}
@@ -293,8 +258,8 @@ function AddSeedDialog({
     }
   }
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault()
+  const submit = async (e?: FormEvent) => {
+    e?.preventDefault()
     if (!value.trim() || !preview || preview.total === 0) return
     setSubmitting(true)
     try {
@@ -317,231 +282,210 @@ function AddSeedDialog({
   const previewBlocked = !value.trim() || (kind === 'dict' && !dictionaryId)
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>添加监控种子</DialogTitle>
-          <DialogDescription>
-            种子是持续监控的起点（域名 / 网段 / 公司等）。保存后会按间隔自动生成采集批次。
-          </DialogDescription>
-        </DialogHeader>
-        <form onSubmit={submit} className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label>种子类型</Label>
-              <Select
-                value={kind}
-                onValueChange={(v) => {
-                  setKind(v as SeedKind)
-                  setDictionaryId('')
-                  setLive(false)
-                  resetPreview()
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {SEED_KINDS.map((k) => (
-                    <SelectItem key={k} value={k}>
-                      {seedKindLabel[k]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="seed-interval">监控间隔（小时）</Label>
-              <Input
-                id="seed-interval"
-                type="number"
-                min={1}
-                max={720}
-                value={interval}
-                onChange={(e) => setInterval(Number(e.target.value))}
-              />
-            </div>
-          </div>
+    <Modal
+      open={open}
+      onCancel={() => onOpenChange(false)}
+      title="添加监控种子"
+      width={512}
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button onClick={() => onOpenChange(false)}>取消</Button>
+          <Button onClick={runPreview} disabled={previewing || previewBlocked}>
+            {previewing ? '预览中…' : '预览目标'}
+          </Button>
+          <Button
+            type="primary"
+            onClick={() => submit()}
+            disabled={submitting || previewBlocked || !preview || preview.total === 0}
+          >
+            {submitting ? '添加中…' : '添加并启用监控'}
+          </Button>
+        </div>
+      }
+    >
+      <p className="text-muted-foreground mb-4 text-sm">
+        种子是持续监控的起点（域名 / 网段 / 公司等）。保存后会按间隔自动生成采集批次。
+      </p>
+      <form onSubmit={(e) => submit(e)} className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
           <div className="space-y-1.5">
-            <Label htmlFor="seed-trigger">触发方式</Label>
+            <label className="text-sm font-medium">种子类型</label>
             <Select
-              value={triggerMode}
-              onValueChange={(v) => setTriggerMode(v as PlanTriggerMode)}
-            >
-              <SelectTrigger id="seed-trigger">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PLAN_TRIGGER_MODES.map((m) => (
-                  <SelectItem key={m.value} value={m.value}>
-                    {m.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-muted-foreground text-xs">
-              {triggerMode === 'interval'
-                ? '按监控间隔到期跑。'
-                : triggerMode === 'on_change'
-                  ? '项目内出现新增/重现资产时才跑。'
-                  : '到期照跑；有资产变化也提前跑一次。'}
-            </p>
-          </div>
-          {triggerMode !== 'interval' && (
-            <div className="space-y-1.5">
-              <Label htmlFor="seed-cooldown">变化触发冷却（分钟）</Label>
-              <Input
-                id="seed-cooldown"
-                type="number"
-                min={1}
-                max={1440}
-                value={cooldown}
-                onChange={(e) => setCooldown(Number(e.target.value))}
-              />
-              <p className="text-muted-foreground text-xs">
-                两次变化触发之间至少间隔这么久，避免一次采集风暴刷出一串批次。
-              </p>
-            </div>
-          )}
-          <div className="space-y-1.5">
-            <Label htmlFor="seed-value">种子值</Label>
-            <Input
-              id="seed-value"
-              value={value}
-              placeholder={
-                kind === 'cidr'
-                  ? '203.0.113.0/24'
-                  : kind === 'dict'
-                    ? 'example.com（基础域名）'
-                    : kind === 'company'
-                      ? '公司名称'
-                      : kind === 'cert'
-                        ? '证书组织名，如 Meituan Software System'
-                        : kind === 'repo'
-                          ? 'https://github.com/org/repo'
-                          : 'example.com'
-              }
-              onChange={(e) => {
-                setValue(e.target.value)
+              className="w-full"
+              value={kind}
+              onChange={(v) => {
+                setKind(v as SeedKind)
+                setDictionaryId('')
+                setLive(false)
                 resetPreview()
               }}
-              className="font-mono"
+              options={SEED_KINDS.map((k) => ({ value: k, label: seedKindLabel[k] }))}
             />
-            {kind === 'dict' && (
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="seed-interval" className="text-sm font-medium">
+              监控间隔（小时）
+            </label>
+            <Input
+              id="seed-interval"
+              type="number"
+              min={1}
+              max={720}
+              value={interval}
+              onChange={(e) => setInterval(Number(e.target.value))}
+            />
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <label htmlFor="seed-trigger" className="text-sm font-medium">
+            触发方式
+          </label>
+          <Select
+            className="w-full"
+            id="seed-trigger"
+            value={triggerMode}
+            onChange={(v) => setTriggerMode(v as PlanTriggerMode)}
+            options={PLAN_TRIGGER_MODES.map((m) => ({ value: m.value, label: m.label }))}
+          />
+          <p className="text-muted-foreground text-xs">
+            {triggerMode === 'interval'
+              ? '按监控间隔到期跑。'
+              : triggerMode === 'on_change'
+                ? '项目内出现新增/重现资产时才跑。'
+                : '到期照跑；有资产变化也提前跑一次。'}
+          </p>
+        </div>
+        {triggerMode !== 'interval' && (
+          <div className="space-y-1.5">
+            <label htmlFor="seed-cooldown" className="text-sm font-medium">
+              变化触发冷却（分钟）
+            </label>
+            <Input
+              id="seed-cooldown"
+              type="number"
+              min={1}
+              max={1440}
+              value={cooldown}
+              onChange={(e) => setCooldown(Number(e.target.value))}
+            />
+            <p className="text-muted-foreground text-xs">
+              两次变化触发之间至少间隔这么久，避免一次采集风暴刷出一串批次。
+            </p>
+          </div>
+        )}
+        <div className="space-y-1.5">
+          <label htmlFor="seed-value" className="text-sm font-medium">
+            种子值
+          </label>
+          <Input
+            id="seed-value"
+            value={value}
+            placeholder={
+              kind === 'cidr'
+                ? '203.0.113.0/24'
+                : kind === 'dict'
+                  ? 'example.com（基础域名）'
+                  : kind === 'company'
+                    ? '公司名称'
+                    : kind === 'cert'
+                      ? '证书组织名，如 Meituan Software System'
+                      : kind === 'repo'
+                        ? 'https://github.com/org/repo'
+                        : 'example.com'
+            }
+            onChange={(e) => {
+              setValue(e.target.value)
+              resetPreview()
+            }}
+            className="font-mono"
+          />
+          {kind === 'dict' && (
+            <p className="text-muted-foreground text-xs">
+              dict 种子的值是基础域名，具体子域词表从下面的字典展开。
+            </p>
+          )}
+        </div>
+
+        {kind === 'dict' && (
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">子域字典</label>
+            <Select
+              className="w-full"
+              value={dictionaryId || undefined}
+              onChange={(v) => {
+                setDictionaryId(v)
+                resetPreview()
+              }}
+              placeholder={dictionaries.isLoading ? '加载中…' : '选择字典'}
+              options={dictionaryList.map((d) => ({
+                value: String(d.id),
+                label: `${d.name}（${d.line_count} 行）`,
+              }))}
+            />
+            {!dictionaries.isLoading && dictionaryList.length === 0 && (
               <p className="text-muted-foreground text-xs">
-                dict 种子的值是基础域名，具体子域词表从下面的字典展开。
+                还没有子域字典，先去「字典」页导入。
               </p>
             )}
           </div>
+        )}
 
-          {kind === 'dict' && (
-            <div className="space-y-1.5">
-              <Label>子域字典</Label>
-              <Select
-                value={dictionaryId}
-                onValueChange={(v) => {
-                  setDictionaryId(v)
-                  resetPreview()
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue
-                    placeholder={dictionaries.isLoading ? '加载中…' : '选择字典'}
-                  />
-                </SelectTrigger>
-                <SelectContent>
-                  {dictionaryList.map((d) => (
-                    <SelectItem key={d.id} value={d.id}>
-                      {d.name}（{d.line_count} 行）
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {!dictionaries.isLoading && dictionaryList.length === 0 && (
-                <p className="text-muted-foreground text-xs">
-                  还没有子域字典，先去「字典」页导入。
-                </p>
-              )}
+        {(kind === 'company' || kind === 'cert' || kind === 'repo' || kind === 'app') && (
+          <div className="flex items-start justify-between gap-3 rounded-md border p-3">
+            <div>
+              <label className="text-sm font-medium">使用 live 数据源</label>
+              <p className="text-muted-foreground mt-1 text-xs">
+                会向已配置的测绘 / 代码托管 API 发起查询，但不会探测展开出的目标。
+              </p>
             </div>
-          )}
+            <Switch
+              checked={live}
+              onChange={(checked) => {
+                setLive(checked)
+                resetPreview()
+              }}
+            />
+          </div>
+        )}
 
-          {(kind === 'company' || kind === 'cert' || kind === 'repo' || kind === 'app') && (
-            <div className="flex items-start justify-between gap-3 rounded-md border p-3">
-              <div>
-                <Label>使用 live 数据源</Label>
-                <p className="text-muted-foreground mt-1 text-xs">
-                  会向已配置的测绘 / 代码托管 API 发起查询，但不会探测展开出的目标。
-                </p>
-              </div>
-              <Switch
-                checked={live}
-                onCheckedChange={(v) => {
-                  setLive(v)
-                  resetPreview()
-                }}
-              />
-            </div>
-          )}
-
-          {preview && (
-            <div className="bg-muted/30 space-y-2 rounded-md border p-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant={preview.total > 0 ? 'success' : 'warning'}>
-                  {preview.total} 个目标
-                </Badge>
+        {preview && (
+          <div className="bg-muted/30 space-y-2 rounded-md border p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Tag className={badgeCls(preview.total > 0 ? 'success' : 'warning')}>
+                {preview.total} 个目标
+              </Tag>
+              <span className="text-muted-foreground text-xs">
+                模式 {preview.mode} · 来源 {preview.source}
+              </span>
+              {preview.truncated && (
                 <span className="text-muted-foreground text-xs">
-                  模式 {preview.mode} · 来源 {preview.source}
+                  仅展示前 {preview.shown} 条
                 </span>
-                {preview.truncated && (
-                  <span className="text-muted-foreground text-xs">
-                    仅展示前 {preview.shown} 条
-                  </span>
-                )}
-              </div>
-              {preview.targets.length > 0 && (
-                <div className="max-h-28 overflow-auto rounded border bg-background p-2 font-mono text-xs">
-                  {preview.targets.slice(0, 10).map((t) => (
-                    <div key={`${t.host}:${t.port}`}>
-                      {t.host}:{t.port}
-                    </div>
-                  ))}
-                </div>
-              )}
-              {preview.warnings.map((w) => (
-                <p key={w} className="text-amber-600 text-xs">
-                  {w}
-                </p>
-              ))}
-              {preview.total === 0 && (
-                <p className="text-destructive text-xs">
-                  预览没有产生目标，不能保存；请调整种子或等待对应数据源接入。
-                </p>
               )}
             </div>
-          )}
-
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              取消
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={runPreview}
-              disabled={previewing || previewBlocked}
-            >
-              {previewing ? '预览中…' : '预览目标'}
-            </Button>
-            <Button
-              type="submit"
-              disabled={submitting || previewBlocked || !preview || preview.total === 0}
-            >
-              {submitting ? '添加中…' : '添加并启用监控'}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+            {preview.targets.length > 0 && (
+              <div className="max-h-28 overflow-auto rounded border bg-background p-2 font-mono text-xs">
+                {preview.targets.slice(0, 10).map((t) => (
+                  <div key={`${t.host}:${t.port}`}>
+                    {t.host}:{t.port}
+                  </div>
+                ))}
+              </div>
+            )}
+            {preview.warnings.map((w) => (
+              <p key={w} className="text-amber-600 text-xs">
+                {w}
+              </p>
+            ))}
+            {preview.total === 0 && (
+              <p className="text-destructive text-xs">
+                预览没有产生目标，不能保存；请调整种子或等待对应数据源接入。
+              </p>
+            )}
+          </div>
+        )}
+      </form>
+    </Modal>
   )
 }
 
@@ -551,6 +495,8 @@ export default function ProjectDetailPage() {
   const validId = Number.isFinite(idNum) && idNum > 0
   const queryClient = useQueryClient()
   const { toast } = useToast()
+  const confirm = useConfirm()
+  const iconInputRef = useRef<HTMLInputElement>(null)
 
   const [editOpen, setEditOpen] = useState(false)
   const [seedOpen, setSeedOpen] = useState(false)
@@ -773,15 +719,294 @@ export default function ProjectDetailPage() {
     onError: fail('移除图标失败'),
   })
 
+  const taskColumns: TableProps<Task>['columns'] = [
+    {
+      title: '任务',
+      dataIndex: 'name',
+      key: 'name',
+      render: (_, task) => <div className="max-w-[220px] truncate font-medium">{task.name}</div>,
+    },
+    {
+      title: '类型',
+      dataIndex: 'type',
+      key: 'type',
+      render: (_, task) => (
+        <span className="text-muted-foreground whitespace-nowrap text-xs">
+          {taskTypeLabel[task.type] || task.type}
+        </span>
+      ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      render: (_, task) => {
+        const meta = taskStatusMeta[task.status] ?? {
+          label: task.status,
+          variant: 'outline' as const,
+        }
+        return <Tag className={badgeCls(meta.variant)}>{meta.label}</Tag>
+      },
+    },
+    {
+      title: '进度',
+      dataIndex: 'progress',
+      key: 'progress',
+      render: (_, task) => (
+        <div className="flex min-w-[110px] items-center gap-2">
+          <Progress percent={task.progress} showInfo={false} strokeWidth={6} className="w-16" />
+          <span className="text-muted-foreground w-9 tabular-nums text-xs">{task.progress}%</span>
+        </div>
+      ),
+    },
+    {
+      title: '目标',
+      dataIndex: 'targets',
+      key: 'targets',
+      render: (_, task) => <span className="text-muted-foreground text-xs">{task.targets.length} 个</span>,
+    },
+    {
+      title: '创建时间',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
+      render: (_, task) => (
+        <span className="text-muted-foreground whitespace-nowrap text-xs">
+          {fmtDate(task.createdAt)}
+        </span>
+      ),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      align: 'right',
+      render: (_, task) => (
+        <div className="flex justify-end">
+          <Link to={`/tasks/${task.id}`}>
+            <Button type="text" size="small">
+              查看
+            </Button>
+          </Link>
+        </div>
+      ),
+    },
+  ]
+
+  const seedColumns: TableProps<Seed>['columns'] = [
+    {
+      title: '类型',
+      dataIndex: 'kind',
+      key: 'kind',
+      render: (_, seed) => (
+        <Tag className={badgeCls('outline')}>{seedKindLabel[seed.kind] || seed.kind}</Tag>
+      ),
+    },
+    {
+      title: '种子值',
+      dataIndex: 'value',
+      key: 'value',
+      render: (_, seed) => (
+        <div className="max-w-[280px] truncate font-mono text-xs">
+          {seed.value}
+          {seed.kind === 'domain' && (
+            <div className="text-muted-foreground mt-1 font-sans text-[11px]">
+              覆盖 {domainCountMap.get(seed.id) ?? 0} 个站点
+            </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'enabled',
+      key: 'enabled',
+      render: (_, seed) => (
+        <Tag className={badgeCls(seed.enabled ? 'success' : 'secondary')}>
+          {seed.enabled ? '启用' : '停用'}
+        </Tag>
+      ),
+    },
+    {
+      title: '创建时间',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      render: (_, seed) => (
+        <span className="text-muted-foreground text-xs">{fmtDate(seed.created_at)}</span>
+      ),
+    },
+    {
+      title: '',
+      key: 'actions',
+      width: 48,
+      render: (_, seed) => (
+        <Button
+          type="text"
+          size="small"
+          title="删除种子"
+          icon={<Trash2 className="text-destructive size-4" />}
+          onClick={async () => {
+            if (
+              await confirm({
+                title: '删除这个种子？',
+                description: '种子和它关联的监控计划都会删除，已经产生的批次记录保留。',
+                confirmText: '删除',
+                destructive: true,
+              })
+            )
+              deleteSeedMutation.mutate(seed.id)
+          }}
+        />
+      ),
+    },
+  ]
+
+  const planColumns: TableProps<Plan>['columns'] = [
+    {
+      title: '种子',
+      dataIndex: 'seed_value',
+      key: 'seed_value',
+      render: (_, plan) => <div className="max-w-[220px] truncate font-mono text-xs">{plan.seed_value}</div>,
+    },
+    {
+      title: '间隔',
+      dataIndex: 'interval_hours',
+      key: 'interval_hours',
+      render: (_, plan) => (
+        <span className="whitespace-nowrap text-sm">
+          {plan.interval_hours} 小时 ·{' '}
+          {planTriggerModeLabel[plan.trigger_mode] ?? plan.trigger_mode ?? '固定周期'}
+        </span>
+      ),
+    },
+    {
+      title: '启用',
+      dataIndex: 'enabled',
+      key: 'enabled',
+      render: (_, plan) => (
+        <Switch
+          checked={plan.enabled}
+          disabled={updatePlanMutation.isPending}
+          onChange={(enabled) => updatePlanMutation.mutate({ planId: plan.id, enabled })}
+        />
+      ),
+    },
+    {
+      title: '下次执行',
+      dataIndex: 'next_run_at',
+      key: 'next_run_at',
+      render: (_, plan) => <span className="text-muted-foreground text-xs">{fmtDate(plan.next_run_at)}</span>,
+    },
+    {
+      title: '上次执行',
+      dataIndex: 'last_run_at',
+      key: 'last_run_at',
+      render: (_, plan) => <span className="text-muted-foreground text-xs">{fmtDate(plan.last_run_at)}</span>,
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      align: 'right',
+      render: (_, plan) => (
+        <div className="flex items-center justify-end gap-1">
+          <Button
+            type="text"
+            size="small"
+            title="立即触发"
+            disabled={triggerPlanMutation.isPending}
+            onClick={() => triggerPlanMutation.mutate(plan.id)}
+            icon={<Zap className="size-4" />}
+          />
+          <Button
+            type="text"
+            size="small"
+            title="删除计划"
+            icon={<Trash2 className="text-destructive size-4" />}
+            onClick={async () => {
+              if (
+                await confirm({
+                  title: '删除这个监控计划？',
+                  description: '不会删除种子，只停止按此计划生成批次。',
+                  confirmText: '删除',
+                  destructive: true,
+                })
+              )
+                deletePlanMutation.mutate(plan.id)
+            }}
+          />
+        </div>
+      ),
+    },
+  ]
+
+  const runColumns: TableProps<Run>['columns'] = [
+    {
+      title: '批次',
+      dataIndex: 'id',
+      key: 'id',
+      render: (_, run) => <span className="font-mono text-xs">#{run.id}</span>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      render: (_, run) => {
+        const meta = runStatusMeta[run.status] ?? {
+          label: run.status,
+          variant: 'outline' as const,
+        }
+        return <Tag className={badgeCls(meta.variant)}>{meta.label}</Tag>
+      },
+    },
+    {
+      title: '周期开始',
+      dataIndex: 'cycle_start',
+      key: 'cycle_start',
+      render: (_, run) => <span className="text-muted-foreground text-xs">{fmtDate(run.cycle_start)}</span>,
+    },
+    {
+      title: '统计',
+      dataIndex: 'stats',
+      key: 'stats',
+      render: (_, run) => (
+        <span className="text-muted-foreground max-w-[240px] truncate text-xs">
+          {Object.keys(run.stats ?? {}).length > 0
+            ? Object.entries(run.stats)
+                .slice(0, 3)
+                .map(([k, v]) => `${k}: ${String(v)}`)
+                .join(' · ')
+            : '—'}
+        </span>
+      ),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      align: 'right',
+      render: (_, run) => (
+        <div className="flex justify-end">
+          <Button
+            size="small"
+            disabled={
+              executeRunMutation.isPending || run.status === 'done' || run.status === 'failed'
+            }
+            onClick={() => executeRunMutation.mutate(run.id)}
+          >
+            <Play className="mr-1 h-3.5 w-3.5" />
+            执行
+          </Button>
+        </div>
+      ),
+    },
+  ]
+
   if (!validId) {
     return (
       <Card>
-        <CardContent className="text-muted-foreground flex flex-col items-center gap-3 py-16">
+        <div className="text-muted-foreground flex flex-col items-center gap-3 py-16">
           项目 ID 不合法
-          <Button asChild variant="outline" size="sm">
-            <Link to="/projects">返回项目列表</Link>
-          </Button>
-        </CardContent>
+          <Link to="/projects">
+            <Button size="small">返回项目列表</Button>
+          </Link>
+        </div>
       </Card>
     )
   }
@@ -789,13 +1014,13 @@ export default function ProjectDetailPage() {
   if (projectQuery.isLoading) {
     return (
       <div className="space-y-4">
-        <Skeleton className="h-16 w-full" />
+        <Skeleton loading active title={false} paragraph={{ rows: 1 }} />
         <div className="grid gap-4 md:grid-cols-5">
           {Array.from({ length: 5 }).map((_, i) => (
-            <Skeleton key={i} className="h-20" />
+            <Skeleton key={i} loading active title={false} paragraph={{ rows: 1 }} />
           ))}
         </div>
-        <Skeleton className="h-72 w-full" />
+        <Skeleton loading active title={false} paragraph={{ rows: 6 }} />
       </div>
     )
   }
@@ -803,13 +1028,13 @@ export default function ProjectDetailPage() {
   if (!project) {
     return (
       <Card>
-        <CardContent className="text-muted-foreground flex flex-col items-center gap-3 py-16">
+        <div className="text-muted-foreground flex flex-col items-center gap-3 py-16">
           <AlertTriangle className="text-destructive h-8 w-8" />
           {projectQuery.isError ? '项目加载失败' : '项目不存在'}
-          <Button asChild variant="outline" size="sm">
-            <Link to="/projects">返回项目列表</Link>
-          </Button>
-        </CardContent>
+          <Link to="/projects">
+            <Button size="small">返回项目列表</Button>
+          </Link>
+        </div>
       </Card>
     )
   }
@@ -822,11 +1047,9 @@ export default function ProjectDetailPage() {
       {/* 顶部：面包屑 + 项目身份 + 操作 */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-3">
-          <Button variant="ghost" size="icon" asChild>
-            <Link to="/projects" aria-label="返回项目列表">
-              <ArrowLeft className="h-5 w-5" />
-            </Link>
-          </Button>
+          <Link to="/projects" aria-label="返回项目列表">
+            <Button type="text" icon={<ArrowLeft className="h-5 w-5" />} />
+          </Link>
           <span
             className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl text-white shadow-sm"
             style={{ backgroundColor: project.color || '#64748b' }}
@@ -844,9 +1067,9 @@ export default function ProjectDetailPage() {
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-2xl font-bold">{project.name}</h1>
-              <Badge variant={project.collection_paused ? 'warning' : 'success'}>
+              <Tag className={badgeCls(project.collection_paused ? 'warning' : 'success')}>
                 {project.collection_paused ? '已暂停' : '采集中'}
-              </Badge>
+              </Tag>
             </div>
             <p className="text-muted-foreground mt-1 font-mono text-sm">
               {project.code} · {regionLabel(project.region)}
@@ -855,47 +1078,46 @@ export default function ProjectDetailPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button asChild variant="outline" size="sm">
-            <Link to={projectPath}>
+          <Link to={projectPath}>
+            <Button size="small">
               <Database className="mr-2 h-4 w-4" />
               项目资产
-            </Link>
-          </Button>
-          <Button asChild variant="outline" size="sm">
-            <Link to={topologyPath}>
+            </Button>
+          </Link>
+          <Link to={topologyPath}>
+            <Button size="small">
               <Radio className="mr-2 h-4 w-4" />
               资产星图
-            </Link>
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setReportOpen(true)}>
+            </Button>
+          </Link>
+          <Button size="small" onClick={() => setReportOpen(true)}>
             <FileText className="mr-2 h-4 w-4" />
             信息收集报告
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+          <Button size="small" onClick={() => setEditOpen(true)}>
             <Pencil className="mr-2 h-4 w-4" />
             编辑资料
           </Button>
-          {/* 用 Button asChild 包 label：之前手抄了一套按钮样式，改了 Button 也跟不上 */}
-          <Button asChild variant="outline" size="sm">
-          <label className="cursor-pointer">
+          {/* 图标上传走隐藏 input + 按钮触发，样式统一跟 Button，不手抄 */}
+          <Button size="small" onClick={() => iconInputRef.current?.click()}>
             <ImagePlus className="mr-2 h-4 w-4" />
             图标
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0]
-                if (file) uploadIconMutation.mutate(file)
-                e.currentTarget.value = ''
-              }}
-            />
-          </label>
           </Button>
+          <input
+            ref={iconInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) uploadIconMutation.mutate(file)
+              e.currentTarget.value = ''
+            }}
+          />
           {project.icon_sha256 && (
             <Button
-              variant="ghost"
-              size="sm"
+              type="text"
+              size="small"
               disabled={clearIconMutation.isPending}
               onClick={() => clearIconMutation.mutate()}
             >
@@ -904,8 +1126,8 @@ export default function ProjectDetailPage() {
             </Button>
           )}
           <Button
-            variant={project.collection_paused ? 'default' : 'outline'}
-            size="sm"
+            type={project.collection_paused ? 'primary' : 'default'}
+            size="small"
             disabled={pauseMutation.isPending}
             onClick={() => pauseMutation.mutate(!project.collection_paused)}
           >
@@ -942,104 +1164,53 @@ export default function ProjectDetailPage() {
         {/* 左：任务 + 持续监控 */}
         <div className="space-y-4 xl:col-span-2">
           <Card>
-            <CardHeader>
-              <SectionHeader
-                title="关联任务"
-                description="归属于本项目的扫描任务；任务结果会自动并入项目资产。"
-                action={
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => tasksQuery.refetch()}
-                      disabled={tasksQuery.isFetching}
-                    >
-                      <RefreshCw
-                        className={cn('mr-2 h-4 w-4', tasksQuery.isFetching && 'animate-spin')}
-                      />
-                      刷新
+            <SectionHeader
+              title="关联任务"
+              description="归属于本项目的扫描任务；任务结果会自动并入项目资产。"
+              action={
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="text"
+                    size="small"
+                    onClick={() => tasksQuery.refetch()}
+                    disabled={tasksQuery.isFetching}
+                  >
+                    <RefreshCw
+                      className={cn('mr-2 h-4 w-4', tasksQuery.isFetching && 'animate-spin')}
+                    />
+                    刷新
+                  </Button>
+                  <Link to={`/tasks/new?project_id=${project.id}`}>
+                    <Button type="primary" size="small">
+                      <Plus className="mr-2 h-4 w-4" />
+                      新建任务
                     </Button>
-                    <Button size="sm" asChild>
-                      <Link to={`/tasks/new?project_id=${project.id}`}>
-                        <Plus className="mr-2 h-4 w-4" />
-                        新建任务
-                      </Link>
-                    </Button>
-                  </div>
-                }
-              />
-            </CardHeader>
-            <CardContent>
+                  </Link>
+                </div>
+              }
+            />
+            <div className="mt-4">
               {tasksQuery.isLoading ? (
-                <Skeleton className="h-24 w-full" />
+                <Skeleton loading active title={false} paragraph={{ rows: 3 }} />
               ) : tasks.length === 0 ? (
                 <div className="text-muted-foreground flex flex-col items-center gap-3 py-6 text-sm">
                   <ListTodo className="h-8 w-8 opacity-40" />
                   <p>本项目还没有任务</p>
-                  <Button size="sm" variant="outline" asChild>
-                    <Link to={`/tasks/new?project_id=${project.id}`}>
+                  <Link to={`/tasks/new?project_id=${project.id}`}>
+                    <Button size="small">
                       <Plus className="mr-2 h-4 w-4" />
                       新建任务
-                    </Link>
-                  </Button>
+                    </Button>
+                  </Link>
                 </div>
               ) : (
                 <>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>任务</TableHead>
-                        <TableHead>类型</TableHead>
-                        <TableHead>状态</TableHead>
-                        <TableHead>进度</TableHead>
-                        <TableHead>目标</TableHead>
-                        <TableHead>创建时间</TableHead>
-                        <TableHead className="text-right">操作</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {tasks.map((task) => {
-                        const meta = taskStatusMeta[task.status] ?? {
-                          label: task.status,
-                          variant: 'outline' as const,
-                        }
-                        return (
-                          <TableRow key={task.id}>
-                            <TableCell className="max-w-[220px] truncate font-medium">
-                              {task.name}
-                            </TableCell>
-                            <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
-                              {taskTypeLabel[task.type] || task.type}
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant={meta.variant}>{meta.label}</Badge>
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex min-w-[110px] items-center gap-2">
-                                <Progress value={task.progress} className="h-1.5 w-16" />
-                                <span className="text-muted-foreground w-9 tabular-nums text-xs">
-                                  {task.progress}%
-                                </span>
-                              </div>
-                            </TableCell>
-                            <TableCell className="text-muted-foreground text-xs">
-                              {task.targets.length} 个
-                            </TableCell>
-                            <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
-                              {fmtDate(task.createdAt)}
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex justify-end">
-                                <Button variant="ghost" size="sm" asChild>
-                                  <Link to={`/tasks/${task.id}`}>查看</Link>
-                                </Button>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        )
-                      })}
-                    </TableBody>
-                  </Table>
+                  <Table<Task>
+                    columns={taskColumns}
+                    dataSource={tasks}
+                    rowKey="id"
+                    pagination={false}
+                  />
                   {tasksTotal > tasks.length && (
                     <p className="text-muted-foreground pt-3 text-xs">
                       共 {tasksTotal} 个任务，显示最近 {tasks.length} 个
@@ -1047,294 +1218,110 @@ export default function ProjectDetailPage() {
                   )}
                 </>
               )}
-            </CardContent>
+            </div>
           </Card>
 
           <Card>
-            <CardHeader>
-              <SectionHeader
-                title="监控种子"
-                description="种子决定持续监控的范围；暂停项目后，种子保留但不会到期执行。"
-                action={
-                  <Button size="sm" onClick={() => setSeedOpen(true)}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    添加种子
-                  </Button>
-                }
-              />
-            </CardHeader>
-            <CardContent>
+            <SectionHeader
+              title="监控种子"
+              description="种子决定持续监控的范围；暂停项目后，种子保留但不会到期执行。"
+              action={
+                <Button type="primary" size="small" onClick={() => setSeedOpen(true)}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  添加种子
+                </Button>
+              }
+            />
+            <div className="mt-4">
               {seedsQuery.isLoading ? (
-                <Skeleton className="h-24 w-full" />
+                <Skeleton loading active title={false} paragraph={{ rows: 3 }} />
               ) : seeds.length === 0 ? (
                 <p className="text-muted-foreground py-6 text-center text-sm">
                   还没有种子，先添加一个域名或网段。
                 </p>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>类型</TableHead>
-                      <TableHead>种子值</TableHead>
-                      <TableHead>状态</TableHead>
-                      <TableHead>创建时间</TableHead>
-                      <TableHead className="w-12" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {seeds.map((seed: Seed) => (
-                      <TableRow key={seed.id}>
-                        <TableCell>
-                          <Badge variant="outline">{seedKindLabel[seed.kind] || seed.kind}</Badge>
-                        </TableCell>
-                        <TableCell className="max-w-[280px] truncate font-mono text-xs">
-                          {seed.value}
-                          {seed.kind === 'domain' && (
-                            <div className="text-muted-foreground mt-1 font-sans text-[11px]">
-                              覆盖 {domainCountMap.get(seed.id) ?? 0} 个站点
-                            </div>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={seed.enabled ? 'success' : 'secondary'}>
-                            {seed.enabled ? '启用' : '停用'}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-muted-foreground text-xs">
-                          {fmtDate(seed.created_at)}
-                        </TableCell>
-                        <TableCell>
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button variant="ghost" size="icon" title="删除种子">
-                                <Trash2 className="text-destructive size-4" />
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>删除这个种子？</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  种子和它关联的监控计划都会删除，已经产生的批次记录保留。
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel>取消</AlertDialogCancel>
-                                <AlertDialogAction
-                                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                  onClick={() => deleteSeedMutation.mutate(seed.id)}
-                                >
-                                  删除
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <Table<Seed>
+                  columns={seedColumns}
+                  dataSource={seeds}
+                  rowKey="id"
+                  pagination={false}
+                />
               )}
-            </CardContent>
+            </div>
           </Card>
 
           <Card>
-            <CardHeader>
-              <SectionHeader
-                title="监控计划"
-                description="每个种子按固定间隔生成治理批次；开关只影响该计划。"
-              />
-            </CardHeader>
-            <CardContent>
+            <SectionHeader
+              title="监控计划"
+              description="每个种子按固定间隔生成治理批次；开关只影响该计划。"
+            />
+            <div className="mt-4">
               {plansQuery.isLoading ? (
-                <Skeleton className="h-24 w-full" />
+                <Skeleton loading active title={false} paragraph={{ rows: 3 }} />
               ) : plans.length === 0 ? (
                 <p className="text-muted-foreground py-6 text-center text-sm">暂无监控计划</p>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>种子</TableHead>
-                      <TableHead>间隔</TableHead>
-                      <TableHead>启用</TableHead>
-                      <TableHead>下次执行</TableHead>
-                      <TableHead>上次执行</TableHead>
-                      <TableHead className="text-right">操作</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {plans.map((plan: Plan) => (
-                      <TableRow key={plan.id}>
-                        <TableCell className="max-w-[220px] truncate font-mono text-xs">
-                          {plan.seed_value}
-                        </TableCell>
-                        <TableCell className="whitespace-nowrap text-sm">
-                          {plan.interval_hours} 小时 ·{' '}
-                          {planTriggerModeLabel[plan.trigger_mode] ?? plan.trigger_mode ?? '固定周期'}
-                        </TableCell>
-                        <TableCell>
-                          <Switch
-                            checked={plan.enabled}
-                            disabled={updatePlanMutation.isPending}
-                            onCheckedChange={(enabled) =>
-                              updatePlanMutation.mutate({ planId: plan.id, enabled })
-                            }
-                          />
-                        </TableCell>
-                        <TableCell className="text-muted-foreground text-xs">
-                          {fmtDate(plan.next_run_at)}
-                        </TableCell>
-                        <TableCell className="text-muted-foreground text-xs">
-                          {fmtDate(plan.last_run_at)}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center justify-end gap-1">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              title="立即触发"
-                              disabled={triggerPlanMutation.isPending}
-                              onClick={() => triggerPlanMutation.mutate(plan.id)}
-                            >
-                              <Zap className="size-4" />
-                            </Button>
-                            <AlertDialog>
-                              <AlertDialogTrigger asChild>
-                                <Button variant="ghost" size="icon" title="删除计划">
-                                  <Trash2 className="text-destructive size-4" />
-                                </Button>
-                              </AlertDialogTrigger>
-                              <AlertDialogContent>
-                                <AlertDialogHeader>
-                                  <AlertDialogTitle>删除这个监控计划？</AlertDialogTitle>
-                                  <AlertDialogDescription>
-                                    不会删除种子，只停止按此计划生成批次。
-                                  </AlertDialogDescription>
-                                </AlertDialogHeader>
-                                <AlertDialogFooter>
-                                  <AlertDialogCancel>取消</AlertDialogCancel>
-                                  <AlertDialogAction
-                                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                    onClick={() => deletePlanMutation.mutate(plan.id)}
-                                  >
-                                    删除
-                                  </AlertDialogAction>
-                                </AlertDialogFooter>
-                              </AlertDialogContent>
-                            </AlertDialog>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <Table<Plan>
+                  columns={planColumns}
+                  dataSource={plans}
+                  rowKey="id"
+                  pagination={false}
+                />
               )}
-            </CardContent>
+            </div>
           </Card>
 
           <Card>
-            <CardHeader>
-              <SectionHeader
-                title="执行批次"
-                description="每次计划到期或手动触发都会生成一个批次，批次里是待探测的目标。"
-                action={
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => runsQuery.refetch()}
-                    disabled={runsQuery.isFetching}
-                  >
-                    <RefreshCw
-                      className={cn('mr-2 h-4 w-4', runsQuery.isFetching && 'animate-spin')}
-                    />
-                    刷新
-                  </Button>
-                }
-              />
-            </CardHeader>
-            <CardContent>
+            <SectionHeader
+              title="执行批次"
+              description="每次计划到期或手动触发都会生成一个批次，批次里是待探测的目标。"
+              action={
+                <Button
+                  type="text"
+                  size="small"
+                  onClick={() => runsQuery.refetch()}
+                  disabled={runsQuery.isFetching}
+                >
+                  <RefreshCw
+                    className={cn('mr-2 h-4 w-4', runsQuery.isFetching && 'animate-spin')}
+                  />
+                  刷新
+                </Button>
+              }
+            />
+            <div className="mt-4">
               {runsQuery.isLoading ? (
-                <Skeleton className="h-24 w-full" />
+                <Skeleton loading active title={false} paragraph={{ rows: 3 }} />
               ) : runs.length === 0 ? (
                 <p className="text-muted-foreground py-6 text-center text-sm">
                   暂无执行批次，触发一个计划即可生成。
                 </p>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>批次</TableHead>
-                      <TableHead>状态</TableHead>
-                      <TableHead>周期开始</TableHead>
-                      <TableHead>统计</TableHead>
-                      <TableHead className="text-right">操作</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {runs.map((run) => {
-                      const meta = runStatusMeta[run.status] ?? {
-                        label: run.status,
-                        variant: 'outline' as const,
-                      }
-                      return (
-                        <TableRow key={run.id}>
-                          <TableCell className="font-mono text-xs">#{run.id}</TableCell>
-                          <TableCell>
-                            <Badge variant={meta.variant}>{meta.label}</Badge>
-                          </TableCell>
-                          <TableCell className="text-muted-foreground text-xs">
-                            {fmtDate(run.cycle_start)}
-                          </TableCell>
-                          <TableCell className="text-muted-foreground max-w-[240px] truncate text-xs">
-                            {Object.keys(run.stats ?? {}).length > 0
-                              ? Object.entries(run.stats)
-                                  .slice(0, 3)
-                                  .map(([k, v]) => `${k}: ${String(v)}`)
-                                  .join(' · ')
-                              : '—'}
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex justify-end">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                disabled={
-                                  executeRunMutation.isPending ||
-                                  run.status === 'done' ||
-                                  run.status === 'failed'
-                                }
-                                onClick={() => executeRunMutation.mutate(run.id)}
-                              >
-                                <Play className="mr-1 h-3.5 w-3.5" />
-                                执行
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      )
-                    })}
-                  </TableBody>
-                </Table>
+                <Table<Run>
+                  columns={runColumns}
+                  dataSource={runs}
+                  rowKey="id"
+                  pagination={false}
+                />
               )}
-            </CardContent>
+            </div>
           </Card>
         </div>
 
         {/* 右：项目资料（表单式字段） */}
         <div className="space-y-4">
           <Card>
-            <CardHeader>
-              <SectionHeader title="项目资料" description="项目的基本信息与采集状态。" />
-            </CardHeader>
-            <CardContent className="divide-y">
+            <SectionHeader title="项目资料" description="项目的基本信息与采集状态。" />
+            <div className="divide-y">
               <InfoRow label="项目编码">
                 <span className="font-mono">{project.code}</span>
               </InfoRow>
               <InfoRow label="地区">{regionLabel(project.region)}</InfoRow>
               <InfoRow label="采集周期">{project.cycle_interval_days} 天</InfoRow>
               <InfoRow label="采集状态">
-                <Badge variant={project.collection_paused ? 'warning' : 'success'}>
+                <Tag className={badgeCls(project.collection_paused ? 'warning' : 'success')}>
                   {project.collection_paused ? '已暂停' : '采集中'}
-                </Badge>
+                </Tag>
               </InfoRow>
               {project.collection_paused && (
                 <InfoRow label="暂停原因">{project.collection_pause_reason || '—'}</InfoRow>
@@ -1361,27 +1348,25 @@ export default function ProjectDetailPage() {
                   {project.description || '暂无说明'}
                 </p>
               </div>
-            </CardContent>
+            </div>
           </Card>
 
           <Card>
-            <CardHeader>
-              <SectionHeader title="数据入口" description="按项目筛选资产或查看星图。" />
-            </CardHeader>
-            <CardContent className="grid gap-2">
-              <Button asChild variant="outline" className="justify-start">
-                <Link to={projectPath}>
+            <SectionHeader title="数据入口" description="按项目筛选资产或查看星图。" />
+            <div className="mt-4 grid gap-2">
+              <Link to={projectPath}>
+                <Button className="justify-start">
                   <Database className="mr-2 h-4 w-4" />
                   资产探索 · 按本项目筛选
-                </Link>
-              </Button>
-              <Button asChild variant="outline" className="justify-start">
-                <Link to={topologyPath}>
+                </Button>
+              </Link>
+              <Link to={topologyPath}>
+                <Button className="justify-start">
                   <Radio className="mr-2 h-4 w-4" />
                   资产星图 · 按本项目筛选
-                </Link>
-              </Button>
-            </CardContent>
+                </Button>
+              </Link>
+            </div>
           </Card>
         </div>
       </div>

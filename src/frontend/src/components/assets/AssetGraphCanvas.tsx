@@ -15,6 +15,7 @@ import {
   useNodesState,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
+import { Button, Skeleton, Tag } from 'antd'
 import {
   Briefcase,
   Globe,
@@ -33,10 +34,6 @@ import type {
   AssetGraphNode,
   AssetGraphRel,
 } from '@/api/assets'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
-import { Skeleton } from '@/components/ui/skeleton'
 import { computeLayout } from '@/lib/graph-layout'
 import { cn } from '@/lib/utils'
 
@@ -391,10 +388,8 @@ export function AssetGraphCanvas({
   return (
     <div className={cn('relative w-full overflow-hidden rounded-xl', className ?? 'h-auto min-h-[600px] lg:h-[72vh]')}>
       {data === null && loading ? (
-        <div className="space-y-3 p-6">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton key={i} className="h-10 w-full" />
-          ))}
+        <div className="p-6">
+          <Skeleton active title={false} paragraph={{ rows: 8 }} />
         </div>
       ) : nodes.length === 0 ? (
         <div className="text-muted-foreground flex h-full flex-col items-center justify-center gap-2">
@@ -547,8 +542,8 @@ export function AssetGraphCanvas({
       )}
 
       {selected && (
-        <Card className="absolute top-3 right-3 z-10 w-80">
-          <CardContent className="p-4">
+        <div className="bg-card text-card-foreground absolute top-3 right-3 z-10 w-80 rounded-xl border shadow">
+          <div className="p-4">
             <div className="mb-3 flex items-start justify-between gap-2">
               <div className="flex items-center gap-2.5">
                 {(() => {
@@ -575,25 +570,23 @@ export function AssetGraphCanvas({
                 </div>
               </div>
               <Button
-                variant="ghost"
-                size="icon"
+                type="text"
                 className="h-11 w-11 sm:h-7 sm:w-7"
                 aria-label="关闭详情"
                 onClick={() => setSelected(null)}
-              >
-                <X className="size-4" />
-              </Button>
+                icon={<X className="size-4" />}
+              />
             </div>
 
             <div className="mb-2">
               <DetailRow label="状态">
                 {reachState(selected) ? (
-                  <Badge
-                    variant={reachState(selected) === 'reachable' ? 'success' : 'outline'}
+                  <Tag
+                    color={reachState(selected) === 'reachable' ? 'success' : undefined}
                     className="font-normal"
                   >
                     {stateText[reachState(selected) as ReachState]}
-                  </Badge>
+                  </Tag>
                 ) : (
                   <span className="text-muted-foreground">结构节点</span>
                 )}
@@ -615,8 +608,8 @@ export function AssetGraphCanvas({
             </div>
 
             <p className="text-muted-foreground border-t pt-2 text-xs leading-relaxed">{note}</p>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       )}
     </div>
   )
