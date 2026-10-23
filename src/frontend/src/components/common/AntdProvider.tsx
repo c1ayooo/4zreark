@@ -89,8 +89,9 @@ export function AntdProvider({ children }: { children: ReactNode }) {
         colorTextSecondary: mutedFg,
         colorError: destructive,
         colorWarning: '#d48806',
-        borderRadius: 4,
-        borderRadiusLG: 4,
+        // 圆角是明确的产品偏好：8/12px 的柔和圆角，与 Tailwind 侧 --radius: 0.5rem 对齐
+        borderRadius: 8,
+        borderRadiusLG: 12,
         fontFamily:
           "'Noto Sans SC Variable', 'Noto Sans SC', -apple-system, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif",
         fontSize: 14,
@@ -102,7 +103,7 @@ export function AntdProvider({ children }: { children: ReactNode }) {
       },
       components: {
         Table: { cellPaddingBlockSM: 6, cellPaddingInlineSM: 10, headerBg: dark ? '#1b2028' : '#f0f2f5' },
-        Menu: { itemBorderRadius: 4, itemMarginInline: 6 },
+        Menu: { itemBorderRadius: 8, itemMarginInline: 6 },
         Modal: { contentBg: card, headerBg: card },
         Card: { paddingLG: 16 },
       },
