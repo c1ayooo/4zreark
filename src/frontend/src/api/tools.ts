@@ -203,6 +203,10 @@ export const toolsApi = {
     const raw = (await api.post('/nuclei/runtime/update', input, { timeout: 600000 })) as unknown as ApiResponse<unknown>
     return raw.data
   },
+  nucleiRuntimeSettings: async (body: { enabled?: boolean; auto_update?: boolean; interval_hours?: number; version?: string }): Promise<NucleiRuntimeStatus> => {
+    const raw = (await api.put('/nuclei/runtime/settings', body)) as unknown as ApiResponse<NucleiRuntimeStatus>
+    return raw.data
+  },
   verifyStats: async (days = 30): Promise<VerifyStats> => {
     const raw = (await api.get('/vuln-verify/stats', { params: { days } })) as unknown as ApiResponse<VerifyStats>
     return raw.data
@@ -239,6 +243,16 @@ export interface ToolsRuntimeOverview {
   nuclei?: NucleiRuntimeStatus | null
 }
 
+export interface ToolUpdateRecord {
+  tool: string
+  from_version: string
+  to_version: string
+  sha256: string
+  ok: boolean
+  note: string
+  created_at: string
+}
+
 export interface EngineUsageStatus {
   available: boolean
   limits?: Record<string, number>
@@ -267,8 +281,8 @@ export const toolRuntimeApi = {
     const raw = (await api.put(`/tools/${name}/settings`, body)) as unknown as ApiResponse<ToolRuntimeStatus>
     return raw.data
   },
-  async history(name: string): Promise<unknown[]> {
-    const raw = (await api.get(`/tools/${name}/history`)) as unknown as ApiResponse<unknown[]>
+  async history(name: string): Promise<ToolUpdateRecord[]> {
+    const raw = (await api.get(`/tools/${name}/history`)) as unknown as ApiResponse<ToolUpdateRecord[]>
     return raw.data ?? []
   },
   async engineUsage(): Promise<EngineUsageStatus> {

@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { Button, Card, Checkbox, Input, Select, Tabs, Tag } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
 import { toolsApi, type ComponentCVE, type GithubDork, type GithubLeakCandidate, type EnterpriseProvider, type EnterpriseRef, type NucleiRuntimeStatus, type VerifyStats } from '@/api/tools'
-import { Radio, KeyRound, GitCompare, Code2, Quote, Boxes, ScrollText, Github, Building2, PackageSearch, Terminal } from 'lucide-react'
+import { Radio, KeyRound, GitCompare, Code2, Quote, Boxes, ScrollText, Github, Building2, PackageSearch, Terminal, RefreshCw } from 'lucide-react'
+import ToolUpdatePanel from '@/pages/tools/ToolUpdatePanel'
 
 const { TextArea } = Input
 
@@ -38,6 +39,7 @@ export default function ToolkitPage() {
           { key: 'ghleak', label: <span className="flex items-center gap-2"><Github className="h-4 w-4" />GitHub 泄露</span>, children: <GithubLeakPanel /> },
           { key: 'enterprise', label: <span className="flex items-center gap-2"><Building2 className="h-4 w-4" />企业检索</span>, children: <EnterprisePanel /> },
           { key: 'extract', label: <span className="flex items-center gap-2"><PackageSearch className="h-4 w-4" />报文提取</span>, children: <ExtractPanel /> },
+          { key: 'updates', label: <span className="flex items-center gap-2"><RefreshCw className="h-4 w-4" />更新策略</span>, children: <ToolUpdatePanel /> },
           { key: 'runtime', label: <span className="flex items-center gap-2"><Terminal className="h-4 w-4" />运行时</span>, children: <RuntimePanel /> },
         ]}
       />
