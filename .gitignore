@@ -28,6 +28,11 @@ src/backend/.sock.lock
 src/backend/project:read
 src/backend/cmd/tmptls/
 
-# ZCode 本地会话与测试运行时文件
-.zcode/
+# ZCode 本地会话与测试运行时文件（skills 例外：随仓库分发的项目技能）
+.zcode/*
+!.zcode/skills/
 src/backend/test/.sock.lock
+
+# Python 字节码与 GUI 测试产物
+__pycache__/
+gui-test-screenshots/
