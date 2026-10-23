@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {keepPreviousData, useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import { Building2, DownloadCloud, FileSearch, GitBranch, Link2, Plus, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
 import { Button, Input, Modal, Select, Table, Tag } from 'antd'
@@ -18,6 +18,7 @@ import {
 } from '@/api/enterprise'
 import { icpApi, type ICPFiling, type ICPQuery } from '@/api/icp'
 import { useConfirm } from '@/components/common/confirm-provider'
+import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
 
@@ -70,6 +71,9 @@ export default function EnterprisePage() {
 
   const [projectId, setProjectId] = useState('0')
   const [q, setQ] = useState('')
+  // 防抖后才是真正发请求的关键词：逐键输入不再每字符打一次后端
+  const debouncedQ = useDebouncedValue(q)
+  useEffect(() => { setPage(1) }, [debouncedQ])
   const [status, setStatus] = useState('')
   const [page, setPage] = useState(1)
 
@@ -104,13 +108,13 @@ export default function EnterprisePage() {
 
   const projects = useQuery({ queryKey: ['asset-projects'], queryFn: () => projectApi.list() })
   const list = useQuery({
-    queryKey: ['enterprise-entities', projectId, q, status, page],
+    queryKey: ['enterprise-entities', projectId, debouncedQ, status, page],
     // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
     placeholderData: keepPreviousData,
     queryFn: () =>
       enterpriseApi.list({
         project_id: Number(projectId) || undefined,
-        q: q || undefined,
+        q: debouncedQ || undefined,
         status: status || undefined,
         page,
         page_size: PAGE_SIZE,

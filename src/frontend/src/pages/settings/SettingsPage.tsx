@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Button, Card, Checkbox, Input, Tabs, Tag } from 'antd'
+import { getErrorMessage } from '@/lib/errors'
 import { useAuthStore } from '@/store/auth'
 import { useAppStore } from '@/store/app'
 import { authApi } from '@/api/auth'
@@ -134,8 +135,8 @@ export default function SettingsPage() {
       logout()
       navigate('/login')
     },
-    onError: () => {
-      toast({ title: '密码修改失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '密码修改失败'), variant: 'destructive' })
     },
   })
 
@@ -642,7 +643,10 @@ export default function SettingsPage() {
                                         size="small"
                                         danger
                                         disabled={removePreset.isPending}
-                                        onClick={() => removePreset.mutate(p.id)}
+                                        onClick={async () => {
+                                          const ok = await confirm({ title: `删除监控预设「${p.name}」？`, destructive: true })
+                                          if (ok) removePreset.mutate(p.id)
+                                        }}
                                       >
                                         <Trash2 className="h-4 w-4" />
                                       </Button>

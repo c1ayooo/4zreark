@@ -556,7 +556,14 @@ export default function NodesPage() {
               <Button
                 size="small"
                 disabled={!editing || rotateMutation.isPending}
-                onClick={() => editing && rotateMutation.mutate(editing.id)}
+                onClick={async () => {
+                  if (!editing) return
+                  const ok = await confirm({
+                    title: `重置节点「${editing.name}」的密钥？`,
+                    description: '旧密钥立即失效，在线节点会被断开，需用新密钥重新接入。',
+                  })
+                  if (ok) rotateMutation.mutate(editing.id)
+                }}
               >
                 <KeyRound className="h-4 w-4 mr-1" />
                 重置密钥
@@ -565,7 +572,15 @@ export default function NodesPage() {
                 size="small"
                 danger
                 disabled={!editing || revokeMutation.isPending}
-                onClick={() => editing && revokeMutation.mutate(editing.id)}
+                onClick={async () => {
+                  if (!editing) return
+                  const ok = await confirm({
+                    title: `吊销节点「${editing.name}」的密钥？`,
+                    description: '吊销后该节点将永久无法连接平台，需重新部署。',
+                    destructive: true,
+                  })
+                  if (ok) revokeMutation.mutate(editing.id)
+                }}
               >
                 <Trash2 className="h-4 w-4 mr-1" />
                 吊销密钥

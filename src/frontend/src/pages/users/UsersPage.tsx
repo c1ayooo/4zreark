@@ -8,11 +8,14 @@ import { Button, Input, Modal, Select, Table, Tag } from 'antd'
 import type { TableProps } from 'antd'
 import EmptyState from '@/components/common/EmptyState'
 import { useToast } from '@/components/ui/use-toast'
+import { useConfirm } from '@/components/common/confirm-provider'
+import { getErrorMessage } from '@/lib/errors'
 import { cn, formatDate, getStatusColor } from '@/lib/utils'
 import { Search, Plus, Trash2, RefreshCw, Key, Ticket, Copy } from 'lucide-react'
 
 export default function UsersPage() {
   const { toast } = useToast()
+  const confirm = useConfirm()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
@@ -61,8 +64,8 @@ export default function UsersPage() {
       setNewUser({ username: '', email: '', password: '', nickname: '', role: 'user' })
       queryClient.invalidateQueries({ queryKey: ['users'] })
     },
-    onError: () => {
-      toast({ title: '创建失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '创建失败'), variant: 'destructive' })
     },
   })
 
@@ -72,8 +75,8 @@ export default function UsersPage() {
       toast({ title: '删除成功' })
       queryClient.invalidateQueries({ queryKey: ['users'] })
     },
-    onError: () => {
-      toast({ title: '删除失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '删除失败'), variant: 'destructive' })
     },
   })
 
@@ -227,7 +230,14 @@ export default function UsersPage() {
             danger
             aria-label="删除用户"
             icon={<Trash2 className="h-4 w-4" />}
-            onClick={() => deleteMutation.mutate(user.id)}
+            onClick={async () => {
+              const ok = await confirm({
+                title: `删除用户「${user.username}」？`,
+                description: '用户将被禁用且无法再登录，操作不可恢复。',
+                destructive: true,
+              })
+              if (ok) deleteMutation.mutate(user.id)
+            }}
           />
         </div>
       ),
@@ -285,7 +295,10 @@ export default function UsersPage() {
           danger
           aria-label="删除注册码"
           icon={<Trash2 className="h-4 w-4" />}
-          onClick={() => deleteCode.mutate(c.code)}
+          onClick={async () => {
+            const ok = await confirm({ title: `删除注册码 ${c.code.slice(0, 8)}…？`, destructive: true })
+            if (ok) deleteCode.mutate(c.code)
+          }}
         />
       ),
     },

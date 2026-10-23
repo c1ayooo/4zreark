@@ -19,9 +19,12 @@ import {
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import TaskCreateDialog from '@/components/tasks/TaskCreateDialog'
+import { useConfirm } from '@/components/common/confirm-provider'
+import { getErrorMessage } from '@/lib/errors'
 
 export default function TasksPage() {
   const { toast } = useToast()
+  const confirm = useConfirm()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
@@ -45,7 +48,11 @@ export default function TasksPage() {
         search,
         status: statusFilter === 'all' ? undefined : statusFilter,
       }),
-    refetchInterval: 5000, // Auto refresh every 5s for running tasks
+    refetchInterval: (query) => {
+      // 只有存在运行中/排队的任务才自动刷新，列表静止时不打后端
+      const list = query.state.data?.data?.list
+      return list?.some((t) => t.status === 'running' || t.status === 'pending') ? 5000 : false
+    },
   })
 
   const startMutation = useMutation({
@@ -54,8 +61,8 @@ export default function TasksPage() {
       toast({ title: '任务已启动' })
       queryClient.invalidateQueries({ queryKey: ['tasks'] })
     },
-    onError: () => {
-      toast({ title: '启动任务失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '启动任务失败'), variant: 'destructive' })
     },
   })
 
@@ -65,8 +72,8 @@ export default function TasksPage() {
       toast({ title: '任务已暂停' })
       queryClient.invalidateQueries({ queryKey: ['tasks'] })
     },
-    onError: () => {
-      toast({ title: '暂停任务失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '暂停任务失败'), variant: 'destructive' })
     },
   })
 
@@ -76,8 +83,8 @@ export default function TasksPage() {
       toast({ title: '任务已取消' })
       queryClient.invalidateQueries({ queryKey: ['tasks'] })
     },
-    onError: () => {
-      toast({ title: '取消任务失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '取消任务失败'), variant: 'destructive' })
     },
   })
 
@@ -87,8 +94,8 @@ export default function TasksPage() {
       toast({ title: '任务已恢复' })
       queryClient.invalidateQueries({ queryKey: ['tasks'] })
     },
-    onError: () => {
-      toast({ title: '恢复任务失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '恢复任务失败'), variant: 'destructive' })
     },
   })
 
@@ -98,8 +105,8 @@ export default function TasksPage() {
       toast({ title: '任务已重试' })
       queryClient.invalidateQueries({ queryKey: ['tasks'] })
     },
-    onError: () => {
-      toast({ title: '重试任务失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '重试任务失败'), variant: 'destructive' })
     },
   })
 
@@ -109,8 +116,8 @@ export default function TasksPage() {
       toast({ title: '删除成功' })
       queryClient.invalidateQueries({ queryKey: ['tasks'] })
     },
-    onError: () => {
-      toast({ title: '删除任务失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '删除任务失败'), variant: 'destructive' })
     },
   })
 
@@ -252,8 +259,16 @@ export default function TasksPage() {
             type="text"
             danger
             aria-label="删除任务"
+            title="删除任务"
             icon={<Trash2 className="h-4 w-4" />}
-            onClick={() => deleteMutation.mutate(task.id)}
+            onClick={async () => {
+              const ok = await confirm({
+                title: `删除任务「${task.name}」？`,
+                description: '任务及其结果索引将被删除，结果历史不可恢复。',
+                destructive: true,
+              })
+              if (ok) deleteMutation.mutate(task.id)
+            }}
             disabled={task.status === 'running'}
           />
         </div>
@@ -303,6 +318,7 @@ export default function TasksPage() {
             { value: 'paused', label: '已暂停' },
             { value: 'completed', label: '已完成' },
             { value: 'failed', label: '失败' },
+            { value: 'cancelled', label: '已取消' },
           ]}
         />
       </div>

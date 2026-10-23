@@ -8,6 +8,8 @@ import { Badge, Button, Card, Input, Modal, Select, Switch, Table, Tag } from 'a
 import type { TableProps } from 'antd'
 import EmptyState from '@/components/common/EmptyState'
 import { useToast } from '@/components/ui/use-toast'
+import { getErrorMessage } from '@/lib/errors'
+import { useConfirm } from '@/components/common/confirm-provider'
 import { formatDate } from '@/lib/utils'
 import {
   Plus,
@@ -58,6 +60,7 @@ const TARGET_TYPES = [
 
 export default function CruisePage() {
   const { toast } = useToast()
+  const confirm = useConfirm()
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
@@ -251,8 +254,8 @@ export default function CruisePage() {
       queryClient.invalidateQueries({ queryKey: ['cruises'] })
       queryClient.invalidateQueries({ queryKey: ['cruiseStats'] })
     },
-    onError: () => {
-      toast({ title: '删除失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '删除失败'), variant: 'destructive' })
     },
   })
 
@@ -263,8 +266,8 @@ export default function CruisePage() {
       queryClient.invalidateQueries({ queryKey: ['cruises'] })
       queryClient.invalidateQueries({ queryKey: ['cruiseStats'] })
     },
-    onError: () => {
-      toast({ title: '启用失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '启用失败'), variant: 'destructive' })
     },
   })
 
@@ -275,8 +278,8 @@ export default function CruisePage() {
       queryClient.invalidateQueries({ queryKey: ['cruises'] })
       queryClient.invalidateQueries({ queryKey: ['cruiseStats'] })
     },
-    onError: () => {
-      toast({ title: '禁用失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '禁用失败'), variant: 'destructive' })
     },
   })
 
@@ -286,8 +289,8 @@ export default function CruisePage() {
       toast({ title: '已触发执行' })
       queryClient.invalidateQueries({ queryKey: ['cruises'] })
     },
-    onError: () => {
-      toast({ title: '执行失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '执行失败'), variant: 'destructive' })
     },
   })
 
@@ -583,7 +586,14 @@ export default function CruisePage() {
             danger
             title="删除"
             icon={<Trash2 className="h-4 w-4" />}
-            onClick={() => deleteMutation.mutate(cruise.id)}
+            onClick={async () => {
+                const ok = await confirm({
+                  title: `删除巡航任务「${cruise.name}」？`,
+                  description: '执行日志将一并删除，历史不可恢复。',
+                  destructive: true,
+                })
+                if (ok) deleteMutation.mutate(cruise.id)
+              }}
           />
         </div>
       ),

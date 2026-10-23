@@ -6,6 +6,8 @@ import { Button, Card, Input, Modal, Select, Switch, Table, Tabs, Tag } from 'an
 import type { TableProps } from 'antd'
 import EmptyState from '@/components/common/EmptyState'
 import { useToast } from '@/components/ui/use-toast'
+import { getErrorMessage } from '@/lib/errors'
+import { useConfirm } from '@/components/common/confirm-provider'
 import { formatDate } from '@/lib/utils'
 import { notificationLink } from '@/lib/notifyLink'
 import {
@@ -54,6 +56,7 @@ const badgeCls = (variant: 'default' | 'secondary' | 'destructive' | 'outline' |
 export default function NotifyPage() {
   const navigate = useNavigate()
   const { toast } = useToast()
+  const confirm = useConfirm()
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const [activeTab, setActiveTab] = useState(() =>
@@ -124,6 +127,7 @@ export default function NotifyPage() {
       queryClient.invalidateQueries({ queryKey: ['notify'] })
       refetchInbox()
     },
+    onError: (e) => toast({ title: getErrorMessage(e, '标记失败'), variant: 'destructive' }),
   })
 
   const markOneMutation = useMutation({
@@ -132,6 +136,7 @@ export default function NotifyPage() {
       queryClient.invalidateQueries({ queryKey: ['notify'] })
       refetchInbox()
     },
+    onError: (e) => toast({ title: getErrorMessage(e, '标记失败'), variant: 'destructive' }),
   })
 
   // 创建配置
@@ -156,8 +161,8 @@ export default function NotifyPage() {
       toast({ title: '删除成功' })
       queryClient.invalidateQueries({ queryKey: ['notify-configs'] })
     },
-    onError: () => {
-      toast({ title: '删除失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '删除失败'), variant: 'destructive' })
     },
   })
 
@@ -168,8 +173,8 @@ export default function NotifyPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['notify-configs'] })
     },
-    onError: () => {
-      toast({ title: '状态切换失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '状态切换失败'), variant: 'destructive' })
     },
   })
 
@@ -456,9 +461,13 @@ export default function NotifyPage() {
                             type="text"
                             size="small"
                             danger
-                            onClick={() =>
-                              deleteMutation.mutate({ name: config.name, type: config.type })
-                            }
+                            onClick={async () => {
+                              const ok = await confirm({
+                                title: `删除通知渠道「${config.name}」？`,
+                                destructive: true,
+                              })
+                              if (ok) deleteMutation.mutate({ name: config.name, type: config.type })
+                            }}
                             aria-label="删除"
                             icon={<Trash2 className="h-4 w-4" />}
                           />

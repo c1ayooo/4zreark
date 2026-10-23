@@ -4,6 +4,8 @@ import { queueApi, QueueTask } from '@/api/queue'
 import { Button, Card, Progress, Table, Tabs, Tag } from 'antd'
 import type { TableProps } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
+import { getErrorMessage } from '@/lib/errors'
+import { useConfirm } from '@/components/common/confirm-provider'
 import { cn, formatDate } from '@/lib/utils'
 import {
   ListTodo,
@@ -38,6 +40,7 @@ const badgeCls = (variant: 'default' | 'secondary' | 'destructive' | 'outline') 
 
 export default function QueuePage() {
   const { toast } = useToast()
+  const confirm = useConfirm()
   const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState('overview')
   const [pendingPage, setPendingPage] = useState(1)
@@ -88,8 +91,8 @@ export default function QueuePage() {
       queryClient.invalidateQueries({ queryKey: ['queue-deadletter'] })
       queryClient.invalidateQueries({ queryKey: ['queue-stats'] })
     },
-    onError: () => {
-      toast({ title: '重试失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '重试失败'), variant: 'destructive' })
     },
   })
 
@@ -101,8 +104,8 @@ export default function QueuePage() {
       queryClient.invalidateQueries({ queryKey: ['queue-deadletter'] })
       queryClient.invalidateQueries({ queryKey: ['queue-stats'] })
     },
-    onError: () => {
-      toast({ title: '清空失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '清空失败'), variant: 'destructive' })
     },
   })
 
@@ -114,8 +117,8 @@ export default function QueuePage() {
       queryClient.invalidateQueries({ queryKey: ['queue-pending'] })
       queryClient.invalidateQueries({ queryKey: ['queue-stats'] })
     },
-    onError: () => {
-      toast({ title: '取消失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '取消失败'), variant: 'destructive' })
     },
   })
 
@@ -339,7 +342,14 @@ export default function QueuePage() {
                   <Button
                     danger
                     size="small"
-                    onClick={() => clearDeadletterMutation.mutate()}
+                    onClick={async () => {
+                      const ok = await confirm({
+                        title: `清空全部 ${deadletter.length} 条死信？`,
+                        description: '死信任务将永久删除，无法重试。',
+                        destructive: true,
+                      })
+                      if (ok) clearDeadletterMutation.mutate()
+                    }}
                     disabled={clearDeadletterMutation.isPending || deadletter.length === 0}
                   >
                     <Trash2 className="h-4 w-4 mr-2" />

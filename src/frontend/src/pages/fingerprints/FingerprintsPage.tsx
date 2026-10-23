@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Fingerprint, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { Button, Input, Modal, Select, Switch, Table, Tag } from 'antd'
@@ -6,6 +6,7 @@ import type { TableProps } from 'antd'
 
 import { fpApi, type FpRule } from '@/api/fingerprints'
 import { useConfirm } from '@/components/common/confirm-provider'
+import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
@@ -37,6 +38,8 @@ export default function FingerprintsPage() {
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin')
 
   const [q, setQ] = useState('')
+  const debouncedQ = useDebouncedValue(q)
+  useEffect(() => { setPage(1) }, [debouncedQ])
   const [category, setCategory] = useState('')
   const [source, setSource] = useState('')
   const [enabled, setEnabled] = useState('')
@@ -47,7 +50,7 @@ export default function FingerprintsPage() {
   const [form, setForm] = useState<FormState>(emptyForm)
 
   const list = useQuery({
-    queryKey: ['fingerprints', q, category, source, enabled, page],
+    queryKey: ['fingerprints', debouncedQ, category, source, enabled, page],
     queryFn: () =>
       fpApi.list({
         q: q || undefined,

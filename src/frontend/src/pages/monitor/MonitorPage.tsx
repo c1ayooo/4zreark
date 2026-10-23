@@ -4,6 +4,8 @@ import { monitorApi, MonitorType, type ChangeRecord, type MonitoredPage } from '
 import { Button, Card, Input, Modal, Select, Switch, Table, Tabs, Tag } from 'antd'
 import type { TableProps } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
+import { getErrorMessage } from '@/lib/errors'
+import { useConfirm } from '@/components/common/confirm-provider'
 import { cn, formatDate } from '@/lib/utils'
 import {
   Eye,
@@ -54,6 +56,7 @@ const badgeCls = (variant: 'default' | 'secondary' | 'destructive' | 'outline') 
 
 export default function MonitorPage() {
   const { toast } = useToast()
+  const confirm = useConfirm()
   const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState('pages')
   const [showAddDialog, setShowAddDialog] = useState(false)
@@ -92,8 +95,8 @@ export default function MonitorPage() {
       setShowAddDialog(false)
       setNewPage({ url: '', name: '', interval: 60, monitorTypes: ['content_hash'], keywords: '' })
     },
-    onError: () => {
-      toast({ title: '添加失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '添加失败'), variant: 'destructive' })
     },
   })
 
@@ -104,8 +107,8 @@ export default function MonitorPage() {
       toast({ title: '删除成功' })
       queryClient.invalidateQueries({ queryKey: ['monitor-pages'] })
     },
-    onError: () => {
-      toast({ title: '删除失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '删除失败'), variant: 'destructive' })
     },
   })
 
@@ -116,8 +119,8 @@ export default function MonitorPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['monitor-pages'] })
     },
-    onError: () => {
-      toast({ title: '状态切换失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '状态切换失败'), variant: 'destructive' })
     },
   })
 
@@ -132,8 +135,8 @@ export default function MonitorPage() {
       }
       queryClient.invalidateQueries({ queryKey: ['monitor-pages'] })
     },
-    onError: () => {
-      toast({ title: '检查失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '检查失败'), variant: 'destructive' })
     },
   })
 
@@ -144,8 +147,8 @@ export default function MonitorPage() {
       toast({ title: '已确认' })
       queryClient.invalidateQueries({ queryKey: ['monitor-changes'] })
     },
-    onError: () => {
-      toast({ title: '确认失败', variant: 'destructive' })
+    onError: (e) => {
+      toast({ title: getErrorMessage(e, '确认失败'), variant: 'destructive' })
     },
   })
 
@@ -281,7 +284,13 @@ export default function MonitorPage() {
             danger
             title="删除"
             icon={<Trash2 className="h-4 w-4" />}
-            onClick={() => deleteMutation.mutate(page.id)}
+            onClick={async () => {
+                const ok = await confirm({
+                  title: `停止监控「${page.name}」并删除？`,
+                  destructive: true,
+                })
+                if (ok) deleteMutation.mutate(page.id)
+              }}
           />
         </div>
       ),
