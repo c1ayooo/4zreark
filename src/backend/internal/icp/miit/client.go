@@ -23,6 +23,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -31,6 +32,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/c1ayooo/4zreark/internal/resilience"
 )
 
 const (
@@ -81,38 +84,39 @@ type Page struct {
 	Items   []Item
 }
 
-// Client 工信部查询客户端（并发安全）
+// Client 工信部查询客户端（并发安全）。
+//
+// 采集风控（resilience 纵深熔断）：
+//   - 每个上游 host 一个熔断器：连续失败开闸、创宇盾拦截立即开闸，
+//     冷却期指数退避；开闸期间请求直接以 *resilience.CircuitOpenError 拒绝；
+//   - 出口代理池：proxy 支持逗号/换行分隔多代理，轮转使用；被封出口自动拉黑换道，
+//     全部被封时回退直连并由熔断器节流。
 type Client struct {
-	hc    *http.Client
-	proxy string
-	gate  *requestGate
+	timeout  time.Duration
+	gate     *requestGate
+	pool     *resilience.ProxyPool
+	breakers *resilience.BreakerSet
+
+	clientsMu sync.Mutex
+	clients   map[string]*http.Client // 按出口串（""=直连）惰性建连
 
 	mu          sync.Mutex
 	token       string
 	tokenExpire time.Time
 }
 
-// New 创建客户端；proxy 非空时走 HTTP 代理（http://前缀可省略）
+// New 创建客户端；proxy 支持逗号/换行分隔的多个代理（单条 http:// 前缀可省略），
+// 兼容旧签名：单代理串行为不变，多代理时按池轮转。
 func New(proxy string, timeout time.Duration) *Client {
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
-	transport := &http.Transport{
-		MaxIdleConnsPerHost: 30,
-		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true}, // 对齐 Rust danger_accept_invalid_certs
-	}
-	if p := strings.TrimSpace(proxy); p != "" {
-		if !strings.Contains(p, "://") {
-			p = "http://" + p
-		}
-		if u, err := url.Parse(p); err == nil {
-			transport.Proxy = http.ProxyURL(u)
-		}
-	}
 	return &Client{
-		hc:    &http.Client{Transport: transport, Timeout: timeout},
-		proxy: proxy,
-		gate:  newRequestGate(5 * time.Second),
+		timeout:  timeout,
+		pool:     resilience.NewProxyPool(proxy),
+		breakers: resilience.NewBreakerSet(),
+		clients:  map[string]*http.Client{},
+		gate:     newRequestGate(5 * time.Second),
 	}
 }
 
@@ -122,6 +126,48 @@ func (c *Client) SetMinInterval(d time.Duration) {
 	if c.gate != nil {
 		c.gate.setInterval(d)
 	}
+}
+
+// clientFor 返回绑定指定出口的 HTTP 客户端（惰性创建并缓存）。
+// 多代理时按出口隔离连接池，避免复用被风控盯上的 TCP/TLS 会话。
+func (c *Client) clientFor(proxy string) *http.Client {
+	c.clientsMu.Lock()
+	defer c.clientsMu.Unlock()
+	if hc, ok := c.clients[proxy]; ok {
+		return hc
+	}
+	transport := &http.Transport{
+		MaxIdleConnsPerHost: 30,
+		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true}, // 对齐 Rust danger_accept_invalid_certs
+	}
+	if p := normalizeProxy(proxy); p != "" {
+		if u, err := url.Parse(p); err == nil {
+			transport.Proxy = http.ProxyURL(u)
+		}
+	}
+	hc := &http.Client{Transport: transport, Timeout: c.timeout}
+	c.clients[proxy] = hc
+	return hc
+}
+
+// normalizeProxy 归一出口串：去空白，无 scheme 时补 http://（对齐原 New 语义）。
+func normalizeProxy(proxy string) string {
+	p := strings.TrimSpace(proxy)
+	if p == "" {
+		return ""
+	}
+	if !strings.Contains(p, "://") {
+		p = "http://" + p
+	}
+	return p
+}
+
+// requestHost 提取请求 URL 的 host，作为熔断器粒度（hlwicpfwc.miit.gov.cn 等）。
+func requestHost(rawURL string) string {
+	if u, err := url.Parse(rawURL); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return rawURL
 }
 
 func baseHeaders() map[string]string {
@@ -134,7 +180,37 @@ func baseHeaders() map[string]string {
 	}
 }
 
+// post 发起一次带风控防护的上游请求（token/验证码/查询共用）。
+//
+// 纵深熔断流程：
+//  1. 检查按 host 的熔断器：开闸期间直接拒绝（*resilience.CircuitOpenError，带建议等待时长）；
+//  2. 过全局 5s 限速门后，从代理池轮出一个出口发请求；
+//  3. 按结果回填熔断器与代理池：成功 → RecordSuccess/ok；创宇盾拦截 → RecordBlocked/blocked
+//     （池内还有其他可用出口时，同一请求内换道重试 1 次）；网络错/5xx → RecordFailure/error。
 func (c *Client) post(ctx context.Context, rawURL string, headers map[string]string, contentType string, body []byte) ([]byte, error) {
+	host := requestHost(rawURL)
+	bk := c.breakers.Get(host)
+
+	proxy := c.pool.Pick()
+	data, err := c.doOnce(ctx, bk, host, proxy, rawURL, headers, contentType, body, true)
+	if errors.Is(err, ErrBlocked) {
+		// 当前出口被创宇盾拦截：池内还有其他可用出口时换道重试一次。
+		// 验证码层面的重试逻辑（solveCaptcha）保持不变。
+		if alt, ok := c.pool.PickExcluding(proxy); ok {
+			return c.doOnce(ctx, bk, host, alt, rawURL, headers, contentType, body, false)
+		}
+	}
+	return data, err
+}
+
+// doOnce 执行单次请求并回填熔断器/代理池状态。checkBreaker=false 用于被拦截后的
+// 换道重试：这是同一个调用内的续发请求，不再重复过闸（此时熔断器刚被 RecordBlocked 打开）。
+func (c *Client) doOnce(ctx context.Context, bk *resilience.Breaker, host, proxy, rawURL string, headers map[string]string, contentType string, body []byte, checkBreaker bool) ([]byte, error) {
+	if checkBreaker {
+		if ok, retryAfter := bk.Allow(); !ok {
+			return nil, &resilience.CircuitOpenError{Host: host, RetryAfter: retryAfter}
+		}
+	}
 	if c.gate != nil {
 		if err := c.gate.wait(ctx); err != nil {
 			return nil, err
@@ -148,18 +224,31 @@ func (c *Client) post(ctx context.Context, rawURL string, headers map[string]str
 		req.Header.Set(k, v)
 	}
 	req.Header.Set("Content-Type", contentType)
-	resp, err := c.hc.Do(req)
+	resp, err := c.clientFor(proxy).Do(req)
 	if err != nil {
+		bk.RecordFailure()
+		c.pool.Report(proxy, resilience.OutcomeError)
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= http.StatusInternalServerError {
+		bk.RecordFailure()
+		c.pool.Report(proxy, resilience.OutcomeError)
+		return nil, fmt.Errorf("工信部服务器异常（HTTP %d）", resp.StatusCode)
+	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
+		bk.RecordFailure()
+		c.pool.Report(proxy, resilience.OutcomeError)
 		return nil, err
 	}
 	if strings.Contains(string(data), blockMarker) {
+		bk.RecordBlocked()
+		c.pool.Report(proxy, resilience.OutcomeBlocked)
 		return nil, ErrBlocked
 	}
+	bk.RecordSuccess()
+	c.pool.Report(proxy, resilience.OutcomeOK)
 	return data, nil
 }
 
