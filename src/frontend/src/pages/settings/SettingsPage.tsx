@@ -13,7 +13,8 @@ import { useConfirm } from '@/components/common/confirm-provider'
 import { useToast } from '@/components/ui/use-toast'
 import { MCPAccessPanel } from '@/components/settings/MCPAccessPanel'
 import { ToolRuntimePanel } from '@/components/settings/ToolRuntimePanel'
-import { Moon, Sun, Monitor, Palette, User, Lock, Key, CheckCircle, XCircle, Plug, Database, Plus, Trash2, Gauge } from 'lucide-react'
+import { ProxyPanel } from '@/components/settings/ProxyPanel'
+import { Moon, Sun, Monitor, Palette, User, Lock, Key, CheckCircle, XCircle, Plug, Database, Plus, Trash2, Gauge, Globe } from 'lucide-react'
 
 export default function SettingsPage() {
   const confirm = useConfirm()
@@ -692,6 +693,16 @@ export default function SettingsPage() {
                     </span>
                   ),
                   children: <ToolRuntimePanel />,
+                },
+                {
+                  key: 'network-proxy',
+                  label: (
+                    <span className="flex items-center gap-2">
+                      <Globe className="h-4 w-4" />
+                      网络代理
+                    </span>
+                  ),
+                  children: <ProxyPanel />,
                 },
               ]
             : []),
