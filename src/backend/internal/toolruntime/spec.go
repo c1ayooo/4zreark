@@ -48,6 +48,10 @@ type ToolSpec struct {
 	// 换版前跑 HelpArgs 断言全部仍在；上游改名会在更新门被拦下。
 	// 新增 flag 用法时同步维护这里（与 runner 代码同仓同评审）。
 	RequiredFlags []string
+
+	// AutoUpdateByDefault 新建状态时 auto_update 的初始值。
+	// 依赖 fork 补丁的工具（rem）必须默认关：自动升到官方版会把数据面搞断。
+	AutoUpdateByDefault bool
 }
 
 // Specs 是受管工具注册表；顺序即 /api/tools 列表顺序。
@@ -72,7 +76,8 @@ var Specs = []ToolSpec{
 		HelpArgs:         []string{"-h"},
 
 		// scanner/portscan/gogo_runner.go ScanPorts
-		RequiredFlags: []string{"-i", "-p", "-o", "-t", "-d"},
+		RequiredFlags:       []string{"-i", "-p", "-o", "-t", "-d"},
+		AutoUpdateByDefault: true,
 	},
 	{
 		Name:        "spray",
@@ -98,6 +103,7 @@ var Specs = []ToolSpec{
 		RequiredFlags: []string{"-u", "-l", "-t", "-j", "-f", "--no-color", "--no-bar",
 			"-d", "-D", "--rate-limit", "--depth", "--finger", "--crawl", "--bak",
 			"--common"},
+		AutoUpdateByDefault: true,
 	},
 	{
 		Name:           "katana",
@@ -116,9 +122,13 @@ var Specs = []ToolSpec{
 		VersionProbeArgs: []string{"-version"},
 		HelpArgs:         []string{"-h"},
 
-		// scanner/webscan/katana.go commonArgs + 单目标/列表参数
+		// scanner/webscan/katana.go commonArgs + 单目标/列表参数；
+		// -headless 系是 SPA 分流（crawler_module looksLikeSPA）实际使用的 flag，
+		// 上游删改会在更新门被拦下，避免静默丢掉 headless 能力。
 		RequiredFlags: []string{"-d", "-c", "-timeout", "-rl", "-fs", "-H", "-silent",
-			"-jsonl", "-ob", "-or", "-ef", "-jc", "-jsl", "-kf", "-o", "-u", "-list"},
+			"-jsonl", "-ob", "-or", "-ef", "-jc", "-jsl", "-kf", "-o", "-u", "-list",
+			"-headless", "-no-sandbox", "-xhr", "-sc"},
+		AutoUpdateByDefault: true,
 	},
 	{
 		Name:           "rem",

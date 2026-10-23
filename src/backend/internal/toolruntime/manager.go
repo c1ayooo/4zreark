@@ -349,6 +349,9 @@ func (m *Manager) loadState(ctx context.Context, name string) *ToolState {
 		}
 	}
 	fresh := m.normalize(&ToolState{Name: name, Repo: spec.Repo}, spec)
+	// 新状态的 auto_update 取 spec 的显式默认（rem 因 fork 依赖默认关）。
+	// Go 零值是 false，不在这里赋值的话首次 Check 落库会把「默认开」写成关。
+	fresh.AutoUpdate = spec.AutoUpdateByDefault
 	m.memStates.Store(name, fresh)
 	return fresh
 }
