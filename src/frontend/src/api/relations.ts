@@ -28,6 +28,18 @@ export const relationTypeLabel: Record<string, string> = {
   cname: 'CNAME',
 }
 
+// 边类型配色：明暗两套主题都可读的中饱和度色；图例/画布/抽屉共用。
+export const relationTypeColor: Record<string, string> = {
+  domain_parent: '#10b981',
+  same_ip: '#f97316',
+  same_cert: '#ef4444',
+  same_icon: '#8b5cf6',
+  same_fp: '#0ea5e9',
+  same_c_segment: '#eab308',
+  redirect: '#ec4899',
+  cname: '#64748b',
+}
+
 export const eventTypeLabel: Record<string, string> = {
   first_seen: '首次发现',
   attribute_change: '属性变化',
@@ -59,6 +71,8 @@ export interface RelationNode {
   value: string
   title: string
   ip: string
+  /** favicon sha256；旧后端可能不带，渲染时回退字母头像 */
+  icon_sha256?: string
 }
 
 export interface RelationEdge {
@@ -68,6 +82,17 @@ export interface RelationEdge {
   confidence: number
   left: RelationNode
   right: RelationNode
+}
+
+/** 单条边的证据行（GET /relations/evidence），side 标明记录属于边的哪一侧 */
+export interface RelationEvidenceItem {
+  record_id: number
+  source: string
+  value: string
+  note: string
+  observed_at?: string
+  side: 'left' | 'right' | string
+  host: string
 }
 
 export interface RelationGraphData {
@@ -100,4 +125,10 @@ export const relationApi = {
       {},
       { params: { project_id: projectId || undefined } }
     ),
+
+  /** 单条关系边的证据行（图谱点边时懒加载） */
+  edgeEvidence: (relationId: number) =>
+    api.get<unknown, ApiResponse<{ evidence: RelationEvidenceItem[] }>>('/relations/evidence', {
+      params: { relation_id: relationId },
+    }),
 }

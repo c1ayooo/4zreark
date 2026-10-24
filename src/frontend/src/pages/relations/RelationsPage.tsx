@@ -1,17 +1,12 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Network, RefreshCw, Share2 } from 'lucide-react'
-import { Button, Card, Select, Table, Tag } from 'antd'
-import type { TableProps } from 'antd'
+import { Button, Card, Segmented, Select } from 'antd'
 
 import { projectApi } from '@/api/projects'
-import {
-  relationApi,
-  relationTypeLabel,
-  type RelationEdge,
-  type RelationIndexStatus,
-} from '@/api/relations'
-import EmptyState from '@/components/common/EmptyState'
+import { relationApi, relationTypeLabel, type RelationIndexStatus } from '@/api/relations'
+import { EdgeTable } from './components/EdgeTable'
+import { RelationGraphCanvas } from './components/RelationGraphCanvas'
 import { useToast } from '@/components/ui/use-toast'
 
 const TYPES = [
@@ -30,19 +25,22 @@ export default function RelationsPage() {
   const queryClient = useQueryClient()
   const [projectId, setProjectId] = useState('0')
   const [type, setType] = useState('')
+  // 图谱为默认视图；表格用于逐行精确浏览
+  const [view, setView] = useState<'graph' | 'table'>('graph')
 
   const projects = useQuery({ queryKey: ['asset-projects'], queryFn: () => projectApi.list() })
   const status = useQuery({
     queryKey: ['relation-status', projectId],
     queryFn: () => relationApi.indexStatus(Number(projectId) || undefined),
   })
+  // 图谱要全量边（上限 5000），表格维持 500 条的轻量查询
   const graph = useQuery({
-    queryKey: ['relations', projectId, type],
+    queryKey: ['relations', projectId, type, view],
     queryFn: () =>
       relationApi.list({
         project_id: Number(projectId) || undefined,
         type: type || undefined,
-        limit: 500,
+        limit: view === 'graph' ? 5000 : 500,
       }),
   })
 
@@ -63,56 +61,7 @@ export default function RelationsPage() {
 
   const stats: RelationIndexStatus | undefined = status.data?.data
   const data = graph.data?.data
-  const edges: RelationEdge[] = data?.edges ?? []
-
-  const edgeColumns: TableProps<RelationEdge>['columns'] = [
-    {
-      title: '类型',
-      dataIndex: 'type',
-      key: 'type',
-      width: 110,
-      render: (v: string) => <Tag>{relationTypeLabel[v] ?? v}</Tag>,
-    },
-    {
-      title: '聚类键',
-      dataIndex: 'key',
-      key: 'key',
-      render: (v: string) => (
-        <span className="font-mono text-xs text-muted-foreground">{v}</span>
-      ),
-    },
-    {
-      title: '站点 A',
-      key: 'left',
-      render: (_, e) => (
-        <div>
-          <div className="text-sm font-mono">{e.left.host}</div>
-          <div className="text-xs text-muted-foreground">
-            {e.left.title || '—'} · {e.left.ip || '—'}
-          </div>
-        </div>
-      ),
-    },
-    {
-      title: '站点 B',
-      key: 'right',
-      render: (_, e) => (
-        <div>
-          <div className="text-sm font-mono">{e.right.host}</div>
-          <div className="text-xs text-muted-foreground">
-            {e.right.title || '—'} · {e.right.ip || '—'}
-          </div>
-        </div>
-      ),
-    },
-    {
-      title: '置信度',
-      dataIndex: 'confidence',
-      key: 'confidence',
-      width: 90,
-      render: (v: number) => <span className="text-sm tabular-nums">{v.toFixed(2)}</span>,
-    },
-  ]
+  const edges = data?.edges ?? []
 
   return (
     <div className="space-y-5 p-6">
@@ -124,6 +73,14 @@ export default function RelationsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Segmented
+            value={view}
+            onChange={(v) => setView(v as 'graph' | 'table')}
+            options={[
+              { value: 'graph', label: '图谱', icon: <Share2 className="h-3.5 w-3.5" /> },
+              { value: 'table', label: '表格', icon: <Network className="h-3.5 w-3.5" /> },
+            ]}
+          />
           <Select
             className="w-[190px]"
             value={projectId}
@@ -181,25 +138,11 @@ export default function RelationsPage() {
         </span>
       </div>
 
-      <div className="rounded-md border">
-        <Table
-          columns={edgeColumns}
-          dataSource={edges}
-          rowKey="id"
-          loading={graph.isLoading}
-          pagination={false}
-          locale={{
-            emptyText: (
-              <EmptyState
-                icon={Network}
-                title="还没有关系边"
-                description="导入资产后点右上角「重建图谱」；同 IP/父子域/同图标/同技术栈会生成聚类。"
-                className="border-0"
-              />
-            ),
-          }}
-        />
-      </div>
+      {view === 'graph' ? (
+        <RelationGraphCanvas data={data ?? null} loading={graph.isLoading} className="h-[68vh]" />
+      ) : (
+        <EdgeTable edges={edges} loading={graph.isLoading} />
+      )}
     </div>
   )
 }
