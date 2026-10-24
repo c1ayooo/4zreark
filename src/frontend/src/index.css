@@ -83,3 +83,12 @@
 ::-webkit-scrollbar-thumb:hover {
   @apply bg-muted-foreground/50;
 }
+
+/* 窄轨道（收起侧栏）隐藏滚动条：滚轮/触控板仍可滚动，内容按轨道真宽居中 */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+

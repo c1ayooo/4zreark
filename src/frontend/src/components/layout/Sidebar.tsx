@@ -235,29 +235,39 @@ export default function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps
         collapsed ? 'lg:w-16' : 'lg:w-44'
       )}
     >
-      {/* Logo */}
-      <div className="flex h-16 items-center justify-between border-b px-4">
+      {/* Logo：收起态只留居中的展开按钮，保证与下方图标列同轴 */}
+      <div
+        className={cn(
+          'flex h-16 items-center justify-between border-b px-4',
+          collapsed && 'justify-center'
+        )}
+      >
         {!collapsed && (
           <Link to="/dashboard" className="flex items-center gap-2">
             <img src="/icon-192x192.png" alt="4zreark" className="h-8 w-8 dark:invert" />
             <span className="text-[15px] font-bold tracking-tight">4zreark</span>
           </Link>
         )}
-        {collapsed && (
-          <img src="/icon-192x192.png" alt="4zreark" className="mx-auto h-8 w-8 dark:invert" />
+        {!collapsed && (
+          <Button
+            type="text"
+            size="small"
+            onClick={toggleSidebar}
+            aria-label="收起侧栏"
+            className="hidden h-8 w-8 lg:inline-flex"
+            icon={<ChevronLeft className="h-4 w-4 transition-transform" />}
+          />
         )}
-        <Button
-          type="text"
-          size="small"
-          onClick={toggleSidebar}
-          aria-label={collapsed ? '展开侧栏' : '收起侧栏'}
-          className={cn('hidden h-8 w-8 lg:inline-flex', collapsed && 'mx-auto')}
-          icon={
-            <ChevronLeft
-              className={cn('h-4 w-4 transition-transform', collapsed && 'rotate-180')}
-            />
-          }
-        />
+        {collapsed && (
+          <Button
+            type="text"
+            size="small"
+            onClick={toggleSidebar}
+            aria-label="展开侧栏"
+            className="hidden h-8 w-8 lg:inline-flex"
+            icon={<ChevronLeft className="h-4 w-4 rotate-180 transition-transform" />}
+          />
+        )}
         <Button
           type="text"
           className="h-11 w-11 lg:hidden"
@@ -267,8 +277,10 @@ export default function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps
         />
       </div>
 
-      {/* Navigation：菜单项较多，必须让 nav 自己滚动，否则底部项会被裁掉。 */}
-      <nav className="h-[calc(100vh-4rem)] overflow-y-auto pb-20">
+      {/* Navigation：菜单项较多，必须让 nav 自己滚动，否则底部项会被裁掉。
+          收起态隐藏滚动条并把菜单宽度贴合轨道，否则 antd 收起菜单按默认 80px
+          居中，比 w-16 轨道宽 16px，图标整体右偏。 */}
+      <nav className={cn('h-[calc(100vh-4rem)] overflow-y-auto pb-20', collapsed && 'scrollbar-none')}>
         <Menu
           mode="inline"
           inlineCollapsed={collapsed}
@@ -285,7 +297,7 @@ export default function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps
             }
           }}
           onClick={onMenuClick}
-          style={{ borderInlineEnd: 'none', background: 'transparent', fontSize: 13 }}
+          style={{ borderInlineEnd: 'none', background: 'transparent', fontSize: 13, width: '100%' }}
         />
       </nav>
 
