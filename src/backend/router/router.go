@@ -152,6 +152,8 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 			{
 				protected.GET("/relations", middleware.RequirePermission("governance:read"), govHandler.ListRelations)
 				protected.GET("/relations/index-status", middleware.RequirePermission("governance:read"), govHandler.RelationIndexStatus)
+				// 单条边的证据行（关系图谱点边查看）；静态路径避免与 index-status 冲突。
+				protected.GET("/relations/evidence", middleware.RequirePermission("governance:read"), govHandler.RelationEdgeEvidence)
 				protected.GET("/asset-relations", govHandler.ListRelations)
 				protected.GET("/asset-relations/index-status", govHandler.RelationIndexStatus)
 				protected.POST("/governance/relations/rebuild", middleware.RequirePermission("governance:write"), govHandler.RebuildRelations)

@@ -531,6 +531,22 @@ func (h *GovernanceHandler) RelationIndexStatus(c *gin.Context) {
 	utils.Success(c, status)
 }
 
+// RelationEdgeEvidence 单条关系边的证据行。GET /api/relations/evidence?relation_id=
+// 用静态路径 + query 参数，避免和 /relations/index-status 在路由树上冲突。
+func (h *GovernanceHandler) RelationEdgeEvidence(c *gin.Context) {
+	relationID, err := strconv.ParseInt(c.Query("relation_id"), 10, 64)
+	if err != nil || relationID <= 0 {
+		utils.BadRequest(c, "无效的 relation_id")
+		return
+	}
+	evidence, err := h.relations.EdgeEvidence(c.Request.Context(), relationID)
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"evidence": evidence})
+}
+
 // ReplayResults 把历史 scan_results 回放成 raw_records/sites。
 // POST /api/governance/replay-results?project_id=&limit=
 func (h *GovernanceHandler) ReplayResults(c *gin.Context) {

@@ -45,3 +45,12 @@ func (s *RelationService) Status(ctx context.Context, projectID int64) (*repo.Re
 	}
 	return r.Status(ctx, projectID)
 }
+
+// EdgeEvidence 取一条关系边的证据行（图谱证据抽屉用）。
+func (s *RelationService) EdgeEvidence(ctx context.Context, relationID int64) ([]repo.RelationEvidenceRow, error) {
+	r, err := s.repo()
+	if err != nil {
+		return nil, err
+	}
+	return r.EdgeEvidence(ctx, relationID)
+}

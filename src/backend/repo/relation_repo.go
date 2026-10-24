@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -47,12 +48,13 @@ type relationPair struct {
 }
 
 type RelationNode struct {
-	ID        int64  `json:"id"`
-	ProjectID int64  `json:"project_id"`
-	Host      string `json:"host"`
-	Value     string `json:"value"`
-	Title     string `json:"title"`
-	IP        string `json:"ip"`
+	ID         int64  `json:"id"`
+	ProjectID  int64  `json:"project_id"`
+	Host       string `json:"host"`
+	Value      string `json:"value"`
+	Title      string `json:"title"`
+	IP         string `json:"ip"`
+	IconSHA256 string `json:"icon_sha256"`
 }
 
 type RelationEdge struct {
@@ -62,6 +64,18 @@ type RelationEdge struct {
 	Confidence float64      `json:"confidence"`
 	Left       RelationNode `json:"left"`
 	Right      RelationNode `json:"right"`
+}
+
+// RelationEvidenceRow 单条关系边的证据行（relation_evidence → raw_records）。
+// side 标明证据记录属于边的哪一侧站点，图谱证据抽屉按侧分组展示。
+type RelationEvidenceRow struct {
+	RecordID   int64      `json:"record_id"`
+	Source     string     `json:"source"`
+	Value      string     `json:"value"`
+	Note       string     `json:"note"`
+	ObservedAt *time.Time `json:"observed_at"`
+	Side       string     `json:"side"`
+	Host       string     `json:"host"`
 }
 
 type RelationGraph struct {
@@ -83,6 +97,8 @@ type RelationRepo interface {
 	Rebuild(ctx context.Context, projectID int64) (map[string]int64, error)
 	List(ctx context.Context, projectID int64, typ string, limit int) (*RelationGraph, error)
 	Status(ctx context.Context, projectID int64) (*RelationIndexStatus, error)
+	// EdgeEvidence 一条边的全部证据行（按观测时间倒序）。
+	EdgeEvidence(ctx context.Context, relationID int64) ([]RelationEvidenceRow, error)
 }
 
 type relationRepo struct{ r *Repo }
@@ -291,8 +307,8 @@ func (r *relationRepo) List(ctx context.Context, projectID int64, typ string, li
 	}
 	rows, err := r.r.pool.Query(ctx, `
 SELECT r.id, r.type, r.key, r.confidence,
-       l.id, l.project_id, l.host, coalesce(l.value, ''), coalesce(l.title, ''), coalesce(l.ip::text, ''),
-       rr.id, rr.project_id, rr.host, coalesce(rr.value, ''), coalesce(rr.title, ''), coalesce(rr.ip::text, '')
+       l.id, l.project_id, l.host, coalesce(l.value, ''), coalesce(l.title, ''), coalesce(l.ip::text, ''), coalesce(l.icon_sha256, ''),
+       rr.id, rr.project_id, rr.host, coalesce(rr.value, ''), coalesce(rr.title, ''), coalesce(rr.ip::text, ''), coalesce(rr.icon_sha256, '')
   FROM relations r
   JOIN sites l  ON l.id = r.left_site_id
   JOIN sites rr ON rr.id = r.right_site_id
@@ -315,8 +331,8 @@ SELECT r.id, r.type, r.key, r.confidence,
 		var e RelationEdge
 		var l, rr RelationNode
 		if err := rows.Scan(&e.ID, &e.Type, &e.Key, &e.Confidence,
-			&l.ID, &l.ProjectID, &l.Host, &l.Value, &l.Title, &l.IP,
-			&rr.ID, &rr.ProjectID, &rr.Host, &rr.Value, &rr.Title, &rr.IP); err != nil {
+			&l.ID, &l.ProjectID, &l.Host, &l.Value, &l.Title, &l.IP, &l.IconSHA256,
+			&rr.ID, &rr.ProjectID, &rr.Host, &rr.Value, &rr.Title, &rr.IP, &rr.IconSHA256); err != nil {
 			return nil, err
 		}
 		if len(graph.Edges) >= limit {
@@ -363,6 +379,37 @@ SELECT (SELECT count(*) FROM relation_evidence e JOIN relations r ON r.id = e.re
 		return nil, err
 	}
 	return out, nil
+}
+
+// EdgeEvidence 取一条关系边的全部证据行：relation_evidence → raw_records → sites，
+// side 标明每行证据记录属于边的哪一侧。证据行在重建时保证 record_id 非空，
+// 这里用 JOIN 直连；脏数据（记录被清理）会连带 evidence 行一起被 retention 清掉。
+func (r *relationRepo) EdgeEvidence(ctx context.Context, relationID int64) ([]RelationEvidenceRow, error) {
+	rows, err := r.r.pool.Query(ctx, `
+SELECT e.record_id, coalesce(rr.source, ''), coalesce(rr.value, ''), coalesce(e.note, ''), rr.observed_at,
+       CASE WHEN rr.site_id = r.left_site_id THEN 'left' ELSE 'right' END,
+       coalesce(s.host, '')
+  FROM relation_evidence e
+  JOIN relations r ON r.id = e.relation_id
+  JOIN raw_records rr ON rr.id = e.record_id
+  LEFT JOIN sites s ON s.id = rr.site_id
+ WHERE e.relation_id = $1
+ ORDER BY rr.observed_at DESC, e.record_id DESC`, relationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []RelationEvidenceRow{}
+	for rows.Next() {
+		var ev RelationEvidenceRow
+		if err := rows.Scan(&ev.RecordID, &ev.Source, &ev.Value, &ev.Note, &ev.ObservedAt,
+			&ev.Side, &ev.Host); err != nil {
+			return nil, err
+		}
+		out = append(out, ev)
+	}
+	return out, rows.Err()
 }
 
 // cSegment 取 IPv4 的 /24 前缀（"10.0.1." 这种形式，前三位点号结尾）。
