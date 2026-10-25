@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/scanner/vulnscan"
+	"github.com/c1ayooo/4zreark/service/notify"
 )
 
 // POCLoader 允许远程 worker 从平台 API 拉取 POC，而不是直连数据库。
@@ -76,6 +78,10 @@ type VulnScanModule struct {
 	invOnce sync.Once
 	inv     []templateEntry
 	invErr  error
+
+	// 高危发现（critical/high）在模块收尾时聚成一条通知，避免逐条轰炸渠道。
+	foundMu    sync.Mutex
+	foundVulns []VulnResult
 }
 
 // templateEntry 是模板库的内存索引（内容 + 匹配所需的元数据）。
@@ -181,6 +187,7 @@ func (m *VulnScanModule) ModuleRun() error {
 				allWg.Wait()
 				close(m.resultChan)
 				resultWg.Wait()
+				m.notifyHighRiskFindings()
 				log.Printf("[%s] Input closed, waiting for next module", m.name)
 				nextModuleRun.Wait()
 				return nil
@@ -466,10 +473,7 @@ func (m *VulnScanModule) scanVulnerabilities(target string, techs []string) {
 		if r == nil {
 			continue
 		}
-		select {
-		case <-m.ctx.Done():
-			return
-		case m.resultChan <- VulnResult{
+		vr := VulnResult{
 			Target:      target,
 			VulnID:      r.TemplateID,
 			Name:        r.TemplateName,
@@ -481,8 +485,96 @@ func (m *VulnScanModule) scanVulnerabilities(target string, techs []string) {
 			POC:         r.TemplateID,
 			Source:      "nuclei",
 			Timestamp:   time.Now(),
-		}:
+		}
+		if vr.Severity == "critical" || vr.Severity == "high" {
+			m.foundMu.Lock()
+			m.foundVulns = append(m.foundVulns, vr)
+			m.foundMu.Unlock()
+		}
+		select {
+		case <-m.ctx.Done():
+			return
+		case m.resultChan <- vr:
 		}
 	}
 	log.Printf("[%s] Scanned %d templates for %s, matched %d", m.name, len(selected), target, len(results))
+}
+
+// vulnNotifyTopN 高危通知里最多展示的明细条数。
+const vulnNotifyTopN = 10
+
+// notifyHighRiskFindings 模块收尾时把本轮 critical/high 发现聚合成一条通知。
+// 逐条发会在大目标量下轰炸所有渠道；每条流水线一轮只发一条。
+func (m *VulnScanModule) notifyHighRiskFindings() {
+	m.foundMu.Lock()
+	found := m.foundVulns
+	m.foundVulns = nil
+	m.foundMu.Unlock()
+
+	msg := vulnFindingsMessage(found)
+	if msg == nil {
+		return
+	}
+	notify.GetGlobalManager().SendAsync(msg)
+}
+
+var vulnNotifyRanks = map[string]int{"critical": 0, "high": 1}
+
+func vulnNotifyLabel(sev string) string {
+	if sev == "critical" {
+		return "严重"
+	}
+	return "高危"
+}
+
+// vulnFindingsMessage 高危发现聚合通知（纯函数，便于测试）。
+// found 里只应传 critical/high；其他级别会被忽略，全被忽略时返回 nil。
+func vulnFindingsMessage(found []VulnResult) *notify.NotifyMessage {
+	filtered := make([]VulnResult, 0, len(found))
+	critical, high := 0, 0
+	for _, v := range found {
+		switch v.Severity {
+		case "critical":
+			critical++
+			filtered = append(filtered, v)
+		case "high":
+			high++
+			filtered = append(filtered, v)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return vulnNotifyRanks[filtered[i].Severity] < vulnNotifyRanks[filtered[j].Severity]
+	})
+
+	targets := make(map[string]struct{}, len(filtered))
+	for _, v := range filtered {
+		targets[v.Target] = struct{}{}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "**严重**: %d\n**高危**: %d\n**涉及目标**: %d\n**明细**:", critical, high, len(targets))
+	shown := filtered
+	if len(shown) > vulnNotifyTopN {
+		shown = shown[:vulnNotifyTopN]
+	}
+	for _, v := range shown {
+		fmt.Fprintf(&b, "\n- [%s] %s — %s", vulnNotifyLabel(v.Severity), v.Name, v.Target)
+	}
+	if len(filtered) > len(shown) {
+		fmt.Fprintf(&b, "\n- ……等共 %d 条", len(filtered))
+	}
+
+	level := notify.NotifyLevelWarning
+	if critical > 0 {
+		level = notify.NotifyLevelCritical
+	}
+	return &notify.NotifyMessage{
+		Level:   level,
+		Title:   fmt.Sprintf("🚨 扫描发现 %d 个高危漏洞（%d 个目标）", len(filtered), len(targets)),
+		Content: b.String(),
+		Source:  "vuln_scanner",
+	}
 }
