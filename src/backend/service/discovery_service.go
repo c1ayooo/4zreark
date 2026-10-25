@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/c1ayooo/4zreark/internal/recon/ctlog"
+	"github.com/c1ayooo/4zreark/internal/recon/subdomain"
 	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/service/notify"
 )
@@ -112,7 +113,31 @@ type DiscoverySummary struct {
 	Sources     int   `json:"sources"`
 	FromCTLog   int   `json:"from_ctlog"`
 	FromEngines int   `json:"from_engines"`
+	FromPassive int   `json:"from_passive"`
 	NewCount    int64 `json:"new_count"`
+}
+
+// discoveryRootsCap 发现轮每项目最多展开的根域数（与 crt.sh 配额共用，
+// 两个源都按这份根域清单走）。
+const discoveryRootsCap = 5
+
+// collectDiscoveryRoots 挑出参与本轮发现的启用 domain 种子根域（纯函数）。
+// 禁用种子不参与发现轮：用户关掉的种子不该继续烧配额。
+func collectDiscoveryRoots(seeds []*repo.Seed, cap int) []string {
+	roots := make([]string, 0, cap)
+	seen := map[string]bool{}
+	for _, seed := range seeds {
+		if !seed.Enabled || seed.Kind != "domain" || len(roots) >= cap {
+			continue
+		}
+		root := normalizeDiscoverDomain(seed.Value)
+		if root == "" || seen[root] {
+			continue
+		}
+		seen[root] = true
+		roots = append(roots, root)
+	}
+	return roots
 }
 
 // RunForProject 对单个项目执行一轮被动发现。
@@ -128,18 +153,10 @@ func (s *DiscoveryService) RunForProject(ctx context.Context, projectID int64) (
 	summary := &DiscoverySummary{}
 	discovered := map[string]repo.AssetCandidate{} // key: domain
 
-	// 源 1：crt.sh 证书透明（每项目至多 5 个 domain 种子，防刷 crt.sh）
-	// 禁用种子不参与发现轮：用户关掉的种子不该继续烧配额
-	ctQueried := 0
-	for _, seed := range seeds {
-		if !seed.Enabled || seed.Kind != "domain" || ctQueried >= 5 {
-			continue
-		}
-		root := normalizeDiscoverDomain(seed.Value)
-		if root == "" {
-			continue
-		}
-		ctQueried++
+	roots := collectDiscoveryRoots(seeds, discoveryRootsCap)
+
+	// 源 1：crt.sh 证书透明（每项目至多 discoveryRootsCap 个根域，防刷 crt.sh）
+	for _, root := range roots {
 		names, err := ctlog.QuerySubdomains(ctx, root)
 		if err != nil {
 			log.Printf("[Discovery] crt.sh 查询 %s 失败（跳过）: %v", root, err)
@@ -185,7 +202,40 @@ func (s *DiscoveryService) RunForProject(ctx context.Context, projectID int64) (
 			}
 		}
 	}
-	if summary.FromCTLog > 0 || summary.FromEngines > 0 {
+	// 源 3：免 key 公开被动 DNS 聚合（OTX/RapidDNS/HackerTarget + 国内三源）。
+	// 复用 recon 包的 Enumerate：去重/归一化/按源容错都在里面，出网走 recon 代理。
+	// 与 crt.sh 共用同一份根域清单；这些源很轻，间隔 2s 即可。
+	for _, root := range roots {
+		res, err := subdomain.Enumerate(ctx, root, subdomain.Options{
+			EnablePassiveDNS:   true,
+			EnableCNPassiveDNS: true,
+			Limit:              200,
+			Timeout:            30 * time.Second,
+		})
+		if err != nil {
+			log.Printf("[Discovery] 被动源聚合 %s 失败（跳过）: %v", root, err)
+			continue
+		}
+		for src, e := range res.Errors { // 有源失败只记日志，不拖累其他源
+			log.Printf("[Discovery] 被动源 %s/%s 失败: %v", root, src, e)
+		}
+		for _, h := range res.Hits {
+			host := normalizeDiscoverDomain(h.Name)
+			if host == "" {
+				continue
+			}
+			if _, seen := discovered[host]; !seen {
+				discovered[host] = repo.AssetCandidate{Kind: "domain", Value: host, Source: "passive", Confidence: 50}
+				summary.FromPassive++
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+	if summary.FromCTLog > 0 || summary.FromEngines > 0 || summary.FromPassive > 0 {
 		summary.Sources = 1
 	}
 
