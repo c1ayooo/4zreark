@@ -771,7 +771,7 @@ export default function DigitalAssetsPage() {
           </div>
           <p className="text-xs text-muted-foreground">
             {collectProvider?.Hint ??
-              '当前仅小蓝本提供数字资产字段；其余数据源会在采集时明确报错'}
+              '数字资产当前支持小蓝本与 ENScan_GO；其余数据源会在采集时明确报错'}
           </p>
 
           {collectProvider?.Auth === 'account' && (

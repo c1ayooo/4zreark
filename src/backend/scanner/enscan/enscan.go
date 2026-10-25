@@ -283,9 +283,10 @@ func (s *ENScanScanner) StartAPIServer(ctx context.Context) error {
 	// 等待 API 服务启动
 	time.Sleep(3 * time.Second)
 
-	// 检查服务是否启动成功
+	// 健康检查打 /status（进程自带轻量端点）。/api/info 是同步上游查询，
+	// 实测单次要 17s+，拿它探活会把启动阻塞成一次真实采集。
 	for i := 0; i < 10; i++ {
-		resp, err := s.httpClient.Get(s.apiURL + "/api/info?name=test")
+		resp, err := s.httpClient.Get(s.apiURL + "/status")
 		if err == nil {
 			resp.Body.Close()
 			log.Printf("[ENScan] API server started successfully")
@@ -431,16 +432,22 @@ func (s *ENScanScanner) queryViaCLI(ctx context.Context, companyName string, opt
 	return s.parseCLIOutput(companyName, output, opts.Source)
 }
 
-// parseAPIResponse 解析 API 响应
+// parseAPIResponse 解析 API 响应。
+// 实测信封为 {"code":200,"data":{...},"message":"查询成功"}；data 的键与 -field
+// 取值一致（app/wx_app/wechat/icp/weibo/copyright/job）。数组元素的字段名以
+// live 校准为准：这里按常见键名容错提取，识别不了的字段安全忽略（不崩不混入）。
 func (s *ENScanScanner) parseAPIResponse(companyName string, body []byte, source string) (*ENScanResult, error) {
 	result := &ENScanResult{
-		Company:   companyName,
-		Source:    source,
-		QueryTime: time.Now(),
-		Apps:      make([]AppInfo, 0),
-		WxApps:    make([]WxAppInfo, 0),
-		Wechats:   make([]WechatInfo, 0),
-		ICPs:      make([]ICPInfo, 0),
+		Company:    companyName,
+		Source:     source,
+		QueryTime:  time.Now(),
+		Apps:       make([]AppInfo, 0),
+		WxApps:     make([]WxAppInfo, 0),
+		Wechats:    make([]WechatInfo, 0),
+		ICPs:       make([]ICPInfo, 0),
+		Weibos:     make([]WeiboInfo, 0),
+		Copyrights: make([]CopyrightInfo, 0),
+		Jobs:       make([]JobInfo, 0),
 	}
 
 	// ENScan API 返回格式
@@ -456,13 +463,13 @@ func (s *ENScanScanner) parseAPIResponse(companyName string, body []byte, source
 			for _, app := range apps {
 				if appMap, ok := app.(map[string]interface{}); ok {
 					result.Apps = append(result.Apps, AppInfo{
-						Name:        getString(appMap, "name"),
+						Name:        getString(appMap, "name", "app_name", "appName"),
 						Category:    getString(appMap, "category"),
-						Logo:        getString(appMap, "logo"),
-						Description: getString(appMap, "description"),
+						Logo:        getString(appMap, "logo", "icon"),
+						Description: getString(appMap, "description", "introduction"),
 						Version:     getString(appMap, "version"),
-						Package:     getString(appMap, "package"),
-						Developer:   getString(appMap, "developer"),
+						Package:     getString(appMap, "package", "pkgname", "bundle_id", "bundleid"),
+						Developer:   getString(appMap, "developer", "company"),
 					})
 				}
 			}
@@ -473,10 +480,10 @@ func (s *ENScanScanner) parseAPIResponse(companyName string, body []byte, source
 			for _, wxApp := range wxApps {
 				if wxAppMap, ok := wxApp.(map[string]interface{}); ok {
 					result.WxApps = append(result.WxApps, WxAppInfo{
-						Name:        getString(wxAppMap, "name"),
-						AppID:       getString(wxAppMap, "app_id"),
-						Logo:        getString(wxAppMap, "logo"),
-						Description: getString(wxAppMap, "description"),
+						Name:        getString(wxAppMap, "name", "app_name", "appName"),
+						AppID:       getString(wxAppMap, "app_id", "appid", "userName"),
+						Logo:        getString(wxAppMap, "logo", "icon"),
+						Description: getString(wxAppMap, "description", "introduction"),
 						Category:    getString(wxAppMap, "category"),
 					})
 				}
@@ -488,10 +495,10 @@ func (s *ENScanScanner) parseAPIResponse(companyName string, body []byte, source
 			for _, wechat := range wechats {
 				if wechatMap, ok := wechat.(map[string]interface{}); ok {
 					result.Wechats = append(result.Wechats, WechatInfo{
-						Name:        getString(wechatMap, "name"),
-						WechatID:    getString(wechatMap, "wechat_id"),
-						Logo:        getString(wechatMap, "logo"),
-						Description: getString(wechatMap, "description"),
+						Name:        getString(wechatMap, "name", "nickname"),
+						WechatID:    getString(wechatMap, "wechat_id", "alias", "wxid"),
+						Logo:        getString(wechatMap, "logo", "headimg"),
+						Description: getString(wechatMap, "description", "signature"),
 					})
 				}
 			}
@@ -502,10 +509,57 @@ func (s *ENScanScanner) parseAPIResponse(companyName string, body []byte, source
 			for _, icp := range icps {
 				if icpMap, ok := icp.(map[string]interface{}); ok {
 					result.ICPs = append(result.ICPs, ICPInfo{
-						Domain:      getString(icpMap, "domain"),
-						ICP:         getString(icpMap, "icp"),
-						SiteName:    getString(icpMap, "site_name"),
-						CompanyName: getString(icpMap, "company_name"),
+						Domain:      getString(icpMap, "domain", "site"),
+						ICP:         getString(icpMap, "icp", "cdate", "licence"),
+						SiteName:    getString(icpMap, "site_name", "name", "website"),
+						CompanyName: getString(icpMap, "company_name", "unit_name", "company"),
+					})
+				}
+			}
+		}
+
+		// 解析微博
+		if weibos, ok := data["weibo"].([]interface{}); ok {
+			for _, weibo := range weibos {
+				if weiboMap, ok := weibo.(map[string]interface{}); ok {
+					result.Weibos = append(result.Weibos, WeiboInfo{
+						Name:        getString(weiboMap, "name", "nickname"),
+						WeiboID:     getString(weiboMap, "weibo_id", "id"),
+						URL:         getString(weiboMap, "url", "link"),
+						Description: getString(weiboMap, "description", "verified_reason"),
+					})
+				}
+			}
+		}
+
+		// 解析软件著作权
+		if copyrights, ok := data["copyright"].([]interface{}); ok {
+			for _, copyright := range copyrights {
+				if cMap, ok := copyright.(map[string]interface{}); ok {
+					result.Copyrights = append(result.Copyrights, CopyrightInfo{
+						Name:         getString(cMap, "name", "software_name"),
+						ShortName:    getString(cMap, "short_name", "shortname"),
+						Version:      getString(cMap, "version"),
+						RegisterNo:   getString(cMap, "register_no", "regnum", "registerno"),
+						RegisterDate: getString(cMap, "register_date"),
+						PublishDate:  getString(cMap, "publish_date"),
+					})
+				}
+			}
+		}
+
+		// 解析招聘信息
+		if jobs, ok := data["job"].([]interface{}); ok {
+			for _, job := range jobs {
+				if jobMap, ok := job.(map[string]interface{}); ok {
+					result.Jobs = append(result.Jobs, JobInfo{
+						Title:      getString(jobMap, "title", "name", "job_name"),
+						Location:   getString(jobMap, "location", "city", "address"),
+						Salary:     getString(jobMap, "salary"),
+						Experience: getString(jobMap, "experience"),
+						Education:  getString(jobMap, "education"),
+						Source:     getString(jobMap, "source", "platform"),
+						URL:        getString(jobMap, "url", "link"),
 					})
 				}
 			}
@@ -672,11 +726,13 @@ func (s *ENScanScanner) BatchQuery(ctx context.Context, companies []string, opts
 	return results, nil
 }
 
-// getString 从 map 中安全获取字符串
-func getString(m map[string]interface{}, key string) string {
-	if v, ok := m[key]; ok {
-		if s, ok := v.(string); ok {
-			return s
+// getString 从 map 中安全获取字符串，按顺序取第一个非空键值。
+func getString(m map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if v, ok := m[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
 		}
 	}
 	return ""

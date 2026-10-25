@@ -417,7 +417,7 @@ func (s *CruiseService) executeDigitalCruise(cruise *models.CruiseTask, cruiseID
 	}
 	if _, ok := provider.(enterprise.DigitalAssetsProvider); !ok {
 		s.failDigitalRun(cruise, startTime, restoreStatus,
-			fmt.Sprintf("数据源 %s 不支持数字资产采集（当前支持：xiaolanben）", provider.Name()))
+			fmt.Sprintf("数据源 %s 不支持数字资产采集（当前支持：xiaolanben/enscan）", provider.Name()))
 		return
 	}
 	r := repo.Default()
