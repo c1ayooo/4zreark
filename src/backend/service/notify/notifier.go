@@ -54,6 +54,9 @@ type NotifyConfig struct {
 	Type    NotifyType `json:"type"`
 	Enabled bool       `json:"enabled"`
 	Name    string     `json:"name"`
+	// MinLevel 是该渠道的最低接收级别：info/warning/critical。
+	// 空 = 全收。级别低于门槛的消息跳过该渠道（critical 渠道不被 info 刷屏）。
+	MinLevel NotifyLevel `json:"min_level,omitempty"`
 
 	// DingTalk
 	DingTalkWebhook string `json:"dingtalk_webhook,omitempty"`

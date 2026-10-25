@@ -33,9 +33,11 @@ func GetGlobalManager() *NotifyManager {
 
 // NotifyManager 通知管理器
 type NotifyManager struct {
-	notifiers []Notifier
-	configs   []NotifyConfig
-	mu        sync.RWMutex
+	// dispatch 是渠道配置与通知器的配对列表；按级路由要用配置里的 MinLevel，
+	// 只留 Notifier 就查不到门槛了。
+	dispatch []channelDispatch
+	configs  []NotifyConfig
+	mu       sync.RWMutex
 
 	// 通知队列
 	queue  chan *NotifyMessage
@@ -45,6 +47,12 @@ type NotifyManager struct {
 	history    []*NotifyHistory
 	historyMu  sync.RWMutex
 	maxHistory int
+}
+
+// channelDispatch 一条渠道：配置（含 MinLevel）+ 就绪的通知器。
+type channelDispatch struct {
+	cfg      NotifyConfig
+	notifier Notifier
 }
 
 // NotifyHistory 通知历史记录
@@ -60,7 +68,7 @@ type NotifyHistory struct {
 // NewNotifyManager 创建通知管理器
 func NewNotifyManager() *NotifyManager {
 	return &NotifyManager{
-		notifiers:  make([]Notifier, 0),
+		dispatch:   make([]channelDispatch, 0),
 		configs:    make([]NotifyConfig, 0),
 		queue:      make(chan *NotifyMessage, 1000),
 		stopCh:     make(chan struct{}),
@@ -267,9 +275,9 @@ func (m *NotifyManager) EnableConfig(name string, t NotifyType, enabled bool) {
 	m.mu.Unlock()
 }
 
-// rebuildNotifiers 重建通知器列表
+// rebuildNotifiers 重建渠道分发表
 func (m *NotifyManager) rebuildNotifiers() {
-	m.notifiers = make([]Notifier, 0)
+	m.dispatch = make([]channelDispatch, 0, len(m.configs))
 
 	for _, config := range m.configs {
 		if !config.Enabled {
@@ -278,7 +286,7 @@ func (m *NotifyManager) rebuildNotifiers() {
 
 		notifier := m.createNotifier(config)
 		if notifier != nil {
-			m.notifiers = append(m.notifiers, notifier)
+			m.dispatch = append(m.dispatch, channelDispatch{cfg: config, notifier: notifier})
 		}
 	}
 }
@@ -325,7 +333,7 @@ func (m *NotifyManager) createNotifier(config NotifyConfig) Notifier {
 	return nil
 }
 
-// Send 发送通知（同步）
+// Send 发送通知（同步）。按渠道 MinLevel 过滤：级别够不着门槛的渠道直接跳过。
 func (m *NotifyManager) Send(ctx context.Context, msg *NotifyMessage) error {
 	if msg == nil {
 		return nil
@@ -334,7 +342,7 @@ func (m *NotifyManager) Send(ctx context.Context, msg *NotifyMessage) error {
 		return nil
 	}
 	m.mu.RLock()
-	notifiers := m.notifiers
+	dispatch := m.dispatch
 	m.mu.RUnlock()
 
 	if msg.Timestamp.IsZero() {
@@ -355,14 +363,17 @@ func (m *NotifyManager) Send(ctx context.Context, msg *NotifyMessage) error {
 	m.saveNotification(msg)
 
 	var lastErr error
-	for _, notifier := range notifiers {
-		if err := notifier.Send(ctx, msg); err != nil {
+	for _, d := range dispatch {
+		if !ChannelLevelAllowed(msg.Level, d.cfg.MinLevel) {
+			continue
+		}
+		if err := d.notifier.Send(ctx, msg); err != nil {
 			lastErr = err
 			perr := MaskSensitive(err.Error())
-			log.Printf("[Notify] Failed to send via %s: %s", notifier.Type(), perr)
-			m.addHistory(msg, notifier.Type(), "failed", perr)
+			log.Printf("[Notify] Failed to send via %s: %s", d.notifier.Type(), perr)
+			m.addHistory(msg, d.notifier.Type(), "failed", perr)
 		} else {
-			m.addHistory(msg, notifier.Type(), "success", "")
+			m.addHistory(msg, d.notifier.Type(), "success", "")
 		}
 	}
 
@@ -535,8 +546,13 @@ func (m *NotifyManager) NotifyTaskComplete(taskName string, taskID string, succe
 // NotifyAssetChange 资产变更通知。changeType 用中文短句（进通知标题），
 // extra 会随站内通知落库（前端 notificationLink 优先读 extra.link 做跳转）。
 func (m *NotifyManager) NotifyAssetChange(changeType, assetInfo string, extra map[string]interface{}) {
+	m.NotifyAssetChangeWithLevel(NotifyLevelInfo, changeType, assetInfo, extra)
+}
+
+// NotifyAssetChangeWithLevel 带级别的资产变更通知。分级路由按 level 与渠道 MinLevel 匹配。
+func (m *NotifyManager) NotifyAssetChangeWithLevel(level NotifyLevel, changeType, assetInfo string, extra map[string]interface{}) {
 	msg := &NotifyMessage{
-		Level:     NotifyLevelInfo,
+		Level:     level,
 		Title:     "资产变更: " + changeType,
 		Content:   assetInfo,
 		Source:    "asset_monitor",

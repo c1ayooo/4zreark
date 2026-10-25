@@ -52,6 +52,16 @@ func NotifyLevelAllowed(level NotifyLevel) bool {
 	return levelRank(level) >= levelRank(NotifyLevel(min))
 }
 
+// ChannelLevelAllowed 判断消息级别是否达到渠道门槛。min 为空或非法 = 全收。
+// 分级路由靠它：比如 critical 渠道只收 critical，warning 渠道收 warning 及以上。
+func ChannelLevelAllowed(level, min NotifyLevel) bool {
+	min = NotifyLevel(strings.ToLower(strings.TrimSpace(string(min))))
+	if min == "" {
+		return true
+	}
+	return levelRank(level) >= levelRank(min)
+}
+
 func levelRank(l NotifyLevel) int {
 	switch l {
 	case NotifyLevelCritical:

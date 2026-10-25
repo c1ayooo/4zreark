@@ -68,7 +68,7 @@ func TestManagerMasksAndFilters(t *testing.T) {
 	t.Setenv("ZRE_NOTIFY_MIN_LEVEL", "warning")
 	m := NewNotifyManager()
 	fake := &fakeNotifier{}
-	m.notifiers = []Notifier{fake}
+	m.dispatch = []channelDispatch{{notifier: fake}}
 
 	_ = m.Send(context.Background(), &NotifyMessage{Level: NotifyLevelInfo, Title: "info", Content: "password=abc"})
 	if len(fake.msgs) != 0 {
@@ -80,6 +80,26 @@ func TestManagerMasksAndFilters(t *testing.T) {
 	}
 	if strings.Contains(fake.msgs[0].Content, "abc") {
 		t.Fatalf("发送内容未脱敏: %s", fake.msgs[0].Content)
+	}
+}
+
+func TestManagerChannelMinLevelRouting(t *testing.T) {
+	t.Setenv("ZRE_NOTIFY_MIN_LEVEL", "")
+	m := NewNotifyManager()
+	all := &fakeNotifier{}   // 无门槛渠道：全收
+	crit := &fakeNotifier{}  // min_level=critical：只收 critical
+	m.dispatch = []channelDispatch{
+		{notifier: all},
+		{cfg: NotifyConfig{Name: "critical-only", MinLevel: NotifyLevelCritical}, notifier: crit},
+	}
+
+	_ = m.Send(context.Background(), &NotifyMessage{Level: NotifyLevelInfo, Title: "i", Content: "x"})
+	if len(all.msgs) != 1 || len(crit.msgs) != 0 {
+		t.Fatalf("info 应只到无门槛渠道: all=%d crit=%d", len(all.msgs), len(crit.msgs))
+	}
+	_ = m.Send(context.Background(), &NotifyMessage{Level: NotifyLevelCritical, Title: "c", Content: "x"})
+	if len(crit.msgs) != 1 {
+		t.Fatalf("critical 应到达 critical 渠道，实际 %d", len(crit.msgs))
 	}
 }
 
