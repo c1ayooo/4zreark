@@ -17,6 +17,9 @@ import (
 
 // classifyXlbKey 把 companyDetail 的数组字段名映射到名单 kind；
 // 未识别的键返回空串（跳过）。匹配顺序敏感：miniapp 先于 app。
+// live 校准（2026-10-25 实测）：detail 页数组键含 products（APP，productName/bundleid/dataType）、
+// newMedias（混合桶：accountName/typeName/type，typeName ∈ weibo/xcx/wechat）、webSites、
+// trademarks、compets 等；APP/小程序/公众号 tab 为页内展示，无独立懒加载接口。
 func classifyXlbKey(key string) string {
 	k := strings.ToLower(strings.TrimSpace(key))
 	switch {
@@ -27,10 +30,85 @@ func classifyXlbKey(key string) string {
 	case containsAnySub(k, "newmedia", "weibo", "douyin", "kuaishou", "xiaohongshu", "tiktok",
 		"bilibili", "shortvideo", "video", "media"):
 		return "newmedia"
-	case containsAnySub(k, "app"):
+	case containsAnySub(k, "product", "app"):
+		// products：小蓝本「产品信息」tab，实测条目为 APP（productName/bundleid/dataType）。
 		return "app"
 	}
 	return ""
+}
+
+// xlbKindFromItem 条目级 kind 细分：newMedias 是混合桶（weibo/xcx/wechat），
+// 按条目 typeName/type 拆到具体名单 kind；识别不了时沿用桶的 kind。
+func xlbKindFromItem(bucketKind string, item map[string]string) string {
+	code := strings.ToLower(item["typename"])
+	if code == "" {
+		code = strings.ToLower(item["type"])
+	}
+	switch {
+	case containsAnySub(code, "xcx", "miniapp", "miniprogram", "weapp", "小程序"):
+		return "miniapp"
+	case containsAnySub(code, "wechat", "weixin", "wx", "gzh", "公众号", "微信"):
+		return "official_account"
+	case containsAnySub(code, "weibo", "微博", "douyin", "抖音", "tiktok", "kuaishou", "快手",
+		"xiaohongshu", "小红书", "bilibili", "b站", "视频号"):
+		return "newmedia"
+	}
+	return bucketKind
+}
+
+// xlbPlatformFromItem 平台展示名：优先中文 type（如「官方微博」），否则按码映射。
+func xlbPlatformFromItem(item map[string]string) string {
+	if v := item["type"]; strings.TrimSpace(v) != "" && !isASCIICode(v) {
+		return strings.TrimSpace(v)
+	}
+	code := strings.ToLower(item["typename"])
+	switch {
+	case containsAnySub(code, "xcx"):
+		return "微信小程序"
+	case containsAnySub(code, "wechat", "weixin", "wx"):
+		return "微信公众号"
+	case containsAnySub(code, "weibo"):
+		return "微博"
+	case containsAnySub(code, "douyin"):
+		return "抖音"
+	case containsAnySub(code, "kuaishou"):
+		return "快手"
+	case containsAnySub(code, "xiaohongshu"):
+		return "小红书"
+	case containsAnySub(code, "bilibili"):
+		return "哔哩哔哩"
+	}
+	if v := item["typename"]; strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
+	// 通用回退：自描述平台键（apps 等非小蓝本原生桶）。
+	for _, k := range []string{"platform", "platformname", "os", "datatype"} {
+		if v := item[k]; strings.TrimSpace(v) != "" && !(isASCIICode(v) && isAllDigits(v)) {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func isASCIICode(s string) bool {
+	for _, r := range s {
+		if r > 127 {
+			return false
+		}
+	}
+	return true
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func containsAnySub(s string, subs ...string) bool {
@@ -77,21 +155,20 @@ func parseXlbDigitalAssets(detailJSON []byte) ([]DigitalHit, error) {
 			continue
 		}
 		for _, it := range items {
+			m := map[string]string{}
 			name, platform, company := "", "", ""
 			switch v := it.(type) {
 			case string:
 				name = strings.TrimSpace(v)
 			case map[string]any:
-				m := map[string]string{}
 				for ik, iv := range v {
 					if s, ok := iv.(string); ok {
 						m[strings.ToLower(ik)] = s
 					}
 				}
-				name = xlbItemString(m, "name", "appname", "title", "nickname", "wxname",
-					"username", "accountname", "wechatname", "ghname", "alias")
-				platform = xlbItemString(m, "platform", "platformname", "typename", "type",
-					"source", "channel", "os")
+				name = xlbItemString(m, "name", "appname", "productname", "title", "nickname",
+					"accountname", "wxname", "username", "wechatname", "ghname", "alias")
+				platform = xlbPlatformFromItem(m)
 				company = xlbItemString(m, "company", "companyname", "publisher", "developer")
 			default:
 				continue
@@ -99,13 +176,17 @@ func parseXlbDigitalAssets(detailJSON []byte) ([]DigitalHit, error) {
 			if name == "" {
 				continue
 			}
+			// 纯数字平台码（如 products.dataType="1"）没有展示意义。
+			if platform != "" && isASCIICode(platform) && isAllDigits(platform) {
+				platform = ""
+			}
 			dedupKey := kind + "\x00" + strings.ToLower(name)
 			if seen[dedupKey] {
 				continue
 			}
 			seen[dedupKey] = true
 			hits = append(hits, DigitalHit{
-				Kind:       kind,
+				Kind:       xlbKindFromItem(kind, m),
 				Name:       name,
 				Platform:   platform,
 				Company:    company,
