@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/c1ayooo/4zreark/internal/enterprise"
@@ -13,6 +14,40 @@ import (
 
 // 数字资产采集编排：数据源定位企业 → 拉取 APP/小程序/公众号/新媒体 → 候选入池。
 // 只产候选，不直写名单；会话凭据语义与企业采集一致（请求体携带，前端不落盘）。
+// 限流：同 provider 同时只允许一个采集在跑（排队），实体间强制间隔，避免连点打上游。
+
+// collectEntityInterval 采集循环里相邻企业之间的最小间隔。
+const collectEntityInterval = 1500 * time.Millisecond
+
+var (
+	collectGateMu sync.Mutex
+	collectGates  = map[string]chan struct{}{}
+)
+
+// acquireCollectGate 同源采集闸门；返回释放函数。
+func acquireCollectGate(provider string) func() {
+	collectGateMu.Lock()
+	defer collectGateMu.Unlock()
+	ch, ok := collectGates[provider]
+	if !ok {
+		ch = make(chan struct{}, 1)
+		collectGates[provider] = ch
+	}
+	ch <- struct{}{}
+	return func() { <-ch }
+}
+
+// paceCollect ctx 感知的采集间隔。
+func paceCollect(ctx context.Context) error {
+	t := time.NewTimer(collectEntityInterval)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
 
 type DigitalCollectInput struct {
 	ProjectID int64  `json:"project_id"`
@@ -82,7 +117,14 @@ func (s *DigitalService) CollectCandidates(ctx context.Context, in DigitalCollec
 
 	out := &DigitalCollectResult{Provider: provider.Name(), Keyword: keyword}
 	all := make([]repo.DigitalCandidateInput, 0, maxAssets)
-	for _, ref := range refs {
+	release := acquireCollectGate(provider.Name())
+	defer release()
+	for i, ref := range refs {
+		if i > 0 {
+			if perr := paceCollect(ctx); perr != nil {
+				return nil, perr
+			}
+		}
 		hits, _, err := dp.DigitalAssets(ctx, ref.ExtID, 1, maxAssets)
 		if err != nil {
 			out.Warnings = append(out.Warnings, ref.Name+"：数字资产拉取失败（"+err.Error()+"）")

@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/c1ayooo/4zreark/internal/enterprise"
 	"github.com/c1ayooo/4zreark/repo"
+	"github.com/c1ayooo/4zreark/service/notify"
 )
 
 // 数据源会话托管服务：设置页的会话清单/维护 + 采集侧凭据回落。
@@ -157,6 +159,7 @@ func ResolveDatasourceSession(provider, cookie, username, password string) (stri
 }
 
 // NoteDatasourceSessionFailure 采集侧会话失效尽力标记（不阻塞采集主流程）。
+// 状态翻转为 expired 时向全部通知渠道发一次告警（已在失效态的重复失败不刷屏）。
 func NoteDatasourceSessionFailure(provider string, err error) {
 	if err == nil || !enterprise.IsSessionMissing(err) {
 		return
@@ -167,7 +170,28 @@ func NoteDatasourceSessionFailure(provider string, err error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = r.DatasourceSessions().MarkStatus(ctx, provider, "expired")
+	rs := r.DatasourceSessions()
+	s, gerr := rs.Get(ctx, provider)
+	alreadyExpired := gerr == nil && s != nil && s.Status == "expired"
+	if merr := rs.MarkStatus(ctx, provider, "expired"); merr != nil {
+		return
+	}
+	if alreadyExpired {
+		return
+	}
+	label := provider
+	if p, ok := registryProvider(provider); ok {
+		label = p.Label
+	}
+	notify.GetGlobalManager().SendAsync(&notify.NotifyMessage{
+		Level: notify.NotifyLevelWarning,
+		Title: "数据源会话失效：" + label,
+		Content: fmt.Sprintf("数据源 %s（%s）的登录会话已被上游判定失效，相关采集将无法进行。\n"+
+			"请到 设置 → 数据源会话 对 %s 重新扫码登录或更新会话。", provider, label, label),
+		Timestamp: time.Now(),
+		Source:    "datasource-session",
+		Extra:     map[string]interface{}{"provider": provider},
+	})
 }
 
 func registryProvider(name string) (enterprise.ProviderKind, bool) {

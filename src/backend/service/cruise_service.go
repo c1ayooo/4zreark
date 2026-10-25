@@ -243,7 +243,7 @@ func (s *CruiseService) executeCruiseWithMode(cruiseID oid.ObjectID, manual bool
 	startTime := time.Now()
 
 	if cruise.ProjectID <= 0 {
-		s.failBeforeCreate(cruiseID, cruise.Name, startTime, restoreStatus, errors.New("巡航任务未绑定归属项目"))
+		s.failBeforeCreate(cruise, startTime, restoreStatus, errors.New("巡航任务未绑定归属项目"))
 		return
 	}
 
@@ -258,11 +258,11 @@ func (s *CruiseService) executeCruiseWithMode(cruiseID oid.ObjectID, manual bool
 	if cruise.TargetSource == models.CruiseTargetSourceProject {
 		preview, err := s.PreviewProjectTargets(cruise.ProjectID, cruise.TargetType)
 		if err != nil {
-			s.failBeforeCreate(cruiseID, cruise.Name, startTime, restoreStatus, err)
+			s.failBeforeCreate(cruise, startTime, restoreStatus, err)
 			return
 		}
 		if len(preview.Targets) == 0 {
-			s.failBeforeCreate(cruiseID, cruise.Name, startTime, restoreStatus,
+			s.failBeforeCreate(cruise, startTime, restoreStatus,
 				fmt.Errorf("项目暂无 %s 类型的可监控资产", cruise.TargetType))
 			return
 		}
@@ -274,7 +274,7 @@ func (s *CruiseService) executeCruiseWithMode(cruiseID oid.ObjectID, manual bool
 		sourceDesc += "）"
 	}
 	if len(targets) == 0 {
-		s.failBeforeCreate(cruiseID, cruise.Name, startTime, restoreStatus, errors.New("巡航目标为空"))
+		s.failBeforeCreate(cruise, startTime, restoreStatus, errors.New("巡航目标为空"))
 		return
 	}
 
@@ -298,6 +298,8 @@ func (s *CruiseService) executeCruiseWithMode(cruiseID oid.ObjectID, manual bool
 	if err := s.taskService.CreateTask(task); err != nil {
 		log.Printf("[CruiseService] Failed to create task for cruise %s: %v", cruise.Name, err)
 		s.recordCruiseLog(cruiseID, oid.NilObjectID, "failed", startTime, time.Now(), 0, 0, err.Error())
+		s.sendCruiseNotification(cruise, cruiseRunMessage(cruise, "failed", 0, 0, 0,
+			"创建扫描任务失败: "+err.Error(), ""))
 		s.finishCruiseRun(cruiseID, restoreStatus)
 		s.updateLastStatus(cruiseID, "failed")
 		s.incrementFailCount(cruiseID)
@@ -354,6 +356,13 @@ func (s *CruiseService) executeCruiseWithMode(cruiseID oid.ObjectID, manual bool
 					s.incrementFailCount(cruiseID)
 				}
 
+				s.sendCruiseNotification(cruise, cruiseRunMessage(cruise, status,
+					endTime.Sub(startTime), resultCount, vulnCount, errorMsg, taskID))
+				if status == "success" && cruise.NotifyOnVuln && vulnCount > 0 {
+					s.sendCruiseNotification(cruise, cruiseVulnDigestMessage(
+						cruise, s.cruiseVulnItems(taskID), taskID))
+				}
+
 				cruiseEntryMu.RLock()
 				entryID, exists := cruiseEntries[hexID]
 				var next time.Time
@@ -381,6 +390,8 @@ func (s *CruiseService) executeCruiseWithMode(cruiseID oid.ObjectID, manual bool
 				s.finishCruiseRun(cruiseID, restoreStatus)
 				s.updateLastStatus(cruiseID, "timeout")
 				s.incrementFailCount(cruiseID)
+				s.sendCruiseNotification(cruise, cruiseRunMessage(cruise, "timeout",
+					24*time.Hour, 0, 0, "任务执行超时（已自动取消，释放并发槽）", taskID))
 				return
 			}
 		}
@@ -395,17 +406,17 @@ func (s *CruiseService) executeDigitalCruise(cruise *models.CruiseTask, cruiseID
 	cfg := cruise.Digital
 	provider, err := newEnterpriseProvider(cfg.Provider, cfg.Cookie, cfg.Username, cfg.Password, cfg.ProxyURL)
 	if err != nil {
-		s.failDigitalRun(cruiseID, cruise.Name, startTime, restoreStatus, err.Error())
+		s.failDigitalRun(cruise, startTime, restoreStatus, err.Error())
 		return
 	}
 	if _, ok := provider.(enterprise.DigitalAssetsProvider); !ok {
-		s.failDigitalRun(cruiseID, cruise.Name, startTime, restoreStatus,
+		s.failDigitalRun(cruise, startTime, restoreStatus,
 			fmt.Sprintf("数据源 %s 不支持数字资产采集（当前支持：xiaolanben）", provider.Name()))
 		return
 	}
 	r := repo.Default()
 	if r == nil {
-		s.failDigitalRun(cruiseID, cruise.Name, startTime, restoreStatus, "数据层未初始化")
+		s.failDigitalRun(cruise, startTime, restoreStatus, "数据层未初始化")
 		return
 	}
 	maxEntities := cfg.MaxEntities
@@ -421,7 +432,7 @@ func (s *CruiseService) executeDigitalCruise(cruise *models.CruiseTask, cruiseID
 	defer cancel()
 	res := RunDigitalCollectCycle(ctx, provider, cruise.ProjectID, maxEntities, maxAssets)
 	if res.Err != nil {
-		s.failDigitalRun(cruiseID, cruise.Name, startTime, restoreStatus, res.Err.Error())
+		s.failDigitalRun(cruise, startTime, restoreStatus, res.Err.Error())
 		return
 	}
 	warnings := res.Warnings
@@ -442,6 +453,11 @@ func (s *CruiseService) executeDigitalCruise(cruise *models.CruiseTask, cruiseID
 		s.incrementSuccessCount(cruiseID)
 	} else {
 		s.incrementFailCount(cruiseID)
+	}
+	s.sendCruiseNotification(cruise, digitalCruiseRunMessage(cruise, res))
+	if status != "success" {
+		s.sendCruiseNotification(cruise, cruiseRunMessage(cruise, status,
+			endTime.Sub(startTime), int(res.Candidates), 0, errorMsg, ""))
 	}
 	cruiseEntryMu.RLock()
 	entryID, exists := cruiseEntries[hexID]
@@ -502,7 +518,13 @@ func RunDigitalCollectCycle(ctx context.Context, provider enterprise.Provider, p
 	}
 
 	dig := NewDigitalService()
-	for _, e := range entities {
+	for i, e := range entities {
+		if i > 0 {
+			if perr := paceCollect(ctx); perr != nil {
+				out.Warnings = append(out.Warnings, "采集中断："+perr.Error())
+				return out
+			}
+		}
 		res, err := dig.CollectCandidates(ctx, DigitalCollectInput{
 			ProjectID:        projectID,
 			Keyword:          e.Name,
@@ -522,10 +544,13 @@ func RunDigitalCollectCycle(ctx context.Context, provider enterprise.Provider, p
 	return out
 }
 
-// failDigitalRun 数字资产巡航启动期失败：记日志、恢复状态、累计失败计数。
-func (s *CruiseService) failDigitalRun(cruiseID oid.ObjectID, name string, startTime time.Time, restoreStatus models.CruiseStatus, msg string) {
-	log.Printf("[CruiseService] Digital cruise %s failed: %s", name, msg)
+// failDigitalRun 数字资产巡航启动期失败：记日志、恢复状态、累计失败计数、发失败告警。
+func (s *CruiseService) failDigitalRun(cruise *models.CruiseTask, startTime time.Time, restoreStatus models.CruiseStatus, msg string) {
+	log.Printf("[CruiseService] Digital cruise %s failed: %s", cruise.Name, msg)
+	cruiseID := cruise.ID
 	s.recordCruiseLog(cruiseID, oid.NilObjectID, "failed", startTime, time.Now(), 0, 0, msg)
+	s.sendCruiseNotification(cruise, cruiseRunMessage(cruise, "failed",
+		time.Since(startTime), 0, 0, msg, ""))
 	s.finishCruiseRun(cruiseID, restoreStatus)
 	s.updateLastStatus(cruiseID, "failed")
 	s.incrementFailCount(cruiseID)
@@ -1143,10 +1168,13 @@ func ensureProjectExists(ctx context.Context, projectID int64) error {
 	return nil
 }
 
-func (s *CruiseService) failBeforeCreate(cruiseID oid.ObjectID, name string, startTime time.Time,
+func (s *CruiseService) failBeforeCreate(cruise *models.CruiseTask, startTime time.Time,
 	restoreStatus models.CruiseStatus, cause error) {
-	log.Printf("[CruiseService] Failed to prepare task for cruise %s: %v", name, cause)
+	log.Printf("[CruiseService] Failed to prepare task for cruise %s: %v", cruise.Name, cause)
+	cruiseID := cruise.ID
 	s.recordCruiseLog(cruiseID, oid.NilObjectID, "failed", startTime, time.Now(), 0, 0, cause.Error())
+	s.sendCruiseNotification(cruise, cruiseRunMessage(cruise, "failed",
+		time.Since(startTime), 0, 0, cause.Error(), ""))
 	s.finishCruiseRun(cruiseID, restoreStatus)
 	s.updateLastStatus(cruiseID, "failed")
 	s.incrementFailCount(cruiseID)
