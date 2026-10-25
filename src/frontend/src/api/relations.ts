@@ -15,6 +15,9 @@ export interface AssetEvent {
   before: Record<string, unknown>
   after: Record<string, unknown>
   created_at: string
+  /** /api/changes 附带：站点值与项目名 */
+  asset_value?: string
+  project_name?: string
 }
 
 export const relationTypeLabel: Record<string, string> = {
@@ -44,8 +47,10 @@ export const eventTypeLabel: Record<string, string> = {
   first_seen: '首次发现',
   attribute_change: '属性变化',
   reappear: '重新出现',
+  content_change: '内容变化',
   takeover: '接管风险',
   archived: '已归档',
+  fingerprint_change: '指纹变化',
 }
 
 export const eventTypeVariant = (
@@ -53,6 +58,7 @@ export const eventTypeVariant = (
 ): 'default' | 'secondary' | 'destructive' | 'outline' => {
   if (type === 'first_seen') return 'default'
   if (type === 'reappear') return 'default'
+  if (type === 'takeover') return 'destructive'
   if (type === 'archived') return 'outline'
   return 'secondary'
 }
@@ -62,6 +68,23 @@ export const assetEventApi = {
     api.get<unknown, ApiResponse<{ items: AssetEvent[]; limit: number }>>('/events', {
       params: { limit },
     }),
+  /**
+   * 变更时间线（/api/changes）：服务端按项目/事件类型过滤，
+   * 行内额外带 asset_value / project_name。
+   */
+  changes: (
+    params: { project_id?: number; event_type?: string; limit?: number } = {}
+  ) =>
+    api.get<unknown, ApiResponse<{ items: AssetEvent[]; total: number; limit: number }>>(
+      '/changes',
+      {
+        params: {
+          project_id: params.project_id || undefined,
+          event_type: params.event_type || undefined,
+          limit: params.limit || undefined,
+        },
+      }
+    ),
 }
 
 export interface RelationNode {
