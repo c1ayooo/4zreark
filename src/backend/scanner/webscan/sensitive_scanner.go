@@ -74,7 +74,10 @@ func loadSensitivePatternsFromConfig() map[string]*SensitivePattern {
 	return patterns
 }
 
-// getDefaultSensitivePatterns returns minimal default patterns
+// getDefaultSensitivePatterns 返回内置缺省规则集。
+// 选取标准是「结构强特征」：云厂商密钥格式、带凭据的连接串、私钥块——
+// 误报率低，不依赖 config 注入也能覆盖最常见的泄露面。
+// 配置了 vuln.sensitive_patterns 时完全以配置为准（不合并），沿用原语义。
 func getDefaultSensitivePatterns() map[string]*SensitivePattern {
 	patterns := map[string]*SensitivePattern{
 		"password_field": {
@@ -89,11 +92,83 @@ func getDefaultSensitivePatterns() map[string]*SensitivePattern {
 			Type:     "credential",
 			Severity: "high",
 		},
+		"client_secret": {
+			Name:     "client_secret",
+			Pattern:  `(?i)client_secret\s*[=:]\s*['"][a-zA-Z0-9_\-]{20,}['"]`,
+			Type:     "credential",
+			Severity: "high",
+		},
 		"private_key": {
 			Name:     "private_key",
 			Pattern:  `-----BEGIN (RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----`,
 			Type:     "credential",
 			Severity: "critical",
+		},
+		"aws_access_key": {
+			Name:     "aws_access_key",
+			Pattern:  `\bAKIA[0-9A-Z]{16}\b`,
+			Type:     "credential",
+			Severity: "high",
+		},
+		"aws_secret_key": {
+			Name:     "aws_secret_key",
+			Pattern:  `(?i)aws_secret_access_key\s*[=:]\s*['"][a-zA-Z0-9/+=]{40}['"]`,
+			Type:     "credential",
+			Severity: "high",
+		},
+		"google_api_key": {
+			Name:     "google_api_key",
+			Pattern:  `\bAIza[0-9A-Za-z\-_]{35}\b`,
+			Type:     "credential",
+			Severity: "high",
+		},
+		"alibaba_access_key": {
+			// 阿里云 AccessKey：LTAI 前缀（含 LTAI4/LTAI5 代次）
+			Name:     "alibaba_access_key",
+			Pattern:  `\bLTAI[0-9A-Za-z]{12,28}\b`,
+			Type:     "credential",
+			Severity: "high",
+		},
+		"tencent_secret_id": {
+			// 腾讯云 SecretId：AKID 前缀
+			Name:     "tencent_secret_id",
+			Pattern:  `\bAKID[A-Za-z0-9]{30,44}\b`,
+			Type:     "credential",
+			Severity: "high",
+		},
+		"github_token": {
+			// ghp_ 经典 PAT 与 github_pat_ 细粒度令牌
+			Name:     "github_token",
+			Pattern:  `\b(ghp_[0-9a-zA-Z]{36}|github_pat_[0-9a-zA-Z_]{60,})\b`,
+			Type:     "credential",
+			Severity: "critical",
+		},
+		"slack_token": {
+			Name:     "slack_token",
+			Pattern:  `\bxox[abprs]-[0-9a-zA-Z-]{10,}\b`,
+			Type:     "credential",
+			Severity: "high",
+		},
+		"jwt_token": {
+			// 页面里硬编码的 JWT（三段式 base64url）；常态出现在调试页/前端源码
+			Name:     "jwt_token",
+			Pattern:  `\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b`,
+			Type:     "credential",
+			Severity: "medium",
+		},
+		"connection_uri_with_credentials": {
+			// 带凭据的数据库/消息队列连接串：user:pass@host
+			Name:     "connection_uri_with_credentials",
+			Pattern:  `(?i)\b(mongodb(\+srv)?|mysql|postgres(ql)?|redis|amqps?|mssql|jdbc:[a-z0-9]+)://[^\s'"@<]+:[^\s'"@<]+@[^\s'"<]+`,
+			Type:     "credential",
+			Severity: "critical",
+		},
+		"id_card_cn": {
+			// 18 位身份证（19/20 世纪出生段 + 校验位形态），用于页面泄露 PII
+			Name:     "id_card_cn",
+			Pattern:  `\b[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:[0-2]\d|3[01])\d{3}[\dXx]\b`,
+			Type:     "pii",
+			Severity: "medium",
 		},
 		"email": {
 			Name:     "email",
