@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { cruiseApi, CruiseTask, CruiseCreateRequest, CruiseTargetPreview } from '@/api/cruise'
+import { enterpriseApi, type EnterpriseProvider } from '@/api/enterprise'
 import { projectApi } from '@/api/projects'
 import { seedCollectionApi, CruiseOverviewRow } from '@/api/seedCollection'
 import { Badge, Button, Card, Input, Modal, Select, Switch, Table, Tag } from 'antd'
@@ -75,6 +76,7 @@ export default function CruisePage() {
     name: '',
     description: '',
     project_id: 0,
+    kind: 'scan',
     target_source: 'static',
     cron_expr: '0 0 * * *',
     targets: [],
@@ -86,12 +88,31 @@ export default function CruisePage() {
       timeout: 30,
       concurrent: 50,
     },
+    digital: {
+      provider: 'xiaolanben',
+      username: '',
+      password: '',
+      cookie: '',
+      max_entities: 20,
+      max_assets: 50,
+    },
     notify_on_complete: false,
     notify_on_vuln: true,
   })
   const [targetsText, setTargetsText] = useState('')
 
   const isProjectSource = formData.target_source === 'project'
+  const isDigital = formData.kind === 'digital_assets'
+  const providers = useQuery({
+    queryKey: ['enterprise-providers'],
+    queryFn: () => enterpriseApi.providers(),
+    enabled: isDigital,
+  })
+  const collectProvider: EnterpriseProvider | undefined = providers.data?.data?.items?.find(
+    (p) => p.Name === formData.digital?.provider
+  )
+  const setDigital = (patch: Partial<NonNullable<CruiseCreateRequest['digital']>>) =>
+    setFormData({ ...formData, digital: { ...formData.digital!, ...patch } })
   const targetTypeLabel =
     TARGET_TYPES.find((t) => t.value === formData.target_type)?.label || formData.target_type
 
@@ -302,6 +323,7 @@ export default function CruisePage() {
       name: '',
       description: '',
       project_id: 0,
+      kind: 'scan',
       target_source: 'static',
       cron_expr: '0 0 * * *',
       targets: [],
@@ -312,6 +334,14 @@ export default function CruisePage() {
         port_scan_mode: 'top1000',
         timeout: 30,
         concurrent: 50,
+      },
+      digital: {
+        provider: 'xiaolanben',
+        username: '',
+        password: '',
+        cookie: '',
+        max_entities: 20,
+        max_assets: 50,
       },
       notify_on_complete: false,
       notify_on_vuln: true,
@@ -326,12 +356,30 @@ export default function CruisePage() {
       name: cruise.name,
       description: cruise.description,
       project_id: cruise.project_id,
+      kind: (cruise.kind as CruiseCreateRequest['kind']) || 'scan',
       target_source: cruise.target_source || 'static',
       cron_expr: cruise.cron_expr,
       targets: cruise.targets,
       target_type: cruise.target_type,
       task_type: cruise.task_type,
       config: cruise.config,
+      digital: cruise.digital
+        ? {
+            provider: cruise.digital.provider,
+            username: cruise.digital.username ?? '',
+            password: cruise.digital.password ?? '',
+            cookie: cruise.digital.cookie ?? '',
+            max_entities: cruise.digital.max_entities ?? 20,
+            max_assets: cruise.digital.max_assets ?? 50,
+          }
+        : {
+            provider: 'xiaolanben',
+            username: '',
+            password: '',
+            cookie: '',
+            max_entities: 20,
+            max_assets: 50,
+          },
       notify_on_complete: cruise.notify_on_complete,
       notify_on_vuln: cruise.notify_on_vuln,
     })
@@ -348,7 +396,7 @@ export default function CruisePage() {
     try {
       const result = await cruiseApi.previewTargets(
         formData.project_id,
-        formData.target_type || 'domain'
+        isDigital ? 'digital_assets' : formData.target_type || 'domain'
       )
       setPreview(result)
     } catch (error: any) {
@@ -380,14 +428,18 @@ export default function CruisePage() {
       toast({ title: '请设置执行周期', variant: 'destructive' })
       return
     }
-    if (!isProjectSource && targets.length === 0) {
+    if (!isProjectSource && !isDigital && targets.length === 0) {
       toast({ title: '请输入扫描目标', variant: 'destructive' })
+      return
+    }
+    if (isDigital && !formData.digital?.provider) {
+      toast({ title: '请选择数字资产数据源', variant: 'destructive' })
       return
     }
 
     const submitData = {
       ...formData,
-      targets: isProjectSource ? [] : targets,
+      targets: isProjectSource || isDigital ? [] : targets,
     } as CruiseCreateRequest
 
     if (editingCruise) {
@@ -507,7 +559,12 @@ export default function CruisePage() {
       dataIndex: 'task_type',
       key: 'task_type',
       width: 100,
-      render: (v: string) => TASK_TYPES.find((t) => t.value === v)?.label || v,
+      render: (_, cruise) =>
+        cruise.kind === 'digital_assets' ? (
+          <Tag className="border-primary bg-primary/10 text-primary">数字资产采集</Tag>
+        ) : (
+          (TASK_TYPES.find((t) => t.value === cruise.task_type)?.label || cruise.task_type)
+        ),
     },
     {
       title: '上次执行',
@@ -715,16 +772,36 @@ export default function CruisePage() {
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">任务类型</label>
+              <label className="text-sm font-medium">巡航类型</label>
               <Select
                 className="w-full"
-                placeholder="选择任务类型"
-                options={TASK_TYPES}
-                value={formData.task_type}
-                onChange={(value) => setFormData({ ...formData, task_type: value })}
+                value={formData.kind || 'scan'}
+                options={[
+                  { value: 'scan', label: '扫描巡航' },
+                  { value: 'digital_assets', label: '数字资产采集' },
+                ]}
+                onChange={(value) => {
+                  setFormData({ ...formData, kind: value })
+                  setPreview(null)
+                }}
               />
             </div>
           </div>
+
+          {!isDigital && (
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">任务类型</label>
+                <Select
+                  className="w-full"
+                  placeholder="选择任务类型"
+                  options={TASK_TYPES}
+                  value={formData.task_type}
+                  onChange={(value) => setFormData({ ...formData, task_type: value })}
+                />
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
@@ -753,7 +830,8 @@ export default function CruisePage() {
               <Select
                 className="w-full"
                 placeholder="选择目标来源"
-                value={formData.target_source || 'static'}
+                disabled={isDigital}
+                value={isDigital ? 'project' : formData.target_source || 'static'}
                 options={[
                   { value: 'static', label: '固定目标列表' },
                   { value: 'project', label: '项目整体资产（自动派生）' },
@@ -794,25 +872,136 @@ export default function CruisePage() {
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium">目标类型</label>
-              <Select
-                className="w-full"
-                placeholder="选择目标类型"
-                options={TARGET_TYPES}
-                value={formData.target_type}
-                onChange={(value) => {
-                  setFormData({ ...formData, target_type: value })
-                  setPreview(null)
-                }}
-              />
-              {isProjectSource && (
-                <div className="text-xs text-muted-foreground">
-                  派生维度：域名会归并到根域，IP / URL / CIDR 会去重
-                </div>
+              {isDigital ? (
+                <Select
+                  className="w-full"
+                  value={formData.digital?.provider}
+                  options={(providers.data?.data?.items ?? [])
+                    .filter((p) => p.Available)
+                    .map((p) => ({ value: p.Name, label: p.Label }))}
+                  onChange={(value) => setDigital({ provider: value })}
+                />
+              ) : (
+                <>
+                  <Select
+                    className="w-full"
+                    placeholder="选择目标类型"
+                    options={TARGET_TYPES}
+                    value={formData.target_type}
+                    onChange={(value) => {
+                      setFormData({ ...formData, target_type: value })
+                      setPreview(null)
+                    }}
+                  />
+                  {isProjectSource && (
+                    <div className="text-xs text-muted-foreground">
+                      派生维度：域名会归并到根域，IP / URL / CIDR 会去重
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
 
-          {isProjectSource ? (
+          {isDigital ? (
+            <div className="space-y-3 rounded-md border bg-muted/30 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium">按项目企业线索周期采集</div>
+                  <div className="text-xs text-muted-foreground">
+                    每次执行遍历项目企业线索，从数据源拉取 APP / 小程序 / 公众号 / 新媒体；
+                    diff 后只把新增上榜送进数字资产候选池，确认后才落名单。
+                  </div>
+                </div>
+                <Button
+                  size="small"
+                  onClick={handlePreview}
+                  loading={previewLoading}
+                  icon={<RefreshCw className="h-4 w-4" />}
+                >
+                  预览
+                </Button>
+              </div>
+              {preview && (
+                <div className="space-y-2">
+                  <div className="text-xs text-muted-foreground">
+                    共 {preview.total} 家企业线索（每次执行取前 {formData.digital?.max_entities ?? 20} 家）
+                  </div>
+                  {preview.targets.length === 0 ? (
+                    <div className="rounded bg-background p-2 text-xs text-muted-foreground">
+                      项目还没有企业线索，请先到「企业身份」录入或采集
+                    </div>
+                  ) : (
+                    <div className="max-h-32 overflow-y-auto rounded bg-background p-2 text-xs">
+                      {preview.targets.slice(0, 50).map((target) => (
+                        <div key={target} className="truncate">
+                          {target}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-2">
+                  <label className="text-xs font-medium">数据源</label>
+                  <Select
+                    className="w-full"
+                    value={formData.digital?.provider}
+                    options={(providers.data?.data?.items ?? [])
+                      .filter((p) => p.Available)
+                      .map((p) => ({ value: p.Name, label: p.Label }))}
+                    onChange={(value) => setDigital({ provider: value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-medium">单次企业数上限（≤50）</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={50}
+                    value={formData.digital?.max_entities}
+                    onChange={(e) =>
+                      setDigital({ max_entities: Number(e.target.value) || 20 })
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-medium">单企业资产上限（≤200）</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={200}
+                    value={formData.digital?.max_assets}
+                    onChange={(e) =>
+                      setDigital({ max_assets: Number(e.target.value) || 50 })
+                    }
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <label className="text-xs font-medium">账号（账号类数据源）</label>
+                  <Input
+                    value={formData.digital?.username ?? ''}
+                    onChange={(e) => setDigital({ username: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-medium">密码</label>
+                  <Input
+                    type="password"
+                    value={formData.digital?.password ?? ''}
+                    onChange={(e) => setDigital({ password: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {collectProvider?.Hint ?? '当前仅小蓝本提供数字资产字段'}
+                ；定时执行没有请求上下文，凭据随任务配置存储，请确认敏感信息可接受。
+              </div>
+            </div>
+          ) : isProjectSource ? (
             <div className="space-y-3 rounded-md border bg-muted/30 p-3">
               <div className="flex items-start justify-between gap-3">
                 <div>

@@ -98,6 +98,7 @@ export interface EnterpriseJob {
   nodes: number
   entities: number
   domains: number
+  digital: number
   imported: number
   error: string
   created_at: string
@@ -191,6 +192,7 @@ export const enterpriseApi = {
     username?: string
     password?: string
     proxy_url?: string
+    collect_digital?: boolean
   }) =>
     api.post<unknown, ApiResponse<EnterpriseJob>>('/enterprise-entities/discover', body),
 

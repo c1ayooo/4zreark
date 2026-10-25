@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
 import {keepPreviousData, useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
-import { Plus, RefreshCw, Trash2, Undo2 } from 'lucide-react'
+import { Plus, RefreshCw, Trash2, Undo2, Ban, CheckCheck, Radar } from 'lucide-react'
 import { Button, Input, Modal, Select, Table, Tag } from 'antd'
 import type { TableProps } from 'antd'
 
 import { projectApi } from '@/api/projects'
+import { enterpriseApi, type EnterpriseProvider } from '@/api/enterprise'
 import {
   digitalApi,
+  digitalCandidateApi,
+  digitalCandidateStatusLabel,
   digitalKindLabel,
   digitalKinds,
+  type DigitalCandidate,
   type DigitalPreview,
 } from '@/api/digital'
 import { useConfirm } from '@/components/common/confirm-provider'
@@ -40,6 +44,22 @@ export default function DigitalAssetsPage() {
   const [preview, setPreview] = useState<DigitalPreview | null>(null)
 
   const projects = useQuery({ queryKey: ['asset-projects'], queryFn: () => projectApi.list() })
+  const providers = useQuery({
+    queryKey: ['enterprise-providers'],
+    queryFn: () => enterpriseApi.providers(),
+  })
+
+  const [collectOpen, setCollectOpen] = useState(false)
+  const [collectForm, setCollectForm] = useState({
+    provider: 'xiaolanben',
+    keyword: '',
+    username: '',
+    password: '',
+    cookie: '',
+  })
+  const collectProvider: EnterpriseProvider | undefined = providers.data?.data?.items?.find(
+    (p) => p.Name === collectForm.provider
+  )
   const list = useQuery({
     queryKey: ['digital-assets', projectId, kind, q, page],
     // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
@@ -58,9 +78,23 @@ export default function DigitalAssetsPage() {
     queryFn: () => digitalApi.batches(Number(projectId) || undefined, 20),
   })
 
+  const [candStatus, setCandStatus] = useState('candidate')
+  const [candSelected, setCandSelected] = useState<number[]>([])
+  const candidates = useQuery({
+    queryKey: ['digital-candidates', projectId, candStatus],
+    queryFn: () =>
+      digitalCandidateApi.list({
+        project_id: Number(projectId) || undefined,
+        status: candStatus || undefined,
+        page: 1,
+        page_size: 200,
+      }),
+  })
+
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['digital-assets'] })
     queryClient.invalidateQueries({ queryKey: ['digital-imports'] })
+    queryClient.invalidateQueries({ queryKey: ['digital-candidates'] })
   }
 
   const previewMutation = useMutation({
@@ -111,6 +145,63 @@ export default function DigitalAssetsPage() {
     onError: (e: any) =>
       toast({ title: '撤销失败', description: e?.message, variant: 'destructive' }),
   })
+
+  const confirmCands = useMutation({
+    mutationFn: () => digitalCandidateApi.confirm(Number(projectId), candSelected),
+    onSuccess: (res) => {
+      toast({
+        title: '候选已导入名单',
+        description: `回执 #${res.data?.batch?.id} · 确认 ${res.data?.confirmed ?? 0} 条`,
+      })
+      setCandSelected([])
+      invalidate()
+    },
+    onError: (e: any) =>
+      toast({ title: '确认失败', description: e?.message, variant: 'destructive' }),
+  })
+
+  const rejectCands = useMutation({
+    mutationFn: () => digitalCandidateApi.reject(candSelected),
+    onSuccess: (res) => {
+      toast({ title: '已忽略候选', description: `${res.data?.rejected ?? 0} 条` })
+      setCandSelected([])
+      invalidate()
+    },
+    onError: (e: any) =>
+      toast({ title: '忽略失败', description: e?.message, variant: 'destructive' }),
+  })
+
+  const collect = useMutation({
+    mutationFn: () =>
+      digitalCandidateApi.collect({
+        project_id: Number(projectId),
+        provider: collectForm.provider,
+        keyword: collectForm.keyword,
+        cookie: collectForm.cookie || undefined,
+        username: collectForm.username || undefined,
+        password: collectForm.password || undefined,
+      }),
+    onSuccess: (res) => {
+      const r = res.data
+      toast({
+        title: '采集完成',
+        description:
+          `企业 ${r?.entities ?? 0} 个 · 资产 ${r?.found ?? 0} 条 · ` +
+          `新候选 ${r?.candidates ?? 0} · 直接入名单 ${r?.imported ?? 0}` +
+          (r?.warnings?.length ? ` · 警告：${r.warnings.join('；')}` : ''),
+      })
+      setCollectOpen(false)
+      setCollectForm({ provider: collectForm.provider, keyword: '', username: '', password: '', cookie: '' })
+      setCandStatus('candidate')
+      invalidate()
+    },
+    onError: (e: any) =>
+      toast({ title: '采集失败', description: e?.message, variant: 'destructive' }),
+  })
+
+  useEffect(() => {
+    setCandSelected([])
+  }, [candStatus, projectId])
 
   const closeImport = () => {
     if (preview) digitalApi.cancel(preview.token, 'digital').catch(() => {})
@@ -278,6 +369,84 @@ export default function DigitalAssetsPage() {
     },
   ]
 
+  const candItems = candidates.data?.data ?? []
+  const candTotal = candidates.data?.total ?? 0
+
+  const candidateColumns: TableProps<DigitalCandidate>['columns'] = [
+    {
+      title: '名称',
+      dataIndex: 'name',
+      key: 'name',
+      render: (v: string) => <span className="text-sm font-medium">{v}</span>,
+    },
+    {
+      title: '类型',
+      dataIndex: 'kind',
+      key: 'kind',
+      width: 90,
+      render: (v: string) => <Tag>{digitalKindLabel[v] ?? v}</Tag>,
+    },
+    {
+      title: '公司',
+      dataIndex: 'company',
+      key: 'company',
+      width: 140,
+      render: (v: string) => <span className="text-sm">{v || '—'}</span>,
+    },
+    {
+      title: '平台',
+      dataIndex: 'platform',
+      key: 'platform',
+      width: 100,
+      render: (v: string) => <span className="text-sm">{v || '—'}</span>,
+    },
+    {
+      title: '来源企业',
+      dataIndex: 'entity_name',
+      key: 'entity_name',
+      width: 150,
+      render: (v: string) => <span className="text-sm">{v || '—'}</span>,
+    },
+    {
+      title: '来源',
+      dataIndex: 'source',
+      key: 'source',
+      width: 100,
+      render: (v: string) => (
+        <span className="text-xs text-muted-foreground">{v || '—'}</span>
+      ),
+    },
+    {
+      title: '证据',
+      dataIndex: 'evidence',
+      key: 'evidence',
+      ellipsis: true,
+      render: (v: string) => (
+        <span className="text-xs text-muted-foreground" title={v}>{v || '—'}</span>
+      ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 90,
+      render: (v: string) => (
+        <Tag className={badgeCls(v === 'candidate' ? 'secondary' : 'outline')}>
+          {digitalCandidateStatusLabel[v] ?? v}
+        </Tag>
+      ),
+    },
+    {
+      title: '时间',
+      dataIndex: 'updated_at',
+      key: 'updated_at',
+      width: 150,
+      render: (v: string) => (
+        <span className="text-xs text-muted-foreground">{formatDate(v)}</span>
+      ),
+    },
+  ]
+
   return (
     <div className="space-y-5 p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -306,6 +475,13 @@ export default function DigitalAssetsPage() {
           />
           <Button onClick={() => list.refetch()}>
             <RefreshCw className="mr-2 h-4 w-4" /> 刷新
+          </Button>
+          <Button
+            onClick={() => setCollectOpen(true)}
+            disabled={!canImport}
+            title={canImport ? undefined : '先选择一个归属项目'}
+          >
+            <Radar className="mr-2 h-4 w-4" /> 从数据源采集
           </Button>
           <Button
             type="primary"
@@ -385,6 +561,72 @@ export default function DigitalAssetsPage() {
             hideOnSinglePage: true,
             onChange: (p) => setPage(p),
           }}
+        />
+      </div>
+
+      <div className="rounded-md border">
+        <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
+          <span className="text-sm font-medium">采集候选</span>
+          {(['candidate', 'imported', 'rejected'] as const).map((st) => (
+            <button
+              key={st}
+              className={
+                'rounded-full border px-3 py-0.5 text-xs ' +
+                (candStatus === st
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'text-muted-foreground hover:bg-muted')
+              }
+              onClick={() => setCandStatus(st)}
+            >
+              {digitalCandidateStatusLabel[st]}
+            </button>
+          ))}
+          <span className="ml-auto text-sm text-muted-foreground">{candTotal} 条</span>
+          {candStatus === 'candidate' && candSelected.length > 0 && (
+            <>
+              <Button
+                size="small"
+                type="primary"
+                icon={<CheckCheck className="h-3.5 w-3.5" />}
+                loading={confirmCands.isPending}
+                onClick={() => confirmCands.mutate()}
+              >
+                确认 {candSelected.length} 条
+              </Button>
+              <Button
+                size="small"
+                icon={<Ban className="h-3.5 w-3.5" />}
+                loading={rejectCands.isPending}
+                onClick={() => rejectCands.mutate()}
+              >
+                忽略
+              </Button>
+            </>
+          )}
+        </div>
+        <Table
+          columns={candidateColumns}
+          dataSource={candItems}
+          rowKey="id"
+          loading={candidates.isLoading}
+          rowSelection={
+            candStatus === 'candidate'
+              ? {
+                  selectedRowKeys: candSelected,
+                  onChange: (keys) => setCandSelected(keys as number[]),
+                }
+              : undefined
+          }
+          locale={{
+            emptyText: (
+              <div className="py-6 text-center text-muted-foreground">
+                {candStatus === 'candidate'
+                  ? '还没有采集候选（数据源采集后出现在这里）'
+                  : '没有符合条件的候选'}
+              </div>
+            ),
+          }}
+          pagination={false}
         />
       </div>
 
@@ -477,6 +719,89 @@ export default function DigitalAssetsPage() {
               <div className="text-xs text-muted-foreground">
                 示例：{preview.sample.map((s) => s.name).join('、') || '—'}
               </div>
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      <Modal
+        open={collectOpen}
+        onCancel={() => setCollectOpen(false)}
+        width={560}
+        title="从数据源采集数字资产"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setCollectOpen(false)}>取消</Button>
+            <Button
+              type="primary"
+              loading={collect.isPending}
+              disabled={!collectForm.keyword.trim()}
+              onClick={() => collect.mutate()}
+            >
+              {collect.isPending ? '采集中…' : '开始采集'}
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            按企业名从数据源拉取 APP / 小程序 / 公众号 / 新媒体，结果进候选池，确认后才落名单。
+          </p>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">数据源</label>
+              <Select
+                className="w-full"
+                value={collectForm.provider}
+                onChange={(v) => setCollectForm({ ...collectForm, provider: v })}
+                options={(providers.data?.data?.items ?? [])
+                  .filter((p) => p.Available)
+                  .map((p) => ({ value: p.Name, label: p.Label }))}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">企业名</label>
+              <Input
+                placeholder="如：示例科技有限公司"
+                value={collectForm.keyword}
+                onChange={(e) => setCollectForm({ ...collectForm, keyword: e.target.value })}
+              />
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {collectProvider?.Hint ??
+              '当前仅小蓝本提供数字资产字段；其余数据源会在采集时明确报错'}
+          </p>
+
+          {collectProvider?.Auth === 'account' && (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-sm font-medium">账号</label>
+                <Input
+                  value={collectForm.username}
+                  onChange={(e) => setCollectForm({ ...collectForm, username: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-sm font-medium">密码</label>
+                <Input
+                  type="password"
+                  value={collectForm.password}
+                  onChange={(e) => setCollectForm({ ...collectForm, password: e.target.value })}
+                />
+              </div>
+            </div>
+          )}
+          {collectProvider?.Auth === 'cookie' && (
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Cookie</label>
+              <Input.TextArea
+                className="font-mono text-sm"
+                rows={3}
+                value={collectForm.cookie}
+                onChange={(e) => setCollectForm({ ...collectForm, cookie: e.target.value })}
+              />
             </div>
           )}
         </div>

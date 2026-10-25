@@ -41,6 +41,79 @@ export interface ImportBatch {
   created_at: string
 }
 
+// 采集候选池：自动采集结果先入池，确认后落名单
+export interface DigitalCandidate {
+  id: number
+  project_id: number
+  kind: DigitalKind | string
+  name: string
+  company: string
+  platform: string
+  source: string
+  entity_name: string
+  evidence: string
+  status: 'candidate' | 'imported' | 'rejected' | string
+  batch_id: number | null
+  created_at: string
+  updated_at: string
+}
+
+export const digitalCandidateStatusLabel: Record<string, string> = {
+  candidate: '待确认',
+  imported: '已导入',
+  rejected: '已忽略',
+}
+
+export interface DigitalCandidateListResponse {
+  code: number
+  message: string
+  data: DigitalCandidate[]
+  total: number
+  page: number
+  size: number
+}
+
+export interface DigitalCollectResult {
+  provider: string
+  keyword: string
+  entities: number
+  found: number
+  candidates: number
+  imported: number
+  warnings?: string[]
+}
+
+export const digitalCandidateApi = {
+  list: (params: {
+    project_id?: number
+    kind?: string
+    status?: string
+    q?: string
+    page?: number
+    page_size?: number
+  }) => api.get<unknown, DigitalCandidateListResponse>('/digital-candidates', { params }),
+
+  collect: (body: {
+    project_id: number
+    provider: string
+    keyword: string
+    limit?: number
+    max_assets?: number
+    cookie?: string
+    username?: string
+    password?: string
+  }) => api.post<unknown, ApiResponse<DigitalCollectResult>>('/digital-candidates/collect', body),
+
+  confirm: (projectId: number, ids: number[]) =>
+    api.post<unknown, ApiResponse<{ batch: ImportBatch; confirmed: number }>>(
+      '/digital-candidates/confirm',
+      { project_id: projectId, ids }
+    ),
+
+  reject: (ids: number[]) =>
+    api.post<unknown, ApiResponse<{ rejected: number }>>('/digital-candidates/reject', { ids }),
+}
+
 export interface LocalDocPreview {
   token: string
   expires_at: string

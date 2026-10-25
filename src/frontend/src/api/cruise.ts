@@ -3,12 +3,26 @@ import { TaskConfig } from './tasks'
 
 export type CruiseStatus = 'enabled' | 'disabled' | 'running'
 export type CruiseTargetSource = 'static' | 'project'
+// 巡航类型：scan 常规扫描（默认）；digital_assets 数字资产周期采集
+export type CruiseKind = 'scan' | 'digital_assets'
+
+export interface DigitalCruiseConfig {
+  provider: string
+  username?: string
+  password?: string
+  cookie?: string
+  proxy_url?: string
+  max_entities?: number
+  max_assets?: number
+}
 
 export interface CruiseTask {
   id: string
   workspace_id?: string
   project_id: number
   target_source: CruiseTargetSource
+  kind?: CruiseKind | string
+  digital?: DigitalCruiseConfig
   name: string
   description: string
   status: CruiseStatus
@@ -52,6 +66,8 @@ export interface CruiseCreateRequest {
   name: string
   description?: string
   project_id: number
+  kind?: CruiseKind | string
+  digital?: DigitalCruiseConfig
   target_source: CruiseTargetSource
   cron_expr: string
   timezone?: string
@@ -69,6 +85,7 @@ export interface CruiseUpdateRequest {
   name?: string
   description?: string
   project_id?: number
+  digital?: DigitalCruiseConfig
   target_source?: CruiseTargetSource
   cron_expr?: string
   timezone?: string

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Button, Input, Modal, Select } from 'antd'
+import { Button, Checkbox, Input, Modal, Select } from 'antd'
 import { Search } from 'lucide-react'
 
 import { enterpriseApi, type CompanyRef, type EnterpriseProvider } from '@/api/enterprise'
@@ -23,6 +23,7 @@ export default function DeepCollectModal({ open, projectId, providers, onClose }
     password: '',
     depth: 2,
     max_nodes: 20,
+    collect_digital: true,
   })
   const [refs, setRefs] = useState<CompanyRef[]>([])
   const [selectedRef, setSelectedRef] = useState<CompanyRef | null>(null)
@@ -61,6 +62,7 @@ export default function DeepCollectModal({ open, projectId, providers, onClose }
         cookie: deepForm.cookie || undefined,
         username: deepForm.username || undefined,
         password: deepForm.password || undefined,
+        collect_digital: deepForm.collect_digital || undefined,
       })
     },
     onSuccess: (res) => {
@@ -201,6 +203,13 @@ export default function DeepCollectModal({ open, projectId, providers, onClose }
             />
           </div>
         </div>
+
+        <Checkbox
+          checked={deepForm.collect_digital}
+          onChange={(e) => setDeepForm({ ...deepForm, collect_digital: e.target.checked })}
+        >
+          顺带采集数字资产（APP / 小程序 / 公众号 / 新媒体，进数字资产候选池；仅小蓝本支持）
+        </Checkbox>
       </div>
     </Modal>
   )
