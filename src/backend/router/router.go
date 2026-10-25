@@ -396,6 +396,19 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				proxyGroup.POST("/test", networkProxyHandler.TestProxy)
 			}
 
+			// 数据源会话托管（扫码/Cookie/账号密码）+ 无头托管扫码登录
+			dsSessionHandler := api.NewDatasourceSessionHandler()
+			qrSessionHandler := api.NewQrSessionHandler()
+			dsGroup := protected.Group("/datasource-sessions", middleware.AdminMiddleware())
+			{
+				dsGroup.GET("", dsSessionHandler.List)
+				dsGroup.PUT("/:provider", dsSessionHandler.Save)
+				dsGroup.DELETE("/:provider", dsSessionHandler.Delete)
+				dsGroup.POST("/:provider/qr/begin", qrSessionHandler.Begin)
+				dsGroup.GET("/:provider/qr/poll", qrSessionHandler.Poll)
+				dsGroup.POST("/:provider/qr/cancel", qrSessionHandler.Cancel)
+			}
+
 			// Node routes
 			nodeHandler := api.NewNodeHandler(nodeHub)
 			nodeGroup := protected.Group("/nodes")

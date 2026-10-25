@@ -109,7 +109,9 @@ func (in EnterpriseCollectInput) buildProvider() (enterprise.Provider, error) {
 }
 
 // newEnterpriseProvider 按会话凭据构造数据源 adapter；数字资产采集与企业采集共用。
+// 凭据字段级回落会话存储（请求体非空字段优先）。
 func newEnterpriseProvider(provider, cookie, username, password, proxyURL string) (enterprise.Provider, error) {
+	cookie, username, password = ResolveDatasourceSession(provider, cookie, username, password)
 	cfg := map[string]string{
 		"cookie":    strings.TrimSpace(cookie),
 		"username":  strings.TrimSpace(username),

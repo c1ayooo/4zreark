@@ -14,6 +14,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { MCPAccessPanel } from '@/components/settings/MCPAccessPanel'
 import { ToolRuntimePanel } from '@/components/settings/ToolRuntimePanel'
 import { ProxyPanel } from '@/components/settings/ProxyPanel'
+import DatasourceSessionsTab from '@/components/settings/DatasourceSessionsTab'
 import { Moon, Sun, Monitor, Palette, User, Lock, Key, CheckCircle, XCircle, Plug, Database, Plus, Trash2, Gauge, Globe } from 'lucide-react'
 
 export default function SettingsPage() {
@@ -703,6 +704,16 @@ export default function SettingsPage() {
                     </span>
                   ),
                   children: <ProxyPanel />,
+                },
+                {
+                  key: 'datasource-sessions',
+                  label: (
+                    <span className="flex items-center gap-2">
+                      <Database className="h-4 w-4" />
+                      数据源会话
+                    </span>
+                  ),
+                  children: <DatasourceSessionsTab />,
                 },
               ]
             : []),

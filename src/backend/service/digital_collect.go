@@ -63,6 +63,7 @@ func (s *DigitalService) CollectCandidates(ctx context.Context, in DigitalCollec
 		var err error
 		provider, err = newEnterpriseProvider(in.Provider, in.Cookie, in.Username, in.Password, in.ProxyURL)
 		if err != nil {
+			NoteDatasourceSessionFailure(in.Provider, err)
 			return nil, err
 		}
 	}
