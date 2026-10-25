@@ -4,7 +4,7 @@ import { TaskConfig } from './tasks'
 export type CruiseStatus = 'enabled' | 'disabled' | 'running'
 export type CruiseTargetSource = 'static' | 'project'
 // 巡航类型：scan 常规扫描（默认）；digital_assets 数字资产周期采集
-export type CruiseKind = 'scan' | 'digital_assets'
+export type CruiseKind = 'scan' | 'digital_assets' | 'enterprise_deep'
 
 export interface DigitalCruiseConfig {
   provider: string
@@ -14,6 +14,8 @@ export interface DigitalCruiseConfig {
   proxy_url?: string
   max_entities?: number
   max_assets?: number
+  depth?: number
+  max_nodes?: number
 }
 
 export interface CruiseTask {

@@ -11,7 +11,11 @@ const eventFilter = [
   { value: '', label: '全部' },
   { value: 'first_seen', label: '首次发现' },
   { value: 'attribute_change', label: '属性变化' },
+  { value: 'fingerprint_change', label: '指纹变化' },
+  { value: 'content_change', label: '内容变化' },
   { value: 'reappear', label: '重新出现' },
+  { value: 'takeover', label: '接管风险' },
+  { value: 'archived', label: '已归档' },
 ]
 
 // shadcn Badge variant → Tag 的类名配色（Tag 无 variant，用 Tailwind 类保留原色）
@@ -24,13 +28,13 @@ const variantClass: Record<string, string> = {
 
 export default function EventsPage() {
   const [type, setType] = useState('')
-  const limit = type ? 200 : 100
+  const limit = 200
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['asset-events', limit],
-    queryFn: () => assetEventApi.list(limit),
+    queryKey: ['asset-events-changes', type, limit],
+    queryFn: () => assetEventApi.changes({ event_type: type || undefined, limit }),
   })
 
-  const items = (data?.data?.items ?? []).filter((e) => type === '' || e.event_type === type)
+  const items = data?.data?.items ?? []
 
   const diff = (before: Record<string, unknown>, after: Record<string, unknown>) => {
     const keys = new Set([...Object.keys(before ?? {}), ...Object.keys(after ?? {})])
@@ -68,11 +72,20 @@ export default function EventsPage() {
       ),
     },
     {
+      title: '项目',
+      dataIndex: 'project_name',
+      key: 'project_name',
+      width: 140,
+      ellipsis: true,
+      render: (v: string) => <span className="text-sm text-muted-foreground">{v || '—'}</span>,
+    },
+    {
       title: '站点',
-      dataIndex: 'site_id',
-      key: 'site_id',
-      width: 90,
-      render: (v: number) => <span className="font-mono text-sm">#{v}</span>,
+      dataIndex: 'asset_value',
+      key: 'asset_value',
+      width: 220,
+      ellipsis: true,
+      render: (v: string) => <span className="font-mono text-sm">{v || '—'}</span>,
     },
     {
       title: '说明',
@@ -108,7 +121,7 @@ export default function EventsPage() {
         <div>
           <h1 className="text-2xl font-semibold">变更时间线</h1>
           <p className="text-sm text-muted-foreground">
-            站点首次发现、属性变化、失联后重现；保留最近 1 万条 / 7 天（策略随资产治理配置）
+            首次发现、属性/指纹/内容变化、失联重现、接管与归档；保留最近 1 万条 / 7 天（策略随资产治理配置）
           </p>
         </div>
         <Button onClick={() => refetch()}>
@@ -140,7 +153,7 @@ export default function EventsPage() {
           dataSource={items}
           rowKey="id"
           loading={isLoading}
-          pagination={false}
+          pagination={{ pageSize: 50, hideOnSinglePage: true }}
           locale={{
             emptyText: (
               <div className="py-8 text-center text-sm text-muted-foreground">

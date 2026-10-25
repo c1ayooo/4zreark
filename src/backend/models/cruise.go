@@ -22,14 +22,16 @@ const (
 )
 
 // 巡航类型：scan 常规扫描任务（默认）；digital_assets 数字资产周期采集
-// （遍历项目企业线索拉取 APP/小程序/公众号/新媒体，diff 后只把新增送候选池）。
+// （遍历项目企业线索拉取 APP/小程序/公众号/新媒体，diff 后只把新增送候选池）；
+// enterprise_deep 企业深度采集（遍历项目企业线索逐个启动 BFS 子公司树展开）。
 const (
 	CruiseKindScan          = "scan"
 	CruiseKindDigitalAssets = "digital_assets"
+	CruiseKindEnterpriseDeep = "enterprise_deep"
 )
 
-// DigitalCruiseConfig 数字资产巡航的会话与容量配置。
-// 定时执行没有请求上下文，凭据随任务配置存储（与平台内其它出网配置同级敏感项）。
+// DigitalCruiseConfig 非扫描类巡航（数字资产/企业深度采集）的会话与容量配置。
+// 定时执行没有请求上下文，凭据随任务配置存储（会话存储可用时执行侧会字段级回落）。
 type DigitalCruiseConfig struct {
 	Provider    string `json:"provider" bson:"provider"`
 	Username    string `json:"username" bson:"username"`
@@ -38,6 +40,8 @@ type DigitalCruiseConfig struct {
 	ProxyURL    string `json:"proxy_url" bson:"proxy_url"`
 	MaxEntities int    `json:"max_entities" bson:"max_entities"` // 单次采集企业数上限
 	MaxAssets   int    `json:"max_assets" bson:"max_assets"`     // 单企业资产上限
+	Depth       int    `json:"depth" bson:"depth"`               // 企业深度采集：BFS 展开深度
+	MaxNodes    int    `json:"max_nodes" bson:"max_nodes"`       // 企业深度采集：单次 BFS 节点上限
 }
 
 // CruiseTask 巡航任务（定时自动扫描）

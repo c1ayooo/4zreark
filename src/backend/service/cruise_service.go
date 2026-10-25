@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -250,6 +251,11 @@ func (s *CruiseService) executeCruiseWithMode(cruiseID oid.ObjectID, manual bool
 	// 数字资产巡航：不建扫描任务，遍历项目企业线索直接采集入候选池。
 	if cruise.Kind == models.CruiseKindDigitalAssets {
 		s.executeDigitalCruise(cruise, cruiseID, startTime, restoreStatus)
+		return
+	}
+	// 企业深度采集巡航：遍历项目企业线索逐个启动 BFS 子公司树展开（错峰启动）。
+	if cruise.Kind == models.CruiseKindEnterpriseDeep {
+		s.executeEnterpriseDeepCruise(cruise, cruiseID, startTime, restoreStatus)
 		return
 	}
 
@@ -556,6 +562,132 @@ func (s *CruiseService) failDigitalRun(cruise *models.CruiseTask, startTime time
 	s.incrementFailCount(cruiseID)
 }
 
+// executeEnterpriseDeepCruise 企业深度采集巡航：遍历项目企业线索，逐个启动 BFS
+// 子公司树展开（分支/投资/集团成员 + 数字资产顺带）。BFS 本身异步执行，本函数只
+// 负责错峰启动并记录任务号；任务进度在「企业身份 → 采集任务」里查看。
+func (s *CruiseService) executeEnterpriseDeepCruise(cruise *models.CruiseTask, cruiseID oid.ObjectID, startTime time.Time, restoreStatus models.CruiseStatus) {
+	hexID := cruiseID.Hex()
+	cfg := cruise.Digital
+	provider, err := newEnterpriseProvider(cfg.Provider, cfg.Cookie, cfg.Username, cfg.Password, cfg.ProxyURL)
+	if err != nil {
+		s.failDigitalRun(cruise, startTime, restoreStatus, err.Error())
+		return
+	}
+	dp, dpOK := provider.(enterprise.DigitalAssetsProvider)
+	_ = dp
+
+	depth := cfg.Depth
+	if depth <= 0 || depth > 2 {
+		depth = 1
+	}
+	maxNodes := cfg.MaxNodes
+	if maxNodes <= 0 || maxNodes > 50 {
+		maxNodes = 20
+	}
+	maxEntities := cfg.MaxEntities
+	if maxEntities <= 0 || maxEntities > 20 {
+		maxEntities = 10
+	}
+
+	r := repo.Default()
+	if r == nil {
+		s.failDigitalRun(cruise, startTime, restoreStatus, "数据层未初始化")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	entities, _, err := r.Enterprises().List(ctx, repo.EnterpriseFilter{
+		ProjectID: cruise.ProjectID, Page: 1, PageSize: maxEntities,
+	})
+	if err != nil {
+		s.failDigitalRun(cruise, startTime, restoreStatus, "读取企业线索失败: "+err.Error())
+		return
+	}
+	if len(entities) == 0 {
+		s.failDigitalRun(cruise, startTime, restoreStatus, "项目没有企业线索（先在企业身份页录入或采集）")
+		return
+	}
+
+	es := NewEnterpriseService()
+	collector, cerr := es.collector()
+	if cerr != nil {
+		s.failDigitalRun(cruise, startTime, restoreStatus, "采集器初始化失败: "+cerr.Error())
+		return
+	}
+
+	// 错峰启动：BFS 是长任务，多个同时启动会对上游形成并发流；间隔 15s。
+	launched := []string{}
+	warnings := []string{}
+	for i, e := range entities {
+		if i > 0 {
+			t := time.NewTimer(15 * time.Second)
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				warnings = append(warnings, "启动中断：超时")
+				i = len(entities)
+			case <-t.C:
+			}
+		}
+		refs, serr := provider.Search(ctx, e.Name, 1)
+		if serr != nil || len(refs) == 0 {
+			warnings = append(warnings, e.Name+"：企业检索失败或无结果")
+			continue
+		}
+		job := enterprise.Job{
+			ProjectID:   strconv.FormatInt(cruise.ProjectID, 10),
+			Owner:       "cruise:" + hexID,
+			Provider:    provider.Name(),
+			Keyword:     e.Name,
+			Depth:       depth,
+			MaxNodes:    maxNodes,
+			ExpandGroup: true,
+		}
+		root := enterprise.CompanyRef{ExtID: refs[0].ExtID, Name: refs[0].Name}
+		var started enterprise.Job
+		if dpOK {
+			started, err = collector.StartWithDigitalSink(ctx, provider, job, root, dp)
+		} else {
+			started, err = collector.Start(ctx, provider, job, root)
+		}
+		if err != nil {
+			warnings = append(warnings, e.Name+"：深度采集启动失败")
+			continue
+		}
+		launched = append(launched, started.ID)
+	}
+
+	endTime := time.Now()
+	status := "success"
+	errorMsg := strings.Join(warnings, "；")
+	if len(launched) == 0 {
+		status = "failed"
+	}
+	s.recordCruiseLog(cruiseID, oid.NilObjectID, "running", startTime, time.Time{}, 0, 0, "")
+	s.updateCruiseLog(cruiseID, oid.NilObjectID, status, endTime,
+		int64(endTime.Sub(startTime).Seconds()), len(launched), 0, errorMsg)
+	s.finishCruiseRun(cruiseID, restoreStatus)
+	s.updateLastStatus(cruiseID, status)
+	s.updateLastRun(cruiseID, "", startTime)
+	if status == "success" {
+		s.incrementSuccessCount(cruiseID)
+	} else {
+		s.incrementFailCount(cruiseID)
+	}
+	cruiseEntryMu.RLock()
+	entryID, exists := cruiseEntries[hexID]
+	var next time.Time
+	if exists {
+		next = cronScheduler().Entry(entryID).Next
+	}
+	cruiseEntryMu.RUnlock()
+	if exists {
+		s.updateNextRunTime(cruiseID, next)
+	}
+	log.Printf("[CruiseService] Enterprise-deep cruise %s done: entities=%d launched=%d warnings=%d jobs=%v",
+		cruise.Name, len(entities), len(launched), len(warnings), launched)
+}
+
 // cruiseScheduleSpec 把巡航的 cron 表达式与其 timezone 组装成 robfig/cron 认识的
 // spec：时区有效且非 Local 时加 "CRON_TZ=<tz> " 前缀，Entry.Next 与触发时间都按
 // 该时区计算。此前 timezone 存而不用，容器默认 UTC 时按北京时间配的 9 点实际 17 点触发。
@@ -604,8 +736,8 @@ func (s *CruiseService) CreateCruise(req *models.CruiseTaskCreateRequest, userID
 	}
 
 	targetType := ""
-	if kind == models.CruiseKindDigitalAssets {
-		// 数字资产巡航不走扫描目标体系；企业线索即目标。
+	if kind != models.CruiseKindScan {
+		// 数字资产/企业深度巡航不走扫描目标体系；项目企业线索即目标。
 		source = models.CruiseTargetSourceProject
 	} else {
 		targetType = normalizeCruiseTargetType(req.TargetType)
@@ -628,7 +760,7 @@ func (s *CruiseService) CreateCruise(req *models.CruiseTaskCreateRequest, userID
 		return nil, err
 	}
 	targets := cleanCruiseTargets(req.Targets)
-	if kind != models.CruiseKindDigitalAssets && source == models.CruiseTargetSourceStatic && len(targets) == 0 {
+	if kind == models.CruiseKindScan && source == models.CruiseTargetSourceStatic && len(targets) == 0 {
 		return nil, errors.New("固定目标模式至少需要一个扫描目标")
 	}
 
@@ -1073,7 +1205,7 @@ func normalizeCruiseKind(kind string) string {
 	if kind == "" {
 		return models.CruiseKindScan
 	}
-	if kind != models.CruiseKindDigitalAssets {
+	if kind != models.CruiseKindDigitalAssets && kind != models.CruiseKindEnterpriseDeep {
 		return models.CruiseKindScan
 	}
 	return kind

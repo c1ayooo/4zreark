@@ -95,6 +95,8 @@ export default function CruisePage() {
       cookie: '',
       max_entities: 20,
       max_assets: 50,
+      depth: 1,
+      max_nodes: 20,
     },
     notify_on_complete: false,
     notify_on_vuln: true,
@@ -103,6 +105,8 @@ export default function CruisePage() {
 
   const isProjectSource = formData.target_source === 'project'
   const isDigital = formData.kind === 'digital_assets'
+  const isDeep = formData.kind === 'enterprise_deep'
+  const isNonScan = isDigital || isDeep
   const providers = useQuery({
     queryKey: ['enterprise-providers'],
     queryFn: () => enterpriseApi.providers(),
@@ -379,6 +383,8 @@ export default function CruisePage() {
             cookie: '',
             max_entities: 20,
             max_assets: 50,
+            depth: 1,
+            max_nodes: 20,
           },
       notify_on_complete: cruise.notify_on_complete,
       notify_on_vuln: cruise.notify_on_vuln,
@@ -396,7 +402,7 @@ export default function CruisePage() {
     try {
       const result = await cruiseApi.previewTargets(
         formData.project_id,
-        isDigital ? 'digital_assets' : formData.target_type || 'domain'
+        isNonScan ? 'digital_assets' : formData.target_type || 'domain'
       )
       setPreview(result)
     } catch (error: any) {
@@ -428,18 +434,18 @@ export default function CruisePage() {
       toast({ title: '请设置执行周期', variant: 'destructive' })
       return
     }
-    if (!isProjectSource && !isDigital && targets.length === 0) {
+    if (!isProjectSource && !isNonScan && targets.length === 0) {
       toast({ title: '请输入扫描目标', variant: 'destructive' })
       return
     }
-    if (isDigital && !formData.digital?.provider) {
+    if (isNonScan && !formData.digital?.provider) {
       toast({ title: '请选择数字资产数据源', variant: 'destructive' })
       return
     }
 
     const submitData = {
       ...formData,
-      targets: isProjectSource || isDigital ? [] : targets,
+      targets: isProjectSource || isNonScan ? [] : targets,
     } as CruiseCreateRequest
 
     if (editingCruise) {
@@ -562,6 +568,8 @@ export default function CruisePage() {
       render: (_, cruise) =>
         cruise.kind === 'digital_assets' ? (
           <Tag className="border-primary bg-primary/10 text-primary">数字资产采集</Tag>
+        ) : cruise.kind === 'enterprise_deep' ? (
+          <Tag className="border-primary bg-primary/10 text-primary">企业深度采集</Tag>
         ) : (
           (TASK_TYPES.find((t) => t.value === cruise.task_type)?.label || cruise.task_type)
         ),
@@ -779,6 +787,7 @@ export default function CruisePage() {
                 options={[
                   { value: 'scan', label: '扫描巡航' },
                   { value: 'digital_assets', label: '数字资产采集' },
+                  { value: 'enterprise_deep', label: '企业深度采集' },
                 ]}
                 onChange={(value) => {
                   setFormData({ ...formData, kind: value })
@@ -788,7 +797,7 @@ export default function CruisePage() {
             </div>
           </div>
 
-          {!isDigital && (
+          {!isNonScan && (
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium">任务类型</label>
@@ -830,8 +839,8 @@ export default function CruisePage() {
               <Select
                 className="w-full"
                 placeholder="选择目标来源"
-                disabled={isDigital}
-                value={isDigital ? 'project' : formData.target_source || 'static'}
+                disabled={isNonScan}
+                value={isNonScan ? 'project' : formData.target_source || 'static'}
                 options={[
                   { value: 'static', label: '固定目标列表' },
                   { value: 'project', label: '项目整体资产（自动派生）' },
@@ -872,7 +881,7 @@ export default function CruisePage() {
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium">目标类型</label>
-              {isDigital ? (
+              {isNonScan ? (
                 <Select
                   className="w-full"
                   value={formData.digital?.provider}
@@ -903,14 +912,17 @@ export default function CruisePage() {
             </div>
           </div>
 
-          {isDigital ? (
+          {isNonScan ? (
             <div className="space-y-3 rounded-md border bg-muted/30 p-3">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <div className="text-sm font-medium">按项目企业线索周期采集</div>
+                  <div className="text-sm font-medium">
+                    {isDeep ? '按项目企业线索周期深度采集（子公司树）' : '按项目企业线索周期采集'}
+                  </div>
                   <div className="text-xs text-muted-foreground">
-                    每次执行遍历项目企业线索，从数据源拉取 APP / 小程序 / 公众号 / 新媒体；
-                    diff 后只把新增上榜送进数字资产候选池，确认后才落名单。
+                    {isDeep
+                      ? '每次执行遍历项目企业线索，逐个错峰启动 BFS 子公司树展开（分支/投资/集团成员 + 数字资产顺带）；任务进度在企业身份页查看。'
+                      : '每次执行遍历项目企业线索，从数据源拉取 APP / 小程序 / 公众号 / 新媒体；diff 后只把新增上榜送进数字资产候选池，确认后才落名单。'}
                   </div>
                 </div>
                 <Button
@@ -925,7 +937,7 @@ export default function CruisePage() {
               {preview && (
                 <div className="space-y-2">
                   <div className="text-xs text-muted-foreground">
-                    共 {preview.total} 家企业线索（每次执行取前 {formData.digital?.max_entities ?? 20} 家）
+                    共 {preview.total} 家企业线索（每次执行取前 {formData.digital?.max_entities ?? (isDeep ? 10 : 20)} 家）
                   </div>
                   {preview.targets.length === 0 ? (
                     <div className="rounded bg-background p-2 text-xs text-muted-foreground">
@@ -954,30 +966,61 @@ export default function CruisePage() {
                     onChange={(value) => setDigital({ provider: value })}
                   />
                 </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-medium">单次企业数上限（≤50）</label>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={50}
-                    value={formData.digital?.max_entities}
-                    onChange={(e) =>
-                      setDigital({ max_entities: Number(e.target.value) || 20 })
-                    }
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-medium">单企业资产上限（≤200）</label>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={200}
-                    value={formData.digital?.max_assets}
-                    onChange={(e) =>
-                      setDigital({ max_assets: Number(e.target.value) || 50 })
-                    }
-                  />
-                </div>
+                {isDeep ? (
+                  <>
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium">展开深度（1–2）</label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={2}
+                        value={formData.digital?.depth}
+                        onChange={(e) =>
+                          setDigital({ depth: Number(e.target.value) || 1 })
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium">单次节点上限（≤50）</label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={50}
+                        value={formData.digital?.max_nodes}
+                        onChange={(e) =>
+                          setDigital({ max_nodes: Number(e.target.value) || 20 })
+                        }
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium">单次企业数上限（≤50）</label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={50}
+                        value={formData.digital?.max_entities}
+                        onChange={(e) =>
+                          setDigital({ max_entities: Number(e.target.value) || 20 })
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium">单企业资产上限（≤200）</label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={200}
+                        value={formData.digital?.max_assets}
+                        onChange={(e) =>
+                          setDigital({ max_assets: Number(e.target.value) || 50 })
+                        }
+                      />
+                    </div>
+                  </>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-2">
