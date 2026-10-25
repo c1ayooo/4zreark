@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/enterprise"
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/repo"
 
@@ -246,6 +247,12 @@ func (s *CruiseService) executeCruiseWithMode(cruiseID oid.ObjectID, manual bool
 		return
 	}
 
+	// 数字资产巡航：不建扫描任务，遍历项目企业线索直接采集入候选池。
+	if cruise.Kind == models.CruiseKindDigitalAssets {
+		s.executeDigitalCruise(cruise, cruiseID, startTime, restoreStatus)
+		return
+	}
+
 	targets := cruise.Targets
 	sourceDesc := "固定目标"
 	if cruise.TargetSource == models.CruiseTargetSourceProject {
@@ -380,6 +387,150 @@ func (s *CruiseService) executeCruiseWithMode(cruiseID oid.ObjectID, manual bool
 	}()
 }
 
+// executeDigitalCruise 数字资产巡航执行体：遍历项目企业线索逐个采集数字资产
+// 入候选池（diff 语义由入池对账保证：已存在候选只刷新证据，名单已有直接 imported）。
+// 不创建扫描任务；单企业失败记 warning 不中断，结果进巡航日志。
+func (s *CruiseService) executeDigitalCruise(cruise *models.CruiseTask, cruiseID oid.ObjectID, startTime time.Time, restoreStatus models.CruiseStatus) {
+	hexID := cruiseID.Hex()
+	cfg := cruise.Digital
+	provider, err := newEnterpriseProvider(cfg.Provider, cfg.Cookie, cfg.Username, cfg.Password, cfg.ProxyURL)
+	if err != nil {
+		s.failDigitalRun(cruiseID, cruise.Name, startTime, restoreStatus, err.Error())
+		return
+	}
+	if _, ok := provider.(enterprise.DigitalAssetsProvider); !ok {
+		s.failDigitalRun(cruiseID, cruise.Name, startTime, restoreStatus,
+			fmt.Sprintf("数据源 %s 不支持数字资产采集（当前支持：xiaolanben）", provider.Name()))
+		return
+	}
+	r := repo.Default()
+	if r == nil {
+		s.failDigitalRun(cruiseID, cruise.Name, startTime, restoreStatus, "数据层未初始化")
+		return
+	}
+	maxEntities := cfg.MaxEntities
+	if maxEntities <= 0 || maxEntities > 50 {
+		maxEntities = 20
+	}
+	maxAssets := cfg.MaxAssets
+	if maxAssets <= 0 || maxAssets > 200 {
+		maxAssets = 50
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	res := RunDigitalCollectCycle(ctx, provider, cruise.ProjectID, maxEntities, maxAssets)
+	if res.Err != nil {
+		s.failDigitalRun(cruiseID, cruise.Name, startTime, restoreStatus, res.Err.Error())
+		return
+	}
+	warnings := res.Warnings
+
+	endTime := time.Now()
+	errorMsg := strings.Join(warnings, "；")
+	status := "success"
+	if res.Found == 0 && len(warnings) > 0 {
+		status = "failed"
+	}
+	s.recordCruiseLog(cruiseID, oid.NilObjectID, "running", startTime, time.Time{}, 0, 0, "")
+	s.updateCruiseLog(cruiseID, oid.NilObjectID, status, endTime,
+		int64(endTime.Sub(startTime).Seconds()), int(res.Candidates), 0, errorMsg)
+	s.finishCruiseRun(cruiseID, restoreStatus)
+	s.updateLastStatus(cruiseID, status)
+	s.updateLastRun(cruiseID, "", startTime)
+	if status == "success" {
+		s.incrementSuccessCount(cruiseID)
+	} else {
+		s.incrementFailCount(cruiseID)
+	}
+	cruiseEntryMu.RLock()
+	entryID, exists := cruiseEntries[hexID]
+	var next time.Time
+	if exists {
+		next = cronScheduler().Entry(entryID).Next
+	}
+	cruiseEntryMu.RUnlock()
+	if exists {
+		s.updateNextRunTime(cruiseID, next)
+	}
+	log.Printf("[CruiseService] Digital cruise %s done: entities=%d checked=%d found=%d candidates=%d imported=%d warnings=%d",
+		cruise.Name, res.Entities, res.Checked, res.Found, res.Candidates, res.Imported, len(warnings))
+}
+
+// DigitalCruiseCycleResult 一轮数字资产巡航采集的统计。
+type DigitalCruiseCycleResult struct {
+	Entities   int      `json:"entities"`
+	Checked    int      `json:"checked"`
+	Found      int      `json:"found"`
+	Candidates int64    `json:"candidates"`
+	Imported   int64    `json:"imported"`
+	Warnings   []string `json:"warnings,omitempty"`
+	Err        error    `json:"-"`
+}
+
+// RunDigitalCollectCycle 数字资产巡航的采集核心：遍历项目企业线索，逐个
+// 检索上游并拉取数字资产入候选池（diff 由入池对账保证，重复执行不重复入池）。
+// 导出供巡航执行体与测试复用；provider 需实现 DigitalAssetsProvider。
+func RunDigitalCollectCycle(ctx context.Context, provider enterprise.Provider, projectID int64, maxEntities, maxAssets int) *DigitalCruiseCycleResult {
+	out := &DigitalCruiseCycleResult{}
+	if _, ok := provider.(enterprise.DigitalAssetsProvider); !ok {
+		out.Err = fmt.Errorf("数据源 %s 不支持数字资产采集", provider.Name())
+		return out
+	}
+	r := repo.Default()
+	if r == nil {
+		out.Err = errors.New("数据层未初始化")
+		return out
+	}
+	if maxEntities <= 0 || maxEntities > 50 {
+		maxEntities = 20
+	}
+	if maxAssets <= 0 || maxAssets > 200 {
+		maxAssets = 50
+	}
+	entities, _, err := r.Enterprises().List(ctx, repo.EnterpriseFilter{
+		ProjectID: projectID, Page: 1, PageSize: maxEntities,
+	})
+	if err != nil {
+		out.Err = fmt.Errorf("读取企业线索失败: %w", err)
+		return out
+	}
+	out.Entities = len(entities)
+	if len(entities) == 0 {
+		out.Err = errors.New("项目没有企业线索（先在企业身份页录入或采集）")
+		return out
+	}
+
+	dig := NewDigitalService()
+	for _, e := range entities {
+		res, err := dig.CollectCandidates(ctx, DigitalCollectInput{
+			ProjectID:        projectID,
+			Keyword:          e.Name,
+			MaxAssets:        maxAssets,
+			ProviderOverride: provider,
+		})
+		if err != nil {
+			out.Warnings = append(out.Warnings, e.Name+"："+err.Error())
+			continue
+		}
+		out.Checked++
+		out.Found += res.Found
+		out.Candidates += res.Candidates
+		out.Imported += res.Imported
+		out.Warnings = append(out.Warnings, res.Warnings...)
+	}
+	return out
+}
+
+// failDigitalRun 数字资产巡航启动期失败：记日志、恢复状态、累计失败计数。
+func (s *CruiseService) failDigitalRun(cruiseID oid.ObjectID, name string, startTime time.Time, restoreStatus models.CruiseStatus, msg string) {
+	log.Printf("[CruiseService] Digital cruise %s failed: %s", name, msg)
+	s.recordCruiseLog(cruiseID, oid.NilObjectID, "failed", startTime, time.Now(), 0, 0, msg)
+	s.finishCruiseRun(cruiseID, restoreStatus)
+	s.updateLastStatus(cruiseID, "failed")
+	s.incrementFailCount(cruiseID)
+}
+
 // cruiseScheduleSpec 把巡航的 cron 表达式与其 timezone 组装成 robfig/cron 认识的
 // spec：时区有效且非 Local 时加 "CRON_TZ=<tz> " 前缀，Entry.Next 与触发时间都按
 // 该时区计算。此前 timezone 存而不用，容器默认 UTC 时按北京时间配的 9 点实际 17 点触发。
@@ -422,12 +573,23 @@ func (s *CruiseService) CreateCruise(req *models.CruiseTaskCreateRequest, userID
 	if err != nil {
 		return nil, err
 	}
-	targetType := normalizeCruiseTargetType(req.TargetType)
-	if !validCruiseTargetType(targetType) {
-		return nil, fmt.Errorf("不支持的目标类型: %s", targetType)
-	}
+	kind := normalizeCruiseKind(req.Kind)
 	if req.ProjectID <= 0 {
 		return nil, errors.New("必须选择归属项目（project_id）")
+	}
+
+	targetType := ""
+	if kind == models.CruiseKindDigitalAssets {
+		// 数字资产巡航不走扫描目标体系；企业线索即目标。
+		source = models.CruiseTargetSourceProject
+	} else {
+		targetType = normalizeCruiseTargetType(req.TargetType)
+		if !validCruiseTargetType(targetType) {
+			return nil, fmt.Errorf("不支持的目标类型: %s", targetType)
+		}
+		if req.TaskType == "" {
+			return nil, errors.New("扫描巡航必须选择任务类型（task_type）")
+		}
 	}
 
 	store, err := s.store()
@@ -441,7 +603,7 @@ func (s *CruiseService) CreateCruise(req *models.CruiseTaskCreateRequest, userID
 		return nil, err
 	}
 	targets := cleanCruiseTargets(req.Targets)
-	if source == models.CruiseTargetSourceStatic && len(targets) == 0 {
+	if kind != models.CruiseKindDigitalAssets && source == models.CruiseTargetSourceStatic && len(targets) == 0 {
 		return nil, errors.New("固定目标模式至少需要一个扫描目标")
 	}
 
@@ -456,6 +618,8 @@ func (s *CruiseService) CreateCruise(req *models.CruiseTaskCreateRequest, userID
 		WorkspaceID:      workspaceID,
 		ProjectID:        req.ProjectID,
 		TargetSource:     source,
+		Kind:             kind,
+		Digital:          req.Digital,
 		Name:             req.Name,
 		Description:      req.Description,
 		Status:           models.CruiseStatusDisabled, // 默认禁用，需手动启用
@@ -539,6 +703,9 @@ func (s *CruiseService) UpdateCruise(cruiseID string, req *models.CruiseTaskUpda
 	}
 	if req.Config != nil {
 		update["config"] = *req.Config
+	}
+	if req.Digital != nil {
+		update["digital"] = *req.Digital
 	}
 	if req.NotifyOnComplete != nil {
 		update["notify_on_complete"] = *req.NotifyOnComplete
@@ -782,6 +949,29 @@ func (s *CruiseService) PreviewProjectTargets(projectID int64, targetType string
 	if err := ensureProjectExists(ctx, projectID); err != nil {
 		return nil, err
 	}
+
+	// 数字资产巡航的目标预览：项目企业线索列表（企业名即采集目标）。
+	if tt == "digital_assets" {
+		r := repo.Default()
+		if r == nil {
+			return nil, errors.New("数据层未初始化")
+		}
+		entities, total, err := r.Enterprises().List(ctx, repo.EnterpriseFilter{
+			ProjectID: projectID, Page: 1, PageSize: 50,
+		})
+		if err != nil {
+			return nil, err
+		}
+		names := make([]string, 0, len(entities))
+		for _, e := range entities {
+			names = append(names, e.Name)
+		}
+		return &TargetPreview{
+			TargetType: tt, Targets: names,
+			Total: int(total), Truncated: total > 50,
+		}, nil
+	}
+
 	values, err := repo.NewAssetRepo().ProjectTargetValues(ctx, projectID, tt)
 	if err != nil {
 		return nil, err
@@ -852,9 +1042,21 @@ func normalizeCruiseTargetType(targetType string) string {
 	return targetType
 }
 
+// normalizeCruiseKind 巡航类型：空视为 scan（存量任务语义）。
+func normalizeCruiseKind(kind string) string {
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if kind == "" {
+		return models.CruiseKindScan
+	}
+	if kind != models.CruiseKindDigitalAssets {
+		return models.CruiseKindScan
+	}
+	return kind
+}
+
 func validCruiseTargetType(targetType string) bool {
 	switch targetType {
-	case "domain", "ip", "url", "cidr":
+	case "domain", "ip", "url", "cidr", "digital_assets":
 		return true
 	default:
 		return false

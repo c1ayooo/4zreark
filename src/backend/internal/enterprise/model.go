@@ -89,6 +89,7 @@ type Job struct {
 	Nodes                int        `json:"nodes"`
 	Entities             int        `json:"entities"`
 	Domains              int        `json:"domains"`
+	Digital              int        `json:"digital"` // 顺带采集的数字资产入池数
 	Imported             int        `json:"imported"`
 	Error                string     `json:"error"`
 	CreatedAt            time.Time  `json:"created_at"`

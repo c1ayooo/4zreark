@@ -15,7 +15,8 @@ type CollectorStore interface {
 	FinishJob(ctx context.Context, id, status, errMsg string) error
 	SaveEntity(ctx context.Context, e *Entity) (bool, error)
 	SaveDomain(ctx context.Context, jobID, domain, site, icp, entityName string) (bool, error)
-	BumpJob(ctx context.Context, id string, nodes, entities, domains int) error
+	SaveDigitalCandidates(ctx context.Context, jobID, source string, hits []DigitalHit) (int64, error)
+	BumpJob(ctx context.Context, id string, nodes, entities, domains, digital int) error
 }
 
 // Collector BFS 编排器（移植自 4zreco internal/enterprise/collector.go）：
@@ -30,6 +31,8 @@ type Collector struct {
 	pageSize    int
 	maxPageWalk int
 	maxNodes    int
+	// maxDigitalPerEntity 单实体数字资产拉取上限（sink 启用时生效）。
+	maxDigitalPerEntity int
 }
 
 type runningJob struct {
@@ -43,6 +46,7 @@ func NewCollector(store CollectorStore, lg *log.Logger) *Collector {
 	return &Collector{
 		store: store, log: lg, running: map[string]*runningJob{},
 		rateLimit: 800 * time.Millisecond, pageSize: 10, maxPageWalk: 5, maxNodes: 200,
+		maxDigitalPerEntity: 50,
 	}
 }
 
@@ -51,6 +55,16 @@ func (c *Collector) SetRateLimit(d time.Duration) { c.rateLimit = d }
 
 // Start 启动后台 BFS 采集任务，立即返回 job（status=running）。
 func (c *Collector) Start(ctx context.Context, provider Provider, job Job, root CompanyRef) (Job, error) {
+	return c.start(ctx, provider, job, root, nil)
+}
+
+// StartWithDigitalSink 启动 BFS 并在每个实体详情后顺带拉取数字资产入候选池。
+// sink 为 nil 等价 Start；拉取失败只记日志，不影响域名采集。
+func (c *Collector) StartWithDigitalSink(ctx context.Context, provider Provider, job Job, root CompanyRef, sink DigitalAssetsProvider) (Job, error) {
+	return c.start(ctx, provider, job, root, sink)
+}
+
+func (c *Collector) start(ctx context.Context, provider Provider, job Job, root CompanyRef, sink DigitalAssetsProvider) (Job, error) {
 	if job.Depth < 1 {
 		job.Depth = 1
 	}
@@ -71,7 +85,7 @@ func (c *Collector) Start(ctx context.Context, provider Provider, job Job, root 
 	c.mu.Lock()
 	c.running[created.ID] = &runningJob{cancel: cancel}
 	c.mu.Unlock()
-	go c.run(runCtx, provider, created, root)
+	go c.run(runCtx, provider, created, root, sink)
 	return created, nil
 }
 
@@ -93,10 +107,10 @@ func (c *Collector) forget(jobID string) {
 	c.mu.Unlock()
 }
 
-func (c *Collector) run(ctx context.Context, provider Provider, job Job, root CompanyRef) {
+func (c *Collector) run(ctx context.Context, provider Provider, job Job, root CompanyRef, sink DigitalAssetsProvider) {
 	defer c.forget(job.ID)
 	status, msg := "done", ""
-	if _, err := c.walk(ctx, provider, job, root); err != nil {
+	if _, err := c.walk(ctx, provider, job, root, sink); err != nil {
 		if ctx.Err() != nil {
 			status, msg = "canceled", "用户取消"
 		} else {
@@ -108,8 +122,8 @@ func (c *Collector) run(ctx context.Context, provider Provider, job Job, root Co
 	}
 }
 
-// walk 从根企业开始逐层展开：detail → 域名入候选 → 子公司(分支/投资)入队。
-func (c *Collector) walk(ctx context.Context, provider Provider, job Job, root CompanyRef) ([]string, error) {
+// walk 从根企业开始逐层展开：detail → 域名入候选 → （可选）数字资产入候选池 → 子公司(分支/投资)入队。
+func (c *Collector) walk(ctx context.Context, provider Provider, job Job, root CompanyRef, sink DigitalAssetsProvider) ([]string, error) {
 	type item struct {
 		ref        CompanyRef
 		depth      int
@@ -193,7 +207,29 @@ func (c *Collector) walk(ctx context.Context, provider Provider, job Job, root C
 				break
 			}
 		}
-		if err := c.store.BumpJob(ctx, job.ID, 1, entities, domains); err != nil {
+		// 顺带采集数字资产（APP/小程序/公众号/新媒体）入候选池；失败不致命。
+		digital := 0
+		if sink != nil {
+			if err := c.pace(ctx); err != nil {
+				return targets, err
+			}
+			hits, _, err := sink.DigitalAssets(ctx, cur.ref.ExtID, 1, c.maxDigitalPerEntity)
+			if err != nil {
+				c.log.Printf("[enterprise] 数字资产拉取失败(%s): %v", cur.ref.ExtID, err)
+			} else {
+				for i := range hits {
+					if hits[i].EntityName == "" {
+						hits[i].EntityName = name
+					}
+				}
+				if n, serr := c.store.SaveDigitalCandidates(ctx, job.ID, provider.Name(), hits); serr != nil {
+					c.log.Printf("[enterprise] 数字资产入池失败(%s): %v", cur.ref.ExtID, serr)
+				} else {
+					digital = int(n)
+				}
+			}
+		}
+		if err := c.store.BumpJob(ctx, job.ID, 1, entities, domains, digital); err != nil {
 			return targets, err
 		}
 

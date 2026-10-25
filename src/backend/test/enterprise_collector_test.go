@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/c1ayooo/4zreark/internal/enterprise"
+	"github.com/c1ayooo/4zreark/repo"
+	"github.com/c1ayooo/4zreark/service"
 )
 
 // fakeProvider 固定拓扑：root -> (branch b1, invest i1) -> deep。
@@ -130,6 +132,74 @@ func TestNormalizeDomainExported(t *testing.T) {
 	for in, want := range cases {
 		if got := enterprise.NormalizeDomain(in); got != want {
 			t.Errorf("NormalizeDomain(%q)=%q want %q", in, got, want)
+		}
+	}
+}
+
+// digitalSinkProvider 在 fakeProvider 拓扑上叠加数字资产拉取。
+type digitalSinkProvider struct{ fakeProvider }
+
+func (f *digitalSinkProvider) DigitalAssets(_ context.Context, extID string, _, _ int) ([]enterprise.DigitalHit, bool, error) {
+	return []enterprise.DigitalHit{
+		{Kind: "app", Name: "BFS-" + extID + "-App", Platform: "Android", Evidence: "详情页 apps"},
+		{Kind: "miniapp", Name: "BFS-" + extID + "-Mini", Platform: "微信"},
+	}, false, nil
+}
+
+// BFS 顺带数字资产：每个实体详情后入候选池，任务统计含 digital；域名采集不受影响。
+func TestEnterpriseCollectorDigitalSink(t *testing.T) {
+	r := openTestRepo(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	code := fmt.Sprintf("ent-dig-%d", time.Now().UnixNano())
+	var projectID int64
+	if err := r.Pool().QueryRow(ctx,
+		`INSERT INTO projects (code, name) VALUES ($1,$2) RETURNING id`, code, code).Scan(&projectID); err != nil {
+		t.Fatalf("建测试项目失败: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = r.Pool().Exec(context.Background(), `DELETE FROM projects WHERE id=$1`, projectID)
+	})
+
+	c := enterprise.NewCollector(r, log.New(io.Discard, "", 0))
+	c.SetRateLimit(0)
+	job, err := c.StartWithDigitalSink(ctx, &digitalSinkProvider{}, enterprise.Job{
+		ProjectID: fmt.Sprint(projectID), Owner: "tester", Provider: "fake",
+		Keyword: "根企业", Depth: 2, MaxNodes: 10,
+	}, enterprise.CompanyRef{ExtID: "root", Name: "根企业"}, &digitalSinkProvider{})
+	if err != nil {
+		t.Fatalf("启动采集失败: %v", err)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	var done enterprise.Job
+	for {
+		got, err := r.GetEnterpriseJob(ctx, job.ID)
+		if err != nil {
+			t.Fatalf("读取任务失败: %v", err)
+		}
+		if got.Status != "running" {
+			done = got
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("任务未在期限内结束: %+v", got)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if done.Status != "done" || done.Digital < 2 {
+		t.Fatalf("任务结果不符: status=%s digital=%d (期望 done 且 >=2)", done.Status, done.Digital)
+	}
+
+	dig := service.NewDigitalService()
+	items, total, err := dig.ListCandidates(ctx, repo.DigitalCandidateFilter{ProjectID: projectID})
+	if err != nil || total < 2 {
+		t.Fatalf("数字资产候选不符: total=%d len=%d err=%v", total, len(items), err)
+	}
+	for _, it := range items {
+		if it.Source != "fake" || it.EntityName == "" {
+			t.Fatalf("候选来源/归属企业不符: %+v", it)
 		}
 	}
 }

@@ -21,6 +21,25 @@ const (
 	CruiseTargetSourceProject = "project"
 )
 
+// 巡航类型：scan 常规扫描任务（默认）；digital_assets 数字资产周期采集
+// （遍历项目企业线索拉取 APP/小程序/公众号/新媒体，diff 后只把新增送候选池）。
+const (
+	CruiseKindScan          = "scan"
+	CruiseKindDigitalAssets = "digital_assets"
+)
+
+// DigitalCruiseConfig 数字资产巡航的会话与容量配置。
+// 定时执行没有请求上下文，凭据随任务配置存储（与平台内其它出网配置同级敏感项）。
+type DigitalCruiseConfig struct {
+	Provider    string `json:"provider" bson:"provider"`
+	Username    string `json:"username" bson:"username"`
+	Password    string `json:"password" bson:"password"`
+	Cookie      string `json:"cookie" bson:"cookie"`
+	ProxyURL    string `json:"proxy_url" bson:"proxy_url"`
+	MaxEntities int    `json:"max_entities" bson:"max_entities"` // 单次采集企业数上限
+	MaxAssets   int    `json:"max_assets" bson:"max_assets"`     // 单企业资产上限
+}
+
 // CruiseTask 巡航任务（定时自动扫描）
 type CruiseTask struct {
 	ID          oid.ObjectID `json:"id" bson:"_id,omitempty"`
@@ -29,6 +48,9 @@ type CruiseTask struct {
 	ProjectID int64 `json:"project_id" bson:"project_id"`
 	// TargetSource 为 static 时使用 Targets；为 project 时每次执行按项目整体资产重新派生。
 	TargetSource string       `json:"target_source" bson:"target_source"`
+	// Kind 巡航类型：scan（默认，缺省为存量任务语义）| digital_assets。
+	Kind   string              `json:"kind" bson:"kind"`
+	Digital DigitalCruiseConfig `json:"digital" bson:"digital"`
 	Name         string       `json:"name" bson:"name"`
 	Description  string       `json:"description" bson:"description"`
 	Status       CruiseStatus `json:"status" bson:"status"`
@@ -71,13 +93,15 @@ type CruiseTaskCreateRequest struct {
 	Name             string     `json:"name" binding:"required"`
 	Description      string     `json:"description"`
 	ProjectID        int64      `json:"project_id"`
+	Kind             string     `json:"kind"` // scan（默认）| digital_assets
 	TargetSource     string     `json:"target_source"`                // static | project
 	CronExpr         string     `json:"cron_expr" binding:"required"` // Cron 表达式
 	Timezone         string     `json:"timezone"`                     // 默认 Asia/Shanghai
 	Targets          []string   `json:"targets"`                      // static 模式必填
 	TargetType       string     `json:"target_type"`
-	TaskType         TaskType   `json:"task_type" binding:"required"`
+	TaskType         TaskType   `json:"task_type"` // scan 类型必填
 	Config           TaskConfig `json:"config"`
+	Digital          DigitalCruiseConfig `json:"digital"`
 	NotifyOnComplete bool       `json:"notify_on_complete"`
 	NotifyOnVuln     bool       `json:"notify_on_vuln"`
 	NotifyChannels   []string   `json:"notify_channels"`
@@ -96,6 +120,7 @@ type CruiseTaskUpdateRequest struct {
 	TargetType       *string     `json:"target_type"`
 	TaskType         *TaskType   `json:"task_type"`
 	Config           *TaskConfig `json:"config"`
+	Digital          *DigitalCruiseConfig `json:"digital"`
 	NotifyOnComplete *bool       `json:"notify_on_complete"`
 	NotifyOnVuln     *bool       `json:"notify_on_vuln"`
 	NotifyChannels   []string    `json:"notify_channels"`

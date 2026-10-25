@@ -33,3 +33,21 @@ func IsSessionMissing(err error) bool {
 	var e ErrSessionMissing
 	return errors.As(err, &e)
 }
+
+// DigitalHit 数字资产线索（APP/小程序/公众号/新媒体）。Kind 取值与 digital_assets 名单一致：
+// app / miniapp / official_account / newmedia。
+type DigitalHit struct {
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	Platform   string `json:"platform,omitempty"`
+	Company    string `json:"company,omitempty"`
+	EntityName string `json:"entity_name,omitempty"` // 归属企业名
+	Evidence   string `json:"evidence,omitempty"`
+}
+
+// DigitalAssetsProvider 可选能力接口：数据源支持数字资产采集时实现；
+// 调用方用类型断言探测，不要求所有 Provider 实现。
+type DigitalAssetsProvider interface {
+	// DigitalAssets 企业关联的数字资产，返回下一页是否存在。
+	DigitalAssets(ctx context.Context, extID string, page, size int) ([]DigitalHit, bool, error)
+}

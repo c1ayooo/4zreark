@@ -219,6 +219,24 @@ func (r *digitalRepo) UndoBatch(ctx context.Context, batchID int64) (int64, erro
 		return 0, err
 	}
 	deleted := tag.RowsAffected()
+	// 名单行已随批次删除的候选回退为待确认；名单行仍在的（经其它路径导入）
+	// 保持 imported，只清批次引用。
+	if _, err := tx.Exec(ctx, `
+update digital_candidates
+   set status = 'candidate', batch_id = null, updated_at = now()
+ where batch_id = $1 and status = 'imported'
+   and not exists (select 1 from digital_assets da
+                    where da.project_id = digital_candidates.project_id
+                      and da.kind = digital_candidates.kind
+                      and da.name = digital_candidates.name)`, batchID); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `
+update digital_candidates
+   set batch_id = null, updated_at = now()
+ where batch_id = $1 and status = 'imported'`, batchID); err != nil {
+		return 0, err
+	}
 	upd, err := tx.Exec(ctx,
 		`update import_batches set status = 'undone' where id = $1 and status = 'committed'`, batchID)
 	if err != nil {

@@ -249,3 +249,143 @@ func NamesFromText(text string) []string {
 	}
 	return out
 }
+
+// ---------------------------------------------------------------- 候选池
+
+// UpsertCandidates 采集结果入池：与既有名单对账，已在名单的直接标 imported。
+// rejected 是用户终态，重复入池只刷新证据字段，不复活。
+func (s *DigitalService) UpsertCandidates(ctx context.Context, projectID int64, items []repo.DigitalCandidateInput) (int64, int64, error) {
+	if projectID <= 0 {
+		return 0, 0, errors.New("project_id 必填")
+	}
+	if len(items) == 0 {
+		return 0, 0, errors.New("没有可入池的候选")
+	}
+	if len(items) > maxDigitalItems {
+		return 0, 0, fmt.Errorf("单次入池最多 %d 条，收到 %d", maxDigitalItems, len(items))
+	}
+
+	seen := map[string]bool{}
+	fresh := make([]repo.DigitalCandidateInput, 0, len(items))
+	for _, a := range items {
+		a.Kind = strings.TrimSpace(a.Kind)
+		a.Name = strings.Join(strings.Fields(a.Name), " ")
+		if !digitalKinds[a.Kind] || a.Name == "" {
+			continue
+		}
+		key := a.Kind + "\x00" + strings.ToLower(a.Name)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		a.Company = strings.TrimSpace(a.Company)
+		a.Platform = strings.TrimSpace(a.Platform)
+		a.Source = strings.TrimSpace(a.Source)
+		a.EntityName = strings.TrimSpace(a.EntityName)
+		a.Evidence = strings.TrimSpace(a.Evidence)
+		if a.Source == "" {
+			a.Source = "collect"
+		}
+		fresh = append(fresh, a)
+	}
+	if len(fresh) == 0 {
+		return 0, 0, errors.New("候选全部无效：kind 必须是 app / miniapp / official_account / newmedia 且名称非空")
+	}
+
+	r, err := s.repo()
+	if err != nil {
+		return 0, 0, err
+	}
+	// 与既有名单对账（按 kind 分组精确匹配，唯一键也是精确匹配）。
+	existing := map[string]bool{}
+	byKind := map[string][]string{}
+	for _, a := range fresh {
+		byKind[a.Kind] = append(byKind[a.Kind], a.Name)
+	}
+	for k, names := range byKind {
+		set, err := r.ExistingNames(ctx, projectID, k, names)
+		if err != nil {
+			return 0, 0, err
+		}
+		for name := range set {
+			existing[k+"\x00"+name] = true
+		}
+	}
+	full := repo.Default()
+	if full == nil {
+		return 0, 0, errors.New("数据层未初始化")
+	}
+	return full.DigitalCandidates().UpsertCandidates(ctx, projectID, fresh,
+		func(kind, name string) bool { return existing[kind+"\x00"+name] })
+}
+
+func (s *DigitalService) ListCandidates(ctx context.Context, f repo.DigitalCandidateFilter) ([]*repo.DigitalCandidate, int64, error) {
+	full := repo.Default()
+	if full == nil {
+		return nil, 0, errors.New("数据层未初始化")
+	}
+	return full.DigitalCandidates().ListCandidates(ctx, f)
+}
+
+// ConfirmCandidates 批量确认候选：经既有两段式导入落名单（生成可撤销回执），
+// 确认成功的候选置 imported 记 batch_id。
+func (s *DigitalService) ConfirmCandidates(ctx context.Context, projectID int64, ids []int64, createdBy string) (*repo.ImportBatch, int64, error) {
+	if projectID <= 0 {
+		return nil, 0, errors.New("project_id 必填")
+	}
+	if len(ids) == 0 {
+		return nil, 0, errors.New("ids 必填")
+	}
+	full := repo.Default()
+	if full == nil {
+		return nil, 0, errors.New("数据层未初始化")
+	}
+	rows, err := full.DigitalCandidates().CandidatesByIDs(ctx, projectID, ids)
+	if err != nil {
+		return nil, 0, err
+	}
+	assets := make([]repo.DigitalAssetInput, 0, len(rows))
+	confirmedIDs := make([]int64, 0, len(rows))
+	for _, c := range rows {
+		if c.Status != "candidate" {
+			continue
+		}
+		assets = append(assets, repo.DigitalAssetInput{
+			Kind: c.Kind, Name: c.Name, Company: c.Company,
+			Platform: c.Platform, Source: c.Source,
+		})
+		confirmedIDs = append(confirmedIDs, c.ID)
+	}
+	if len(assets) == 0 {
+		return nil, 0, errors.New("没有可确认的候选（仅待确认状态可确认）")
+	}
+	batch, _, err := full.Digital().InsertBatch(ctx, projectID, "digital", assets,
+		map[string]any{"preview_total": len(assets), "source": "candidates"}, createdBy)
+	if err != nil {
+		return nil, 0, err
+	}
+	confirmed, err := full.DigitalCandidates().ConfirmCandidates(ctx, projectID, confirmedIDs, batch.ID)
+	if err != nil {
+		return nil, 0, err
+	}
+	return batch, confirmed, nil
+}
+
+// RejectCandidates 批量忽略候选；仅待确认状态可忽略。
+func (s *DigitalService) RejectCandidates(ctx context.Context, ids []int64) (int64, error) {
+	if len(ids) == 0 {
+		return 0, errors.New("ids 必填")
+	}
+	full := repo.Default()
+	if full == nil {
+		return 0, errors.New("数据层未初始化")
+	}
+	rejected, err := full.DigitalCandidates().RejectCandidates(ctx, ids)
+	if err != nil {
+		return 0, err
+	}
+	if rejected == 0 {
+		return 0, errors.New("没有可忽略的候选（仅待确认状态可忽略）")
+	}
+	return rejected, nil
+}

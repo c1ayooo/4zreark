@@ -46,12 +46,60 @@ func (r *Repo) FinishJob(ctx context.Context, id, status, errMsg string) error {
 	return err
 }
 
-func (r *Repo) BumpJob(ctx context.Context, id string, nodes, entities, domains int) error {
+func (r *Repo) BumpJob(ctx context.Context, id string, nodes, entities, domains, digital int) error {
 	_, err := r.pool.Exec(ctx, `
 update enterprise_jobs
-   set nodes = nodes + $2, entities = entities + $3, domains = domains + $4
- where id = $1`, id, nodes, entities, domains)
+   set nodes = nodes + $2, entities = entities + $3, domains = domains + $4,
+       digital = digital + $5
+ where id = $1`, id, nodes, entities, domains, digital)
 	return err
+}
+
+// SaveDigitalCandidates 把 BFS 顺带采集的数字资产写入候选池（status=candidate），
+// 与既有名单对账：已存在的直接标 imported。返回写入行数。
+func (r *Repo) SaveDigitalCandidates(ctx context.Context, jobID, source string, hits []enterprise.DigitalHit) (int64, error) {
+	if len(hits) == 0 {
+		return 0, nil
+	}
+	kinds, names, companies, platforms, entities, evidences := make([]string, 0, len(hits)),
+		make([]string, 0, len(hits)), make([]string, 0, len(hits)),
+		make([]string, 0, len(hits)), make([]string, 0, len(hits)),
+		make([]string, 0, len(hits))
+	for _, h := range hits {
+		if h.Name == "" {
+			continue
+		}
+		kinds = append(kinds, h.Kind)
+		names = append(names, h.Name)
+		companies = append(companies, h.Company)
+		platforms = append(platforms, h.Platform)
+		entities = append(entities, h.EntityName)
+		evidences = append(evidences, h.Evidence)
+	}
+	if len(names) == 0 {
+		return 0, nil
+	}
+	tag, err := r.pool.Exec(ctx, `
+insert into digital_candidates
+    (project_id, kind, name, company, platform, source, entity_name, evidence, status)
+select j.project_id, t.k, t.n, t.c, t.p, $2, t.en, t.ev,
+       case when exists (select 1 from digital_assets da
+                          where da.project_id = j.project_id
+                            and da.kind = t.k and da.name = t.n)
+            then 'imported' else 'candidate' end
+  from enterprise_jobs j,
+       unnest($3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[])
+       as t(k, n, c, p, en, ev)
+ where j.id = $1
+on conflict (project_id, kind, name) do update set
+    company = excluded.company, platform = excluded.platform,
+    source = excluded.source, entity_name = excluded.entity_name,
+    evidence = excluded.evidence, updated_at = now()`,
+		jobID, source, kinds, names, companies, platforms, entities, evidences)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // SaveEntity 幂等写入企业实体；已存在时补全详情并合并域名/备案。
@@ -112,7 +160,7 @@ func (r *Repo) ListEnterpriseJobs(ctx context.Context, projectID int64, limit in
 		limit = 50
 	}
 	q := `select id, project_id::text, owner, provider, keyword, status, depth, max_nodes,
-	             nodes, entities, domains, imported, error, created_at, finished_at
+	             nodes, entities, domains, digital, imported, error, created_at, finished_at
 	        from enterprise_jobs`
 	args := []any{}
 	if projectID > 0 {
@@ -140,7 +188,7 @@ func (r *Repo) ListEnterpriseJobs(ctx context.Context, projectID int64, limit in
 func (r *Repo) GetEnterpriseJob(ctx context.Context, id string) (enterprise.Job, error) {
 	row := r.pool.QueryRow(ctx, `
 select id, project_id::text, owner, provider, keyword, status, depth, max_nodes,
-       nodes, entities, domains, imported, error, created_at, finished_at
+       nodes, entities, domains, digital, imported, error, created_at, finished_at
   from enterprise_jobs where id = $1`, id)
 	job, err := scanEnterpriseJob(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -155,7 +203,7 @@ func scanEnterpriseJob(row interface{ Scan(...any) error }) (enterprise.Job, err
 		finishedAt *time.Time
 	)
 	if err := row.Scan(&j.ID, &j.ProjectID, &j.Owner, &j.Provider, &j.Keyword, &j.Status,
-		&j.Depth, &j.MaxNodes, &j.Nodes, &j.Entities, &j.Domains, &j.Imported,
+		&j.Depth, &j.MaxNodes, &j.Nodes, &j.Entities, &j.Domains, &j.Digital, &j.Imported,
 		&j.Error, &j.CreatedAt, &finishedAt); err != nil {
 		return j, err
 	}

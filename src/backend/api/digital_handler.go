@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"io"
@@ -116,6 +117,84 @@ func (h *DigitalHandler) CommitDigitalImport(c *gin.Context) {
 	utils.SuccessWithMessage(c, "名单已导入", gin.H{
 		"batch": batch, "inserted": inserted,
 	})
+}
+
+// ListDigitalCandidates GET /api/digital-candidates?project_id=&kind=&status=&q=&page=&page_size=
+func (h *DigitalHandler) ListDigitalCandidates(c *gin.Context) {
+	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
+	items, total, err := h.digital.ListCandidates(c.Request.Context(), repo.DigitalCandidateFilter{
+		ProjectID: projectID,
+		Kind:      c.Query("kind"),
+		Status:    c.Query("status"),
+		Query:     c.Query("q"),
+		Page:      page,
+		PageSize:  pageSize,
+	})
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.SuccessWithPagination(c, items, total, page, pageSize)
+}
+
+// ConfirmDigitalCandidates POST /api/digital-candidates/confirm
+func (h *DigitalHandler) ConfirmDigitalCandidates(c *gin.Context) {
+	var body struct {
+		ProjectID int64   `json:"project_id"`
+		IDs       []int64 `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.ProjectID <= 0 || len(body.IDs) == 0 {
+		utils.BadRequest(c, "project_id 与 ids 必填")
+		return
+	}
+	batch, confirmed, err := h.digital.ConfirmCandidates(c.Request.Context(),
+		body.ProjectID, body.IDs, c.GetString("username"))
+	if err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "候选已导入名单", gin.H{
+		"batch": batch, "confirmed": confirmed,
+	})
+}
+
+// RejectDigitalCandidates POST /api/digital-candidates/reject
+func (h *DigitalHandler) RejectDigitalCandidates(c *gin.Context) {
+	var body struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || len(body.IDs) == 0 {
+		utils.BadRequest(c, "ids 必填")
+		return
+	}
+	rejected, err := h.digital.RejectCandidates(c.Request.Context(), body.IDs)
+	if err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "已忽略候选", gin.H{"rejected": rejected})
+}
+
+// CollectDigitalCandidates POST /api/digital-candidates/collect
+// 按企业名从数据源采集数字资产入候选池；只产候选，确认后落名单。
+func (h *DigitalHandler) CollectDigitalCandidates(c *gin.Context) {
+	var body service.DigitalCollectInput
+	if err := c.ShouldBindJSON(&body); err != nil {
+		utils.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+	res, err := h.digital.CollectCandidates(c.Request.Context(), body)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			utils.BadRequest(c, "数据源响应超时")
+			return
+		}
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "采集完成", res)
 }
 
 // ListImportBatches GET /api/digital-imports?project_id=&limit=

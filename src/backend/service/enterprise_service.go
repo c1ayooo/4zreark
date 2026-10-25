@@ -105,13 +105,18 @@ type EnterpriseCollectInput struct {
 }
 
 func (in EnterpriseCollectInput) buildProvider() (enterprise.Provider, error) {
+	return newEnterpriseProvider(in.Provider, in.Cookie, in.Username, in.Password, in.ProxyURL)
+}
+
+// newEnterpriseProvider 按会话凭据构造数据源 adapter；数字资产采集与企业采集共用。
+func newEnterpriseProvider(provider, cookie, username, password, proxyURL string) (enterprise.Provider, error) {
 	cfg := map[string]string{
-		"cookie":    strings.TrimSpace(in.Cookie),
-		"username":  strings.TrimSpace(in.Username),
-		"password":  in.Password,
-		"proxy_url": strings.TrimSpace(in.ProxyURL),
+		"cookie":    strings.TrimSpace(cookie),
+		"username":  strings.TrimSpace(username),
+		"password":  password,
+		"proxy_url": strings.TrimSpace(proxyURL),
 	}
-	return enterprise.NewProvider(in.Provider, cfg, "")
+	return enterprise.NewProvider(provider, cfg, "")
 }
 
 type EnterpriseCollectResult struct {
@@ -250,6 +255,9 @@ type EnterpriseDiscoverInput struct {
 	Username  string `json:"username"`
 	Password  string `json:"password"`
 	ProxyURL  string `json:"proxy_url"`
+	// CollectDigital 顺带采集数字资产（APP/小程序/公众号/新媒体）入候选池；
+	// nil 视为开启，仅当数据源支持时生效。
+	CollectDigital *bool `json:"collect_digital"`
 }
 
 // Discover 启动后台 BFS 采集：分支/投资逐层展开，域名进入候选资产。
@@ -274,14 +282,19 @@ func (s *EnterpriseService) Discover(ctx context.Context, in EnterpriseDiscoverI
 	if err != nil {
 		return enterprise.Job{}, err
 	}
-	return collector.Start(ctx, provider, enterprise.Job{
+	job := enterprise.Job{
 		ProjectID: strconv.FormatInt(in.ProjectID, 10),
 		Owner:     in.Owner,
 		Provider:  provider.Name(),
 		Keyword:   name,
 		Depth:     in.Depth,
 		MaxNodes:  in.MaxNodes,
-	}, enterprise.CompanyRef{ExtID: extID, Name: name})
+	}
+	root := enterprise.CompanyRef{ExtID: extID, Name: name}
+	if dp, ok := provider.(enterprise.DigitalAssetsProvider); ok && (in.CollectDigital == nil || *in.CollectDigital) {
+		return collector.StartWithDigitalSink(ctx, provider, job, root, dp)
+	}
+	return collector.Start(ctx, provider, job, root)
 }
 
 func (s *EnterpriseService) Jobs(ctx context.Context, projectID int64, limit int) ([]enterprise.Job, error) {
