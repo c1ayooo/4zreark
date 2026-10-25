@@ -3,7 +3,10 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -115,6 +118,8 @@ func (s *FingerprintService) Match(ctx context.Context, snap ResponseSnapshot) (
 
 // ApplyToSite 匹配并把结果写回：命中表、站点技术栈、标题。
 // 命中集合以本次为准，没再命中的旧命中会被清掉。
+// 集合有增减时写一条 fingerprint_change 事件（变更时间线此前「只增不减」：
+// 指纹消失完全不可见）。事件写入是尽力而为，失败不影响匹配主流程。
 func (s *FingerprintService) ApplyToSite(ctx context.Context, siteID int64, snap ResponseSnapshot, recordID *int64) ([]string, []string, error) {
 	ids, tech, err := s.Match(ctx, snap)
 	if err != nil {
@@ -123,6 +128,12 @@ func (s *FingerprintService) ApplyToSite(ctx context.Context, siteID int64, snap
 	fp, err := s.fpRepo()
 	if err != nil {
 		return nil, nil, err
+	}
+	var beforeNames []string
+	if hits, herr := fp.ListHits(ctx, siteID); herr == nil {
+		beforeNames = hitRuleNames(hits)
+	} else {
+		log.Printf("[Fingerprint] 读取站点 %d 旧命中失败，跳过变更事件: %v", siteID, herr)
 	}
 	if err := fp.SaveHits(ctx, siteID, ids, recordID, map[string]any{
 		"title":       snap.Title,
@@ -137,7 +148,108 @@ func (s *FingerprintService) ApplyToSite(ctx context.Context, siteID int64, snap
 	if err := fp.UpdateSiteProfile(ctx, siteID, snap.Title, snap.Server, tech); err != nil {
 		return nil, nil, err
 	}
+	s.recordFingerprintChange(ctx, siteID, beforeNames, ids, tech, recordID)
 	return ids, tech, nil
+}
+
+// recordFingerprintChange 指纹集合有增减时写 fingerprint_change 事件。
+// before/after 存技术栈名（规则名）；规则被删/禁用时旧名回退为规则 ID。
+// 旧集合为空时不发：空 → 有命中是站点的初始识别，first_seen 已经覆盖，
+// 事件只跟踪「识别之后的变化」（含全部消失）。
+func (s *FingerprintService) recordFingerprintChange(ctx context.Context, siteID int64,
+	beforeNames []string, newIDs, newTech []string, recordID *int64) {
+
+	if len(beforeNames) == 0 {
+		return
+	}
+	added, removed := diffStringSets(beforeNames, newTech)
+	if len(added) == 0 && len(removed) == 0 {
+		return
+	}
+	assets := repo.NewAssetRepo()
+	site, err := assets.SiteSnapshot(ctx, siteID)
+	if err != nil {
+		log.Printf("[Fingerprint] 读取站点 %d 归属失败，跳过变更事件: %v", siteID, err)
+		return
+	}
+	title := fingerprintChangeTitle(added, removed)
+	if err := assets.InsertEvent(ctx, site.ProjectID, siteID, recordID, "fingerprint_change", title,
+		map[string]any{"technologies": beforeNames},
+		map[string]any{"technologies": newTech}); err != nil {
+		log.Printf("[Fingerprint] 写指纹变更事件失败: %v", err)
+	}
+}
+
+func hitRuleNames(hits []*repo.FpHit) []string {
+	out := make([]string, 0, len(hits))
+	for _, h := range hits {
+		if h == nil {
+			continue
+		}
+		name := h.RuleName
+		if name == "" {
+			name = h.RuleID
+		}
+		out = append(out, name)
+	}
+	sortStrings(out)
+	return out
+}
+
+// diffStringSets 集合语义的增减 diff（入参应已去重；大小写敏感）。
+func diffStringSets(old, new []string) (added, removed []string) {
+	oldSet := make(map[string]struct{}, len(old))
+	for _, v := range old {
+		oldSet[v] = struct{}{}
+	}
+	newSet := make(map[string]struct{}, len(new))
+	for _, v := range new {
+		newSet[v] = struct{}{}
+	}
+	for _, v := range new {
+		if _, ok := oldSet[v]; !ok {
+			added = append(added, v)
+		}
+	}
+	for _, v := range old {
+		if _, ok := newSet[v]; !ok {
+			removed = append(removed, v)
+		}
+	}
+	sortStrings(added)
+	sortStrings(removed)
+	return added, removed
+}
+
+// fingerprintChangeTitle 事件标题：增量最多列 3 个，余下用计数。
+func fingerprintChangeTitle(added, removed []string) string {
+	part := func(list []string, sign string) string {
+		if len(list) == 0 {
+			return ""
+		}
+		shown := list
+		if len(shown) > 3 {
+			shown = shown[:3]
+		}
+		s := sign + strings.Join(shown, "、"+sign)
+		if len(list) > 3 {
+			s += fmt.Sprintf(" 等 %d 项", len(list))
+		}
+		return s
+	}
+	title := "指纹变化"
+	if a, r := part(added, "+"), part(removed, "-"); a != "" || r != "" {
+		title += "：" + a
+		if a != "" && r != "" {
+			title += " "
+		}
+		title += r
+	}
+	return title
+}
+
+func sortStrings(in []string) {
+	sort.Strings(in)
 }
 
 // --- 条件树求值 ---
