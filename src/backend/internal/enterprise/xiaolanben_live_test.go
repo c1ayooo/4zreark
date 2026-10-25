@@ -3,6 +3,7 @@ package enterprise
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -57,6 +58,17 @@ func TestXiaolanbenDigitalLive(t *testing.T) {
 			break
 		}
 		t.Logf("  [%s] %s | 平台=%s | 归属=%s | 证据=%s", h.Kind, h.Name, h.Platform, h.EntityName, h.Evidence)
+	}
+
+	// 集团成员枚举（GroupCompaniesProvider 实现）——重构后列表提取函数的 live 验证。
+	if gcs, _, gerr := p.GroupCompanies(ctx, eid, 1, 20); gerr != nil {
+		t.Logf("集团成员拉取失败: %v", gerr)
+	} else {
+		names := make([]string, 0, len(gcs))
+		for _, g := range gcs {
+			names = append(names, g.Name)
+		}
+		t.Logf("集团成员 %d 家: %s", len(gcs), strings.Join(names, "、"))
 	}
 
 	// companyDetail 字段形状图（只输出键名/类型/长度，不输出值），
