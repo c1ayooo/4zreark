@@ -39,7 +39,8 @@ func (h *QrSessionHandler) Begin(c *gin.Context) {
 }
 
 // Poll GET /api/datasource-sessions/:provider/qr/poll?session_id=
-// confirmed 时 Cookie 自动落库并置 active。
+// confirmed 时 Cookie 自动落库并置 active；waiting 时返回最新二维码
+// （上游二维码会自动刷新，前端据此更新展示，避免扫到过期码）。
 func (h *QrSessionHandler) Poll(c *gin.Context) {
 	provider := c.Param("provider")
 	sessionID := c.Query("session_id")
@@ -47,12 +48,15 @@ func (h *QrSessionHandler) Poll(c *gin.Context) {
 		utils.BadRequest(c, "session_id 必填")
 		return
 	}
-	status, cookie, err := enterprise.QRLogin.Poll(provider, sessionID)
+	status, cookie, qrImage, err := enterprise.QRLogin.Poll(provider, sessionID)
 	if err != nil {
 		utils.BadRequest(c, err.Error())
 		return
 	}
 	res := gin.H{"status": status}
+	if qrImage != "" {
+		res["qr_image"] = qrImage
+	}
 	if status == "confirmed" {
 		cookieStr := cookie
 		if err := service.SaveDatasourceSession(c.Request.Context(), provider,

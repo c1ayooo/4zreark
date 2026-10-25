@@ -47,7 +47,7 @@ export const datasourceSessionApi = {
     api.post<unknown, ApiResponse<QrBeginResult>>(`/datasource-sessions/${provider}/qr/begin`, {}),
 
   qrPoll: (provider: string, sessionId: string) =>
-    api.get<unknown, ApiResponse<{ status: QrPollStatus; message?: string }>>(
+    api.get<unknown, ApiResponse<{ status: QrPollStatus; message?: string; qr_image?: string }>>(
       `/datasource-sessions/${provider}/qr/poll`,
       { params: { session_id: sessionId } }
     ),

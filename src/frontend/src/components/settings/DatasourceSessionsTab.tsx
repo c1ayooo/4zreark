@@ -25,6 +25,7 @@ export default function DatasourceSessionsTab() {
   const list = useQuery({ queryKey: ['datasource-sessions'], queryFn: () => datasourceSessionApi.list() })
 
   const [qrProvider, setQrProvider] = useState<DatasourceSessionView | null>(null)
+  const [qrImage, setQrImage] = useState('')
   const [editProvider, setEditProvider] = useState<DatasourceSessionView | null>(null)
   const [editCookie, setEditCookie] = useState('')
   const [editUsername, setEditUsername] = useState('')
@@ -44,6 +45,7 @@ export default function DatasourceSessionsTab() {
 
   const openQr = (p: DatasourceSessionView) => {
     setQrProvider(p)
+    setQrImage('')
     qrBegin.mutate(p)
   }
 
@@ -52,14 +54,33 @@ export default function DatasourceSessionsTab() {
     onSuccess: (res, p) => {
       const sessionId = res.data?.session_id
       if (!sessionId) return
+      setQrImage(res.data?.qr_image ?? '')
+      const expiresAt = res.data?.expires_at ? new Date(res.data.expires_at).getTime() : 0
       stopPoll()
+      let errStreak = 0
       pollTimer.current = setInterval(async () => {
+        // 前端到期即停：上游二维码存活期短于会话 TTL 时不再空转
+        if (expiresAt && Date.now() > expiresAt) {
+          stopPoll()
+          toast({
+            title: '二维码已过期',
+            description: '请关闭弹窗后重新点「扫码登录」',
+            variant: 'destructive',
+          })
+          return
+        }
         try {
           const poll = await datasourceSessionApi.qrPoll(p.name, sessionId)
+          errStreak = 0
           const status = poll.data?.status
+          // 上游二维码自动刷新，每次轮询带回最新截图，避免扫到过期码
+          if (poll.data?.qr_image) setQrImage(poll.data.qr_image)
           if (status === 'confirmed') {
             stopPoll()
-            toast({ title: '登录成功', description: `${p.label} 会话已保存` })
+            toast({
+              title: '登录成功',
+              description: poll.data?.message || `${p.label} 会话已保存`,
+            })
             setQrProvider(null)
             invalidate()
           } else if (status === 'expired') {
@@ -70,8 +91,16 @@ export default function DatasourceSessionsTab() {
               variant: 'destructive',
             })
           }
-        } catch {
-          // 网络抖动继续轮询
+        } catch (e: any) {
+          errStreak++
+          if (errStreak >= 3) {
+            stopPoll()
+            toast({
+              title: '轮询失败',
+              description: e?.message || '请关闭弹窗重试',
+              variant: 'destructive',
+            })
+          }
         }
       }, 2000)
     },
@@ -243,15 +272,15 @@ export default function DatasourceSessionsTab() {
           {qrBegin.isError && (
             <div className="py-2 text-sm text-destructive">{(qrBegin.error as any)?.message}</div>
           )}
-          {qrBegin.data?.data?.qr_image && (
+          {qrImage && (
             <>
               <img
-                src={qrBegin.data.data.qr_image}
+                src={qrImage}
                 alt="登录二维码"
                 className="h-56 w-56 rounded border bg-white object-contain p-2"
               />
               <p className="text-center text-xs text-muted-foreground">
-                使用{qrBegin.data.data.scan_hint || '对应手机 APP'}扫一扫，
+                使用{qrBegin.data?.data?.scan_hint || '对应手机 APP'}扫一扫，
                 在手机上确认登录；登录成功后会话自动保存。
               </p>
             </>

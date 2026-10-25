@@ -3,6 +3,7 @@ package enterprise
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 // TestQRLoginLive 实测各源扫码登录的 Begin/Poll（需本机 chrome，QR_LIVE=1 门控）。
@@ -22,10 +23,37 @@ func TestQRLoginLive(t *testing.T) {
 			continue
 		}
 		t.Logf("[%s] OK: session=%s qr=%d bytes login=%s", provider, res.SessionID, len(res.QRImage), QRLoginConfigs[provider].LoginURL)
-		status, cookie, err := QRLogin.Poll(provider, res.SessionID)
+		status, cookie, _, err := QRLogin.Poll(provider, res.SessionID)
 		t.Logf("[%s] poll → status=%s cookie_len=%d err=%v", provider, status, len(cookie), err)
 		QRLogin.Cancel(provider, res.SessionID)
 	}
+}
+
+// TestQRLoginPollFresh 验证 waiting 轮询返回最新二维码（QR_FRESH=1 门控）。
+func TestQRLoginPollFresh(t *testing.T) {
+	if os.Getenv("QR_FRESH") == "" {
+		t.Skip("未设置 QR_FRESH=1")
+	}
+	provider := os.Getenv("QR_FRESH_PROVIDER")
+	if provider == "" {
+		provider = "aqc"
+	}
+	res, err := QRLogin.Begin(provider, "")
+	if err != nil {
+		t.Fatalf("Begin 失败: %v", err)
+	}
+	defer QRLogin.Cancel(provider, res.SessionID)
+	imgs := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		time.Sleep(3 * time.Second)
+		status, cookie, img, err := QRLogin.Poll(provider, res.SessionID)
+		if err != nil {
+			t.Fatalf("poll err: %v", err)
+		}
+		imgs[img] = true
+		t.Logf("poll#%d status=%s cookie=%d img_len=%d", i+1, status, len(cookie), len(img))
+	}
+	t.Logf("不同图片数: %d（>1 说明二维码在轮询中自动刷新）", len(imgs))
 }
 
 // TestQRLoginProbeDOM 探测登录页 DOM 里的二维码候选元素（选择器校准用；QR_PROBE=1 门控）。

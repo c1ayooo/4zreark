@@ -170,22 +170,22 @@ func (m *QRSessionManager) Begin(provider, proxyURL string) (*QRBeginResult, err
 
 // QRStatus 扫码会话状态。
 // waiting：继续轮询；confirmed：登录成功（Cookie 已返回）；expired：会话/二维码过期；error：失败。
-func (m *QRSessionManager) Poll(provider, sessionID string) (status, cookie string, err error) {
+func (m *QRSessionManager) Poll(provider, sessionID string) (status, cookie, qrImage string, err error) {
 	m.mu.Lock()
 	s, ok := m.items[sessionID]
 	if !ok {
 		m.mu.Unlock()
-		return "expired", "", nil
+		return "expired", "", "", nil
 	}
 	if s.Provider != provider {
 		m.mu.Unlock()
-		return "error", "", fmt.Errorf("会话与数据源不匹配")
+		return "error", "", "", fmt.Errorf("会话与数据源不匹配")
 	}
 	if time.Since(s.Started) > qrSessionTTL {
 		s.closeLocked()
 		delete(m.items, sessionID)
 		m.mu.Unlock()
-		return "expired", "", nil
+		return "expired", "", "", nil
 	}
 	cfg := QRLoginConfigs[provider]
 	info, ierr := s.Page.Info()
@@ -196,24 +196,81 @@ func (m *QRSessionManager) Poll(provider, sessionID string) (status, cookie stri
 
 	if ierr != nil || cerr != nil {
 		m.expire(sessionID)
-		return "expired", "", nil
+		return "expired", "", "", nil
 	}
 
 	cookieMap := map[string]string{}
 	for _, c := range cookies {
 		cookieMap[c.Name] = c.Value
 	}
-	// 判据一：成功 Cookie 出现；判据二（兜底）：页面从登录页跳走。
+	// 判据一：成功 Cookie 出现；判据二：页面跳到登录域之外的宿主（如 passport → aiqicha）；
+	// 判据三（兜底）：页面从登录页 URL 标记跳走。
 	urlLeft := cfg.LoginMarker != "" && info != nil && !strings.Contains(info.URL, cfg.LoginMarker)
-	if (cfg.SuccessCookie != "" && cookieMap[cfg.SuccessCookie] != "") || urlLeft {
+	hostChanged := false
+	if info != nil && loginURLHost(cfg.LoginURL) != "" {
+		hostChanged = hostOf(info.URL) != "" && hostOf(info.URL) != loginURLHost(cfg.LoginURL)
+	}
+	if (cfg.SuccessCookie != "" && cookieMap[cfg.SuccessCookie] != "") || urlLeft || hostChanged {
 		var parts []string
 		for _, c := range cookies {
 			parts = append(parts, c.Name+"="+c.Value)
 		}
 		m.expire(sessionID)
-		return "confirmed", strings.Join(parts, "; "), nil
+		return "confirmed", strings.Join(parts, "; "), "", nil
 	}
-	return "waiting", "", nil
+	// 仍在等待：重截当前二维码（上游二维码会自动刷新，静态截图会过期——
+	// 爱企查实测扫码无反应就是这个原因）。截图失败返回空，前端沿用旧图。
+	if fresh := m.freshQR(provider, s.Page, cfg.QRAliases); fresh != "" {
+		qrImage = fresh
+	}
+	return "waiting", "", qrImage, nil
+}
+
+// freshQR 短超时重截二维码；元素已消失（页面跳转中/已过期覆盖）时返回空串。
+func (m *QRSessionManager) freshQR(provider string, page *rod.Page, aliases []string) string {
+	bounded := page.Timeout(8 * time.Second)
+	els, err := bounded.Elements(strings.Join(aliases, ", "))
+	if err != nil {
+		return ""
+	}
+	for _, el := range els {
+		shape, serr := el.Shape()
+		if serr != nil || shape == nil || len(shape.Quads) == 0 {
+			continue
+		}
+		q := shape.Quads[0]
+		w := q[2] - q[0]
+		h := q[7] - q[1]
+		if w >= 80 && w <= 420 && h >= 80 && h <= 420 {
+			png, serr := el.Screenshot(proto.PageCaptureScreenshotFormatPng, 0)
+			if serr == nil && len(png) > 0 {
+				return "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+// loginURLHost 取登录页 URL 的 host 部分。
+func loginURLHost(raw string) string {
+	u := strings.TrimPrefix(strings.TrimPrefix(raw, "https://"), "http://")
+	if i := strings.IndexByte(u, '/'); i >= 0 {
+		u = u[:i]
+	}
+	return u
+}
+
+// hostOf 取 URL 的 host 部分（容错版）。
+func hostOf(raw string) string {
+	u := raw
+	if i := strings.Index(u, "://"); i >= 0 {
+		u = u[i+3:]
+	}
+	if i := strings.IndexAny(u, "/?#"); i >= 0 {
+		u = u[:i]
+	}
+	return u
 }
 
 // Cancel 关闭并移除扫码会话。
