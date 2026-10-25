@@ -40,6 +40,7 @@ type NotifyRepo interface {
 	UnreadCount(ctx context.Context, userID string) (int64, error)
 	MarkRead(ctx context.Context, userID string, id int64) error
 	MarkAllRead(ctx context.Context, userID string) (int64, error)
+	PurgeNotifications(ctx context.Context, days, batch int) (int64, error)
 }
 
 type notifyRepo struct{ r *Repo }
@@ -213,6 +214,29 @@ select n.id, $1 from notifications n
        select 1 from notification_reads r
         where r.notification_id = n.id and r.user_id = $1)
 on conflict (notification_id, user_id) do nothing`, userID)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// PurgeNotifications 删除 days 天前的站内通知，单批最多 batch 条。
+// notification_reads 对 notifications 是 ON DELETE CASCADE，已读状态随之清理。
+func (n *notifyRepo) PurgeNotifications(ctx context.Context, days, batch int) (int64, error) {
+	if days <= 0 {
+		return 0, nil
+	}
+	if batch <= 0 || batch > 50000 {
+		batch = 10000
+	}
+	tag, err := n.r.pool.Exec(ctx, `
+DELETE FROM notifications
+ WHERE id IN (
+   SELECT id FROM notifications
+    WHERE created_at < now() - make_interval(days => $1)
+    ORDER BY created_at
+    LIMIT $2
+ )`, days, batch)
 	if err != nil {
 		return 0, err
 	}

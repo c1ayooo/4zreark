@@ -27,6 +27,8 @@ func (r *Repo) RetentionCount(ctx context.Context, table string, days int) (int6
 		q = `SELECT count(*) FROM verifications WHERE observed_at < now() - make_interval(days => $1)`
 	case "asset_events":
 		q = `SELECT count(*) FROM asset_events WHERE created_at < now() - make_interval(days => $1)`
+	case "notifications":
+		q = `SELECT count(*) FROM notifications WHERE created_at < now() - make_interval(days => $1)`
 	default:
 		return 0, fmt.Errorf("不支持的表: %s", table)
 	}

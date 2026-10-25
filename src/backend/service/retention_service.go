@@ -24,6 +24,7 @@ type RetentionPolicy struct {
 	VerificationsDays int `json:"verifications_days"`
 	EventsKeep        int `json:"events_keep"`
 	EventsDays        int `json:"events_days"`
+	NotificationsDays int `json:"notifications_days"`
 	BatchLimit        int `json:"batch_limit"`
 }
 
@@ -44,6 +45,7 @@ func DefaultRetentionPolicy() RetentionPolicy {
 		VerificationsDays: envInt("ZRE_RETENTION_VERIFICATIONS_DAYS", 90),
 		EventsKeep:        envInt("ZRE_RETENTION_EVENTS_KEEP", 10000),
 		EventsDays:        envInt("ZRE_RETENTION_EVENTS_DAYS", 7),
+		NotificationsDays: envInt("ZRE_RETENTION_NOTIFICATIONS_DAYS", 30),
 		BatchLimit:        envInt("ZRE_RETENTION_BATCH", 10000),
 	}
 	return p.normalized()
@@ -65,6 +67,9 @@ func (p RetentionPolicy) normalized() RetentionPolicy {
 	if p.EventsDays <= 0 {
 		p.EventsDays = 7
 	}
+	if p.NotificationsDays < 0 {
+		p.NotificationsDays = 0
+	}
 	if p.BatchLimit <= 0 || p.BatchLimit > 50000 {
 		p.BatchLimit = 10000
 	}
@@ -79,6 +84,7 @@ type RetentionReport struct {
 	RawRecords    int64           `json:"raw_records"`
 	Verifications int64           `json:"verifications"`
 	Events        int64           `json:"events"`
+	Notifications int64           `json:"notifications"`
 	DurationMS    int64           `json:"duration_ms"`
 	Errors        []string        `json:"errors,omitempty"`
 }
@@ -150,6 +156,13 @@ func (s *RetentionService) RunOnce(ctx context.Context, dryRun bool, actor, ip s
 			return r.PurgeVerifications(ctx, s.policy.VerificationsDays, s.policy.BatchLimit)
 		},
 	)
+	// 站内通知此前只增不删（表无清理机制），纳入每日保留策略；0 天关闭。
+	runTable("notifications", s.policy.NotificationsDays,
+		func() (int64, error) { return r.RetentionCount(ctx, "notifications", s.policy.NotificationsDays) },
+		func() (int64, error) {
+			return r.Notify().PurgeNotifications(ctx, s.policy.NotificationsDays, s.policy.BatchLimit)
+		},
+	)
 
 	// raw_records 需要先取受害者 ID，再在事务里摘引用；dry-run 只计数。
 	if s.policy.RawRecordsDays > 0 {
@@ -215,13 +228,13 @@ func (s *RetentionService) RunOnce(ctx context.Context, dryRun bool, actor, ip s
 			Action:    "retention_run",
 			Module:    "data_retention",
 			Target:    target,
-			Detail:    fmt.Sprintf("清理 scan_results=%d raw_records=%d verifications=%d events=%d", rep.ScanResults, rep.RawRecords, rep.Verifications, rep.Events),
+			Detail:    fmt.Sprintf("清理 scan_results=%d raw_records=%d verifications=%d events=%d notifications=%d", rep.ScanResults, rep.RawRecords, rep.Verifications, rep.Events, rep.Notifications),
 			IP:        ip,
 			UserAgent: "governance/retention",
 		})
 	}
-	log.Printf("[Retention] dry_run=%v scan_results=%d raw_records=%d verifications=%d events=%d errors=%d",
-		dryRun, rep.ScanResults, rep.RawRecords, rep.Verifications, rep.Events, len(rep.Errors))
+	log.Printf("[Retention] dry_run=%v scan_results=%d raw_records=%d verifications=%d events=%d notifications=%d errors=%d",
+		dryRun, rep.ScanResults, rep.RawRecords, rep.Verifications, rep.Events, rep.Notifications, len(rep.Errors))
 	return rep, nil
 }
 
@@ -231,6 +244,8 @@ func (r *RetentionReport) set(table string, n int64) {
 		r.ScanResults = n
 	case "verifications":
 		r.Verifications = n
+	case "notifications":
+		r.Notifications = n
 	}
 }
 
