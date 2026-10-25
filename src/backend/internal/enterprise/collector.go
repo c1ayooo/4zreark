@@ -34,7 +34,6 @@ type Collector struct {
 	// maxDigitalPerEntity 单实体数字资产拉取上限（sink 启用时生效）。
 	maxDigitalPerEntity int
 }
-
 type runningJob struct {
 	cancel context.CancelFunc
 }
@@ -235,7 +234,7 @@ func (c *Collector) walk(ctx context.Context, provider Provider, job Job, root C
 
 		// 展开下一层：分支机构 + 对外投资
 		if cur.depth < job.Depth {
-			children, err := c.collectChildren(ctx, provider, cur.ref.ExtID)
+			children, err := c.collectChildren(ctx, provider, cur.ref.ExtID, job.ExpandGroup)
 			if err != nil {
 				return targets, err
 			}
@@ -259,21 +258,31 @@ type childRef struct {
 	entType string
 }
 
-// collectChildren 抓取分支+投资列表，翻页受 maxPageWalk 硬限制。
-func (c *Collector) collectChildren(ctx context.Context, provider Provider, extID string) ([]childRef, error) {
-	var out []childRef
-	for _, spec := range []struct {
-		typ  string
-		list func(ctx context.Context, extID string, page, size int) ([]CompanyRef, bool, error)
+// collectChildren 抓取分支+投资（以及可选的集团成员）列表，翻页受 maxPageWalk 硬限制。
+func (c *Collector) collectChildren(ctx context.Context, provider Provider, extID string, expandGroup bool) ([]childRef, error) {
+	specs := []struct {
+		typ string
+		fn  func(ctx context.Context, extID string, page, size int) ([]CompanyRef, bool, error)
 	}{
 		{"branch", provider.Branches},
 		{"invest", provider.Investments},
-	} {
+	}
+	// 集团成员（兄弟公司）是可选项：数据源实现 GroupCompaniesProvider 且请求开启才展开。
+	if expandGroup {
+		if gc, ok := provider.(GroupCompaniesProvider); ok {
+			specs = append(specs, struct {
+				typ string
+				fn  func(ctx context.Context, extID string, page, size int) ([]CompanyRef, bool, error)
+			}{"group", gc.GroupCompanies})
+		}
+	}
+	var out []childRef
+	for _, spec := range specs {
 		for page := 1; page <= c.maxPageWalk; page++ {
 			if err := c.pace(ctx); err != nil {
 				return nil, err
 			}
-			refs, more, err := spec.list(ctx, extID, page, c.pageSize)
+			refs, more, err := spec.fn(ctx, extID, page, c.pageSize)
 			if err != nil {
 				// 列表失败不致命：记录后继续其余类型
 				c.log.Printf("[enterprise] %s 列表失败(%s): %v", spec.typ, extID, err)

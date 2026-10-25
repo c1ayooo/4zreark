@@ -260,6 +260,8 @@ type EnterpriseDiscoverInput struct {
 	// CollectDigital 顺带采集数字资产（APP/小程序/公众号/新媒体）入候选池；
 	// nil 视为开启，仅当数据源支持时生效。
 	CollectDigital *bool `json:"collect_digital"`
+	// CollectGroup 展开集团成员（同集团兄弟公司）；nil 视为开启，仅当数据源支持时生效。
+	CollectGroup *bool `json:"collect_group"`
 }
 
 // Discover 启动后台 BFS 采集：分支/投资逐层展开，域名进入候选资产。
@@ -285,12 +287,13 @@ func (s *EnterpriseService) Discover(ctx context.Context, in EnterpriseDiscoverI
 		return enterprise.Job{}, err
 	}
 	job := enterprise.Job{
-		ProjectID: strconv.FormatInt(in.ProjectID, 10),
-		Owner:     in.Owner,
-		Provider:  provider.Name(),
-		Keyword:   name,
-		Depth:     in.Depth,
-		MaxNodes:  in.MaxNodes,
+		ProjectID:   strconv.FormatInt(in.ProjectID, 10),
+		Owner:       in.Owner,
+		Provider:    provider.Name(),
+		Keyword:     name,
+		Depth:       in.Depth,
+		MaxNodes:    in.MaxNodes,
+		ExpandGroup: in.CollectGroup == nil || *in.CollectGroup,
 	}
 	root := enterprise.CompanyRef{ExtID: extID, Name: name}
 	if dp, ok := provider.(enterprise.DigitalAssetsProvider); ok && (in.CollectDigital == nil || *in.CollectDigital) {

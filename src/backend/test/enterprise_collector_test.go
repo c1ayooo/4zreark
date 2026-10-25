@@ -203,3 +203,96 @@ func TestEnterpriseCollectorDigitalSink(t *testing.T) {
 		}
 	}
 }
+
+// groupExpandProvider 在数字资产 sink 之上叠加集团成员枚举。
+type groupExpandProvider struct{ digitalSinkProvider }
+
+func (f *groupExpandProvider) GroupCompanies(_ context.Context, extID string, page, _ int) ([]enterprise.CompanyRef, bool, error) {
+	if extID == "root" && page == 1 {
+		return []enterprise.CompanyRef{{ExtID: "g1", Name: "集团成员一"}}, false, nil
+	}
+	return nil, false, nil
+}
+
+// BFS 集团展开：ExpandGroup=true 时 group 实体入树；false（或不支持）不展开。
+func TestEnterpriseCollectorGroupExpand(t *testing.T) {
+	r := openTestRepo(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	code := fmt.Sprintf("ent-grp-%d", time.Now().UnixNano())
+	var projectID int64
+	if err := r.Pool().QueryRow(ctx,
+		`INSERT INTO projects (code, name) VALUES ($1,$2) RETURNING id`, code, code).Scan(&projectID); err != nil {
+		t.Fatalf("建测试项目失败: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = r.Pool().Exec(context.Background(), `DELETE FROM projects WHERE id=$1`, projectID)
+	})
+
+	runJob := func(expandGroup bool) {
+		c := enterprise.NewCollector(r, log.New(io.Discard, "", 0))
+		c.SetRateLimit(0)
+		job, err := c.StartWithDigitalSink(ctx, &groupExpandProvider{}, enterprise.Job{
+			ProjectID: fmt.Sprint(projectID), Owner: "tester", Provider: "fake",
+			Keyword: "根企业", Depth: 2, MaxNodes: 20, ExpandGroup: expandGroup,
+		}, enterprise.CompanyRef{ExtID: "root", Name: "根企业"}, &groupExpandProvider{})
+		if err != nil {
+			t.Fatalf("启动采集失败: %v", err)
+		}
+		deadline := time.Now().Add(20 * time.Second)
+		for {
+			got, gerr := r.GetEnterpriseJob(ctx, job.ID)
+			if gerr != nil {
+				t.Fatalf("读取任务失败: %v", gerr)
+			}
+			if got.Status != "running" {
+				if got.Status != "done" {
+					t.Fatalf("任务异常结束: %+v", got)
+				}
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("任务未在期限内结束")
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	// 先跑一次不展开，建立基线（root/b1/i1/deep）
+	runJob(false)
+	var groupCount int
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := r.Pool().QueryRow(ctx,
+			`SELECT count(*) FROM enterprise_entities WHERE project_id=$1 AND entity_type='group'`,
+			projectID).Scan(&groupCount); err != nil {
+			t.Fatalf("查询 group 实体失败: %v", err)
+		}
+		if groupCount == 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if groupCount != 0 {
+		t.Fatalf("未开启展开时不应有 group 实体: %d", groupCount)
+	}
+
+	// 再跑展开：g1 应以 entity_type=group 入树
+	runJob(true)
+	deadline = time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := r.Pool().QueryRow(ctx,
+			`SELECT count(*) FROM enterprise_entities WHERE project_id=$1 AND entity_type='group'`,
+			projectID).Scan(&groupCount); err != nil {
+			t.Fatalf("查询 group 实体失败: %v", err)
+		}
+		if groupCount > 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if groupCount != 1 {
+		t.Fatalf("展开后应有 1 个 group 实体: %d", groupCount)
+	}
+}

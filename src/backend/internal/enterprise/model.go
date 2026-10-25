@@ -85,7 +85,10 @@ type Job struct {
 	Keyword              string     `json:"keyword"`
 	Status               string     `json:"status"` // running / done / error / canceled
 	Depth                int        `json:"depth"`
-	MaxNodes             int        `json:"max_nodes"`
+	// ExpandGroup 展开集团成员（同集团兄弟公司，可选接口 GroupCompaniesProvider）；
+	// 仅内存传递，不落 enterprise_jobs 列。
+	ExpandGroup bool  `json:"expand_group"`
+	MaxNodes    int   `json:"max_nodes"`
 	Nodes                int        `json:"nodes"`
 	Entities             int        `json:"entities"`
 	Domains              int        `json:"domains"`

@@ -24,6 +24,7 @@ export default function DeepCollectModal({ open, projectId, providers, onClose }
     depth: 2,
     max_nodes: 20,
     collect_digital: true,
+    collect_group: true,
   })
   const [refs, setRefs] = useState<CompanyRef[]>([])
   const [selectedRef, setSelectedRef] = useState<CompanyRef | null>(null)
@@ -63,6 +64,7 @@ export default function DeepCollectModal({ open, projectId, providers, onClose }
         username: deepForm.username || undefined,
         password: deepForm.password || undefined,
         collect_digital: deepForm.collect_digital || undefined,
+        collect_group: deepForm.collect_group || undefined,
       })
     },
     onSuccess: (res) => {
@@ -209,6 +211,12 @@ export default function DeepCollectModal({ open, projectId, providers, onClose }
           onChange={(e) => setDeepForm({ ...deepForm, collect_digital: e.target.checked })}
         >
           顺带采集数字资产（APP / 小程序 / 公众号 / 新媒体，进数字资产候选池；仅小蓝本支持）
+        </Checkbox>
+        <Checkbox
+          checked={deepForm.collect_group}
+          onChange={(e) => setDeepForm({ ...deepForm, collect_group: e.target.checked })}
+        >
+          展开集团成员（同集团兄弟公司，计入节点上限；仅小蓝本支持）
         </Checkbox>
       </div>
     </Modal>

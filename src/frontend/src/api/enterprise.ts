@@ -193,6 +193,7 @@ export const enterpriseApi = {
     password?: string
     proxy_url?: string
     collect_digital?: boolean
+    collect_group?: boolean
   }) =>
     api.post<unknown, ApiResponse<EnterpriseJob>>('/enterprise-entities/discover', body),
 

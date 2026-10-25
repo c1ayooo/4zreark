@@ -51,3 +51,10 @@ type DigitalAssetsProvider interface {
 	// DigitalAssets 企业关联的数字资产，返回下一页是否存在。
 	DigitalAssets(ctx context.Context, extID string, page, size int) ([]DigitalHit, bool, error)
 }
+
+// GroupCompaniesProvider 可选能力接口：数据源支持枚举同一集团下的成员公司
+// （兄弟公司口径，区别于对外投资的控股子公司）。BFS 开启「展开集团成员」时调用。
+type GroupCompaniesProvider interface {
+	// GroupCompanies 集团成员列表，返回下一页是否存在。
+	GroupCompanies(ctx context.Context, extID string, page, size int) ([]CompanyRef, bool, error)
+}

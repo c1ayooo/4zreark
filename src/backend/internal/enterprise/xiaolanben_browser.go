@@ -251,14 +251,22 @@ func (p *xiaolanbenProvider) Branches(ctx context.Context, extID string, page, s
 	if p.xlbChromeBin() == "" {
 		return nil, false, p.queryBlocked("分支机构")
 	}
-	return p.xlbCompanyList(ctx, extID, page, size)
+	return p.xlbCompanyList(ctx, extID, "investments", page, size)
 }
 
 func (p *xiaolanbenProvider) Investments(ctx context.Context, extID string, page, size int) ([]CompanyRef, bool, error) {
 	if p.xlbChromeBin() == "" {
 		return nil, false, p.queryBlocked("对外投资")
 	}
-	return p.xlbCompanyList(ctx, extID, page, size)
+	return p.xlbCompanyList(ctx, extID, "investments", page, size)
+}
+
+// GroupCompanies 集团成员（同集团兄弟公司，groupCompanies 数组）。
+func (p *xiaolanbenProvider) GroupCompanies(ctx context.Context, extID string, page, size int) ([]CompanyRef, bool, error) {
+	if p.xlbChromeBin() == "" {
+		return nil, false, p.queryBlocked("集团成员")
+	}
+	return p.xlbCompanyList(ctx, extID, "groupCompanies", page, size)
 }
 
 func (p *xiaolanbenProvider) Domains(ctx context.Context, extID string, page, size int) ([]DomainHit, bool, error) {
@@ -326,8 +334,8 @@ func (p *xiaolanbenProvider) xlbDetail(ctx context.Context, extID string) (*Comp
 	return detail, nil
 }
 
-// xlbCompanyList 子公司/对外投资（详情页 investments）。
-func (p *xiaolanbenProvider) xlbCompanyList(ctx context.Context, extID string, pageNum, size int) ([]CompanyRef, bool, error) {
+// xlbCompanyList 详情页企业列表（listKey：investments=分支/投资、groupCompanies=集团成员）。
+func (p *xiaolanbenProvider) xlbCompanyList(ctx context.Context, extID, listKey string, pageNum, size int) ([]CompanyRef, bool, error) {
 	page, err := p.xlbSignPage(ctx)
 	if err != nil {
 		return nil, false, err
@@ -337,13 +345,13 @@ func (p *xiaolanbenProvider) xlbCompanyList(ctx context.Context, extID string, p
 		return nil, false, fmt.Errorf("小蓝本子公司页导航失败: %w", err)
 	}
 	_ = page.WaitLoad()
-	time.Sleep(2500 * time.Millisecond)
-	res, err := page.Eval(`() => {
+	time.Sleep(2500 * time.Millisecond) // SSR 数据渲染
+	res, err := page.Eval(`(key) => {
 		const s = window.__INITIAL_STATE__ || {};
 		const cd = s.companyDetail || {};
-		const inv = Array.isArray(cd.investments) ? cd.investments : [];
-		return JSON.stringify(inv.map(x => ({ n: x.name || x.entName || '', eid: x.eid || x.id || '' })));
-	}`)
+		const arr = Array.isArray(cd[key]) ? cd[key] : [];
+		return JSON.stringify(arr.map(x => ({ n: x.companyName || x.name || x.entName || x.shortName || '', eid: x.eid || x.id || '' })));
+	}`, listKey)
 	if err != nil {
 		return nil, false, fmt.Errorf("小蓝本子公司提取失败: %w", err)
 	}
