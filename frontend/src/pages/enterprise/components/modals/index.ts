@@ -1,6 +1,8 @@
 export { default as AlignedAssetsModal } from './AlignedAssetsModal'
+export { default as CollectorSettingsModal } from './CollectorSettingsModal'
 export { default as CollectModal } from './CollectModal'
 export { default as CreateEntityModal } from './CreateEntityModal'
 export { default as DeepCollectModal } from './DeepCollectModal'
+export { default as EntityTreeView } from '../EntityTreeView'
 export { default as IcpResultModal } from './IcpResultModal'
 export { default as ImportEntitiesModal } from './ImportEntitiesModal'

@@ -599,6 +599,9 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 			enterpriseHandler := api.NewEnterpriseHandler()
 			protected.GET("/enterprise-entities", middleware.RequirePermission("digital:read"), enterpriseHandler.List)
 			protected.GET("/enterprise-entities/providers", middleware.RequirePermission("digital:read"), enterpriseHandler.Providers)
+			// 深度采集硬上限（层级/节点）：GET 读当前值，PUT 热更新（保存即生效）
+			protected.GET("/enterprise-entities/settings", middleware.RequirePermission("digital:read"), enterpriseHandler.GetSettings)
+			protected.PUT("/enterprise-entities/settings", middleware.RequirePermission("digital:write"), enterpriseHandler.UpdateSettings)
 			protected.POST("/enterprise-entities", middleware.RequirePermission("digital:write"), enterpriseHandler.Upsert)
 			protected.POST("/enterprise-entities/import", middleware.RequirePermission("digital:write"), enterpriseHandler.Import)
 			protected.POST("/enterprise-entities/collect", middleware.RequirePermission("digital:write"), enterpriseHandler.Collect)
@@ -608,6 +611,8 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 			protected.GET("/enterprise-entities/jobs/:id", middleware.RequirePermission("digital:read"), enterpriseHandler.GetJob)
 			protected.POST("/enterprise-entities/jobs/:id/cancel", middleware.RequirePermission("digital:write"), enterpriseHandler.CancelJob)
 			protected.GET("/enterprise-entities/candidates", middleware.RequirePermission("digital:read"), enterpriseHandler.Candidates)
+			protected.POST("/enterprise-entities/candidates/confirm", middleware.RequirePermission("digital:write"), enterpriseHandler.ConfirmCandidates)
+			protected.POST("/enterprise-entities/candidates/reject", middleware.RequirePermission("digital:write"), enterpriseHandler.RejectCandidates)
 			protected.DELETE("/enterprise-entities/:id", middleware.RequirePermission("digital:write"), enterpriseHandler.Delete)
 			protected.GET("/enterprise-entities/:id/assets", middleware.RequirePermission("digital:read"), enterpriseHandler.AlignedAssets)
 			protected.POST("/enterprise-entities/purge-dead", middleware.RequirePermission("digital:write"), enterpriseHandler.PurgeDead)

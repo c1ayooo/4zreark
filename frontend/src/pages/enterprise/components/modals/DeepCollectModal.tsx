@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button, Checkbox, Input, Modal, Select } from 'antd'
 import { Search } from 'lucide-react'
 
@@ -28,6 +28,17 @@ export default function DeepCollectModal({ open, projectId, providers, onClose }
   })
   const [refs, setRefs] = useState<CompanyRef[]>([])
   const [selectedRef, setSelectedRef] = useState<CompanyRef | null>(null)
+
+  // 硬上限跟随「采集上限」配置（热更新）：表单 max 与后端钳制同一口径，
+  // 上限调大后这里无需改代码就能展开更多层
+  const settings = useQuery({
+    queryKey: ['enterprise-settings'],
+    queryFn: () => enterpriseApi.settings(),
+    enabled: open,
+    staleTime: 60_000,
+  })
+  const maxDepth = settings.data?.data?.max_depth || 3
+  const maxNodes = settings.data?.data?.max_nodes || 200
 
   const searchProvider = useMutation({
     mutationFn: () =>
@@ -181,30 +192,35 @@ export default function DeepCollectModal({ open, projectId, providers, onClose }
 
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1">
-            <label className="text-sm font-medium">展开深度（1–3）</label>
+            <label className="text-sm font-medium">展开层级（1–{maxDepth}）</label>
             <Input
               type="number"
               min={1}
-              max={3}
+              max={maxDepth}
               value={deepForm.depth}
-              onChange={(e) =>
-                setDeepForm({ ...deepForm, depth: Number(e.target.value) || 1 })
-              }
+              onChange={(e) => {
+                const n = Number(e.target.value) || 1
+                setDeepForm({ ...deepForm, depth: Math.min(Math.max(n, 1), maxDepth) })
+              }}
             />
           </div>
           <div className="space-y-1">
-            <label className="text-sm font-medium">最大节点数（1–200）</label>
+            <label className="text-sm font-medium">最大节点数（1–{maxNodes}）</label>
             <Input
               type="number"
               min={1}
-              max={200}
+              max={maxNodes}
               value={deepForm.max_nodes}
-              onChange={(e) =>
-                setDeepForm({ ...deepForm, max_nodes: Number(e.target.value) || 20 })
-              }
+              onChange={(e) => {
+                const n = Number(e.target.value) || 20
+                setDeepForm({ ...deepForm, max_nodes: Math.min(Math.max(n, 1), maxNodes) })
+              }}
             />
           </div>
         </div>
+        <p className="text-xs text-muted-foreground">
+          层级与节点的可配上限在「采集上限」里调整，保存后即时生效。
+        </p>
 
         <Checkbox
           checked={deepForm.collect_digital}

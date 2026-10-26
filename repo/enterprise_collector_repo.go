@@ -256,8 +256,7 @@ func scanEnterpriseJob(row interface{ Scan(...any) error }) (enterprise.Job, err
 }
 
 // ListEnterpriseCandidates 列出候选域名。
-func (r *Repo) ListEnterpriseCandidates(ctx context.Context, projectID int64, status string, limit int) ([]enterprise.CandidateAsset, error) {
-	if limit <= 0 || limit > 500 {
+func (r *Repo) ListEnterpriseCandidates(ctx context.Context, projectID int64, status string, limit int) ([]enterprise.CandidateAsset, error) {	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
 	q := `select id, coalesce(job_id,''), project_id::text, domain,
@@ -296,6 +295,53 @@ func (r *Repo) ListEnterpriseCandidates(ctx context.Context, projectID int64, st
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// PromoteDomainCandidates 候选域名批量转 domain 种子并置 imported。
+// 集团成员与无备案域名的人工确认快速通道——带备案的 root/branch/invest 域名
+// 在 SaveDomain 里已自动转种子，这里只处理留在候选池的那部分。
+// 返回实际转种子的域名数（已在种子里的会去重，不计入）。
+func (r *Repo) PromoteDomainCandidates(ctx context.Context, projectID int64, ids []int64) (int, error) {
+	if projectID <= 0 || len(ids) == 0 {
+		return 0, errors.New("project_id 与 ids 必填")
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `
+insert into seeds (project_id, kind, value, enabled)
+select project_id, 'domain', domain, true
+  from enterprise_candidates
+ where project_id = $1 and id = any($2) and status = 'candidate'
+on conflict (project_id, kind, value) do nothing`, projectID, ids)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `
+update enterprise_candidates set status = 'imported'
+ where project_id = $1 and id = any($2) and status = 'candidate'`, projectID, ids); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
+// RejectDomainCandidates 批量忽略候选域名（用户明确不要的，不再展示与重加）。
+func (r *Repo) RejectDomainCandidates(ctx context.Context, ids []int64) (int, error) {
+	if len(ids) == 0 {
+		return 0, errors.New("ids 必填")
+	}
+	tag, err := r.pool.Exec(ctx, `
+update enterprise_candidates set status = 'rejected'
+ where id = any($1) and status = 'candidate'`, ids)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 func entityTypeOrDefault(v string) string {

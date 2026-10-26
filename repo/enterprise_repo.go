@@ -42,6 +42,15 @@ type EnterpriseEntity struct {
 	DigitalCount         int                `json:"digital_count"`
 	CreatedAt            time.Time          `json:"created_at"`
 	UpdatedAt            time.Time          `json:"updated_at"`
+	// ExtID 上游平台的企业 ID；ParentExtID 指向父企业的 ExtID。深度采集（BFS）
+	// 落库时写入；手工维护的行 EntityType=root、Depth=0、ParentExtID 为空。
+	// 跨平台任务对同名企业合并，ExtID 以最后一次采集的平台为准——
+	// 因此层级关系只在同一次任务的范围内可靠，前端按 JobID 分组建树。
+	JobID       string `json:"job_id,omitempty"`
+	ExtID       string `json:"ext_id"`
+	EntityType  string `json:"entity_type"` // root / branch / invest / group
+	ParentExtID string `json:"parent_ext_id"`
+	Depth       int    `json:"depth"`
 }
 
 type EnterpriseInput struct {
@@ -89,6 +98,8 @@ const enterpriseColumns = `e.id, e.project_id, e.name, e.credit_code, e.legal_pe
 	e.open_status, e.industry, e.address, e.registered_capital, coalesce(e.registered_capital_wan, 0),
 	e.icp_numbers, e.domains, e.source, e.status,
 	e.notes, e.created_at, e.updated_at,
+	coalesce(e.ext_id, ''), coalesce(e.entity_type, 'root'), coalesce(e.parent_ext_id, ''), coalesce(e.depth, 0),
+	coalesce(e.job_id::text, ''),
 	(select count(*) from digital_assets d
 	  where d.project_id = e.project_id and d.company = e.name) as digital_count`
 
@@ -100,7 +111,8 @@ func scanEnterprise(row interface{ Scan(...any) error }) (*EnterpriseEntity, err
 	if err := row.Scan(&e.ID, &e.ProjectID, &e.Name, &e.CreditCode, &e.LegalPerson,
 		&e.OpenStatus, &e.Industry, &e.Address, &e.RegisteredCapital, &e.RegisteredCapitalWan,
 		&icpB, &domB, &e.Source, &e.Status,
-		&e.Notes, &e.CreatedAt, &e.UpdatedAt, &e.DigitalCount); err != nil {
+		&e.Notes, &e.CreatedAt, &e.UpdatedAt,
+		&e.ExtID, &e.EntityType, &e.ParentExtID, &e.Depth, &e.JobID, &e.DigitalCount); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}

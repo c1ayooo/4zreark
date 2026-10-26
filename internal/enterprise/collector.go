@@ -30,7 +30,11 @@ type Collector struct {
 	rateLimit   time.Duration
 	pageSize    int
 	maxPageWalk int
-	maxNodes    int
+	// maxDepth / maxNodes 是任务参数的硬上限，受 limitsMu 保护：
+	// 企业采集设置（前端可配，热更新）会在运行中改写，start() 每次取当前值钳制。
+	maxDepth  int
+	maxNodes  int
+	limitsMu  sync.Mutex
 	// maxDigitalPerEntity 单实体数字资产拉取上限（sink 启用时生效）。
 	maxDigitalPerEntity int
 
@@ -51,13 +55,34 @@ func NewCollector(store CollectorStore, lg *log.Logger) *Collector {
 	}
 	return &Collector{
 		store: store, log: lg, running: map[string]*runningJob{},
-		rateLimit: 800 * time.Millisecond, pageSize: 10, maxPageWalk: 5, maxNodes: 200,
+		rateLimit: 800 * time.Millisecond, pageSize: 10, maxPageWalk: 5,
+		maxDepth: 3, maxNodes: 200,
 		maxDigitalPerEntity: 50,
 	}
 }
 
 // SetRateLimit 调整上游请求间隔（测试与调试用；<=0 表示不限速）。
 func (c *Collector) SetRateLimit(d time.Duration) { c.rateLimit = d }
+
+// SetLimits 调整深度/节点硬上限（企业采集设置，热更新：改完即对后续任务生效）。
+// 非正数视为非法，保留原值；下限钳到 1，不给 0 层/0 节点的配置留口子。
+func (c *Collector) SetLimits(maxDepth, maxNodes int) {
+	c.limitsMu.Lock()
+	defer c.limitsMu.Unlock()
+	if maxDepth > 0 {
+		c.maxDepth = maxDepth
+	}
+	if maxNodes > 0 {
+		c.maxNodes = maxNodes
+	}
+}
+
+// Limits 返回当前生效的深度/节点硬上限。
+func (c *Collector) Limits() (maxDepth, maxNodes int) {
+	c.limitsMu.Lock()
+	defer c.limitsMu.Unlock()
+	return c.maxDepth, c.maxNodes
+}
 
 // SetJobDoneHook 任务完成钩子（状态 done 时异步回调）；评估通知等服务层收尾用。
 func (c *Collector) SetJobDoneHook(h func(Job)) {
@@ -78,17 +103,18 @@ func (c *Collector) StartWithDigitalSink(ctx context.Context, provider Provider,
 }
 
 func (c *Collector) start(ctx context.Context, provider Provider, job Job, root CompanyRef, sink DigitalAssetsProvider) (Job, error) {
+	maxDepth, maxNodesCap := c.Limits()
 	if job.Depth < 1 {
 		job.Depth = 1
 	}
-	if job.Depth > 3 {
-		job.Depth = 3
+	if job.Depth > maxDepth {
+		job.Depth = maxDepth
 	}
 	if job.MaxNodes < 1 {
 		job.MaxNodes = 20
 	}
-	if job.MaxNodes > c.maxNodes {
-		job.MaxNodes = c.maxNodes
+	if job.MaxNodes > maxNodesCap {
+		job.MaxNodes = maxNodesCap
 	}
 	created, err := c.store.CreateJob(ctx, job)
 	if err != nil {

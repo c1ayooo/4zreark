@@ -3,7 +3,10 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -259,7 +262,43 @@ func (s *EnterpriseService) Collect(ctx context.Context, in EnterpriseCollectInp
 var (
 	enterpriseCollectorMu sync.Mutex
 	enterpriseCollector   *enterprise.Collector
+	// enterpriseSettings 持久化深度采集硬上限（data/enterprise/settings.json）。
+	// 内存里的 collector 上限随 SetEnterpriseSettings 即时改写（热更新），
+	// 文件只保证进程重启后仍是用户配的值。
+	enterpriseSettings *fileSettings
 )
+
+func enterpriseSettingsStore() *fileSettings {
+	enterpriseCollectorMu.Lock()
+	defer enterpriseCollectorMu.Unlock()
+	if enterpriseSettings == nil {
+		root := os.Getenv("ZRE_DATA_DIR")
+		if strings.TrimSpace(root) == "" {
+			root = "data"
+		}
+		dir := filepath.Join(root, "enterprise")
+		// SetSetting 走临时文件 + rename，目录缺失会让保存直接失败
+		_ = os.MkdirAll(dir, 0o750)
+		enterpriseSettings = newFileSettings(filepath.Join(dir, "settings.json"))
+	}
+	return enterpriseSettings
+}
+
+// applyEnterpriseLimits 把持久化的上限套到 collector 实例上（collector 创建时与设置更新时）。
+func applyEnterpriseLimits(c *enterprise.Collector, fs *fileSettings) {
+	maxDepth, maxNodes := 0, 0
+	if v, _, err := fs.GetSetting("max_depth"); err == nil {
+		if n, perr := strconv.Atoi(v); perr == nil {
+			maxDepth = n
+		}
+	}
+	if v, _, err := fs.GetSetting("max_nodes"); err == nil {
+		if n, perr := strconv.Atoi(v); perr == nil {
+			maxNodes = n
+		}
+	}
+	c.SetLimits(maxDepth, maxNodes)
+}
 
 func (s *EnterpriseService) collector() (*enterprise.Collector, error) {
 	r := repo.Default()
@@ -270,6 +309,8 @@ func (s *EnterpriseService) collector() (*enterprise.Collector, error) {
 	defer enterpriseCollectorMu.Unlock()
 	if enterpriseCollector == nil {
 		enterpriseCollector = enterprise.NewCollector(r, log.Default())
+		// 重启后沿用上次保存的层级/节点上限；没保存过就用内建缺省（3 层 / 200 节点）
+		applyEnterpriseLimits(enterpriseCollector, enterpriseSettingsStore())
 		enterpriseCollector.SetJobDoneHook(func(job enterprise.Job) {
 			pid, perr := strconv.ParseInt(job.ProjectID, 10, 64)
 			if perr != nil || pid <= 0 {
@@ -279,6 +320,65 @@ func (s *EnterpriseService) collector() (*enterprise.Collector, error) {
 		})
 	}
 	return enterpriseCollector, nil
+}
+
+// EnterpriseSettings 返回深度采集的硬上限（层级/节点），前端配置入口与
+// 深度采集弹窗共用这一份，保证表单 max 与后端钳制同一口径。
+func (s *EnterpriseService) EnterpriseSettings() (map[string]any, error) {
+	collector, err := s.collector()
+	if err != nil {
+		return nil, err
+	}
+	maxDepth, maxNodes := collector.Limits()
+	return map[string]any{"max_depth": maxDepth, "max_nodes": maxNodes}, nil
+}
+
+// SetEnterpriseSettings 更新深度采集硬上限并持久化。热更新：内存即时生效，
+// 后续 Discover/巡航启动的任务按新上限钳制，运行中任务不受影响；无需重启进程。
+func (s *EnterpriseService) SetEnterpriseSettings(in map[string]any) error {
+	collector, err := s.collector()
+	if err != nil {
+		return err
+	}
+	fs := enterpriseSettingsStore()
+	updates := map[string]string{}
+	for k, v := range in {
+		switch k {
+		case "max_depth", "max_nodes":
+			n, ok := intValue(v)
+			if !ok {
+				return fmt.Errorf("%s 需要整数", k)
+			}
+			floor := 1
+			if k == "max_depth" {
+				floor = 1
+			}
+			if n < floor {
+				return fmt.Errorf("%s 至少为 %d", k, floor)
+			}
+			if n > 10000 {
+				return fmt.Errorf("%s 过大（上限 10000）", k)
+			}
+			updates[k] = strconv.Itoa(n)
+		default:
+			return fmt.Errorf("不支持的设置项: %s", k)
+		}
+	}
+	// 先落盘再套用：落盘失败则不改内存，两边不会出现不一致
+	for k, v := range updates {
+		if err := fs.SetSetting(k, v); err != nil {
+			return fmt.Errorf("保存设置失败: %w", err)
+		}
+	}
+	maxDepth, maxNodes := collector.Limits()
+	if v, ok := updates["max_depth"]; ok {
+		maxDepth, _ = strconv.Atoi(v)
+	}
+	if v, ok := updates["max_nodes"]; ok {
+		maxNodes, _ = strconv.Atoi(v)
+	}
+	collector.SetLimits(maxDepth, maxNodes)
+	return nil
 }
 
 // SearchProvider 只做企业搜索，不落库；供深度采集前的候选选择。
@@ -387,4 +487,22 @@ func (s *EnterpriseService) Candidates(ctx context.Context, projectID int64, sta
 		return nil, errors.New("数据层未初始化")
 	}
 	return r.ListEnterpriseCandidates(ctx, projectID, status, limit)
+}
+
+// PromoteCandidates 候选域名批量转 domain 种子（人工确认通道）。
+func (s *EnterpriseService) PromoteCandidates(ctx context.Context, projectID int64, ids []int64) (int, error) {
+	r := repo.Default()
+	if r == nil {
+		return 0, errors.New("数据层未初始化")
+	}
+	return r.PromoteDomainCandidates(ctx, projectID, ids)
+}
+
+// RejectCandidates 批量忽略候选域名。
+func (s *EnterpriseService) RejectCandidates(ctx context.Context, ids []int64) (int, error) {
+	r := repo.Default()
+	if r == nil {
+		return 0, errors.New("数据层未初始化")
+	}
+	return r.RejectDomainCandidates(ctx, ids)
 }

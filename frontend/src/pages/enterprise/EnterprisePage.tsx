@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {keepPreviousData, useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
-import { Building2, DownloadCloud, FileSearch, GitBranch, Link2, Plus, RefreshCw, Trash2, Upload } from 'lucide-react'
-import { Button, Input, Select, Table, Tag } from 'antd'
+import { Building2, DownloadCloud, FileSearch, Gauge, GitBranch, Link2, List, Network, Plus, RefreshCw, Trash2, Upload } from 'lucide-react'
+import { Button, Input, Segmented, Select, Table, Tag } from 'antd'
 import type { TableProps } from 'antd'
 
 import { projectApi } from '@/api/projects'
@@ -21,14 +21,18 @@ import { formatDate } from '@/lib/utils'
 import { statusTagClass } from '@/components/ui/StatusTag'
 import {
   AlignedAssetsModal,
+  CollectorSettingsModal,
   CollectModal,
   CreateEntityModal,
   DeepCollectModal,
+  EntityTreeView,
   IcpResultModal,
   ImportEntitiesModal,
 } from './components/modals'
 
 const PAGE_SIZE = 50
+// 树形视图一次装载的上限（后端列表接口 pageSize 上限 500）
+const TREE_PAGE_SIZE = 500
 
 
 // shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
@@ -46,12 +50,16 @@ export default function EnterprisePage() {
   useEffect(() => { setPage(1) }, [debouncedQ])
   const [status, setStatus] = useState('')
   const [page, setPage] = useState(1)
+  // 实体展示形态：list=分页表格，tree=按采集任务分组的股权树
+  const [view, setView] = useState<'list' | 'tree'>('list')
 
   const [open, setOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [collectOpen, setCollectOpen] = useState(false)
   const [deepOpen, setDeepOpen] = useState(false)
+  const [limitsOpen, setLimitsOpen] = useState(false)
   const [candStatus, setCandStatus] = useState('')
+  const [selectedCandIds, setSelectedCandIds] = useState<string[]>([])
   const [icpInput, setIcpInput] = useState('')
   const [icpSelected, setIcpSelected] = useState<string | null>(null)
   const [aligned, setAligned] = useState<EnterpriseEntity | null>(null)
@@ -70,6 +78,20 @@ export default function EnterprisePage() {
         page_size: PAGE_SIZE,
       }),
   })
+  // 树形视图的数据面：不做分页（一次拉满 500），筛选仍然生效
+  const treeList = useQuery({
+    queryKey: ['enterprise-entities-tree', projectId, debouncedQ, status],
+    enabled: view === 'tree',
+    placeholderData: keepPreviousData,
+    queryFn: () =>
+      enterpriseApi.list({
+        project_id: Number(projectId) || undefined,
+        q: debouncedQ || undefined,
+        status: status || undefined,
+        page: 1,
+        page_size: TREE_PAGE_SIZE,
+      }),
+  })
   const providers = useQuery({
     queryKey: ['enterprise-providers'],
     queryFn: () => enterpriseApi.providers(),
@@ -78,7 +100,8 @@ export default function EnterprisePage() {
   const jobs = useQuery({
     queryKey: ['enterprise-jobs', projectId],
     queryFn: () => enterpriseApi.jobs(Number(projectId) || undefined, 30),
-    enabled: Number(projectId) > 0,
+    // 树形视图的任务分组头也需要 jobs（全部项目时 jobs 接口不带过滤）
+    enabled: Number(projectId) > 0 || view === 'tree',
     refetchInterval: (query) =>
       (query.state.data?.data?.items ?? []).some((j) => j.status === 'running') ? 3000 : false,
   })
@@ -156,8 +179,40 @@ export default function EnterprisePage() {
       toast({ title: '取消失败', description: e?.message, variant: 'destructive' }),
   })
 
+  const invalidateCandidates = () => {
+    queryClient.invalidateQueries({ queryKey: ['enterprise-candidates'] })
+    setSelectedCandIds([])
+  }
+
+  // 候选域名转 domain 种子：集团成员/无备案域名的人工确认通道。
+  // 转种子后下一轮任务即会把该域名当授权种子扫。
+  const promoteCand = useMutation({
+    mutationFn: (ids: string[]) => {
+      if (Number(projectId) <= 0) throw new Error('先选择归属项目')
+      return enterpriseApi.confirmCandidates(Number(projectId), ids)
+    },
+    onSuccess: (res) => {
+      toast({ title: '已转入域名种子', description: `新增种子 ${res.data?.seeded ?? 0} 条` })
+      invalidateCandidates()
+    },
+    onError: (e: any) =>
+      toast({ title: '转种子失败', description: e?.message, variant: 'destructive' }),
+  })
+
+  const rejectCand = useMutation({
+    mutationFn: (ids: string[]) => enterpriseApi.rejectCandidates(ids),
+    onSuccess: (res) => {
+      toast({ title: '已忽略候选域名', description: `${res.data?.rejected ?? 0} 条` })
+      invalidateCandidates()
+    },
+    onError: (e: any) =>
+      toast({ title: '忽略失败', description: e?.message, variant: 'destructive' }),
+  })
+
   const items = list.data?.data ?? []
   const total = list.data?.total ?? 0
+  const treeItems = treeList.data?.data ?? []
+  const treeTotal = treeList.data?.total ?? 0
   const projectName = (id: number) =>
     projects.data?.data?.find((p) => p.id === id)?.name ?? `#${id}`
   const canEdit = Number(projectId) > 0
@@ -393,6 +448,36 @@ export default function EnterprisePage() {
         </Tag>
       ),
     },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 130,
+      render: (_, a) =>
+        a.status === 'candidate' ? (
+          <div className="flex items-center gap-1">
+            <Button
+              size="small"
+              type="primary"
+              disabled={!canEdit}
+              title="写入项目 domain 种子，下一轮任务即按授权种子扫描"
+              onClick={() => promoteCand.mutate([a.id])}
+            >
+              转种子
+            </Button>
+            <Button
+              type="text"
+              size="small"
+              disabled={!canEdit}
+              onClick={async () => {
+                if (await confirm(`忽略候选域名「${a.value}」？（忽略后不再展示与重加）`))
+                  rejectCand.mutate([a.id])
+              }}
+            >
+              忽略
+            </Button>
+          </div>
+        ) : null,
+    },
   ]
 
   const icpColumns: TableProps<ICPQuery>['columns'] = [
@@ -501,6 +586,9 @@ export default function EnterprisePage() {
           <Button disabled={!canEdit} onClick={() => setDeepOpen(true)}>
             <GitBranch className="mr-2 h-4 w-4" /> 深度采集
           </Button>
+          <Button disabled={!canEdit} onClick={() => setLimitsOpen(true)} title="子公司展开层级与节点数上限，保存后即时生效">
+            <Gauge className="mr-2 h-4 w-4" /> 采集上限
+          </Button>
           <Button type="primary" disabled={!canEdit} onClick={() => setOpen(true)}>
             <Plus className="mr-2 h-4 w-4" /> 新建线索
           </Button>
@@ -508,6 +596,14 @@ export default function EnterprisePage() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
+        <Segmented
+          value={view}
+          onChange={(v) => setView(v as 'list' | 'tree')}
+          options={[
+            { value: 'list', label: <span className="flex items-center gap-1"><List className="h-3.5 w-3.5" /> 列表</span> },
+            { value: 'tree', label: <span className="flex items-center gap-1"><Network className="h-3.5 w-3.5" /> 股权树</span> },
+          ]}
+        />
         <Input
           className="w-64"
           placeholder="搜索企业名 / 信用代码 / 法人"
@@ -531,25 +627,38 @@ export default function EnterprisePage() {
             { value: 'ignored', label: '已忽略' },
           ]}
         />
-        <span className="ml-auto text-sm text-muted-foreground">{total} 条</span>
+        <span className="ml-auto text-sm text-muted-foreground">
+          {view === 'tree' ? treeTotal : total} 条
+        </span>
       </div>
 
-      <div className="rounded-md border">
-        <Table<EnterpriseEntity>
-          columns={entityColumns}
-          dataSource={items}
-          rowKey="id"
-          loading={list.isLoading}
-          locale={{ emptyText: '还没有企业线索（手工新建、批量导入或从数据源采集）' }}
-          pagination={{
-            current: page,
-            pageSize: PAGE_SIZE,
-            total,
-            showQuickJumper: true,
-            onChange: (p) => setPage(p),
-          }}
-        />
-      </div>
+      {view === 'tree' ? (
+        <div className="rounded-md border p-4">
+          <EntityTreeView
+            entities={treeItems}
+            jobs={jobItems}
+            total={treeTotal}
+            loading={treeList.isLoading}
+          />
+        </div>
+      ) : (
+        <div className="rounded-md border">
+          <Table<EnterpriseEntity>
+            columns={entityColumns}
+            dataSource={items}
+            rowKey="id"
+            loading={list.isLoading}
+            locale={{ emptyText: '还没有企业线索（手工新建、批量导入或从数据源采集）' }}
+            pagination={{
+              current: page,
+              pageSize: PAGE_SIZE,
+              total,
+              showQuickJumper: true,
+              onChange: (p) => setPage(p),
+            }}
+          />
+        </div>
+      )}
 
       <div className="grid gap-4 xl:grid-cols-2">
         <div className="rounded-md border">
@@ -569,9 +678,34 @@ export default function EnterprisePage() {
         </div>
 
         <div className="rounded-md border">
-          <div className="flex items-center justify-between border-b px-4 py-2 text-sm font-medium">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2 text-sm font-medium">
             <span>候选域名</span>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {selectedCandIds.length > 0 && (
+                <>
+                  <span className="text-xs text-muted-foreground">
+                    已选 {selectedCandIds.length} 条
+                  </span>
+                  <Button
+                    size="small"
+                    type="primary"
+                    disabled={!canEdit || promoteCand.isPending}
+                    onClick={() => promoteCand.mutate(selectedCandIds)}
+                  >
+                    批量转种子
+                  </Button>
+                  <Button
+                    size="small"
+                    disabled={!canEdit || rejectCand.isPending}
+                    onClick={async () => {
+                      if (await confirm(`忽略选中的 ${selectedCandIds.length} 条候选域名？`))
+                        rejectCand.mutate(selectedCandIds)
+                    }}
+                  >
+                    批量忽略
+                  </Button>
+                </>
+              )}
               <Select
                 className="w-28"
                 value={candStatus || 'all'}
@@ -594,6 +728,12 @@ export default function EnterprisePage() {
             rowKey="id"
             pagination={false}
             locale={{ emptyText: !canEdit ? '选择项目后查看候选域名' : '暂无候选域名（深度采集完成后写入）' }}
+            rowSelection={{
+              selectedRowKeys: selectedCandIds,
+              onChange: (keys) => setSelectedCandIds(keys as string[]),
+              // 只有候选状态的行可勾选（已导入/已忽略不可再操作）
+              getCheckboxProps: (a) => ({ disabled: a.status !== 'candidate' }),
+            }}
           />
         </div>
       </div>
@@ -653,6 +793,7 @@ export default function EnterprisePage() {
         providers={providerList}
         onClose={() => setDeepOpen(false)}
       />
+      <CollectorSettingsModal open={limitsOpen} onClose={() => setLimitsOpen(false)} />
       <IcpResultModal icpId={icpSelected} onClose={() => setIcpSelected(null)} />
       <AlignedAssetsModal entity={aligned} onClose={() => setAligned(null)} />
     </div>

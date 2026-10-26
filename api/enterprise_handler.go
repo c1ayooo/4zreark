@@ -202,6 +202,33 @@ func (h *EnterpriseHandler) Discover(c *gin.Context) {
 	utils.SuccessWithMessage(c, "采集任务已启动", job)
 }
 
+// GetSettings GET /api/enterprise-entities/settings
+// 深度采集硬上限（层级/节点）。前端配置入口与深度采集弹窗共用。
+func (h *EnterpriseHandler) GetSettings(c *gin.Context) {
+	st, err := h.svc.EnterpriseSettings()
+	if err != nil {
+		utils.InternalError(c, err.Error())
+		return
+	}
+	utils.Success(c, st)
+}
+
+// UpdateSettings PUT /api/enterprise-entities/settings
+// 白名单：max_depth / max_nodes。热更新：保存即生效，后续任务按新上限钳制，无需重启。
+func (h *EnterpriseHandler) UpdateSettings(c *gin.Context) {
+	var in map[string]any
+	if err := c.ShouldBindJSON(&in); err != nil {
+		utils.BadRequest(c, "请求体不是合法 JSON")
+		return
+	}
+	if err := h.svc.SetEnterpriseSettings(in); err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	st, _ := h.svc.EnterpriseSettings()
+	utils.SuccessWithMessage(c, "设置已保存并即时生效", st)
+}
+
 // Jobs GET /api/enterprise-entities/jobs?project_id=&limit=
 func (h *EnterpriseHandler) Jobs(c *gin.Context) {
 	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
@@ -252,4 +279,40 @@ func (h *EnterpriseHandler) Candidates(c *gin.Context) {
 		return
 	}
 	utils.Success(c, gin.H{"items": items, "total": len(items)})
+}
+
+// ConfirmCandidates POST /api/enterprise-entities/candidates/confirm
+// 候选域名批量转 domain 种子（集团成员/无备案域名的人工确认通道）。
+func (h *EnterpriseHandler) ConfirmCandidates(c *gin.Context) {
+	var body struct {
+		ProjectID int64   `json:"project_id"`
+		IDs       []int64 `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.ProjectID <= 0 || len(body.IDs) == 0 {
+		utils.BadRequest(c, "project_id 与 ids 必填")
+		return
+	}
+	seeded, err := h.svc.PromoteCandidates(c.Request.Context(), body.ProjectID, body.IDs)
+	if err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "已转入域名种子", gin.H{"seeded": seeded, "confirmed": len(body.IDs)})
+}
+
+// RejectCandidates POST /api/enterprise-entities/candidates/reject
+func (h *EnterpriseHandler) RejectCandidates(c *gin.Context) {
+	var body struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || len(body.IDs) == 0 {
+		utils.BadRequest(c, "ids 必填")
+		return
+	}
+	rejected, err := h.svc.RejectCandidates(c.Request.Context(), body.IDs)
+	if err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "已忽略候选域名", gin.H{"rejected": rejected})
 }

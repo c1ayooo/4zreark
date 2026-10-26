@@ -29,6 +29,19 @@ export interface EnterpriseEntity {
   digital_count: number
   created_at: string
   updated_at: string
+  // 深度采集（BFS）落库的层级信息；手工行 entity_type=root、depth=0、parent 为空
+  job_id?: string
+  ext_id: string
+  entity_type: 'root' | 'branch' | 'invest' | 'group' | string
+  parent_ext_id: string
+  depth: number
+}
+
+export const entityTypeLabel: Record<string, string> = {
+  root: '根企业',
+  branch: '分支机构',
+  invest: '对外投资',
+  group: '集团成员',
 }
 
 export interface EnterpriseListResponse {
@@ -115,6 +128,12 @@ export interface EnterpriseCandidate {
   evidence: string
   status: string
   created_at: string
+}
+
+/** 深度采集硬上限：所有任务的层级/节点都在此范围内钳制，保存后即时生效 */
+export interface EnterpriseCollectorSettings {
+  max_depth: number
+  max_nodes: number
 }
 
 export const enterpriseStatusLabel: Record<string, string> = {
@@ -217,5 +236,29 @@ export const enterpriseApi = {
     api.get<unknown, ApiResponse<{ items: EnterpriseCandidate[]; total: number }>>(
       '/enterprise-entities/candidates',
       { params: { project_id: projectId || undefined, status: status || undefined, limit } }
+    ),
+
+  /** 深度采集硬上限（层级/节点）；深度采集弹窗的表单上限与配置入口共用 */
+  settings: () =>
+    api.get<unknown, ApiResponse<EnterpriseCollectorSettings>>('/enterprise-entities/settings'),
+
+  /** 保存硬上限：热更新，保存即对后续采集任务生效，无需重启 */
+  saveSettings: (body: { max_depth?: number; max_nodes?: number }) =>
+    api.put<unknown, ApiResponse<EnterpriseCollectorSettings>>(
+      '/enterprise-entities/settings',
+      body
+    ),
+
+  // 候选域名批量转 domain 种子（集团成员/无备案域名的人工确认通道）
+  confirmCandidates: (projectId: number, ids: string[]) =>
+    api.post<unknown, ApiResponse<{ seeded: number; confirmed: number }>>(
+      '/enterprise-entities/candidates/confirm',
+      { project_id: projectId, ids: ids.map(Number) }
+    ),
+
+  rejectCandidates: (ids: string[]) =>
+    api.post<unknown, ApiResponse<{ rejected: number }>>(
+      '/enterprise-entities/candidates/reject',
+      { ids: ids.map(Number) }
     ),
 }
