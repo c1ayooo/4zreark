@@ -75,6 +75,7 @@ const VIEWS: { value: AssetView; label: string }[] = [
   { value: 'clues', label: '线索' },
   { value: 'lost', label: '失联' },
   { value: 'interfaces', label: '接口' },
+  { value: 'crawler', label: '爬虫' },
   { value: 'icons', label: '图标' },
   { value: 'technologies', label: '技术栈' },
   { value: 'ignored', label: '已忽略' },
@@ -537,10 +538,10 @@ export default function AssetsPage() {
       ]
     } else if (kind === 'record') {
       rows = [
-        ['URL', '方法', '接口', '来源', '状态码', '主机', 'IP', '观察时间', '项目'],
+        ['URL', '方法', '接口', '爬虫', '来源', '采集器', '状态码', '主机', 'IP', '观察时间', '项目'],
         ...(items as RawRecordRow[]).map((r) => [
-          r.value, r.method || 'GET', r.is_interface ? '是' : '否', r.source,
-          r.status_code, `${r.host}:${r.port}`, r.ip, r.observed_at, r.project_name,
+          r.value, r.method || 'GET', r.is_interface ? '是' : '否', r.is_crawler ? '是' : '否',
+          r.source, r.collector || '', r.status_code, `${r.host}:${r.port}`, r.ip, r.observed_at, r.project_name,
         ]),
       ]
     } else if (kind === 'domain') {
@@ -662,6 +663,9 @@ export default function AssetsPage() {
                       <Tag className={`${badgeCls('outline')} shrink-0 text-[10px]`}>{r.method || 'GET'}</Tag>
                       {r.is_interface && (
                         <Tag className={`${badgeCls('secondary')} shrink-0 text-[10px]`}>接口</Tag>
+                      )}
+                      {r.is_crawler && (
+                        <Tag className={`${badgeCls('secondary')} shrink-0 text-[10px]`}>爬虫</Tag>
                       )}
                       <span className="break-all">{r.value}</span>
                       <span className="ml-auto shrink-0 tabular-nums text-muted-foreground">
@@ -923,6 +927,17 @@ export default function AssetsPage() {
           接口候选不要求 <span className="font-mono">/api</span> 前缀：非 GET 方法、JSON 响应、
           jsluice 来源、带查询串或接口路径段（graphql / gateway / rest 等）都会命中。
           {kind === 'site' ? '当前列出含接口的站点，切换粒度到「原始记录」可看具体 URL。' : ''}
+        </div>
+      )}
+
+      {view === 'crawler' && (
+        <div className="rounded border bg-muted/40 px-3 py-2 text-[13px] text-muted-foreground">
+          爬虫视图收录 katana 爬出来的 URL（历史数据按爬虫特征兜底识别，目录扫描不带爬虫特征不会混入）。
+          搜索框可用 <span className="font-mono">source="katana"</span>、
+          <span className="font-mono">is_interface="true"</span>、
+          <span className="font-mono">method="POST"</span>、
+          <span className="font-mono">content_type="json"</span> 等条件继续收窄。
+          {kind === 'site' ? '当前列出含爬虫记录的站点，切换粒度到「原始记录」可看具体 URL。' : ''}
         </div>
       )}
 

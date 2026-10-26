@@ -30,6 +30,7 @@ type AssetVerification struct {
 type AssetRecord struct {
 	ID          int64          `json:"id"`
 	Source      string         `json:"source"`
+	Collector   string         `json:"collector"`
 	Host        string         `json:"host"`
 	Port        int            `json:"port"`
 	Protocol    string         `json:"protocol"`
@@ -39,6 +40,7 @@ type AssetRecord struct {
 	IP          string         `json:"ip"`
 	Method      string         `json:"method"`
 	IsInterface bool           `json:"is_interface"`
+	IsCrawler   bool           `json:"is_crawler"`
 	Evidence    map[string]any `json:"evidence"`
 	ObservedAt  time.Time      `json:"observed_at"`
 }
@@ -161,8 +163,9 @@ func (a *AssetRepo) siteVerifications(ctx context.Context, siteID int64) ([]*Ass
 
 func (a *AssetRepo) siteRecords(ctx context.Context, siteID int64) ([]*AssetRecord, error) {
 	rows, err := a.r.pool.Query(ctx, `
-		SELECT r.id, r.source, r.host, r.port, r.protocol, r.value, r.status_code, coalesce(r.title,''),
-		       coalesce(r.ip::text,''), coalesce(r.evidence->>'method',''), `+interfacePredicate("r")+`,
+		SELECT r.id, r.source, coalesce(r.evidence->>'collector',''), r.host, r.port, r.protocol, r.value,
+		       r.status_code, coalesce(r.title,''),
+		       coalesce(r.ip::text,''), coalesce(r.evidence->>'method',''), `+interfacePredicate("r")+`, `+crawlerPredicate("r")+`,
 		       r.evidence, r.observed_at
 		  FROM raw_records r
 		 WHERE r.site_id = $1
@@ -177,8 +180,8 @@ func (a *AssetRepo) siteRecords(ctx context.Context, siteID int64) ([]*AssetReco
 	for rows.Next() {
 		var r AssetRecord
 		var evidence []byte
-		if err := rows.Scan(&r.ID, &r.Source, &r.Host, &r.Port, &r.Protocol, &r.Value,
-			&r.StatusCode, &r.Title, &r.IP, &r.Method, &r.IsInterface, &evidence, &r.ObservedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.Source, &r.Collector, &r.Host, &r.Port, &r.Protocol, &r.Value,
+			&r.StatusCode, &r.Title, &r.IP, &r.Method, &r.IsInterface, &r.IsCrawler, &evidence, &r.ObservedAt); err != nil {
 			return nil, err
 		}
 		if len(evidence) > 0 {
@@ -272,13 +275,17 @@ func (a *AssetRepo) siteRelations(ctx context.Context, siteID int64) ([]*AssetRe
 
 // ListSiteRecords 是详情页原始记录的分页版本：按 (observed_at,id) keyset，
 // 避免一个证据很多的站点把全部记录塞进一次响应。
-func (a *AssetRepo) ListSiteRecords(ctx context.Context, siteID int64, cursor string, limit int, interfaceOnly bool) ([]*AssetRecord, string, bool, error) {
+// interfaceOnly / crawlerOnly 分别只看接口候选与爬虫发现，两者可叠加。
+func (a *AssetRepo) ListSiteRecords(ctx context.Context, siteID int64, cursor string, limit int, interfaceOnly, crawlerOnly bool) ([]*AssetRecord, string, bool, error) {
 	if limit < 1 || limit > 200 {
 		limit = 50
 	}
 	where := "r.site_id = $1"
 	if interfaceOnly {
 		where += " AND " + interfacePredicate("r")
+	}
+	if crawlerOnly {
+		where += " AND " + crawlerPredicate("r")
 	}
 	args := []any{siteID}
 	if cursor != "" {
@@ -298,8 +305,9 @@ func (a *AssetRepo) ListSiteRecords(ctx context.Context, siteID int64, cursor st
 		where += " AND (r.observed_at, r.id) < ($2, $3)"
 	}
 	args = append(args, limit+1)
-	columns := `r.id, r.source, r.host, r.port, r.protocol, r.value, r.status_code, coalesce(r.title,''),
-		coalesce(r.ip::text,''), coalesce(r.evidence->>'method',''), ` + interfacePredicate("r") + `,
+	columns := `r.id, r.source, coalesce(r.evidence->>'collector',''), r.host, r.port, r.protocol, r.value,
+		r.status_code, coalesce(r.title,''),
+		coalesce(r.ip::text,''), coalesce(r.evidence->>'method',''), ` + interfacePredicate("r") + `, ` + crawlerPredicate("r") + `,
 		r.evidence, r.observed_at`
 	stmt := fmt.Sprintf(`SELECT %s FROM raw_records r WHERE %s
 		ORDER BY r.observed_at DESC, r.id DESC LIMIT $%d`, columns, where, len(args))
@@ -312,8 +320,8 @@ func (a *AssetRepo) ListSiteRecords(ctx context.Context, siteID int64, cursor st
 	for rows.Next() {
 		var r AssetRecord
 		var evidence []byte
-		if err := rows.Scan(&r.ID, &r.Source, &r.Host, &r.Port, &r.Protocol, &r.Value,
-			&r.StatusCode, &r.Title, &r.IP, &r.Method, &r.IsInterface, &evidence, &r.ObservedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.Source, &r.Collector, &r.Host, &r.Port, &r.Protocol, &r.Value,
+			&r.StatusCode, &r.Title, &r.IP, &r.Method, &r.IsInterface, &r.IsCrawler, &evidence, &r.ObservedAt); err != nil {
 			return nil, "", false, err
 		}
 		if len(evidence) > 0 {

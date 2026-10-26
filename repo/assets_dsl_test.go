@@ -200,7 +200,91 @@ func TestBuildAssetWhereGovernanceFields(t *testing.T) {
 	}
 }
 
-// normalizeTags 清洗：去空白、去重、截断超限标签。
+// 记录级字段（爬虫/接口这些只落在 raw_records 上的条件）：
+// 站点粒度包 EXISTS，记录粒度直查 r.*；status_code/port 在记录粒度取记录自身的值。
+func TestBuildAssetWhereRecordFields(t *testing.T) {
+	// 站点/域名/IP 粒度：条件包成 raw_records 上的 EXISTS
+	expr, _, err := BuildAssetWhere(`source="katana"`)
+	if err != nil {
+		t.Fatalf("source 条件不应报错: %v", err)
+	}
+	if !strings.Contains(expr, "EXISTS (SELECT 1 FROM raw_records rr WHERE rr.site_id = s.id") ||
+		!strings.Contains(expr, "rr.evidence->>'collector'") || !strings.Contains(expr, "rr.source") {
+		t.Fatalf("站点粒度 source 应包 EXISTS 并同时查 source/collector：%s", expr)
+	}
+
+	expr, _, err = BuildAssetWhere(`is_interface="true"`)
+	if err != nil {
+		t.Fatalf("is_interface 条件不应报错: %v", err)
+	}
+	if !strings.Contains(expr, "rr.evidence->>'is_interface'") {
+		t.Fatalf("is_interface 应落在 rr 上：%s", expr)
+	}
+
+	neg, _, err := BuildAssetWhere(`is_interface!="true"`)
+	if err != nil {
+		t.Fatalf("is_interface 取反不应报错: %v", err)
+	}
+	if !strings.Contains(neg, "(NOT (") {
+		t.Fatalf("is_interface 取反应包 NOT：%s", neg)
+	}
+
+	// 记录粒度：条件直接落在 r.*，不再包 EXISTS
+	expr, args, err := BuildAssetWhereForRecords(`is_interface="true" && method="post" && url="/api/user" && source="katana"`, 1)
+	if err != nil {
+		t.Fatalf("记录粒度组合条件不应报错: %v", err)
+	}
+	if strings.Contains(expr, "EXISTS") {
+		t.Fatalf("记录粒度不应包 EXISTS：%s", expr)
+	}
+	if !strings.Contains(expr, "r.evidence->>'is_interface'") {
+		t.Fatalf("is_interface 应落在 r 上：%s", expr)
+	}
+	if !strings.Contains(expr, "upper(coalesce(r.evidence->>'method',''))") {
+		t.Fatalf("method 应大写比较：%s", expr)
+	}
+	foundPOST := false
+	for _, a := range args {
+		if a == "POST" {
+			foundPOST = true
+		}
+	}
+	if !foundPOST {
+		t.Fatalf("method 参数应归一成大写 POST：%v", args)
+	}
+	if !strings.Contains(expr, "r.value ILIKE") {
+		t.Fatalf("url 应查 r.value：%s", expr)
+	}
+
+	// 记录粒度的 status_code/port 取记录自身的值
+	expr, _, err = BuildAssetWhereForRecords(`status_code="403" && port="8443"`, 1)
+	if err != nil {
+		t.Fatalf("记录粒度 status_code/port 不应报错: %v", err)
+	}
+	if !strings.Contains(expr, "r.status_code = ") || !strings.Contains(expr, "r.port = ") {
+		t.Fatalf("记录粒度 status_code/port 应取 r.*：%s", expr)
+	}
+
+	// 站点粒度维持原口径：s.http_status / s.port
+	expr, _, err = BuildAssetWhere(`status_code="200"`)
+	if err != nil {
+		t.Fatalf("站点粒度 status_code 不应报错: %v", err)
+	}
+	if !strings.Contains(expr, "s.http_status = ") {
+		t.Fatalf("站点粒度 status_code 应保持 s.http_status：%s", expr)
+	}
+
+	// content_type 的包含匹配：content_type="json" 命中 application/json 系列
+	expr, _, err = BuildAssetWhere(`content_type="json"`)
+	if err != nil {
+		t.Fatalf("content_type 条件不应报错: %v", err)
+	}
+	if !strings.Contains(expr, "rr.evidence->>'content_type'") || !strings.Contains(expr, "ILIKE") {
+		t.Fatalf("content_type= 应包含匹配：%s", expr)
+	}
+}
+
+
 func TestNormalizeTags(t *testing.T) {
 	got := normalizeTags([]string{" 重点 ", "重点", "", "云", strings.Repeat("x", 100)})
 	if len(got) != 2 || got[0] != "重点" || got[1] != "云" {

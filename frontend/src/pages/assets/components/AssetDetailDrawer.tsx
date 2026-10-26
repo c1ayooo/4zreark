@@ -34,11 +34,13 @@ export default function AssetDetailDrawer({
 }) {
   const [recordsCursorStack, setRecordsCursorStack] = useState<Array<string | undefined>>([undefined])
   const [recordsInterfaceOnly, setRecordsInterfaceOnly] = useState(false)
+  const [recordsCrawlerOnly, setRecordsCrawlerOnly] = useState(false)
   const recordsCursor = recordsCursorStack[recordsCursorStack.length - 1]
 
   useEffect(() => {
     setRecordsCursorStack([undefined])
     setRecordsInterfaceOnly(false)
+    setRecordsCrawlerOnly(false)
   }, [site?.id])
 
   const detailQuery = useQuery({
@@ -49,12 +51,13 @@ export default function AssetDetailDrawer({
   })
   const detail = detailQuery.data?.data
   const recordsQuery = useQuery({
-    queryKey: ['asset-records', site?.id, recordsCursor, recordsInterfaceOnly],
+    queryKey: ['asset-records', site?.id, recordsCursor, recordsInterfaceOnly, recordsCrawlerOnly],
     queryFn: () =>
       assetApi.records(site!.id, {
         cursor: recordsCursor ?? '',
         limit: 50,
         ...(recordsInterfaceOnly ? { interface: 1 as const } : {}),
+        ...(recordsCrawlerOnly ? { crawler: 1 as const } : {}),
       }),
     enabled: !!site && tab === 'records',
     staleTime: 30_000,
@@ -190,7 +193,7 @@ export default function AssetDetailDrawer({
 
             {tab === 'records' && (
               <div className="space-y-3">
-                <span className="flex items-center gap-2 text-[13px] text-muted-foreground">
+                <div className="flex items-center gap-4 text-[13px] text-muted-foreground">
                   <Checkbox
                     checked={recordsInterfaceOnly}
                     onChange={(e) => {
@@ -200,7 +203,16 @@ export default function AssetDetailDrawer({
                   >
                     只看接口
                   </Checkbox>
-                </span>
+                  <Checkbox
+                    checked={recordsCrawlerOnly}
+                    onChange={(e) => {
+                      setRecordsCrawlerOnly(e.target.checked)
+                      setRecordsCursorStack([undefined])
+                    }}
+                  >
+                    只看爬虫
+                  </Checkbox>
+                </div>
                 {recordsQuery.isLoading ? (
                   <p className="text-sm text-muted-foreground">加载原始记录…</p>
                 ) : records.length === 0 ? (
@@ -222,6 +234,9 @@ export default function AssetDetailDrawer({
                                 {r.is_interface && (
                                   <Tag className={`${statusTagClass('outline')} shrink-0 text-[10px]`}>接口</Tag>
                                 )}
+                                {r.is_crawler && (
+                                  <Tag className={`${statusTagClass('outline')} shrink-0 text-[10px]`}>爬虫</Tag>
+                                )}
                               </div>
                               <div className="mt-0.5 text-[11px] text-muted-foreground">
                                 {formatDate(r.observed_at)}
@@ -234,7 +249,7 @@ export default function AssetDetailDrawer({
                           width: 54,
                           render: (_, r) => (
                             <div className="text-xs text-muted-foreground">
-                              <div>{r.source}</div>
+                              <div>{r.collector || r.source}</div>
                               <div>{r.method || 'GET'}</div>
                             </div>
                           ),

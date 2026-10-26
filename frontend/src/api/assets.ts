@@ -141,7 +141,7 @@ export interface ConnectivityPolicy {
 
 export type AssetKind = 'site' | 'domain' | 'ip' | 'record'
 export type AssetCatalog = 'all' | 'verified' | 'candidates'
-export type AssetView = '' | 'clues' | 'candidates' | 'lost' | 'interfaces' | 'icons' | 'technologies' | 'apps' | 'media' | 'ignored'
+export type AssetView = '' | 'clues' | 'candidates' | 'lost' | 'interfaces' | 'crawler' | 'icons' | 'technologies' | 'apps' | 'media' | 'ignored'
 
 export interface RawRecordRow {
   id: number
@@ -150,6 +150,8 @@ export interface RawRecordRow {
   project_code: string
   project_name: string
   source: string
+  /** 发现这条记录的采集器（katana/dirscan/wih…），历史记录可能为空 */
+  collector?: string
   host: string
   port: number
   protocol: string
@@ -160,6 +162,7 @@ export interface RawRecordRow {
   server: string
   method: string
   is_interface: boolean
+  is_crawler: boolean
   technology_stack: string[]
   observed_at: string
   resource_type: 'record'
@@ -293,7 +296,7 @@ export const assetApi = {
   /** 资产详情：站点 + 入口 + 证据链（验证/指纹/原始记录/事件/关系） */
   detail: (id: number) =>
     api.get<unknown, { code: number; message: string; data: AssetDetail }>(`/assets/${id}`),
-  records: (id: number, params: { cursor?: string; limit?: number; interface?: 1 } = {}) =>
+  records: (id: number, params: { cursor?: string; limit?: number; interface?: 1; crawler?: 1 } = {}) =>
     api.get<unknown, { code: number; data: AssetRecordsPage }>(`/assets/${id}/records`, { params }),
   checkQuery: (q: string) =>
     api.get<unknown, { code: number; data: { valid: boolean; compiled: string } }>('/assets/query-check', {
@@ -392,6 +395,8 @@ export interface AssetFingerprintHit {
 export interface AssetRawRecord {
   id: number
   source: string
+  /** 发现这条记录的采集器（katana/dirscan/wih…），历史记录可能为空 */
+  collector?: string
   host: string
   port: number
   protocol: string
@@ -401,6 +406,7 @@ export interface AssetRawRecord {
   ip: string
   method: string
   is_interface: boolean
+  is_crawler?: boolean
   evidence: Record<string, unknown>
   observed_at: string
 }

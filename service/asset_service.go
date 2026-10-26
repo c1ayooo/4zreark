@@ -144,12 +144,12 @@ func (s *AssetService) GetAssetDetail(ctx context.Context, id int64) (*repo.Asse
 	return a.GetAssetDetail(ctx, id)
 }
 
-func (s *AssetService) ListSiteRecords(ctx context.Context, siteID int64, cursor string, limit int, interfaceOnly bool) ([]*repo.AssetRecord, string, bool, error) {
+func (s *AssetService) ListSiteRecords(ctx context.Context, siteID int64, cursor string, limit int, interfaceOnly, crawlerOnly bool) ([]*repo.AssetRecord, string, bool, error) {
 	a, err := s.repo()
 	if err != nil {
 		return nil, "", false, err
 	}
-	return a.ListSiteRecords(ctx, siteID, cursor, limit, interfaceOnly)
+	return a.ListSiteRecords(ctx, siteID, cursor, limit, interfaceOnly, crawlerOnly)
 }
 
 // ListAssets 是资产列表：view × kind × catalog 三层正交维度 + DSL 查询串。

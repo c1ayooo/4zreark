@@ -290,14 +290,24 @@ function Records({ items }: { items: AssetRawRecord[] }) {
       title: '来源',
       dataIndex: 'source',
       key: 'source',
-      render: (v: string) => <span className="text-xs">{v}</span>,
+      render: (v: string, r) => <span className="text-xs">{r.collector || v}</span>,
     },
     {
       title: '入口',
       dataIndex: 'value',
       key: 'value',
       ellipsis: true,
-      render: (v: string) => <span className="max-w-[260px] truncate font-mono text-xs">{v}</span>,
+      render: (v: string, r) => (
+        <span className="flex items-center gap-1">
+          <span className="max-w-[260px] truncate font-mono text-xs">{v}</span>
+          {r.is_interface && (
+            <Tag className={`${badgeCls('outline')} shrink-0 text-[10px]`}>接口</Tag>
+          )}
+          {r.is_crawler && (
+            <Tag className={`${badgeCls('outline')} shrink-0 text-[10px]`}>爬虫</Tag>
+          )}
+        </span>
+      ),
     },
     {
       title: '状态码',

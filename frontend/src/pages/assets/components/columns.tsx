@@ -495,6 +495,9 @@ export function buildAssetTableParts({
                 {r.is_interface && (
                   <Tag className={`${badgeCls('outline')} shrink-0 text-[11px]`}>接口</Tag>
                 )}
+                {r.is_crawler && (
+                  <Tag className={`${badgeCls('outline')} shrink-0 text-[11px]`}>爬虫</Tag>
+                )}
               </div>
               <div className="text-xs text-muted-foreground">
                 {r.host}:{r.port} · {r.protocol}
@@ -510,7 +513,7 @@ export function buildAssetTableParts({
           const r = row as RawRecordRow
           return (
             <div className="text-[13px] text-muted-foreground">
-              <div>{r.source || '—'}</div>
+              <div>{r.collector || r.source || '—'}</div>
               <div className="text-[11px]">{r.method || 'GET'}</div>
             </div>
           )

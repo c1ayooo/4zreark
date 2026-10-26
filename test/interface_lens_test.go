@@ -82,7 +82,7 @@ func TestInterfaceLens(t *testing.T) {
 		t.Fatalf("接口站点 = %d 个，期望 1", sitePage.Total)
 	}
 
-	items, _, _, err := assets.ListSiteRecords(ctx, rows[0].SiteID, "", 50, true)
+	items, _, _, err := assets.ListSiteRecords(ctx, rows[0].SiteID, "", 50, true, false)
 	if err != nil {
 		t.Fatalf("站点接口记录分页失败: %v", err)
 	}

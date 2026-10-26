@@ -1790,6 +1790,11 @@ func rawRecordFromCrawl(r pipeline.UrlResult) (repo.RawRecord, bool) {
 	if rec.Evidence == nil {
 		rec.Evidence = map[string]any{}
 	}
+	// collector 记录发现这条 URL 的采集器（katana/dirscan/wih/...）：
+	// 资产探索的爬虫视图与 source= DSL 条件都靠它区分，采集侧不写就只能去任务结果里翻。
+	if src := strings.ToLower(strings.TrimSpace(r.Source)); src != "" {
+		rec.Evidence["collector"] = src
+	}
 	if method := strings.ToUpper(strings.TrimSpace(r.Method)); method != "" {
 		rec.Evidence["method"] = method
 	}

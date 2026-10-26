@@ -22,13 +22,19 @@ var assetQueryFields = []string{
 	"icon_hash", "discovery_type", "first_seen", "verified_at", "new_within", "verified_within",
 	"changed_within", "state",
 	"starred", "tag", "note", "ignored",
+	// 记录级字段：落在 raw_records 上（站点粒度按「带此类记录」EXISTS 过滤，
+	// 记录粒度直接查 r.*）。爬虫/接口这些只在任务结果里可见的东西，靠它们进资产查询。
+	"url", "method", "content_type", "source", "is_interface",
 }
 
 type dslParser struct {
 	src  []rune
 	pos  int
 	args *[]any
-	base int // 起始占位符编号，调用方已占用 $1..$base-1
+	base int  // 起始占位符编号，调用方已占用 $1..$base-1
+	// recordDirect=true 时记录级字段直接落在 r.*（记录粒度），
+	// 否则包成 EXISTS (raw_records rr ...)（站点/域名/IP 粒度）。
+	recordDirect bool
 }
 
 // BuildAssetWhere 把查询串编译成参数化 SQL 片段（带 s. 前缀别名）与参数列表。
@@ -38,6 +44,16 @@ func BuildAssetWhere(q string) (string, []any, error) {
 
 // BuildAssetWhereFrom 从指定占位符编号开始编译，避免调用方做字符串替换。
 func BuildAssetWhereFrom(q string, base int) (string, []any, error) {
+	return buildAssetWhereMode(q, base, false)
+}
+
+// BuildAssetWhereForRecords 按「原始记录」粒度编译：记录级字段直接查 r.*，
+// status_code/port 也取记录自身的值而不是归属站点的。
+func BuildAssetWhereForRecords(q string, base int) (string, []any, error) {
+	return buildAssetWhereMode(q, base, true)
+}
+
+func buildAssetWhereMode(q string, base int, recordDirect bool) (string, []any, error) {
 	q = strings.TrimSpace(q)
 	if q == "" {
 		return "", nil, nil
@@ -46,7 +62,7 @@ func BuildAssetWhereFrom(q string, base int) (string, []any, error) {
 		base = 1
 	}
 	args := make([]any, 0, 8)
-	p := &dslParser{src: []rune(q), args: &args, base: base}
+	p := &dslParser{src: []rune(q), args: &args, base: base, recordDirect: recordDirect}
 	expr, err := p.parseOr()
 	if err != nil {
 		return "", nil, err
@@ -257,10 +273,12 @@ func (p *dslParser) add(v any) string {
 	return fmt.Sprintf("$%d", p.base+len(*p.args)-1)
 }
 
+// like 拼包含匹配的 LIKE 模式：= 语义是「包含」，与 == 精确匹配相对。
+func like(v string) string {
+	return "%" + escapeLike(v) + "%"
+}
+
 func (p *dslParser) buildCond(field, op, val string) (string, error) {
-	like := func(v string) string {
-		return "%" + escapeLike(v) + "%"
-	}
 	neg := op == "!="
 
 	switch field {
@@ -272,6 +290,11 @@ func (p *dslParser) buildCond(field, op, val string) (string, error) {
 		col := "s." + field
 		if field == "status_code" {
 			col = "s.http_status"
+		}
+		// 记录粒度下状态码/端口取记录自身的值：原始记录都有独立采集到的
+		// status_code/port，归属站点的聚合值对「这一条 URL」没有意义。
+		if p.recordDirect {
+			col = "r." + field
 		}
 		if neg {
 			return fmt.Sprintf("(%s IS NULL OR %s <> %s)", col, col, p.add(n)), nil
@@ -285,6 +308,76 @@ func (p *dslParser) buildCond(field, op, val string) (string, error) {
 		}
 		return fmt.Sprintf("%s = %s", col, p.add(n)), nil
 
+	case "url", "method", "content_type":
+		return p.recordTextCond(field, op, val)
+
+	case "source":
+		// 采集来源：同时匹配 r.source（scan/passive 等落库来源）与
+		// evidence.collector（katana/dirscan 等采集器），两个口径一个字段查。
+		ph := p.add(strings.ToLower(strings.TrimSpace(val)))
+		pred := fmt.Sprintf(`(lower(coalesce(%s,'')) = %s OR lower(coalesce(%s,'')) = %s)`,
+			p.recordCol("source"), ph, p.recordCol("evidence->>'collector'"), ph)
+		return p.wrapRecord(pred), nil
+
+	case "is_interface":
+		truthy := val == "true" || val == "1" || val == "yes" || val == "y"
+		if neg {
+			truthy = !truthy
+		}
+		pred := interfacePredicate(p.recordAlias())
+		if !truthy {
+			pred = "(NOT " + pred + ")"
+		}
+		return p.wrapRecord(pred), nil
+	}
+
+	return p.siteCond(field, op, val, neg)
+}
+
+// recordAlias 是记录级谓词里 raw_records 的别名：站点粒度走 EXISTS 里的 rr，
+// 记录粒度直接用查询本身的 r。
+func (p *dslParser) recordAlias() string {
+	if p.recordDirect {
+		return "r"
+	}
+	return "rr"
+}
+
+// recordCol 把记录上的列名套上当前粒度的别名。
+func (p *dslParser) recordCol(col string) string {
+	return p.recordAlias() + "." + col
+}
+
+// wrapRecord 按粒度包一条记录级条件。
+func (p *dslParser) wrapRecord(pred string) string {
+	return wrapRecordPredicate(!p.recordDirect, pred)
+}
+
+// recordTextCond 编译 url/method/content_type 这类记录级文本字段：
+// = 包含匹配、== 精确匹配、!= 取反（缺失字段也算不匹配），与站点字段同一套约定。
+func (p *dslParser) recordTextCond(field, op, val string) (string, error) {
+	expr := p.recordCol("value")
+	if field != "url" {
+		expr = fmt.Sprintf("coalesce(%s,'')", p.recordCol("evidence->>'"+field+"'"))
+		if field == "method" {
+			// 方法统一大写比较，method="post" 也能命中
+			expr = "upper(" + expr + ")"
+			val = strings.ToUpper(strings.TrimSpace(val))
+		}
+	}
+	ph := p.add(val)
+	switch op {
+	case "==":
+		return fmt.Sprintf("%s = %s", expr, ph), nil
+	case "!=":
+		return fmt.Sprintf("(coalesce(%s,'') = '' OR %s NOT ILIKE %s)", expr, expr, p.add(like(val))), nil
+	default:
+		return fmt.Sprintf("%s ILIKE %s", expr, p.add(like(val))), nil
+	}
+}
+
+func (p *dslParser) siteCond(field, op, val string, neg bool) (string, error) {
+	switch field {
 	case "state":
 		// 巡检状态：reachable/pending/lost，精确匹配
 		if neg {

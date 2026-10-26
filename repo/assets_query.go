@@ -112,6 +112,7 @@ type RawRecordRow struct {
 	ProjectCode  string    `json:"project_code"`
 	ProjectName  string    `json:"project_name"`
 	Source       string    `json:"source"`
+	Collector    string    `json:"collector"`
 	Host         string    `json:"host"`
 	Port         int       `json:"port"`
 	Protocol     string    `json:"protocol"`
@@ -122,6 +123,7 @@ type RawRecordRow struct {
 	Server       string    `json:"server"`
 	Method       string    `json:"method"`
 	IsInterface  bool      `json:"is_interface"`
+	IsCrawler    bool      `json:"is_crawler"`
 	Tech         []string  `json:"technology_stack"`
 	ObservedAt   time.Time `json:"observed_at"`
 	ResourceType string    `json:"resource_type"`
@@ -213,6 +215,30 @@ func interfacePredicate(alias string) string {
 	return strings.ReplaceAll(interfacePredicateSQL, "{{a}}", alias)
 }
 
+// crawlerPredicateSQL 是爬虫来源记录的统一判定，别名由调用方替换。
+// collector 由采集侧落库（katana/dirscan/wih 等）；历史记录没有 collector，
+// 靠 tag/attribute/referrer 兜底——这三样只有 katana 爬虫会写，目录扫描不带。
+const crawlerPredicateSQL = `(coalesce({{a}}.evidence->>'collector','') = 'katana'
+	OR coalesce({{a}}.evidence->>'tag','') <> ''
+	OR coalesce({{a}}.evidence->>'attribute','') <> ''
+	OR coalesce({{a}}.evidence->>'referrer','') <> '')`
+
+func crawlerPredicate(alias string) string {
+	if alias == "" {
+		return strings.ReplaceAll(crawlerPredicateSQL, "{{a}}.", "")
+	}
+	return strings.ReplaceAll(crawlerPredicateSQL, "{{a}}", alias)
+}
+
+// wrapRecordPredicate 按粒度包一条记录级条件：站点/域名/IP 粒度走 EXISTS
+// （与 interfaces 视图同一写法），记录粒度直接落在 r.* 上。
+func wrapRecordPredicate(siteScoped bool, pred string) string {
+	if siteScoped {
+		return "EXISTS (SELECT 1 FROM raw_records rr WHERE rr.site_id = s.id AND " + pred + ")"
+	}
+	return pred
+}
+
 // buildAssetWhere 把三层维度与 DSL 合成 WHERE（别名固定为 s）。
 func (a *AssetRepo) buildAssetWhere(q AssetQuery) (*whereBuilder, error) {
 	w := newWhereBuilder(1)
@@ -241,6 +267,9 @@ func (a *AssetRepo) buildAssetWhere(q AssetQuery) (*whereBuilder, error) {
 	case "interfaces":
 		w.parts = append(w.parts,
 			"EXISTS (SELECT 1 FROM raw_records rr WHERE rr.site_id = s.id AND "+interfacePredicate("rr")+")")
+	case "crawler":
+		w.parts = append(w.parts,
+			"EXISTS (SELECT 1 FROM raw_records rr WHERE rr.site_id = s.id AND "+crawlerPredicate("rr")+")")
 	case "ignored":
 		w.parts = append(w.parts, "s.ignored")
 	}
@@ -519,9 +548,9 @@ func (a *AssetRepo) attachRecentRecords(ctx context.Context, sites []*Site, limi
 			  FROM raw_records r
 			 WHERE r.site_id = ANY($1)
 		)
-		SELECT id, source, host, port, protocol, value, status_code, coalesce(title,''),
-		       coalesce(ip::text,''), coalesce(evidence->>'method',''), `+interfacePredicate("")+`,
-		       evidence, observed_at, site_id
+		SELECT id, source, coalesce(evidence->>'collector',''), host, port, protocol, value, status_code,
+		       coalesce(title,''), coalesce(ip::text,''), coalesce(evidence->>'method',''),
+		       `+interfacePredicate("")+`, `+crawlerPredicate("")+`, evidence, observed_at, site_id
 		  FROM ranked
 		 WHERE rn <= $2`, ids, limit)
 	if err != nil {
@@ -535,8 +564,8 @@ func (a *AssetRepo) attachRecentRecords(ctx context.Context, sites []*Site, limi
 			evidence []byte
 			siteID   int64
 		)
-		if err := rows.Scan(&r.ID, &r.Source, &r.Host, &r.Port, &r.Protocol, &r.Value,
-			&r.StatusCode, &r.Title, &r.IP, &r.Method, &r.IsInterface, &evidence, &r.ObservedAt, &siteID); err != nil {
+		if err := rows.Scan(&r.ID, &r.Source, &r.Collector, &r.Host, &r.Port, &r.Protocol, &r.Value,
+			&r.StatusCode, &r.Title, &r.IP, &r.Method, &r.IsInterface, &r.IsCrawler, &evidence, &r.ObservedAt, &siteID); err != nil {
 			return err
 		}
 		if len(evidence) > 0 {
@@ -692,15 +721,18 @@ func (a *AssetRepo) buildRecordWhere(q AssetQuery) (*whereBuilder, error) {
 		w.parts = append(w.parts, "(s.state = 'pending' OR s.verification_status IN ('pending','failed'))")
 	case "interfaces":
 		w.parts = append(w.parts, interfacePredicate("r"))
+	case "crawler":
+		w.parts = append(w.parts, crawlerPredicate("r"))
 	}
 	qQ := strings.TrimSpace(q.Q)
 	if qQ == "" {
 		return w, nil
 	}
 	// 与站点粒度同一套查询口径：带 DSL 痕迹的串按 DSL 编译（条件里引用的 s.* 经
-	// join 生效），普通关键词仍走 r.* 的 ILIKE。全局搜索 text="…" 和裸词都直接出数据。
+	// join 生效，记录级字段直接查 r.*），普通关键词仍走 r.* 的 ILIKE。
+	// 全局搜索 text="…" 和裸词都直接出数据。
 	if looksLikeAssetDSL(qQ) {
-		expr, args, err := BuildAssetWhereFrom(qQ, w.next)
+		expr, args, err := BuildAssetWhereForRecords(qQ, w.next)
 		if err != nil {
 			return nil, err
 		}
@@ -721,9 +753,10 @@ func (a *AssetRepo) buildRecordWhere(q AssetQuery) (*whereBuilder, error) {
 
 func rawRecordColumns() string {
 	return `r.id, coalesce(r.site_id,0), r.project_id, coalesce(p.code,''), coalesce(p.name,''),
-	r.source, r.host, r.port, r.protocol, r.value, r.status_code, coalesce(r.title,''),
+	r.source, coalesce(r.evidence->>'collector',''), r.host, r.port, r.protocol, r.value,
+	r.status_code, coalesce(r.title,''),
 	coalesce(r.ip::text,''), r.server, r.tech, coalesce(r.evidence->>'method',''),
-	` + interfacePredicate("r") + `, r.observed_at`
+	` + interfacePredicate("r") + `, ` + crawlerPredicate("r") + `, r.observed_at`
 }
 
 func scanRawRecord(scan func(...any) error) (*RawRecordRow, error) {
@@ -732,8 +765,9 @@ func scanRawRecord(scan func(...any) error) (*RawRecordRow, error) {
 		tech []byte
 	)
 	if err := scan(&row.ID, &row.SiteID, &row.ProjectID, &row.ProjectCode, &row.ProjectName,
-		&row.Source, &row.Host, &row.Port, &row.Protocol, &row.Value, &row.StatusCode,
-		&row.Title, &row.IP, &row.Server, &tech, &row.Method, &row.IsInterface, &row.ObservedAt); err != nil {
+		&row.Source, &row.Collector, &row.Host, &row.Port, &row.Protocol, &row.Value, &row.StatusCode,
+		&row.Title, &row.IP, &row.Server, &tech, &row.Method, &row.IsInterface, &row.IsCrawler,
+		&row.ObservedAt); err != nil {
 		return nil, err
 	}
 	row.Tech = stringArrayFromJSON(tech)
