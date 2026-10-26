@@ -284,6 +284,9 @@ export default function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps
         <Menu
           mode="inline"
           inlineCollapsed={collapsed}
+          // 子菜单缩进减半（默认 24px/层）：w-44 窄轨道下二级项会被图标+缩进
+          // 顶到右边裁字（「变更时间线」截成「变更时…」），12px/层刚好贴合分组标题
+          inlineIndent={12}
           items={items}
           selectedKeys={activePath ? [activePath] : []}
           openKeys={collapsed ? undefined : expandedGroups}
