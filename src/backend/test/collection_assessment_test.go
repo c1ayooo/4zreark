@@ -54,6 +54,55 @@ func TestCollectionAssessment(t *testing.T) {
 			}
 		}
 	}
+	// 快照应已落表；趋势查询应返回至少一个点（时间升序）
+	latest, trend, err := service.ProjectAssessmentTrend(ctx, projectID, 30)
+	if err != nil {
+		t.Fatalf("趋势查询失败: %v", err)
+	}
+	if latest == nil || latest.ProjectID != projectID {
+		t.Fatalf("最近评估缺失: %+v", latest)
+	}
+	if len(trend) == 0 || trend[len(trend)-1].TakenAt.Before(trend[0].TakenAt) {
+		t.Fatalf("趋势点异常: %d 点", len(trend))
+	}
+
+	// 清理注销主体处置：造一条注销实体 + 候选，purge 后应消失
+	code := "assess-purge-test"
+	var pid int64
+	if err := r.Pool().QueryRow(ctx,
+		`insert into projects (code, name) values ($1,$2) returning id`, code, code).Scan(&pid); err != nil {
+		t.Fatalf("建测试项目失败: %v", err)
+	}
+	t.Cleanup(func() {
+		bg := context.Background()
+		_, _ = r.Pool().Exec(bg, `delete from digital_candidates where project_id=$1`, pid)
+		_, _ = r.Pool().Exec(bg, `delete from enterprise_candidates where project_id=$1`, pid)
+		_, _ = r.Pool().Exec(bg, `delete from enterprise_entities where project_id=$1`, pid)
+		_, _ = r.Pool().Exec(bg, `delete from projects where id=$1`, pid)
+	})
+	if _, err := r.Pool().Exec(ctx, `
+insert into enterprise_entities (project_id, name, open_status, source)
+values ($1,'测试注销公司','注销','test'), ($1,'测试在营公司','在营','test')`, pid); err != nil {
+		t.Fatalf("造实体失败: %v", err)
+	}
+	if _, err := r.Pool().Exec(ctx, `
+insert into digital_candidates (project_id, kind, name, entity_name)
+values ($1,'app','注销公司App','测试注销公司'), ($1,'app','在营公司App','测试在营公司')`, pid); err != nil {
+		t.Fatalf("造候选失败: %v", err)
+	}
+	entities, digitalCand, domainCand, err := service.NewEnterpriseService().PurgeDeadEntities(ctx, pid)
+	if err != nil {
+		t.Fatalf("purge 失败: %v", err)
+	}
+	if entities != 1 || digitalCand != 1 {
+		t.Fatalf("purge 计数不符: entities=%d digital=%d domain=%d", entities, digitalCand, domainCand)
+	}
+	var alive int
+	if err := r.Pool().QueryRow(ctx,
+		`select count(*) from enterprise_entities where project_id=$1 and name='测试在营公司'`, pid).Scan(&alive); err != nil || alive != 1 {
+		t.Fatalf("在营主体不应被清理: alive=%d err=%v", alive, err)
+	}
+
 	t.Logf("评估: %+v", a)
 	t.Logf("Summary: %s", a.Summary)
 	t.Logf("Risks: %v", a.Risks)

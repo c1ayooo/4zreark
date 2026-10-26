@@ -124,6 +124,28 @@ func (h *EnterpriseHandler) AlignedAssets(c *gin.Context) {
 }
 
 // Providers GET /api/enterprise-entities/providers
+// PurgeDead POST /api/enterprise-entities/purge-dead
+// 清理注销/吊销主体及其关联候选（评估通知风险项的处置动作）。
+func (h *EnterpriseHandler) PurgeDead(c *gin.Context) {
+	var body struct {
+		ProjectID int64 `json:"project_id"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.ProjectID <= 0 {
+		utils.BadRequest(c, "project_id 必填")
+		return
+	}
+	entities, digitalCand, domainCand, err := h.svc.PurgeDeadEntities(c.Request.Context(), body.ProjectID)
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "已清理注销/吊销主体", gin.H{
+		"entities":           entities,
+		"digital_candidates": digitalCand,
+		"domain_candidates":  domainCand,
+	})
+}
+
 func (h *EnterpriseHandler) Providers(c *gin.Context) {
 	utils.Success(c, gin.H{"items": h.svc.Providers()})
 }

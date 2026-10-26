@@ -576,6 +576,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 			protected.GET("/audit", middleware.RequirePermission("audit:read"), auditHandler.ListAudit)
 
 			// 数字资产名单与本地文档导入（v4 §14）：名单与站点库解耦
+			assessmentHandler := api.NewAssessmentHandler()
 			digitalHandler := api.NewDigitalHandler()
 			protected.GET("/digital-assets", middleware.RequirePermission("digital:read"), digitalHandler.ListDigitalAssets)
 			protected.POST("/digital-assets/preview", middleware.RequirePermission("digital:write"), digitalHandler.PreviewDigitalAssets)
@@ -608,6 +609,8 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 			protected.GET("/enterprise-entities/candidates", middleware.RequirePermission("digital:read"), enterpriseHandler.Candidates)
 			protected.DELETE("/enterprise-entities/:id", middleware.RequirePermission("digital:write"), enterpriseHandler.Delete)
 			protected.GET("/enterprise-entities/:id/assets", middleware.RequirePermission("digital:read"), enterpriseHandler.AlignedAssets)
+			protected.POST("/enterprise-entities/purge-dead", middleware.RequirePermission("digital:write"), enterpriseHandler.PurgeDead)
+			protected.GET("/projects/:id/assessment", middleware.RequirePermission("asset:read"), assessmentHandler.GetProjectAssessment)
 
 			// 工信部 ICP 官方查询（异步单 worker + 全局限速，独立队列）
 			icpHandler := api.NewICPHandler()

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -22,19 +23,20 @@ type CollectionAssessment struct {
 	Trigger     string `json:"trigger"`
 
 	// 资产面
-	Entities        int         `json:"entities"`
-	EntitiesDead    int         `json:"entities_dead"`
-	DigitalAssets   int         `json:"digital_assets"`
-	DigitalByKind   map[string]int `json:"digital_by_kind"`
-	DigitalPending  int         `json:"digital_pending"`
-	DomainCandidates int        `json:"domain_candidates"`
-	DomainNoICP     int         `json:"domain_no_icp"`
-	DomainGroupPend int         `json:"domain_group_pending"`
-	Seeds           int         `json:"seeds"`
-	Sites           int         `json:"sites"`
-	SitesOddPort    int         `json:"sites_odd_port"`
-	SitesPlainHTTP  int         `json:"sites_plain_http"`
-	ExpiredSessions int         `json:"expired_sessions"`
+	Entities          int            `json:"entities"`
+	EntitiesDead      int            `json:"entities_dead"`
+	DigitalAssets     int            `json:"digital_assets"`
+	DigitalByKind     map[string]int `json:"digital_by_kind"`
+	DigitalPending    int            `json:"digital_pending"`
+	DomainCandidates  int            `json:"domain_candidates"`
+	DomainNoICP       int            `json:"domain_no_icp"`
+	DomainGroupPend   int            `json:"domain_group_pending"`
+	Seeds             int            `json:"seeds"`
+	Sites             int            `json:"sites"`
+	SitesOddPort      int            `json:"sites_odd_port"`
+	SitesPlainHTTP    int            `json:"sites_plain_http"`
+	SitesCertExpiring int            `json:"sites_cert_expiring"`
+	ExpiredSessions   int            `json:"expired_sessions"`
 
 	// 风险与结论
 	Risks   []string `json:"risks"`
@@ -114,8 +116,10 @@ select count(*) from seeds where project_id = $1 and enabled`, projectID).Scan(&
 	if err := r.Pool().QueryRow(ctx, `
 select count(*),
        count(*) filter (where port not in (80, 443)),
-       count(*) filter (where protocol = 'http')
-  from sites where project_id = $1`, projectID).Scan(&a.Sites, &a.SitesOddPort, &a.SitesPlainHTTP); err != nil {
+       count(*) filter (where protocol = 'http'),
+       count(*) filter (where cert_not_after is not null and cert_not_after < now() + interval '30 days')
+  from sites where project_id = $1`,
+		projectID).Scan(&a.Sites, &a.SitesOddPort, &a.SitesPlainHTTP, &a.SitesCertExpiring); err != nil {
 		return nil, err
 	}
 	if err := r.Pool().QueryRow(ctx, `
@@ -142,6 +146,9 @@ select count(*) from datasource_sessions where status = 'expired'`).Scan(&a.Expi
 	if a.SitesPlainHTTP > 0 {
 		a.Risks = append(a.Risks, fmt.Sprintf("%d 个站点为明文 HTTP", a.SitesPlainHTTP))
 	}
+	if a.SitesCertExpiring > 0 {
+		a.Risks = append(a.Risks, fmt.Sprintf("%d 个站点证书 30 天内到期或已过期", a.SitesCertExpiring))
+	}
 	if a.ExpiredSessions > 0 {
 		a.Risks = append(a.Risks, fmt.Sprintf("%d 个数据源会话已失效，相关采集将中断", a.ExpiredSessions))
 	}
@@ -151,7 +158,68 @@ select count(*) from datasource_sessions where status = 'expired'`).Scan(&a.Expi
 		a.DigitalByKind["app"], a.DigitalByKind["miniapp"],
 		a.DigitalByKind["official_account"], a.DigitalByKind["newmedia"],
 		a.DomainCandidates, a.Seeds, a.Sites, len(a.Risks))
+
+	// 快照落表（尽力而为；趋势查询的数据源）
+	if statsB, merr := json.Marshal(a); merr == nil {
+		_, _ = r.Pool().Exec(ctx, `
+insert into collection_assessment_snapshots (project_id, stats) values ($1, $2::jsonb)`,
+			projectID, string(statsB))
+	}
 	return a, nil
+}
+
+// AssessmentTrendPoint 趋势数据点。
+type AssessmentTrendPoint struct {
+	TakenAt time.Time       `json:"taken_at"`
+	Stats   json.RawMessage `json:"stats"`
+}
+
+// ProjectAssessmentTrend 最近一次评估 + 历史趋势（最多 limit 个点，时间升序）。
+func ProjectAssessmentTrend(ctx context.Context, projectID int64, limit int) (*CollectionAssessment, []AssessmentTrendPoint, error) {
+	r := repo.Default()
+	if r == nil {
+		return nil, nil, fmt.Errorf("数据层未初始化")
+	}
+	if limit <= 0 || limit > 90 {
+		limit = 30
+	}
+	var latestStats []byte
+	var latest CollectionAssessment
+	row := r.Pool().QueryRow(ctx, `
+select stats from collection_assessment_snapshots
+ where project_id = $1 order by taken_at desc, id desc limit 1`, projectID)
+	if err := row.Scan(&latestStats); err != nil {
+		return nil, nil, nil // 从未有评估
+	}
+	if err := json.Unmarshal(latestStats, &latest); err != nil {
+		return nil, nil, fmt.Errorf("解析最近评估失败: %w", err)
+	}
+	latest.ProjectName, _ = func() (string, error) {
+		var n string
+		err := r.Pool().QueryRow(ctx, `select name from projects where id=$1`, projectID).Scan(&n)
+		return n, err
+	}()
+
+	rows, err := r.Pool().Query(ctx, `
+select taken_at, stats from collection_assessment_snapshots
+ where project_id = $1 order by taken_at desc, id desc limit $2`, projectID, limit)
+	if err != nil {
+		return &latest, nil, err
+	}
+	defer rows.Close()
+	trend := []AssessmentTrendPoint{}
+	for rows.Next() {
+		var p AssessmentTrendPoint
+		if err := rows.Scan(&p.TakenAt, &p.Stats); err != nil {
+			return &latest, nil, err
+		}
+		trend = append(trend, p)
+	}
+	// 时间升序返回
+	for i, j := 0, len(trend)-1; i < j; i, j = i+1, j-1 {
+		trend[i], trend[j] = trend[j], trend[i]
+	}
+	return &latest, trend, nil
 }
 
 // SendCollectionAssessmentAsync 组装并异步发送评估通知；respectThrottle=true 时

@@ -88,6 +88,54 @@ func (s *EnterpriseService) AlignedAssets(ctx context.Context, projectID int64, 
 	return r.AlignedDigitalAssets(ctx, projectID, name)
 }
 
+// PurgeDeadEntities 清理注销/吊销主体及其关联候选（数字候选 + 域名候选）。
+// 评估通知风险项「注销主体仍在列」的处置动作；返回各层清理数量。
+func (s *EnterpriseService) PurgeDeadEntities(ctx context.Context, projectID int64) (entities, digitalCand, domainCand int64, err error) {
+	r := repo.Default()
+	if r == nil {
+		return 0, 0, 0, errors.New("数据层未初始化")
+	}
+	rows, err := r.Pool().Query(ctx, `
+select name from enterprise_entities
+ where project_id = $1 and open_status ~ '注销|吊销|迁出'`, projectID)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	names := []string{}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			rows.Close()
+			return 0, 0, 0, err
+		}
+		names = append(names, n)
+	}
+	rows.Close()
+	if len(names) == 0 {
+		return 0, 0, 0, nil
+	}
+	dtag, err := r.Pool().Exec(ctx,
+		`delete from digital_candidates where project_id = $1 and entity_name = any($2)`,
+		projectID, names)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	etag, err := r.Pool().Exec(ctx,
+		`delete from enterprise_candidates where project_id = $1 and entity_name = any($2)`,
+		projectID, names)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	digitalCand, domainCand = dtag.RowsAffected(), etag.RowsAffected()
+	tag, err := r.Pool().Exec(ctx,
+		`delete from enterprise_entities where project_id = $1 and name = any($2)`,
+		projectID, names)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return tag.RowsAffected(), digitalCand, domainCand, nil
+}
+
 // Providers 返回已接入的企业数据源清单（含未校准的 qcc）。
 func (s *EnterpriseService) Providers() []enterprise.ProviderKind {
 	return enterprise.Registry
