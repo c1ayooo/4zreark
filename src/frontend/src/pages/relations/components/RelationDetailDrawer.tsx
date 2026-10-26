@@ -19,14 +19,24 @@ import { cn } from '@/lib/utils'
 // 关系图谱的详情抽屉：节点 = 站点摘要 + 连边分布；边 = 边信息 + 两侧证据行。
 // 证据在点开边时才拉取（GET /relations/evidence）。
 
+export interface RelationGroupInfo {
+  type: string
+  /** 分组值（IP / 技术栈 / 证书哈希…） */
+  key: string
+  /** 该分组下的全部原始边（星形：中心站 ↔ 各成员） */
+  members: RelationEdge[]
+}
+
 export interface RelationSelection {
-  kind: 'node' | 'edge'
+  kind: 'node' | 'edge' | 'group'
   site?: RelationNode
   /** 节点模式下：各类型连边计数（画布侧算好传入） */
   incident?: { type: string; count: number }[]
   edge?: RelationEdge
   /** 簇间聚合边携带全部成员，抽屉里可切换看哪条的证据 */
   members?: RelationEdge[]
+  /** 分组模式：树形视图点分组值的放大镜按钮时传入 */
+  group?: RelationGroupInfo
 }
 
 function SideBadge({ side }: { side: string }) {
@@ -120,18 +130,21 @@ export function RelationDetailDrawer({
   selection: RelationSelection | null
   onClose: () => void
 }) {
-  const isEdge = selection?.kind === 'edge'
-  // 聚合边的成员切换是抽屉内部状态；换一条边时重置。
+  const group = selection?.kind === 'group' ? selection.group : undefined
+  // 聚合边 / 分组的成员切换是抽屉内部状态；换一条边或一个分组时重置。
   const [activeId, setActiveId] = useState<number | null>(null)
-  useEffect(() => setActiveId(null), [selection?.edge?.id])
-  const edge =
-    isEdge && selection?.edge
-      ? selection.members?.find((m) => m.id === activeId) ?? selection.edge
+  useEffect(() => setActiveId(null), [selection?.edge?.id, group?.type, group?.key])
+  const pool = group ? group.members : selection?.members
+  const active = group
+    ? pool?.find((m) => m.id === activeId) ?? pool?.[0]
+    : selection?.kind === 'edge' && selection.edge
+      ? pool?.find((m) => m.id === activeId) ?? selection.edge
       : undefined
   const site = selection?.site
-  const title =
-    selection?.kind === 'edge' && edge
-      ? `${relationTypeLabel[edge.type] ?? edge.type} · ${edge.left.host} ↔ ${edge.right.host}`
+  const title = group
+    ? `${relationTypeLabel[group.type] ?? group.type} · ${group.key}`
+    : selection?.kind === 'edge' && active
+      ? `${relationTypeLabel[active.type] ?? active.type} · ${active.left.host} ↔ ${active.right.host}`
       : selection?.kind === 'node' && site
         ? site.host
         : '详情'
@@ -177,18 +190,18 @@ export function RelationDetailDrawer({
         </div>
       )}
 
-      {isEdge && edge && (
+      {selection?.kind === 'edge' && active && (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-2">
             <Tag>
               <span
                 className="mr-1.5 inline-block size-2 rounded-full align-middle"
-                style={{ backgroundColor: relationTypeColor[edge.type] ?? '#94a3b8' }}
+                style={{ backgroundColor: relationTypeColor[active.type] ?? '#94a3b8' }}
               />
-              {relationTypeLabel[edge.type] ?? edge.type}
+              {relationTypeLabel[active.type] ?? active.type}
             </Tag>
-            <span className="text-muted-foreground font-mono text-xs">{edge.key || '—'}</span>
-            <span className="text-muted-foreground text-xs">置信度 {(edge.confidence * 100).toFixed(0)}%</span>
+            <span className="text-muted-foreground font-mono text-xs">{active.key || '—'}</span>
+            <span className="text-muted-foreground text-xs">置信度 {(active.confidence * 100).toFixed(0)}%</span>
           </div>
           {selection.members && selection.members.length > 1 && (
             <div>
@@ -197,18 +210,48 @@ export function RelationDetailDrawer({
               </p>
               <EdgeMembers
                 members={selection.members}
-                activeId={edge.id}
+                activeId={active.id}
                 onPick={(m) => setActiveId(m.id)}
               />
             </div>
           )}
           <div className="grid gap-2">
-            <SiteMiniCard site={edge.left} side="left" />
-            <SiteMiniCard site={edge.right} side="right" />
+            <SiteMiniCard site={active.left} side="left" />
+            <SiteMiniCard site={active.right} side="right" />
           </div>
           <div>
             <p className="text-muted-foreground mb-1.5 text-xs">证据（两侧原始记录）</p>
-            <EdgeEvidenceList edgeId={edge.id} />
+            <EdgeEvidenceList edgeId={active.id} />
+          </div>
+        </div>
+      )}
+
+      {group && active && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Tag>
+              <span
+                className="mr-1.5 inline-block size-2 rounded-full align-middle"
+                style={{ backgroundColor: relationTypeColor[group.type] ?? '#94a3b8' }}
+              />
+              {relationTypeLabel[group.type] ?? group.type}
+            </Tag>
+            <span className="min-w-0 truncate font-mono text-xs">{group.key}</span>
+            <span className="text-muted-foreground text-xs tabular-nums">{group.members.length} 条关系</span>
+          </div>
+          <div>
+            <p className="text-muted-foreground mb-1.5 text-xs">
+              该分组共 {group.members.length} 条同类关系，点选某条查看两侧站点与证据：
+            </p>
+            <EdgeMembers members={group.members} activeId={active.id} onPick={(m) => setActiveId(m.id)} />
+          </div>
+          <div className="grid gap-2">
+            <SiteMiniCard site={active.left} side="left" />
+            <SiteMiniCard site={active.right} side="right" />
+          </div>
+          <div>
+            <p className="text-muted-foreground mb-1.5 text-xs">证据（两侧原始记录）</p>
+            <EdgeEvidenceList edgeId={active.id} />
           </div>
         </div>
       )}

@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Network, RefreshCw, Share2 } from 'lucide-react'
+import { ListTree, RefreshCw, Table2 } from 'lucide-react'
 import { Button, Card, Segmented, Select } from 'antd'
 
 import { projectApi } from '@/api/projects'
 import { relationApi, relationTypeLabel, type RelationIndexStatus } from '@/api/relations'
 import { EdgeTable } from './components/EdgeTable'
-import { RelationGraphCanvas } from './components/RelationGraphCanvas'
+import { RelationTreeCanvas } from './components/RelationTreeCanvas'
 import { useToast } from '@/components/ui/use-toast'
 
 const TYPES = [
@@ -25,22 +25,22 @@ export default function RelationsPage() {
   const queryClient = useQueryClient()
   const [projectId, setProjectId] = useState('0')
   const [type, setType] = useState('')
-  // 图谱为默认视图；表格用于逐行精确浏览
-  const [view, setView] = useState<'graph' | 'table'>('graph')
+  // 树形为默认视图（根 → 类型 → 分组值 → 站点）；表格用于逐行精确浏览
+  const [view, setView] = useState<'tree' | 'table'>('tree')
 
   const projects = useQuery({ queryKey: ['asset-projects'], queryFn: () => projectApi.list() })
   const status = useQuery({
     queryKey: ['relation-status', projectId],
     queryFn: () => relationApi.indexStatus(Number(projectId) || undefined),
   })
-  // 图谱要全量边（上限 5000），表格维持 500 条的轻量查询
+  // 树形要全量边（上限 5000），表格维持 500 条的轻量查询
   const graph = useQuery({
     queryKey: ['relations', projectId, type, view],
     queryFn: () =>
       relationApi.list({
         project_id: Number(projectId) || undefined,
         type: type || undefined,
-        limit: view === 'graph' ? 5000 : 500,
+        limit: view === 'tree' ? 5000 : 500,
       }),
   })
 
@@ -69,16 +69,16 @@ export default function RelationsPage() {
         <div>
           <h1 className="text-2xl font-semibold">关系图谱</h1>
           <p className="text-sm text-muted-foreground">
-            按同 IP / 父子域 / 同图标 / 同技术栈聚类；每条边都挂两侧站点的原始记录作为证据
+            按同 IP / 父子域 / 同图标 / 同技术栈聚成分组树：类型 → 分组值 → 成员站点；每条关系都挂两侧站点的原始记录作为证据
           </p>
         </div>
         <div className="flex items-center gap-2">
           <Segmented
             value={view}
-            onChange={(v) => setView(v as 'graph' | 'table')}
+            onChange={(v) => setView(v as 'tree' | 'table')}
             options={[
-              { value: 'graph', label: '图谱', icon: <Share2 className="h-3.5 w-3.5" /> },
-              { value: 'table', label: '表格', icon: <Network className="h-3.5 w-3.5" /> },
+              { value: 'tree', label: '树形', icon: <ListTree className="h-3.5 w-3.5" /> },
+              { value: 'table', label: '表格', icon: <Table2 className="h-3.5 w-3.5" /> },
             ]}
           />
           <Select
@@ -95,7 +95,7 @@ export default function RelationsPage() {
             <RefreshCw className="mr-2 h-4 w-4" /> 刷新
           </Button>
           <Button type="primary" onClick={() => rebuild.mutate()} disabled={rebuild.isPending}>
-            <Share2 className="mr-2 h-4 w-4" />
+            <ListTree className="mr-2 h-4 w-4" />
             {rebuild.isPending ? '重建中…' : '重建图谱'}
           </Button>
         </div>
@@ -138,8 +138,19 @@ export default function RelationsPage() {
         </span>
       </div>
 
-      {view === 'graph' ? (
-        <RelationGraphCanvas data={data ?? null} loading={graph.isLoading} className="h-[68vh]" />
+      {view === 'tree' ? (
+        <RelationTreeCanvas
+          data={data ?? null}
+          loading={graph.isLoading}
+          className="h-[68vh]"
+          rootLabel={
+            projectId === '0'
+              ? '全部项目'
+              : projects.data?.data.find((p) => String(p.id) === projectId)?.name ?? '项目'
+          }
+          typeFilter={type}
+          resetKey={`${projectId}|${type}`}
+        />
       ) : (
         <EdgeTable edges={edges} loading={graph.isLoading} />
       )}

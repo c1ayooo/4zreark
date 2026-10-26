@@ -284,7 +284,7 @@ export default function TaskDetailPage() {
 
   if (!task) {
     return (
-      <div className="flex flex-col items-center justify-center py-16">
+      <div className="flex flex-col items-center justify-center py-10">
         <div className="text-6xl mb-4">🔍</div>
         <h2 className="text-xl font-semibold text-foreground mb-2">任务不存在</h2>
         <p className="text-muted-foreground mb-6 text-center max-w-md">

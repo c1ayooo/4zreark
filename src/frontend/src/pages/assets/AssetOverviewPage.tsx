@@ -117,15 +117,15 @@ export default function AssetOverviewPage() {
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         {cards.map((c) => (
-          <Card key={c.label} styles={{ body: { padding: 16 } }}>
+          <Card key={c.label} styles={{ body: { padding: '10px 12px' } }}>
             <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
               <c.icon className="h-3.5 w-3.5" />
               {c.label}
             </div>
-            <div className="mt-2 font-mono text-2xl font-semibold tabular-nums">
+            <div className="mt-1 font-mono text-xl font-semibold tabular-nums">
               {overview.isLoading ? '—' : nf.format(c.value ?? 0)}
             </div>
-            <div className="text-muted-foreground mt-1 text-[11px]">{c.hint}</div>
+            <div className="text-muted-foreground mt-0.5 text-[11px]">{c.hint}</div>
           </Card>
         ))}
       </div>

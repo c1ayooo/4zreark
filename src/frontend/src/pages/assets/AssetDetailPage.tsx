@@ -125,11 +125,11 @@ function Stat({
   tone?: 'danger' | 'success'
 }) {
   return (
-    <Card styles={{ body: { padding: 16 } }}>
-      <div className="flex items-center gap-3">
+    <Card styles={{ body: { padding: '10px 12px' } }}>
+      <div className="flex items-center gap-2.5">
         <span
           className={cn(
-            'flex size-9 shrink-0 items-center justify-center rounded-lg',
+            'flex size-8 shrink-0 items-center justify-center rounded-lg',
             tone === 'danger'
               ? 'bg-destructive/10 text-destructive'
               : tone === 'success'
@@ -137,11 +137,11 @@ function Stat({
                 : 'bg-primary/10 text-primary',
           )}
         >
-          <Icon className="size-4" />
+          <Icon className="size-3.5" />
         </span>
         <div className="min-w-0">
           <div className="text-muted-foreground text-xs">{label}</div>
-          <div className="truncate text-lg font-semibold tabular-nums">{value}</div>
+          <div className="truncate text-base font-semibold tabular-nums">{value}</div>
         </div>
       </div>
     </Card>
@@ -483,7 +483,7 @@ export default function AssetDetailPage() {
   if (!validId) {
     return (
       <Card>
-        <div className="text-muted-foreground flex flex-col items-center gap-3 py-16">
+        <div className="text-muted-foreground flex flex-col items-center gap-3 py-10">
           资产 ID 不合法
           <Link to="/assets">
             <Button size="small">返回资产列表</Button>
@@ -517,7 +517,7 @@ export default function AssetDetailPage() {
   if (!detail) {
     return (
       <Card>
-        <div className="text-muted-foreground flex flex-col items-center gap-3 py-16">
+        <div className="text-muted-foreground flex flex-col items-center gap-3 py-10">
           <AlertTriangle className="text-destructive h-8 w-8" />
           {detailQuery.isError ? '资产详情加载失败' : '资产不存在'}
           <div className="flex gap-2">
