@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -35,6 +36,43 @@ func materializeTaskConfigDictionaries(ctx context.Context, task *models.Task) (
 			task.Config.SubdomainWordlist = values
 			changed = true
 		}
+	}
+	// 字典自学习：把达到阈值的热词随任务下发（worker 无库，只能消费任务 config）。
+	// 学习是旁路：读取失败只记日志，不阻塞派单。
+	if learned, err := materializeLearnedWords(ctx, task); err != nil {
+		log.Printf("[TaskExecutor] 学习热词物化失败（任务继续）: %v", err)
+	} else if learned {
+		changed = true
+	}
+	return changed, nil
+}
+
+// materializeLearnedWords 把 dict_learning 里已晋升的热词写进任务 config。
+// 执行端把它们追加在内置/任务级词表之后，绝不替代——内置字典的默认语义不变。
+func materializeLearnedWords(ctx context.Context, task *models.Task) (bool, error) {
+	if repo.Default() == nil {
+		return false, nil
+	}
+	cfg, err := LoadDictLearningConfig(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !cfg.Enabled {
+		return false, nil
+	}
+	lr := repo.Default().DictLearning()
+	changed := false
+	if subs, err := lr.PromotedValues(ctx, repo.DictKindSubdomain, 300); err != nil {
+		return changed, err
+	} else if len(subs) > 0 {
+		task.Config.LearnedSubdomainWords = subs
+		changed = true
+	}
+	if paths, err := lr.PromotedValues(ctx, repo.DictKindPath, 800); err != nil {
+		return changed, err
+	} else if len(paths) > 0 {
+		task.Config.LearnedPaths = paths
+		changed = true
 	}
 	return changed, nil
 }

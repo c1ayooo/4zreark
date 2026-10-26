@@ -337,6 +337,15 @@ func main() {
 		defer siteWatchService.Stop()
 		log.Println("Asset cruise v2 started (discovery + site watch)")
 
+		// 证书到期检测：每日扫 sites.cert_not_after，7 天内 critical / 30 天内 warning
+		certExpiryService := service.NewCertExpiryService()
+		certExpiryService.Start()
+		defer certExpiryService.Stop()
+		log.Println("Cert expiry monitor started")
+
+		// 站点判死（down）通知钩子：reappear 的恢复通知在 VerifyService 内直调
+		service.InstallSiteDownNotifyHook()
+
 		// 内置词表自动同步（embed + 磁盘 config/dicts/txt → dictionaries 表）
 		dictSyncService := service.GetDictSyncService()
 		dictSyncService.Start()
@@ -362,6 +371,13 @@ func main() {
 	vulnVerifyService := service.GetVulnVerifyService()
 	vulnVerifyService.Start(context.Background())
 	defer vulnVerifyService.Stop()
+
+	// GitHub 泄露监控（4zreco 迁移）：全局单例，规则按项目同步
+	if gm, err := service.GetGitHubMonitor(); err != nil {
+		log.Printf("[GitHubLeak] 监控初始化失败（不阻塞启动）: %v", err)
+	} else {
+		gm.Start(context.Background())
+	}
 
 	// Initialize WebSocket hub for real-time data
 	log.Println("Initializing WebSocket hub...")

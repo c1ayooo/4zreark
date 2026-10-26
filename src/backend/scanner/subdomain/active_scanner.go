@@ -41,6 +41,8 @@ type ActiveScannerConfig struct {
 	EnableHTTPProbe   bool     // 是否进行HTTP探测
 	// Wordlist 任务级字典；为空时回落到全局 config.GetSubdomains()。
 	Wordlist []string
+	// LearnedWords 字典自学习热词：追加在内置/任务级词表之后，去重合并。
+	LearnedWords []string
 	// EngineKeys 任务级引擎 key（fofa/hunter/quake/zoomeye/shodan/securitytrails）。
 	// 为空时回落到全局配置；数据源表由 service 层解析后注入。
 	EngineKeys map[string]string
@@ -223,6 +225,23 @@ func (s *ActiveScanner) runBruteForce(ctx context.Context, domain string) {
 	if len(subdomains) == 0 {
 		subdomains = config.GetSubdomains()
 	}
+	// 学习热词永远追加，不替代内置词表与任务级字典。
+	if len(s.config.LearnedWords) > 0 {
+		seen := make(map[string]struct{}, len(subdomains)+len(s.config.LearnedWords))
+		merged := make([]string, 0, len(subdomains)+len(s.config.LearnedWords))
+		for _, w := range append(append([]string{}, subdomains...), s.config.LearnedWords...) {
+			w = strings.ToLower(strings.TrimSpace(w))
+			if w == "" {
+				continue
+			}
+			if _, dup := seen[w]; dup {
+				continue
+			}
+			seen[w] = struct{}{}
+			merged = append(merged, w)
+		}
+		subdomains = merged
+	}
 	if len(subdomains) == 0 {
 		log.Printf("[ActiveScanner] No dictionary loaded, skipping brute force")
 		return
@@ -320,12 +339,14 @@ func (s *ActiveScanner) detectWildcard(domain string) []string {
 	return wildcardIPs
 }
 
-// addResult 添加结果
+// addResult 添加结果。source 必须带上引擎/数据源名（如 spacemap:fofa），
+// 落库时靠它回答「这个子域名是谁发现的」。
 func (s *ActiveScanner) addResult(subdomain string, ips []string, source string) {
 	// 提取域名部分
 	result := &SubdomainResult{
 		Subdomain:  subdomain,
 		FullDomain: subdomain,
+		Source:     source,
 		IPs:        ips,
 		Alive:      true,
 	}

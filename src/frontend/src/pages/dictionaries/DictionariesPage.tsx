@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Eye, Paperclip, Plus, RefreshCw, Trash2, Upload } from 'lucide-react'
-import { Button, Input, Modal, Select, Table, Tag } from 'antd'
+import { Button, Input, Modal, Select, Table, Tabs, Tag } from 'antd'
 import type { TableProps } from 'antd'
 
 import {
@@ -14,6 +14,7 @@ import { useConfirm } from '@/components/common/confirm-provider'
 import { useToast } from '@/components/ui/use-toast'
 import EmptyState from '@/components/common/EmptyState'
 import { formatDate } from '@/lib/utils'
+import DictLearningPanel from './components/DictLearningPanel'
 
 const pageSize = 20
 
@@ -176,57 +177,75 @@ export default function DictionariesPage() {
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          className={
-            'rounded-full border px-3 py-1 text-sm ' +
-            (type === '' ? 'border-primary bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted')
-          }
-          onClick={() => { setType(''); setPage(1) }}
-        >
-          全部
-        </button>
-        {dictionaryTypes.map((t) => (
-          <button
-            key={t}
-            className={
-              'rounded-full border px-3 py-1 text-sm ' +
-              (type === t ? 'border-primary bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted')
-            }
-            onClick={() => { setType(t); setPage(1) }}
-          >
-            {t}
-          </button>
-        ))}
-        <span className="ml-auto text-sm text-muted-foreground">共 {total} 个</span>
-      </div>
+      <Tabs
+        defaultActiveKey="dicts"
+        items={[
+          {
+            key: 'dicts',
+            label: '词表',
+            children: (
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    className={
+                      'rounded-full border px-3 py-1 text-sm ' +
+                      (type === '' ? 'border-primary bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted')
+                    }
+                    onClick={() => { setType(''); setPage(1) }}
+                  >
+                    全部
+                  </button>
+                  {dictionaryTypes.map((t) => (
+                    <button
+                      key={t}
+                      className={
+                        'rounded-full border px-3 py-1 text-sm ' +
+                        (type === t ? 'border-primary bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted')
+                      }
+                      onClick={() => { setType(t); setPage(1) }}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                  <span className="ml-auto text-sm text-muted-foreground">共 {total} 个</span>
+                </div>
 
-      <div className="rounded-md border">
-        <Table<Dictionary>
-          columns={columns}
-          dataSource={items}
-          rowKey="id"
-          loading={list.isLoading}
-          locale={{
-            emptyText: (
-              <EmptyState
-                title="还没有字典。点右上角「导入词表」，预览确认后入库。"
-                className="border-0"
-              />
+                <div className="rounded-md border">
+                  <Table<Dictionary>
+                    columns={columns}
+                    dataSource={items}
+                    rowKey="id"
+                    loading={list.isLoading}
+                    locale={{
+                      emptyText: (
+                        <EmptyState
+                          title="还没有字典。点右上角「导入词表」，预览确认后入库。"
+                          className="border-0"
+                        />
+                      ),
+                    }}
+                    pagination={{
+                      current: page,
+                      pageSize,
+                      total,
+                      showQuickJumper: true,
+                      // page_size 固定 20、无独立 pageSize 状态，不展示切换器
+                      showSizeChanger: false,
+                      hideOnSinglePage: true,
+                      onChange: (p) => setPage(p),
+                    }}
+                  />
+                </div>
+              </div>
             ),
-          }}
-          pagination={{
-            current: page,
-            pageSize,
-            total,
-            showQuickJumper: true,
-            // page_size 固定 20、无独立 pageSize 状态，不展示切换器
-            showSizeChanger: false,
-            hideOnSinglePage: true,
-            onChange: (p) => setPage(p),
-          }}
-        />
-      </div>
+          },
+          {
+            key: 'learning',
+            label: '自动学习',
+            children: <DictLearningPanel />,
+          },
+        ]}
+      />
 
       {/* 导入词表 */}
       <Modal

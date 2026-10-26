@@ -55,6 +55,12 @@ type PipelineConfig struct {
 	// DirWordlist 目录字典文件路径（spray -d）；为空时用 spray 默认字典。
 	DirWordlist []string `json:"dir_wordlist,omitempty"`
 
+	// 字典自学习热词（派单时从 dict_learning 物化，随任务下发）。
+	// 只做追加：子域热词拼在内置/任务级词表之后，路径热词写成附加词表文件
+	// 连同 spray 默认字典一起下发，绝不替代原词表。
+	LearnedSubdomainWords []string `json:"learned_subdomain_words,omitempty"`
+	LearnedPaths          []string `json:"learned_paths,omitempty"`
+
 	// 敏感信息检测
 	SensitiveScan bool `json:"sensitive_scan"`
 
@@ -356,6 +362,7 @@ func (p *StreamingPipeline) buildModuleChain() error {
 	// 目录扫描模块
 	if p.config.DirScan {
 		p.dirScanModule = NewDirScanModule(p.ctx, lastModule, p.config.moduleConcurrency(4), p.config.DirWordlist)
+		p.dirScanModule.SetLearnedPaths(p.config.LearnedPaths)
 		p.dirScanModule.SetRate(p.config.rate(), p.config.moduleConcurrency(4))
 		p.dirScanModule.SetScope(p.scope)
 		p.dirScanModule.SetInput(make(chan interface{}, 500))
@@ -388,13 +395,19 @@ func (p *StreamingPipeline) buildModuleChain() error {
 	if p.config.WebCrawler {
 		p.crawlerModule = NewCrawlerModule(p.ctx, lastModule, p.config.moduleConcurrency(8), true) // 默认使用Katana
 		// 流式模式：拿到一个可爬 URL 就开爬，结果边产出边落库
-		p.crawlerModule.SetRate(p.config.rate(), p.config.moduleConcurrency(8))
+		// 每主机速率默认取全局一半（SetRatePerHost 内钳制），保护单业务站
+		p.crawlerModule.SetRatePerHost(p.config.rate(), 0, p.config.moduleConcurrency(8))
 		// 深度/页数上限此前从未接线，任务配置的值一直是摆设
 		if p.config.MaxDepth > 0 {
 			p.crawlerModule.SetCrawlDepth(p.config.MaxDepth)
 		}
 		if p.config.MaxPages > 0 {
 			p.crawlerModule.SetMaxPages(p.config.MaxPages)
+			// 任务给了页数口径就同时落到 katana 引擎层（-mdp），
+			// 让工具自身少发请求，而不是爬完再截产出
+			if p.crawlerModule.katanaScanner != nil {
+				p.crawlerModule.katanaScanner.MaxDomainPages = p.config.MaxPages
+			}
 		}
 		p.crawlerModule.SetScope(p.scope)
 		p.crawlerModule.SetInput(make(chan interface{}, 500))
@@ -452,6 +465,8 @@ func (p *StreamingPipeline) buildModuleChain() error {
 		scanCfg.ResolveIP = p.config.SubdomainResolveIP
 		scanCfg.EnableHTTPProbe = p.config.SubdomainHTTPProbe
 		scanCfg.Wordlist = p.config.SubdomainWordlist
+		// 字典自学习热词：追加在内置/任务级词表之后（active_scanner 内合并）。
+		scanCfg.LearnedWords = p.config.LearnedSubdomainWords
 		// 任务配置的第三方测绘引擎：此前 EnableAPI 恒为 false，引擎接线形同虚设。
 		scanCfg.EnableAPI = p.config.SubdomainEnableAPI
 		scanCfg.APISources = p.config.SubdomainAPISources

@@ -289,6 +289,35 @@ func (h *NodeGatewayHandler) PostCDN(c *gin.Context) {
 	utils.SuccessWithMessage(c, "更新成功", nil)
 }
 
+// PostDictLearning 接收节点侧的字典学习观测（子域首标签/归一路径），平台侧计频晋升。
+func (h *NodeGatewayHandler) PostDictLearning(c *gin.Context) {
+	node := nodeFromContext(c)
+	taskID := c.Param("id")
+	task, err := h.tasks.GetTaskByID(taskID)
+	if err != nil {
+		utils.NotFound(c, err.Error())
+		return
+	}
+	if task.NodeID != "" && task.NodeID != node.NodeID {
+		utils.Forbidden(c, "任务未分配给该节点")
+		return
+	}
+
+	var body struct {
+		SubLabels []string `json:"sub_labels"`
+		Paths     []string `json:"paths"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		utils.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	service.RecordDictObservations(ctx, task.ProjectID, body.SubLabels, body.Paths)
+	utils.Success(c, gin.H{"sub_labels": len(body.SubLabels), "paths": len(body.Paths)})
+}
+
 // ListPOCs 把启用中的 nuclei POC 下发给节点；节点本地缓存后执行漏洞扫描。
 func (h *NodeGatewayHandler) ListPOCs(c *gin.Context) {
 	enabled := true

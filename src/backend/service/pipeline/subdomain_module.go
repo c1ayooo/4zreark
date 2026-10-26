@@ -41,6 +41,8 @@ type SubdomainScanConfig struct {
 	RecursiveDepth   int  // 递归深度 (默认 2)
 	// Wordlist 任务级子域字典；为空时用全局内置词表。
 	Wordlist []string
+	// LearnedWords 字典自学习热词，追加在词表之后。
+	LearnedWords []string
 
 	// API 配置
 	EnableAPI     bool     // 是否启用第三方API (默认 true)
@@ -118,6 +120,7 @@ func NewSubdomainScanModuleWithConfig(ctx context.Context, nextModule ModuleRunn
 		EngineGuard:     subdomain.NewEngineQueryGuard(scanConfig.EngineQueryMaxPerEngine),
 		EnableHTTPProbe: false,
 		Wordlist:        scanConfig.Wordlist,
+		LearnedWords:    scanConfig.LearnedWords,
 		EngineKeys: map[string]string{
 			"fofa":           scanConfig.FofaKey,
 			"hunter":         scanConfig.HunterKey,
@@ -292,11 +295,17 @@ func (m *SubdomainScanModule) scanSubdomains(domain string) {
 			return
 		}
 
+		// 来源用扫描器带回的引擎级标识（passive:crtsh / spacemap:fofa / brute），
+		// 不再一律折叠成 active；老扫描器没填时才回落。
+		src := subResult.Source
+		if src == "" {
+			src = "active"
+		}
 		result := SubdomainResult{
 			Host:       subResult.FullDomain, // 子域名完整名称
 			Domain:     domain,               // 根域名
 			RootDomain: domain,               // 根域名
-			Source:     "active",             // 综合扫描
+			Source:     src,
 			IPs:        subResult.IPs,
 		}
 
@@ -367,7 +376,8 @@ func (m *SubdomainScanModule) enrichAndSend(subdomains []string, results []Subdo
 			result.CDN = hr.CDN
 			result.CDNName = hr.CDNName
 			result.URL = hr.URL
-			result.Source = "httpx"
+			// Source 保留发现来源；HTTP 探测是富化不是发现，
+			// 探测过与否看 StatusCode/URL 即可。
 		}
 
 		select {

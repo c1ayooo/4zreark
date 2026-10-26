@@ -136,6 +136,10 @@ type TaskConfig struct {
 	// 节点不连数据库，只有把条目随任务下发，任务级字典才能在分布式下生效。
 	SubdomainWordlist []string `json:"subdomain_wordlist,omitempty" bson:"subdomain_wordlist,omitempty"`
 	DirWordlist       []string `json:"dir_wordlist,omitempty" bson:"dir_wordlist,omitempty"`
+	// LearnedSubdomainWords / LearnedPaths 是字典自学习晋升的热词（派单时从
+	// dict_learning 读取），执行端只做追加，不替代内置词表与任务级字典。
+	LearnedSubdomainWords []string `json:"learned_subdomain_words,omitempty" bson:"learned_subdomain_words,omitempty"`
+	LearnedPaths          []string `json:"learned_paths,omitempty" bson:"learned_paths,omitempty"`
 
 	// Bruteforce Config
 	ServiceType string `json:"service_type,omitempty" bson:"service_type,omitempty"`

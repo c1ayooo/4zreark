@@ -27,6 +27,9 @@ type SubdomainResult struct {
 	Subdomain   string   `json:"subdomain"`
 	Domain      string   `json:"domain"`
 	FullDomain  string   `json:"full_domain"`
+	// Source 是发现来源（passive:crtsh / spacemap:fofa / brute / artifact:cert-san），
+	// 同一子域名被多路发现时保留首个命中的来源。
+	Source      string   `json:"source,omitempty"`
 	IPs         []string `json:"ips,omitempty"`
 	CNAMEs      []string `json:"cnames,omitempty"`
 	Alive       bool     `json:"alive"`

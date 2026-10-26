@@ -191,6 +191,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				protected.GET("/governance/retention", middleware.RequirePermission("settings:write"), retentionHandler.Policy)
 				protected.POST("/governance/retention/run", middleware.RequirePermission("settings:write"), retentionHandler.Run)
 				protected.POST("/assets/:id/protect", middleware.RequirePermission("asset:write"), govHandler.ProtectAsset)
+				protected.POST("/assets/:id/governance", middleware.RequirePermission("asset:write"), assetHandler.UpdateAssetGovernance)
 				protected.GET("/assets/:id/fingerprints", middleware.RequirePermission("fingerprint:read"), govHandler.SiteFingerprints)
 				protected.GET("/governance/engine-usage", middleware.RequirePermission("governance:read"), govHandler.EngineUsageStatus)
 				protected.PUT("/governance/engine-usage/limits", middleware.RequirePermission("governance:write"), govHandler.EngineUsageSetLimits)
@@ -206,6 +207,15 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				protected.POST("/projects/:id/seeds/collect", middleware.RequirePermission("seed:write"), seedCollectionHandler.Collect)
 				protected.GET("/projects/:id/seeds/collect/jobs", middleware.RequirePermission("asset:read"), seedCollectionHandler.Jobs)
 				protected.GET("/projects/:id/cruise/status", middleware.RequirePermission("asset:read"), seedCollectionHandler.CruiseStatus)
+				// GitHub 泄露监控（迁移自 4zreco/internal/githubleak）
+				ghMonitorHandler := api.NewGitHubMonitorHandler()
+				protected.GET("/projects/:id/github-monitor", middleware.RequirePermission("asset:read"), ghMonitorHandler.Overview)
+				protected.PUT("/projects/:id/github-monitor/settings", middleware.RequirePermission("asset:write"), ghMonitorHandler.SaveSettings)
+				protected.GET("/projects/:id/github-monitor/rules", middleware.RequirePermission("asset:read"), ghMonitorHandler.ListRules)
+				protected.POST("/projects/:id/github-monitor/rules", middleware.RequirePermission("asset:write"), ghMonitorHandler.CreateRule)
+				protected.DELETE("/projects/:id/github-monitor/rules/:rid", middleware.RequirePermission("asset:write"), ghMonitorHandler.DeleteRule)
+				protected.GET("/projects/:id/github-monitor/findings", middleware.RequirePermission("asset:read"), ghMonitorHandler.ListFindings)
+				protected.PUT("/projects/:id/github-monitor/findings/:fid/status", middleware.RequirePermission("asset:write"), ghMonitorHandler.UpdateFindingStatus)
 				protected.GET("/cruise/v2/overview", middleware.RequirePermission("asset:read"), seedCollectionHandler.CruiseOverview)
 				protected.GET("/governance/fingerprints", middleware.RequirePermission("fingerprint:read"), govHandler.ListFingerprints)
 				protected.GET("/governance/fingerprints/sources", middleware.RequirePermission("fingerprint:read"), govHandler.FingerprintSources)
@@ -464,6 +474,14 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				dictionaryGroup.POST("/import", middleware.RequirePermission("dictionary:write"), pluginHandler.ImportDictionary)
 				dictionaryGroup.GET("/:id/entries", middleware.RequirePermission("dictionary:read"), pluginHandler.ListDictionaryEntries)
 				dictionaryGroup.DELETE("/:id", middleware.RequirePermission("dictionary:write"), pluginHandler.DeleteDictionary)
+
+				// 字典自学习：热词计频与阈值配置
+				dictLearningHandler := api.NewDictLearningHandler()
+				protected.GET("/dict-learning", middleware.RequirePermission("dictionary:read"), dictLearningHandler.ListLearning)
+				protected.GET("/dict-learning/stats", middleware.RequirePermission("dictionary:read"), dictLearningHandler.LearningStats)
+				protected.GET("/dict-learning/config", middleware.RequirePermission("dictionary:read"), dictLearningHandler.GetLearningConfig)
+				protected.PUT("/dict-learning/config", middleware.RequirePermission("dictionary:write"), dictLearningHandler.UpdateLearningConfig)
+				protected.POST("/dict-learning/:id/deny", middleware.RequirePermission("dictionary:write"), dictLearningHandler.SetDenied)
 			}
 
 			// Dashboard routes
@@ -770,6 +788,7 @@ func SetupNodeGatewayRouter(nodeHub *api.NodeHub, binaryHandler *api.NodeBinaryH
 		nodeAPI.POST("/tasks/:id/results", nodeGateway.PostResults)
 		nodeAPI.POST("/tasks/:id/assets", nodeGateway.PostAssets)
 		nodeAPI.POST("/tasks/:id/cdn", nodeGateway.PostCDN)
+		nodeAPI.POST("/tasks/:id/dict-learning", nodeGateway.PostDictLearning)
 		nodeAPI.GET("/pocs", nodeGateway.ListPOCs)
 	}
 	return r

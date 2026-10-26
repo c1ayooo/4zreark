@@ -246,6 +246,13 @@ func (c *RemoteClient) PostAssets(ctx context.Context, taskID string, records []
 		map[string]interface{}{"records": records, "routes": routes}, nil)
 }
 
+// PostDictLearning 上报节点侧观察到的字典学习热词（子域首标签/归一路径），
+// 平台侧统一计频与晋升，学习闭环覆盖分布式部署。
+func (c *RemoteClient) PostDictLearning(ctx context.Context, taskID string, subLabels, paths []string) error {
+	return c.call(ctx, http.MethodPost, "/api/node/tasks/"+taskID+"/dict-learning",
+		map[string]interface{}{"sub_labels": subLabels, "paths": paths}, nil)
+}
+
 func (c *RemoteClient) UpdateCDN(ctx context.Context, taskID, domain, provider string) error {
 	return c.call(ctx, http.MethodPost, "/api/node/tasks/"+taskID+"/cdn",
 		map[string]string{"domain": domain, "cdn": provider}, nil)

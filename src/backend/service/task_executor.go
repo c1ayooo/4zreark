@@ -57,6 +57,9 @@ type resultFlusher interface {
 type assetStore interface {
 	Ingest(ctx context.Context, task *models.Task, records []repo.RawRecord) error
 	SaveRoutes(ctx context.Context, task *models.Task, routes []CrawledEndpoint) error
+	// ReportLearning 上报字典学习观测（子域首标签/归一路径）；本地直接计频，
+	// 远程 POST 给平台，让 worker 节点的观测也能进学习闭环。
+	ReportLearning(ctx context.Context, task *models.Task, subLabels, paths []string) error
 }
 
 type localAssetStore struct{}
@@ -100,6 +103,11 @@ func (localAssetStore) SaveRoutes(ctx context.Context, task *models.Task, routes
 	return nil
 }
 
+func (localAssetStore) ReportLearning(ctx context.Context, task *models.Task, subLabels, paths []string) error {
+	RecordDictObservations(ctx, task.ProjectID, subLabels, paths)
+	return nil
+}
+
 type remoteAssetStore struct{ client *RemoteClient }
 
 func (s remoteAssetStore) Ingest(ctx context.Context, task *models.Task, records []repo.RawRecord) error {
@@ -114,6 +122,13 @@ func (s remoteAssetStore) SaveRoutes(ctx context.Context, task *models.Task, rou
 		return nil
 	}
 	return s.client.PostAssets(ctx, task.ID.Hex(), nil, routes)
+}
+
+func (s remoteAssetStore) ReportLearning(ctx context.Context, task *models.Task, subLabels, paths []string) error {
+	if len(subLabels) == 0 && len(paths) == 0 {
+		return nil
+	}
+	return s.client.PostDictLearning(ctx, task.ID.Hex(), subLabels, paths)
 }
 
 // runningTask 正在运行的任务信息
@@ -313,14 +328,20 @@ func (e *TaskExecutor) Stop() {
 	log.Println("[TaskExecutor] Stopped")
 }
 
-// registerRunningTask 注册正在运行的任务
-func (e *TaskExecutor) registerRunningTask(taskID string, cancelFunc context.CancelFunc, pipe *pipeline.StreamingPipeline) {
+// registerRunningTask 注册正在运行的任务；taskID 已注册时返回 false——
+// master 的 River 重试与 worker 推送可能并发下发同一任务，重复执行会双倍
+// 消耗扫描配额并互相覆盖状态，后来者直接拒绝。
+func (e *TaskExecutor) registerRunningTask(taskID string, cancelFunc context.CancelFunc, pipe *pipeline.StreamingPipeline) bool {
 	e.runningMutex.Lock()
 	defer e.runningMutex.Unlock()
+	if _, exists := e.runningTasks[taskID]; exists {
+		return false
+	}
 	e.runningTasks[taskID] = &runningTask{
 		cancelFunc: cancelFunc,
 		pipeline:   pipe,
 	}
+	return true
 }
 
 // unregisterRunningTask 取消注册运行中的任务
@@ -629,6 +650,26 @@ func (e *TaskExecutor) processTask(ctx context.Context, task *models.Task, jobID
 			SubdomainEnableAPI:     engineAPI,
 			SubdomainAPISources:    engineSources,
 			SubdomainEngineKeys:    engineKeys,
+		})
+
+	case models.TaskTypeAssetDiscovery:
+		// 资产发现 = 无漏洞扫描的信息收集组合：子域枚举 → 存活验证 → 端口 → 指纹 → 爬虫。
+		// 前端任务类型里有这一项，此前执行器没有对应分支，任务创建即失败。
+		e.executeStreamingPipeline(ctx, task, jobID, &pipeline.PipelineConfig{
+			SubdomainScan:          true,
+			SubdomainMaxEnumTime:   15,
+			SubdomainResolveIP:     true,
+			SubdomainCheckTakeover: false,
+			SubdomainHTTPProbe:     true,
+			PortScan:               true,
+			PortScanMode:           "top1000",
+			SubdomainEnableAPI:     engineAPI,
+			SubdomainAPISources:    engineSources,
+			SubdomainEngineKeys:    engineKeys,
+			SkipCDN:                true,
+			Fingerprint:            true,
+			WebCrawler:             true,
+			ApiProbe:               true,
 		})
 
 	case models.TaskTypeTakeover:
@@ -1002,10 +1043,18 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 		}
 	}
 
+	// 字典自学习热词随任务下发（worker 无库，只能消费 config）。
+	config.LearnedSubdomainWords = task.Config.LearnedSubdomainWords
+	config.LearnedPaths = task.Config.LearnedPaths
+
 	scanPipe := pipeline.NewStreamingPipelineWithProgress(ctx, task, config, len(task.Targets), progressCallback)
 
-	// 注册正在运行的任务
-	e.registerRunningTask(taskID, cancel, scanPipe)
+	// 注册正在运行的任务；已有同 ID 任务在跑（River 重试/重复推送）则本执行放弃
+	if !e.registerRunningTask(taskID, cancel, scanPipe) {
+		log.Printf("[TaskExecutor] 任务 %s 已在本节点执行中，跳过重复启动", taskID)
+		cancel()
+		return
+	}
 	defer func() {
 		e.unregisterRunningTask(taskID)
 		cancel()
@@ -1030,6 +1079,37 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 	// 资产归并：任务的扫描结果按 project_id 自动并入 sites/raw_records。
 	assetRecords := make([]repo.RawRecord, 0, 256)
 	taskScope := scope.New(task.Targets)
+
+	// 字典自学习：本任务观察到的子域首标签与接口路径，任务内去重，
+	// 攒够一批或任务收尾时上报（每任务每值 +1），达到阈值的词自动晋升进词表。
+	// 本地执行直接计频；worker 经网关 POST 回平台——学习闭环覆盖分布式部署。
+	learningSubs := make(map[string]struct{}, 64)
+	learningPaths := make(map[string]struct{}, 64)
+	flushLearning := func(force bool) {
+		total := len(learningSubs) + len(learningPaths)
+		if total == 0 || (!force && total < 100) {
+			return
+		}
+		subs := make([]string, 0, len(learningSubs))
+		for v := range learningSubs {
+			subs = append(subs, v)
+		}
+		paths := make([]string, 0, len(learningPaths))
+		for v := range learningPaths {
+			paths = append(paths, v)
+		}
+		if err := e.assets.ReportLearning(ctx, task, subs, paths); err != nil {
+			// 失败保留观测待下一批重试；连续失败时丢弃防内存无限累积。
+			log.Printf("[TaskExecutor] 字典学习上报失败（保留重试）: %v", err)
+			if total > 20000 {
+				learningSubs = make(map[string]struct{})
+				learningPaths = make(map[string]struct{})
+			}
+			return
+		}
+		learningSubs = make(map[string]struct{})
+		learningPaths = make(map[string]struct{})
+	}
 
 	// 发现即落库：每攒够一小批就写入，不再等整个任务结束。
 	// 失败时保留切片，下一批继续重试，避免结果被清空。
@@ -1106,6 +1186,7 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 			// 取消前把攒批中的结果与资产写完，避免尾部数据丢在缓冲里。
 			flushResults(true)
 			flushAssets(true)
+			flushLearning(true)
 			e.finishJob(jobID, "")
 			return
 		default:
@@ -1118,11 +1199,23 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 		switch r := result.(type) {
 		case pipeline.SubdomainResult:
 			subdomainCount++
+			// 字典学习：相对根域的首标签（爆破词位置），任务内去重后计频。
+			if lbl := ExtractSubdomainLabel(r.Host, r.RootDomain); lbl != "" {
+				learningSubs[lbl] = struct{}{}
+			}
 			if r.URL != "" && taskScope.AllowsURL(r.URL) {
 				crawledRoutes = append(crawledRoutes, CrawledEndpoint{URL: r.URL, Method: "GET", StatusCode: r.StatusCode})
 			}
 			if rec, ok := rawRecordFromScan(r.URL, r.Host, "https", r.StatusCode, r.Title, firstIP(r.IPs), r.Technologies); ok && taskScope.AllowsHost(rec.Host) {
 				rec.Server = r.WebServer
+				if r.Source != "" {
+					if rec.Evidence == nil {
+						rec.Evidence = map[string]any{}
+					}
+					// 发现来源进证据不改 rec.Source：dedup_key 含 source，
+					// 改了会让同一 URL 被多引擎发现时裂成多行证据。
+					rec.Evidence["discovered_by"] = r.Source
+				}
 				if !ingestFingerprints {
 					rec.Tech = nil
 				}
@@ -1170,6 +1263,12 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 		case pipeline.AssetHttp:
 			if rec, ok := rawRecordFromScan(r.URL, r.Host, "https", r.StatusCode, r.Title, r.IP, r.Technologies); ok && taskScope.AllowsHost(rec.Host) {
 				rec.Server = r.Server
+				rec.BodyHash = r.BodyHash
+				rec.CertOrg = r.CertOrg
+				rec.CertNotAfter = r.CertNotAfter
+				rec.CookieNames = r.CookieNames
+				rec.JSFrameworks = r.JSFrameworks
+				rec.APIHosts = r.APIHosts
 				if ingestFingerprints {
 					rec.Tech = r.Technologies
 				} else {
@@ -1252,6 +1351,10 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 				continue
 			}
 			urlCount++
+			// 字典学习：目录扫描/爬虫发现的路径归一后计频（去 ID 段与文件名）。
+			if p := ExtractLearnedPath(r.Output); p != "" {
+				learningPaths[p] = struct{}{}
+			}
 			crawledRoutes = append(crawledRoutes, CrawledEndpoint{
 				URL: r.Output, Method: r.Method, StatusCode: r.StatusCode,
 			})
@@ -1397,6 +1500,8 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 
 		// 资产/路由发现到一小批就落库，任务列表和资产页不用等全量结束。
 		flushAssets(false)
+		// 学习热词同样小批冲刷，长任务崩掉也不丢一批以上的观测。
+		flushLearning(false)
 
 		// 定期更新进度（基于结果数量，进度追踪器会更精确地计算）
 		if resultCount%50 == 0 {
@@ -1410,6 +1515,7 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 	// 扫描结束：把最后不足一批的资产/路由与结果补写。
 	flushAssets(true)
 	flushResults(true)
+	flushLearning(true)
 
 	// 批量更新子域名的 CDN 信息
 	if len(cdnInfo) > 0 {
