@@ -296,3 +296,91 @@ func TestEnterpriseCollectorGroupExpand(t *testing.T) {
 		t.Fatalf("展开后应有 1 个 group 实体: %d", groupCount)
 	}
 }
+
+// groupDomainsProvider 给集团成员 g1 配带 ICP 的域名，验证 group 口径不自动转种子。
+func (f *groupExpandProvider) Domains(ctx context.Context, extID string, page, size int) ([]enterprise.DomainHit, bool, error) {
+	if extID == "g1" && page == 1 {
+		return []enterprise.DomainHit{{Domain: "g1-mcd.com", ICP: "粤ICP备33333333号", Site: "成员站"}}, false, nil
+	}
+	return f.fakeProvider.Domains(ctx, extID, page, size)
+}
+
+// 备案归属自动转种子：root/invest 的 ICP 域名转种子并置 imported；
+// group 成员的 ICP 域名保持 candidate 人工确认。
+func TestEnterpriseCollectorAutoSeed(t *testing.T) {
+	r := openTestRepo(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	code := fmt.Sprintf("ent-autoseed-%d", time.Now().UnixNano())
+	var projectID int64
+	if err := r.Pool().QueryRow(ctx,
+		`INSERT INTO projects (code, name) VALUES ($1,$2) RETURNING id`, code, code).Scan(&projectID); err != nil {
+		t.Fatalf("建测试项目失败: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = r.Pool().Exec(context.Background(), `DELETE FROM projects WHERE id=$1`, projectID)
+	})
+
+	c := enterprise.NewCollector(r, log.New(io.Discard, "", 0))
+	c.SetRateLimit(0)
+	job, err := c.StartWithDigitalSink(ctx, &groupExpandProvider{}, enterprise.Job{
+		ProjectID: fmt.Sprint(projectID), Owner: "tester", Provider: "fake",
+		Keyword: "根企业", Depth: 2, MaxNodes: 20, ExpandGroup: true,
+	}, enterprise.CompanyRef{ExtID: "root", Name: "根企业"}, &groupExpandProvider{})
+	if err != nil {
+		t.Fatalf("启动采集失败: %v", err)
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		got, gerr := r.GetEnterpriseJob(ctx, job.ID)
+		if gerr != nil {
+			t.Fatalf("读取任务失败: %v", gerr)
+		}
+		if got.Status != "running" {
+			if got.Status != "done" {
+				t.Fatalf("任务异常: %s %q", got.Status, got.Error)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("任务超时")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	seedExists := func(domain string) bool {
+		var ok bool
+		if err := r.Pool().QueryRow(ctx,
+			`select exists(select 1 from seeds where project_id=$1 and kind='domain' and value=$2)`,
+			projectID, domain).Scan(&ok); err != nil {
+			t.Fatalf("查种子失败: %v", err)
+		}
+		return ok
+	}
+	candStatus := func(domain string) string {
+		var st string
+		if err := r.Pool().QueryRow(ctx,
+			`select status from enterprise_candidates where project_id=$1 and domain=$2`,
+			projectID, domain).Scan(&st); err != nil {
+			return "<missing>"
+		}
+		return st
+	}
+
+	// fakeProvider.Detail: root 域名 Root.Com 带 ICP；Domains(): i1 的 Sub.Example.com 带条 ICP → 都应转种子
+	if !seedExists("root.com") || !seedExists("sub.example.com") {
+		t.Fatalf("ICP 归属域名应自动转种子: root.com=%v sub.example.com=%v",
+			seedExists("root.com"), seedExists("sub.example.com"))
+	}
+	if st := candStatus("root.com"); st != "imported" {
+		t.Fatalf("root.com 候选应置 imported: %s", st)
+	}
+	// 集团成员 g1 的域名不自动转，保持人工确认
+	if seedExists("g1-mcd.com") {
+		t.Fatal("group 成员域名不应自动转种子")
+	}
+	if st := candStatus("g1-mcd.com"); st != "candidate" {
+		t.Fatalf("g1-mcd.com 应保持 candidate: %s", st)
+	}
+}

@@ -60,6 +60,15 @@ func TestXiaolanbenDigitalLive(t *testing.T) {
 		t.Logf("  [%s] %s | 平台=%s | 归属=%s | 证据=%s", h.Kind, h.Name, h.Platform, h.EntityName, h.Evidence)
 	}
 
+	// 详情域名 ICP 提取（归属自动转种子的数据依据）。
+	if d, derr := p.Detail(ctx, eid); derr != nil {
+		t.Logf("详情拉取失败: %v", derr)
+	} else {
+		for _, dm := range d.Domains {
+			t.Logf("  域名: %s | ICP: %s", dm.Domain, dm.ICP)
+		}
+	}
+
 	// 集团成员枚举（GroupCompaniesProvider 实现）——重构后列表提取函数的 live 验证。
 	if gcs, _, gerr := p.GroupCompanies(ctx, eid, 1, 20); gerr != nil {
 		t.Logf("集团成员拉取失败: %v", gerr)

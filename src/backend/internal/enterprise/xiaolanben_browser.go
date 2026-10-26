@@ -320,7 +320,9 @@ func (p *xiaolanbenProvider) xlbDetail(ctx context.Context, extID string) (*Comp
 			openStatus: str(bi.companyStatusName || bi.statusTag || ''),
 			phone: str(phones[0] || bi.phoneNumber || ''),
 			email: str(bi.email || ''),
-			websites: ws.map(x => str(x.domain || x.url || x.website || '')).filter(Boolean).concat(extra),
+			websites: ws.map(x => ({ d: str(x.domain || x.url || x.website || ''), icp: str(x.icp || '') }))
+				.filter(x => x.d)
+				.concat(extra.map(d => ({ d: str(d), icp: '' }))),
 			investments: inv.map(x => ({ n: x.name || x.entName || '', eid: x.eid || x.id || '' })),
 		});
 	}`)
@@ -333,7 +335,10 @@ func (p *xiaolanbenProvider) xlbDetail(ctx context.Context, extID string) (*Comp
 		OpenStatus  string   `json:"openStatus"`
 		Phone       string   `json:"phone"`
 		Email       string   `json:"email"`
-		Websites    []string `json:"websites"`
+		Websites []struct {
+			D   string `json:"d"`
+			ICP string `json:"icp"`
+		} `json:"websites"`
 	}
 	if err := json.Unmarshal([]byte(res.Value.String()), &d); err != nil {
 		return nil, fmt.Errorf("小蓝本详情解析失败: %w", err)
@@ -341,11 +346,14 @@ func (p *xiaolanbenProvider) xlbDetail(ctx context.Context, extID string) (*Comp
 	detail := &CompanyDetail{ExtID: extID, Name: d.Name, LegalPerson: d.LegalPerson,
 		OpenStatus: d.OpenStatus, Phone: d.Phone, Email: d.Email}
 	for _, w := range d.Websites {
-		nd := normalizeDomain(w)
+		nd := normalizeDomain(w.D)
 		if nd == "" {
 			continue
 		}
-		detail.Domains = append(detail.Domains, DomainHit{Domain: nd, Site: "小蓝本官网", Evidence: "小蓝本企业详情 webSites"})
+		// webSites 的 icp 是该域名在本主体名下的备案号——归属自动转种子的依据。
+		detail.Domains = append(detail.Domains, DomainHit{
+			Domain: nd, ICP: w.ICP, Site: "小蓝本官网", Evidence: "小蓝本企业详情 webSites",
+		})
 	}
 	return detail, nil
 }

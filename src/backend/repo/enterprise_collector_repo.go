@@ -138,6 +138,10 @@ returning (xmax = 0)`,
 }
 
 // SaveDomain 把域名写入候选资产；同项目已存在则不重复。
+// 渠道无关的归属规则：任一渠道采集的域名带 ICP 备案号、且归属实体是
+// root/branch/invest（被采集企业及其股权子公司）即视为百分百归属，
+// 自动转 domain 种子并把候选置 imported；集团成员（group）口径不自动归属，
+// 保留人工确认。
 func (r *Repo) SaveDomain(ctx context.Context, jobID, domain, site, icp, entityName string) (bool, error) {
 	domain = enterprise.NormalizeDomain(domain)
 	if domain == "" {
@@ -151,7 +155,46 @@ on conflict (project_id, domain) do nothing`,
 	if err != nil {
 		return false, err
 	}
+	if icp != "" {
+		if serr := r.autoSeedConfirmedDomain(ctx, jobID, domain, entityName); serr != nil {
+			return tag.RowsAffected() > 0, serr
+		}
+	}
 	return tag.RowsAffected() > 0, nil
+}
+
+// autoSeedConfirmedDomain 把备案归属确认的域名转为 domain 种子并置候选 imported。
+// 非致命：任何一步失败只记录，不影响候选入库主流程。
+func (r *Repo) autoSeedConfirmedDomain(ctx context.Context, jobID, domain, entityName string) error {
+	var entityType string
+	err := r.pool.QueryRow(ctx, `
+select e.entity_type
+  from enterprise_jobs j
+  join enterprise_entities e on e.project_id = j.project_id and e.name = $2
+ where j.id = $1`, jobID, entityName).Scan(&entityType)
+	if err != nil {
+		// 实体行尚未落库（理论上 walk 先存实体再存域名）或已清理：保守不自动转
+		return nil
+	}
+	if entityType == "group" {
+		return nil
+	}
+	res, err := r.pool.Exec(ctx, `
+insert into seeds (project_id, kind, value, enabled)
+select j.project_id, 'domain', $2, true from enterprise_jobs j where j.id = $1
+on conflict (project_id, kind, value) do nothing`,
+		jobID, domain)
+	if err != nil {
+		return err
+	}
+	if res.RowsAffected() > 0 {
+		_, err = r.pool.Exec(ctx, `
+update enterprise_candidates
+   set status = 'imported'
+ where project_id = (select project_id from enterprise_jobs where id = $1)
+   and domain = $2`, jobID, domain)
+	}
+	return err
 }
 
 // ListEnterpriseJobs 按项目列出采集任务。
