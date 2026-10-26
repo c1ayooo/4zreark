@@ -108,7 +108,7 @@ func (s *DigitalService) CollectCandidates(ctx context.Context, in DigitalCollec
 	}
 	dp, ok := provider.(enterprise.DigitalAssetsProvider)
 	if !ok {
-		return nil, fmt.Errorf("数据源 %s 暂不支持数字资产采集（当前支持：xiaolanben/enscan）", provider.Name())
+		return nil, fmt.Errorf("数据源 %s 暂不支持数字资产采集（当前支持：xiaolanben）", provider.Name())
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)

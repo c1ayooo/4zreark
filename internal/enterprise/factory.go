@@ -24,7 +24,6 @@ var Registry = []ProviderKind{
 	{Name: "fengniao", Label: "风鸟", Auth: "account", Available: true, Hint: "账号密码自动登录（密码登录无验证码）或网页版 Cookie"},
 	{Name: "qcc", Label: "企查查", Auth: "cookie", Available: true, Hint: "网页版 Cookie（需含 QCCSESSID + acw_tc；走 SSR 页面解析，含注册资本）"},
 	{Name: "xiaolanben", Label: "小蓝本", Auth: "account", Available: true, Hint: "账号密码登录（RSA 加密）；查询经平台内嵌无头浏览器承载上游签名"},
-	{Name: "enscan", Label: "ENScan_GO", Auth: "tool", Available: true, Hint: "本机 enscan 二进制（工具箱下载）+ 其 config.yaml Cookie；数字资产走七麦/爱企查，不支持分支/投资分页"},
 }
 
 // NewProvider 工厂：按会话 provider 类型构造对应 adapter。
@@ -47,11 +46,8 @@ func NewProvider(provider string, cfg map[string]string, proxyURL string) (Provi
 		return NewQccProvider(cfg["cookie"], effectiveProxy(cfg, proxyURL))
 	case "xiaolanben":
 		return NewXiaolanbenProvider(cfg["username"], cfg["password"], effectiveProxy(cfg, proxyURL))
-	case "enscan":
-		// ENScan_GO 二进制数据源：Cookie 在其自带 config.yaml（不走会话托管）。
-		return NewENScanProvider()
 	default:
-		return nil, fmt.Errorf("不支持的数据源类型 %q（支持：aqc/tyc/kuaicha/fengniao/qcc/xiaolanben/enscan）", provider)
+		return nil, fmt.Errorf("不支持的数据源类型 %q（支持：aqc/tyc/kuaicha/fengniao/qcc/xiaolanben）", provider)
 	}
 }
 
