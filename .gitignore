@@ -36,3 +36,9 @@ src/backend/test/.sock.lock
 # Python 字节码与 GUI 测试产物
 __pycache__/
 gui-test-screenshots/
+
+# 指纹挖掘 CLI 的本地编译产物（源码在 src/backend/cmd/fpmine/）
+src/backend/fpmine
+
+# TypeScript 增量构建缓存
+*.tsbuildinfo

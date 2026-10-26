@@ -1,0 +1,32 @@
+# 登录入口/认证门户指纹种子
+# 目的：把「存在认证入口的站点」标记为重点资产（统一身份、SSO、后台登录、VPN 入口等）。
+# 口径：只标记「页面本身是/含登录入口」，不判断能否登录成功；爬虫不带凭据，
+# 登录后的内容不在收集范围——这里给的信号用于资产分级与星图筛选。
+# 信号强度：密码输入框 > 凭据字段组合 > 标题关键词。SPA 登录页（JS 渲染表单）
+# 抓到的静态 HTML 可能没有 <input>，靠标题特征兜底。
+rules:
+  - name: "Auth-Login-Password-Input"
+    category: "Auth-Portal"
+    enabled: true
+    expression: 'body ~= "<input[^>]+type=.?password"'
+    note: "密码输入框是登录/改密页的最强信号；type 引号可省，~= 忽略大小写"
+  - name: "Auth-Login-Credential-Fields"
+    category: "Auth-Portal"
+    enabled: true
+    expression: 'body ~= "(name|id)=[\"'']?(username|loginname|user_name|account|j_username|login_form|login-form)" && body ~= "password"'
+    note: "用户名字段与 password 同页出现的凭据组合；覆盖 j_username(Java SSO) 等常见命名"
+  - name: "Auth-Portal-Title-CN"
+    category: "Auth-Portal"
+    enabled: true
+    expression: 'title ~= "(用户登录|管理员登录|后台登录|统一登录|单点登录|统一身份认证|身份认证平台|登录页|欢迎登录|请登录)"'
+    note: "中文登录页标题特征；SPA 登录壳页的主要兜底信号"
+  - name: "Auth-Portal-Title-EN"
+    category: "Auth-Portal"
+    enabled: true
+    expression: 'title ~= "(sign in|log ?in( to| page)?|user login|sso login|single sign-on|authentication portal)"'
+    note: "英文登录页标题特征；~= 已忽略大小写"
+  - name: "Auth-SSO-Endpoint"
+    category: "Auth-Portal"
+    enabled: true
+    expression: 'body ~= "(/oauth/authorize|/cas/login|/sso/login|/auth/realms/|idp/SSO.saml2|/uas/|/saml/login)"'
+    note: "主流 SSO 端点路径特征（OAuth2/CAS/Keycloak/SAML/国密 UAS）"

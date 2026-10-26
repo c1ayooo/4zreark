@@ -3,6 +3,8 @@ package githubleak
 import (
 	"strings"
 	"time"
+
+	"github.com/c1ayooo/4zreark/internal/lz"
 )
 
 // credibility.go — R8 静态闸门之四/五（docs/GitHub敏感信息监控改进建议.md）：
@@ -78,7 +80,7 @@ func credScore(item SearchItem, now time.Time) int {
 
 // downgradeLowCredibility R8-4：可信分 ≤ -2 的来源，候选 likely 降级 suspected。
 // 返回降级条数（供日志；调用方不改 RunRecord 计数，避免动 schema）。
-func downgradeLowCredibility(item SearchItem, candidates []Candidate) int {
+func (s *Service) downgradeLowCredibility(item SearchItem, candidates []Candidate) int {
 	if len(candidates) == 0 {
 		return 0
 	}
@@ -92,12 +94,17 @@ func downgradeLowCredibility(item SearchItem, candidates []Candidate) int {
 			downgraded++
 		}
 	}
+	if downgraded > 0 && s.logger != nil {
+		s.logger.Info("GitHub leak monitor 低可信来源降级",
+			lz.String("repository", item.Repository), lz.String("path", item.Path),
+			lz.Int("downgraded", downgraded))
+	}
 	return downgraded
 }
 
 // downgradeStaleSecrets R8-5：失效快类别（AWS）命中文件的最近提交超出短时效窗口
 // 时降级 suspected。updatedAt 零值（未走时效校验的调用路径）不处理。
-func downgradeStaleSecrets(candidates []Candidate, updatedAt time.Time) int {
+func (s *Service) downgradeStaleSecrets(candidates []Candidate, updatedAt time.Time) int {
 	if len(candidates) == 0 || updatedAt.IsZero() {
 		return 0
 	}
@@ -110,6 +117,12 @@ func downgradeStaleSecrets(candidates []Candidate, updatedAt time.Time) int {
 			candidates[i].Confidence = "suspected"
 			downgraded++
 		}
+	}
+	if downgraded > 0 && s.logger != nil {
+		s.logger.Info("GitHub leak monitor 失效快类别陈旧命中降级",
+			lz.Int("downgraded", downgraded),
+			lz.Int("window_days", fastExpireStaleDays),
+			lz.Time("source_updated_at", updatedAt.UTC()))
 	}
 	return downgraded
 }

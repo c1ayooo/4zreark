@@ -249,6 +249,41 @@ var builtinSources = []upstreamSource{
 			return ParseDdddFinger(data)
 		},
 	},
+	{
+		// chainreactors/fingers 的规范化指纹集（spray 同作者维护，国内覆盖好）：
+		// EHole 格式聚合、Goby logic 表达式、fingers 自维护 HTTP 指纹。
+		// 解析器自带 gunzip，上游是 gzip JSON。无内置快照：离线时静默跳过。
+		Name:       SourceEHole,
+		Candidates: fingersResourcesURLs("ehole.json.gz"),
+		Parse: func(data []byte, _ map[string]string) ([]Rule, WappalyzerImportStats, error) {
+			return ParseEHoleFinger(data)
+		},
+	},
+	{
+		Name:       SourceGoby,
+		Candidates: fingersResourcesURLs("goby.json.gz"),
+		Parse: func(data []byte, _ map[string]string) ([]Rule, WappalyzerImportStats, error) {
+			return ParseGobyFinger(data)
+		},
+	},
+	{
+		Name:       SourceFingers,
+		Candidates: fingersResourcesURLs("fingers_http.json.gz"),
+		Parse: func(data []byte, _ map[string]string) ([]Rule, WappalyzerImportStats, error) {
+			return ParseFingersHTTP(data)
+		},
+	},
+}
+
+// fingersResourcesURLs chainreactors/fingers 仓库 resources/ 下指纹集的候选下载地址
+//（raw master/main + jsdelivr 镜像，与其它上游源同模式）。
+func fingersResourcesURLs(file string) []string {
+	return []string{
+		"https://raw.githubusercontent.com/chainreactors/fingers/master/resources/" + file,
+		"https://raw.githubusercontent.com/chainreactors/fingers/main/resources/" + file,
+		"https://cdn.jsdelivr.net/gh/chainreactors/fingers@master/resources/" + file,
+		"https://gitee.com/mirrors_chainreactors/fingers/raw/master/resources/" + file,
+	}
 }
 
 // Updater 周期同步器;tokenFn / proxyFn 可为空。

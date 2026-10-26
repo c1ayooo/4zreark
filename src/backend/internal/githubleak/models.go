@@ -469,6 +469,8 @@ type ListFilter struct {
 	Keyword  string
 	Page     int
 	PageSize int
+	// RuleNames 项目过滤（4zreark 迁移）：规则名带项目名前缀，按本项目规则名集合圈定。
+	RuleNames []string
 	// SourceUpdatedAfter 非空时只返回路径提交时间在窗口内的命中（服务层按
 	// lookback_days 注入；存量 NULL 行放行）。
 	SourceUpdatedAfter *time.Time
