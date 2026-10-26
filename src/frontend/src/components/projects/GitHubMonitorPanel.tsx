@@ -283,7 +283,7 @@ export function GitHubMonitorPanel({ projectId }: { projectId: number }) {
               <Input
                 size="small"
                 className="w-96"
-                placeholder="新增关键词，逗号/空格分隔（如：lixiang.com 理想汽车 车励行）"
+                placeholder="新增关键词，逗号/空格分隔（如：example.com 某公司名 内部系统代号）"
                 value={ruleInput}
                 onChange={(e) => setRuleInput(e.target.value)}
                 onPressEnter={addKeyword}

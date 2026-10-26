@@ -42,3 +42,8 @@ src/backend/fpmine
 
 # TypeScript 增量构建缓存
 *.tsbuildinfo
+
+# 设计/交接文档与自定义指纹种子：含授权目标信息，只在本地保留
+docs/*.md
+src/backend/internal/recon/fingerprint/seeds/custom-certs.yaml
+src/backend/internal/recon/fingerprint/seeds/custom-icons.yaml
