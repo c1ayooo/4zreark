@@ -4,6 +4,7 @@ server:
   host: "0.0.0.0"
   port: 8080
   mode: "release"  # debug, release, test
+  public_url: ""   # 平台对外访问地址（通知「前往处置」按钮链接前缀），如 http://x.x.x.x:8080
 
 jwt:
   # 生产必须换掉：控制面启动时检测到默认值会拒绝运行（除非 ZRE_ALLOW_DEFAULT_SECRET=1）。

@@ -611,6 +611,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 			protected.GET("/enterprise-entities/:id/assets", middleware.RequirePermission("digital:read"), enterpriseHandler.AlignedAssets)
 			protected.POST("/enterprise-entities/purge-dead", middleware.RequirePermission("digital:write"), enterpriseHandler.PurgeDead)
 			protected.GET("/projects/:id/assessment", middleware.RequirePermission("asset:read"), assessmentHandler.GetProjectAssessment)
+			protected.GET("/projects/:id/assessment/sites", middleware.RequirePermission("asset:read"), assessmentHandler.ListAssessmentSites)
 
 			// 工信部 ICP 官方查询（异步单 worker + 全局限速，独立队列）
 			icpHandler := api.NewICPHandler()

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import ProjectAssessmentCard from '@/components/projects/ProjectAssessmentCard'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
@@ -90,19 +91,19 @@ function StatCard({
   tone?: 'danger'
 }) {
   return (
-    <Card styles={{ body: { padding: 16 } }}>
-      <div className="flex items-center gap-3">
+    <Card styles={{ body: { padding: '10px 12px' } }}>
+      <div className="flex items-center gap-2.5">
         <span
           className={cn(
-            'flex size-9 shrink-0 items-center justify-center rounded-lg',
+            'flex size-8 shrink-0 items-center justify-center rounded-lg',
             tone === 'danger' ? 'bg-destructive/10 text-destructive' : 'bg-primary/10 text-primary',
           )}
         >
-          <Icon className="size-4" />
+          <Icon className="size-3.5" />
         </span>
         <div className="min-w-0">
           <div className="text-muted-foreground text-xs">{label}</div>
-          <div className="truncate text-lg font-semibold tabular-nums">{value}</div>
+          <div className="truncate text-base font-semibold tabular-nums">{value}</div>
         </div>
       </div>
     </Card>
@@ -546,7 +547,7 @@ export default function ProjectDetailPage() {
   if (!validId) {
     return (
       <Card>
-        <div className="text-muted-foreground flex flex-col items-center gap-3 py-16">
+        <div className="text-muted-foreground flex flex-col items-center gap-3 py-10">
           项目 ID 不合法
           <Link to="/projects">
             <Button size="small">返回项目列表</Button>
@@ -573,7 +574,7 @@ export default function ProjectDetailPage() {
   if (!project) {
     return (
       <Card>
-        <div className="text-muted-foreground flex flex-col items-center gap-3 py-16">
+        <div className="text-muted-foreground flex flex-col items-center gap-3 py-10">
           <AlertTriangle className="text-destructive h-8 w-8" />
           {projectQuery.isError ? '项目加载失败' : '项目不存在'}
           <Link to="/projects">
@@ -589,6 +590,7 @@ export default function ProjectDetailPage() {
 
   return (
     <div className="space-y-4">
+      <ProjectAssessmentCard projectId={idNum} />
       {/* 顶部：面包屑 + 项目身份 + 操作 */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-3">

@@ -35,6 +35,9 @@ type ServerConfig struct {
 	Host string `mapstructure:"host"`
 	Port int    `mapstructure:"port"`
 	Mode string `mapstructure:"mode"`
+	// PublicURL 平台对外访问地址（如 https://x.x.x.x:8080），通知消息里的
+	// 「前往处置」按钮用它拼绝对链接；空 = 不渲染按钮。
+	PublicURL string `mapstructure:"public_url"`
 }
 
 type JWTConfig struct {
@@ -337,6 +340,9 @@ func applyPostgresEnv(c *Config) {
 	}
 	if v := os.Getenv("ZRE_PG_SCHEMA"); v != "" {
 		c.Postgres.Schema = v
+	}
+	if v := os.Getenv("ZRE_PUBLIC_URL"); v != "" {
+		c.Server.PublicURL = v
 	}
 	if v := os.Getenv("ZRE_JWT_SECRET"); v != "" {
 		c.JWT.Secret = v

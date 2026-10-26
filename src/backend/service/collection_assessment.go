@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c1ayooo/4zreark/config"
 	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/service/notify"
 )
@@ -250,15 +251,20 @@ func SendCollectionAssessmentAsync(projectID int64, trigger string, respectThrot
 		if len(a.Risks) > 0 {
 			content += "\n风险提示：\n- " + strings.Join(a.Risks, "\n- ")
 		}
+		extra := map[string]interface{}{
+			"project_id": projectID, "risks": len(a.Risks), "sites": a.Sites,
+		}
+		if cfg := config.GetConfig(); cfg != nil && cfg.Server.PublicURL != "" {
+			extra["link"] = strings.TrimRight(cfg.Server.PublicURL, "/") +
+				"/projects/" + fmt.Sprint(projectID)
+		}
 		notify.GetGlobalManager().SendAsync(&notify.NotifyMessage{
 			Level:     level,
 			Title:     "采集完成综合评估 · " + a.ProjectName,
 			Content:   content,
 			Timestamp: time.Now(),
 			Source:    "collection-assessment",
-			Extra: map[string]interface{}{
-				"project_id": projectID, "risks": len(a.Risks), "sites": a.Sites,
-			},
+			Extra:     extra,
 		})
 	}()
 }
