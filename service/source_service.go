@@ -271,21 +271,7 @@ func (s *SourceService) LegacyConfig(ctx context.Context) (map[string]string, []
 			configured = append(configured, k)
 		}
 	}
-	email := ""
-	if r, err := s.repo(); err == nil {
-		if src, err := r.FindByKind(ctx, "fofa"); err == nil {
-			if e, ok := src.Config["email"].(string); ok {
-				email = e
-			}
-		}
-	}
-	if email == "" {
-		if c := config.Loaded(); c != nil {
-			email = c.ThirdParty.Fofa.Email
-		}
-	}
 	return map[string]string{
-		"fofa_email":         email,
 		"fofa_key":           maskKey(keys["fofa"]),
 		"hunter_key":         maskKey(keys["hunter"]),
 		"quake_key":          maskKey(keys["quake"]),
@@ -297,11 +283,6 @@ func (s *SourceService) LegacyConfig(ctx context.Context) (map[string]string, []
 
 // UpdateLegacy 兼容旧 /thirdparty/config：写 sources 表（密文）。
 func (s *SourceService) UpdateLegacy(ctx context.Context, body map[string]string) ([]string, error) {
-	if email := strings.TrimSpace(body["fofa_email"]); email != "" {
-		if err := s.upsertEngineSource(ctx, "fofa", "", map[string]any{"email": email}); err != nil {
-			return nil, fmt.Errorf("upsert fofa email: %w", err)
-		}
-	}
 	pairs := map[string]string{
 		"fofa_key": "fofa", "hunter_key": "hunter", "quake_key": "quake",
 		"securitytrails_key": "securitytrails", "zoomeye_key": "zoomeye", "shodan_key": "shodan",

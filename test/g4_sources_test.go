@@ -100,7 +100,7 @@ func TestG4SourcesCredential(t *testing.T) {
 
 	// 兼容层：旧 /thirdparty/config 的读写落到 sources 表
 	if _, err := svc.UpdateLegacy(ctx, map[string]string{
-		"fofa_key": "legacy-fofa-key", "fofa_email": "ops@example.com",
+		"fofa_key": "legacy-fofa-key",
 	}); err != nil {
 		t.Fatalf("兼容层写入失败: %v", err)
 	}
@@ -110,9 +110,6 @@ func TestG4SourcesCredential(t *testing.T) {
 	legacyCfg, configured, err := svc.LegacyConfig(ctx)
 	if err != nil {
 		t.Fatalf("兼容层读取失败: %v", err)
-	}
-	if legacyCfg["fofa_email"] != "ops@example.com" {
-		t.Fatalf("fofa_email 不符: %v", legacyCfg)
 	}
 	if !strings.HasPrefix(legacyCfg["fofa_key"], "****") {
 		t.Fatalf("兼容层 key 应脱敏: %q", legacyCfg["fofa_key"])

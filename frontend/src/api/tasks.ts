@@ -119,7 +119,6 @@ export interface TaskConfig {
   // 第三方 API 配置
   use_thirdparty?: boolean
   thirdparty_sources?: string[]
-  fofa_email?: string
   fofa_key?: string
   hunter_key?: string
   quake_key?: string
@@ -239,7 +238,6 @@ export const taskApi = {
       // 第三方 API 配置
       use_thirdparty: data.config.use_thirdparty,
       thirdparty_sources: data.config.thirdparty_sources,
-      fofa_email: data.config.fofa_email,
       fofa_key: data.config.fofa_key,
       hunter_key: data.config.hunter_key,
       quake_key: data.config.quake_key,

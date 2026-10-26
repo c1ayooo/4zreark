@@ -2,7 +2,6 @@ import api, { ApiResponse } from '@/lib/api'
 
 // 第三方 API 配置类型
 export interface ThirdPartyConfig {
-  fofa_email: string
   fofa_key: string
   hunter_key: string
   quake_key: string

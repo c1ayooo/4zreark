@@ -53,7 +53,6 @@ type SubdomainScanConfig struct {
 	EngineQueryMaxPerEngine int
 
 	// API 密钥
-	FofaEmail         string
 	FofaKey           string
 	HunterKey         string
 	QuakeKey          string

@@ -74,7 +74,6 @@ alert:
 # 第三方 API 配置 (用于子域名收集)
 thirdparty:
   fofa:
-    email: ""
     key: ""
   hunter:
     key: ""

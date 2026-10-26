@@ -113,7 +113,6 @@ type TaskConfig struct {
 	// EngineQueryMaxPerEngine 单任务内每引擎查询上限（防烧额度）。
 	// master 建任务时按「当日引擎余额」收紧后下发；0=用流水线默认。
 	EngineQueryMaxPerEngine int    `json:"engine_query_max_per_engine,omitempty" bson:"engine_query_max_per_engine,omitempty"`
-	FofaEmail               string `json:"fofa_email,omitempty" bson:"fofa_email,omitempty"`
 	FofaKey                 string `json:"fofa_key,omitempty" bson:"fofa_key,omitempty"`
 	HunterKey               string `json:"hunter_key,omitempty" bson:"hunter_key,omitempty"`
 	QuakeKey                string `json:"quake_key,omitempty" bson:"quake_key,omitempty"`

@@ -169,8 +169,7 @@ type ThirdPartyConfig struct {
 }
 
 type FofaConfig struct {
-	Email string `mapstructure:"email"`
-	Key   string `mapstructure:"key"`
+	Key string `mapstructure:"key"`
 }
 
 type HunterConfig struct {

@@ -37,7 +37,6 @@ export default function SettingsPage() {
     email: user?.email || '',
   })
   const [apiConfigForm, setApiConfigForm] = useState<Partial<ThirdPartyConfig>>({
-    fofa_email: '',
     fofa_key: '',
     hunter_key: '',
     quake_key: '',
@@ -181,7 +180,6 @@ export default function SettingsPage() {
   const handleSaveApiConfig = () => {
     // 只提交非空字段
     const configToUpdate: Partial<ThirdPartyConfig> = {}
-    if (apiConfigForm.fofa_email) configToUpdate.fofa_email = apiConfigForm.fofa_email
     if (apiConfigForm.fofa_key) configToUpdate.fofa_key = apiConfigForm.fofa_key
     if (apiConfigForm.hunter_key) configToUpdate.hunter_key = apiConfigForm.hunter_key
     if (apiConfigForm.quake_key) configToUpdate.quake_key = apiConfigForm.quake_key
@@ -408,14 +406,6 @@ export default function SettingsPage() {
                   {/* FOFA */}
                   <Card title={sourceCardTitle('FOFA', 'fofa', '配置 FOFA 网络空间搜索引擎 API')}>
                     <div className="space-y-4">
-                      <div className="space-y-2">
-                        <label className="text-sm font-medium">Email</label>
-                        <Input
-                          value={apiConfigForm.fofa_email}
-                          onChange={(e) => setApiConfigForm({ ...apiConfigForm, fofa_email: e.target.value })}
-                          placeholder={configData?.data?.config?.fofa_email || '输入 FOFA 账号邮箱'}
-                        />
-                      </div>
                       <div className="space-y-2">
                         <label className="text-sm font-medium">API Key</label>
                         <Input
