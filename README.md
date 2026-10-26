@@ -368,6 +368,13 @@ npm run build
 
 ---
 
+## 致谢
+
+- [ScopeSentry](https://github.com/Autumn-27/ScopeSentry) —— 本项目的资产侦察思路深受其启发：资产查询 DSL 的语法设计与巡航调度理念都参考了 ScopeSentry 的实测体验，在此向原作者 [Autumn-27](https://github.com/Autumn-27) 致谢。
+- 同时感谢本项目集成与借鉴的各开源工具及其作者：[katana](https://github.com/projectdiscovery/katana)、[spray](https://github.com/chainreactors/spray)、[gogo](https://github.com/chainreactors/gogo)、[nuclei](https://github.com/projectdiscovery/nuclei)、[ENScan_GO](https://github.com/wgpsec/ENScan_GO)、[go-rod](https://github.com/go-rod/rod)、[River](https://github.com/riverqueue/river)。
+
+---
+
 ## 安全与授权
 
 - 仅对已授权目标使用；项目种子即授权边界，不要跨项目复用扫描结果。
