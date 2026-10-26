@@ -222,6 +222,13 @@ func (s *EnterpriseService) collector() (*enterprise.Collector, error) {
 	defer enterpriseCollectorMu.Unlock()
 	if enterpriseCollector == nil {
 		enterpriseCollector = enterprise.NewCollector(r, log.Default())
+		enterpriseCollector.SetJobDoneHook(func(job enterprise.Job) {
+			pid, perr := strconv.ParseInt(job.ProjectID, 10, 64)
+			if perr != nil || pid <= 0 {
+				return
+			}
+			SendCollectionAssessmentAsync(pid, "企业深度采集："+job.Keyword, true)
+		})
 	}
 	return enterpriseCollector, nil
 }

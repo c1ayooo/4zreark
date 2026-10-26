@@ -33,10 +33,17 @@ type Collector struct {
 	maxNodes    int
 	// maxDigitalPerEntity 单实体数字资产拉取上限（sink 启用时生效）。
 	maxDigitalPerEntity int
+
+	// jobDoneHook 任务完成回调（SetJobDoneHook 设置）。
+	jobDoneHook func(Job)
 }
 type runningJob struct {
 	cancel context.CancelFunc
 }
+
+// jobDoneHook 任务完成回调（仅 status=done 触发）。
+// jobDoneHookMu 保护运行中的读取与设置并发。
+var jobDoneHookMu sync.Mutex
 
 func NewCollector(store CollectorStore, lg *log.Logger) *Collector {
 	if lg == nil {
@@ -51,6 +58,13 @@ func NewCollector(store CollectorStore, lg *log.Logger) *Collector {
 
 // SetRateLimit 调整上游请求间隔（测试与调试用；<=0 表示不限速）。
 func (c *Collector) SetRateLimit(d time.Duration) { c.rateLimit = d }
+
+// SetJobDoneHook 任务完成钩子（状态 done 时异步回调）；评估通知等服务层收尾用。
+func (c *Collector) SetJobDoneHook(h func(Job)) {
+	c.mu.Lock()
+	c.jobDoneHook = h
+	c.mu.Unlock()
+}
 
 // Start 启动后台 BFS 采集任务，立即返回 job（status=running）。
 func (c *Collector) Start(ctx context.Context, provider Provider, job Job, root CompanyRef) (Job, error) {
@@ -118,6 +132,17 @@ func (c *Collector) run(ctx context.Context, provider Provider, job Job, root Co
 	}
 	if err := c.store.FinishJob(context.Background(), job.ID, status, msg); err != nil {
 		c.log.Printf("[enterprise] 任务 %s 状态落库失败: %v", job.ID, err)
+	}
+	if status == "done" {
+		jobDoneHookMu.Lock()
+		hook := c.jobDoneHook
+		jobDoneHookMu.Unlock()
+		if hook != nil {
+			go func() {
+				defer func() { _ = recover() }()
+				hook(job)
+			}()
+		}
 	}
 }
 

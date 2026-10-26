@@ -62,6 +62,10 @@ type DigitalCollectInput struct {
 
 	// ProviderOverride 供测试注入 fake 数据源；正式调用按 Provider 名称构造。
 	ProviderOverride enterprise.Provider `json:"-"`
+
+	// Notify 采集成功后发综合评估通知；默认开启，巡航周期逐实体调用时置 false
+	//（巡航收尾统一发一次全量评估）。
+	Notify *bool `json:"-"`
 }
 
 type DigitalCollectResult struct {
@@ -158,5 +162,9 @@ func (s *DigitalService) CollectCandidates(ctx context.Context, in DigitalCollec
 	}
 	out.Candidates = candidates
 	out.Imported = imported
+	if in.Notify == nil || *in.Notify {
+		SendCollectionAssessmentAsync(in.ProjectID,
+			"数字资产采集："+keyword+"（候选 "+fmt.Sprint(candidates)+"，直接入名单 "+fmt.Sprint(imported)+"）", false)
+	}
 	return out, nil
 }

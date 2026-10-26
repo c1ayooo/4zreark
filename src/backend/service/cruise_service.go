@@ -686,6 +686,7 @@ func (s *CruiseService) executeEnterpriseDeepCruise(cruise *models.CruiseTask, c
 	}
 	log.Printf("[CruiseService] Enterprise-deep cruise %s done: entities=%d launched=%d warnings=%d jobs=%v",
 		cruise.Name, len(entities), len(launched), len(warnings), launched)
+	SendCollectionAssessmentAsync(cruise.ProjectID, "企业深度采集巡航：" + cruise.Name, false)
 }
 
 // cruiseScheduleSpec 把巡航的 cron 表达式与其 timezone 组装成 robfig/cron 认识的
