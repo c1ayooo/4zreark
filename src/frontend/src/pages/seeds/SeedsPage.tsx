@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ExternalLink, RefreshCw, Search, Sprout } from 'lucide-react'
 import { Button, Input, Select, Table, Tag } from 'antd'
 import type { TableProps } from 'antd'
@@ -27,7 +27,9 @@ const KIND_LABEL: Record<SeedKind, string> = {
  */
 export default function SeedsPage() {
   const navigate = useNavigate()
-  const [projectId, setProjectId] = useState('0')
+  // 仪表盘项目分布表下钻入口：/seeds?project_id=N 只看该项目种子
+  const [searchParams] = useSearchParams()
+  const [projectId, setProjectId] = useState(() => searchParams.get('project_id') || '0')
   const [keyword, setKeyword] = useState('')
 
   const projects = useQuery({ queryKey: ['asset-projects'], queryFn: () => assetApi.projects() })

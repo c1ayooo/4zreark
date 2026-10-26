@@ -20,6 +20,7 @@ var ErrDSLSyntax = errors.New("资产查询语法错误")
 var assetQueryFields = []string{
 	"text", "app", "status_code", "title", "domain", "host", "ip", "port", "protocol",
 	"icon_hash", "discovery_type", "first_seen", "verified_at", "new_within", "verified_within",
+	"changed_within", "state",
 	"starred", "tag", "note", "ignored",
 }
 
@@ -275,7 +276,25 @@ func (p *dslParser) buildCond(field, op, val string) (string, error) {
 		if neg {
 			return fmt.Sprintf("(%s IS NULL OR %s <> %s)", col, col, p.add(n)), nil
 		}
+		// 范围比较：仪表盘下钻用 status_code>="200" && status_code<="299" 表达 2xx 分桶
+		switch op {
+		case ">=":
+			return fmt.Sprintf("%s >= %s", col, p.add(n)), nil
+		case "<=":
+			return fmt.Sprintf("%s <= %s", col, p.add(n)), nil
+		}
 		return fmt.Sprintf("%s = %s", col, p.add(n)), nil
+
+	case "state":
+		// 巡检状态：reachable/pending/lost，精确匹配
+		if neg {
+			return fmt.Sprintf("(s.state IS NULL OR s.state <> %s)", p.add(val)), nil
+		}
+		return fmt.Sprintf("s.state = %s", p.add(val)), nil
+
+	case "changed_within":
+		// 内容变更窗口：changed_within="24h" → 24h 内页面发生过变化
+		return fmt.Sprintf("s.content_changed_at >= now() - (%s)::interval", p.add(intervalOf(val))), nil
 
 	case "icon_hash":
 		col := "s.icon_sha256"

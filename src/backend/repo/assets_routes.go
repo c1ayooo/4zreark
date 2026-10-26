@@ -56,7 +56,55 @@ func (a *AssetRepo) SiteIDByHostAny(ctx context.Context, host string) (int64, in
 	return siteID, projectID, nil
 }
 
+// isJunkRouteStatus 爬虫实测确认「路径不存在/服务不可用」的状态码。
+// 404/410 是明确不存在；5xx 是服务端异常，不可信。401/403 是接口存在但
+// 有鉴权——高价值线索，保留。状态码 0 表示只从 JS 里提取了路径、还没
+// 实测，是候选不是垃圾，同样保留。
+func isJunkRouteStatus(code int) bool {
+	return code == 404 || code == 410 || (code >= 500 && code <= 599)
+}
+
+// SiteIDByHostWithStatus 按 host 找站点并带回当前 http_status，
+// 供爬虫入库前做死站守卫（404/410 站点的爬取结果整体是垃圾）。
+func (a *AssetRepo) SiteIDByHostWithStatus(ctx context.Context, host string) (int64, int64, int, error) {
+	if a == nil || a.r == nil {
+		return 0, 0, 0, errUninitialized()
+	}
+	var siteID, projectID, status int64
+	err := a.r.pool.QueryRow(ctx,
+		`SELECT id, project_id, http_status FROM sites WHERE host = $1 ORDER BY id LIMIT 1`, host).
+		Scan(&siteID, &projectID, &status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, 0, 0, ErrNotFound
+	}
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return siteID, projectID, int(status), nil
+}
+
+// SiteHTTPStatus 查站点当前 http_status（巡检慢爬守卫用）。
+func (a *AssetRepo) SiteHTTPStatus(ctx context.Context, siteID int64) (int, error) {
+	if a == nil || a.r == nil {
+		return 0, errUninitialized()
+	}
+	var status int64
+	err := a.r.pool.QueryRow(ctx,
+		`SELECT http_status FROM sites WHERE id = $1`, siteID).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return int(status), err
+}
+
+// SiteDeadByStatus 站点状态是否属于死站：实测 404/410，爬取与慢爬都应跳过。
+func SiteDeadByStatus(status int) bool {
+	return status == 404 || status == 410
+}
+
 // UpsertSiteRoutes 批量写路由，返回实际处理条数。同一批内 (method,path) 会先去重。
+// 数据清洗：实测 404/410/5xx 的路径反向删除（爬到过但现在死了的不该再展示）；
+// 状态码 0（未实测候选）不覆盖已验证的状态码。
 func (a *AssetRepo) UpsertSiteRoutes(ctx context.Context, siteID, projectID int64, source string, routes []RouteInput) (int, error) {
 	if a == nil || a.r == nil {
 		return 0, errUninitialized()
@@ -85,12 +133,21 @@ func (a *AssetRepo) UpsertSiteRoutes(ctx context.Context, siteID, projectID int6
 	}
 
 	batch := &pgx.Batch{}
+	dropped := 0
 	for _, r := range clean {
+		if isJunkRouteStatus(r.StatusCode) {
+			batch.Queue(`
+				DELETE FROM site_routes WHERE site_id = $1 AND method = $2 AND path = $3`,
+				siteID, r.Method, r.Path)
+			dropped++
+			continue
+		}
 		batch.Queue(`
 			INSERT INTO site_routes (site_id, project_id, method, path, status_code, source)
 			VALUES ($1,$2,$3,$4,$5,$6)
 			ON CONFLICT (site_id, method, path) DO UPDATE SET
-				status_code = EXCLUDED.status_code,
+				status_code = CASE WHEN EXCLUDED.status_code > 0
+					THEN EXCLUDED.status_code ELSE site_routes.status_code END,
 				source      = EXCLUDED.source,
 				last_seen   = now()`,
 			siteID, projectID, r.Method, r.Path, r.StatusCode, source)
@@ -106,7 +163,7 @@ func (a *AssetRepo) UpsertSiteRoutes(ctx context.Context, siteID, projectID int6
 	if err := br.Close(); err != nil {
 		return 0, err
 	}
-	return len(clean), nil
+	return len(clean) - dropped, nil
 }
 
 // ListSiteRoutes 某站点的路由，按最近发现排序。

@@ -13,10 +13,22 @@ import (
 // 统计全部走 PG（repo.DashboardRepo），不再依赖已移除的 Mongo service。
 type DashboardHandler struct {
 	dashboard *repo.DashboardRepo
+	panels    *repo.DashboardPanelsRepo
 }
 
 func NewDashboardHandler() *DashboardHandler {
-	return &DashboardHandler{dashboard: repo.NewDashboardRepo()}
+	return &DashboardHandler{dashboard: repo.NewDashboardRepo(), panels: repo.NewDashboardPanelsRepo()}
+}
+
+// GetPanels 扩展看板聚合数据：采集管道 / 项目分布 / 接口面 / JS 密钥命中。
+// GET /api/dashboard/panels
+func (h *DashboardHandler) GetPanels(c *gin.Context) {
+	data, err := h.panels.Panels(c.Request.Context())
+	if err != nil {
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.Success(c, data)
 }
 
 // GetDashboardStats returns dashboard statistics

@@ -187,11 +187,17 @@ func (s *SiteWatchService) CheckOne(ctx context.Context, w repo.WatchSite) (chan
 }
 
 // maybeStartSlowCrawl 变更站点下发慢爬任务：全局单飞 + 同站 24h 冷却。
+// 数据清洗守卫：站点实测 404/410 时不下发——对死页慢爬只是浪费请求，
+// 等它恢复可达后巡检自然会再次触发。
 func (s *SiteWatchService) maybeStartSlowCrawl(ctx context.Context, w repo.WatchSite, url string) bool {
 	s.crawlMu.Lock()
 	defer s.crawlMu.Unlock()
 
 	assets := repo.NewAssetRepo()
+	if status, err := assets.SiteHTTPStatus(ctx, w.SiteID); err == nil && repo.SiteDeadByStatus(status) {
+		log.Printf("[SiteWatch] %s 实测 http %d，死站不下发慢爬", w.Host, status)
+		return false
+	}
 	if running, err := assets.HasRunningWatchCrawl(ctx); err == nil && running {
 		log.Printf("[SiteWatch] 已有慢爬任务在跑，%s 排队下轮", url)
 		return false

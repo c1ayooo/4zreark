@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { RefreshCw } from 'lucide-react'
 import { Button, Table, Tag } from 'antd'
 import type { TableProps } from 'antd'
@@ -27,12 +28,19 @@ const variantClass: Record<string, string> = {
 }
 
 export default function EventsPage() {
-  const [type, setType] = useState('')
+  // 仪表盘下钻入口：/events?type=content_change 直接落到对应过滤视图
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [type, setType] = useState(() => searchParams.get('type') ?? '')
   const limit = 200
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['asset-events-changes', type, limit],
     queryFn: () => assetEventApi.changes({ event_type: type || undefined, limit }),
   })
+
+  const changeType = (next: string) => {
+    setType(next)
+    setSearchParams(next ? { type: next } : {}, { replace: true })
+  }
 
   const items = data?.data?.items ?? []
 
@@ -139,7 +147,7 @@ export default function EventsPage() {
                 ? 'border-primary bg-primary/10 text-primary'
                 : 'text-muted-foreground hover:bg-muted')
             }
-            onClick={() => setType(f.value)}
+            onClick={() => changeType(f.value)}
           >
             {f.label}
           </button>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {keepPreviousData, useQuery, useMutation, useQueryClient} from '@tanstack/react-query'
 import { vulnApi } from '@/api/vulnerabilities'
 import { reportApi, type ReportProfile } from '@/api/reports'
@@ -236,7 +237,9 @@ export default function VulnerabilitiesPage() {
   const [search, setSearch] = useState('')
   const debouncedSearch = useDebouncedValue(search)
   useEffect(() => { setPage(1) }, [debouncedSearch])
-  const [severityFilter, setSeverityFilter] = useState<string>('all')
+  // 仪表盘下钻入口：/vulnerabilities?severity=high 直接落到对应过滤视图
+  const [searchParams] = useSearchParams()
+  const [severityFilter, setSeverityFilter] = useState<string>(() => searchParams.get('severity') || 'all')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [page, setPage] = useState(1)
   const [selectedIds, setSelectedIds] = useState<string[]>([])

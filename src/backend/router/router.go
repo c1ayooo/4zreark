@@ -494,6 +494,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				dashboardGroup.GET("/recent-tasks", dashboardHandler.GetRecentTasks)
 				dashboardGroup.GET("/recent-vulns", dashboardHandler.GetRecentVulnerabilities)
 				dashboardGroup.GET("/recent-assets", dashboardHandler.GetRecentAssets)
+				dashboardGroup.GET("/panels", dashboardHandler.GetPanels)
 			}
 
 			// Scan routes (实时扫描)

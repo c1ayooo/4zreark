@@ -423,9 +423,15 @@ func (s *AssetService) SaveCrawledRoutes(source string, urls []CrawledEndpoint) 
 	sites, routes := 0, 0
 	authByProject := map[int64][]string{}
 	for _, g := range byHost {
-		siteID, projectID, err := a.SiteIDByHostAny(ctx, g.host)
+		// 死站守卫：http_status 实测 404/410 的站点，爬虫产物整体是垃圾，
+		// 一条都不入库也不反向删它的历史路由（站点可能只是暂时下线）。
+		siteID, projectID, siteStatus, err := a.SiteIDByHostWithStatus(ctx, g.host)
 		if err != nil {
 			continue // 没有对应站点：跳过
+		}
+		if repo.SiteDeadByStatus(siteStatus) {
+			log.Printf("[AssetService] 跳过死站 %s（http %d）的 %d 条爬虫结果", g.host, siteStatus, len(g.routes))
+			continue
 		}
 		if authPortalHosts[g.host] {
 			authByProject[projectID] = append(authByProject[projectID], g.host)
