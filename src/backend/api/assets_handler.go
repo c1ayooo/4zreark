@@ -182,6 +182,8 @@ func (h *AssetHandler) ListAssets(c *gin.Context) {
 		// 行内最近记录是可选开销：默认不查，前端展开某一行时才带 with_recent=1。
 		WithRecentRecords:  c.Query("with_recent") == "1" || c.Query("with_recent") == "true",
 		RecentRecordsLimit: recentLimit,
+		Starred:            starredParam(c.Query("starred")),
+		Tag:                c.Query("tag"),
 	})
 	if err != nil {
 		if errors.Is(err, repo.ErrDSLSyntax) {
@@ -192,6 +194,50 @@ func (h *AssetHandler) ListAssets(c *gin.Context) {
 		return
 	}
 	utils.Success(c, res)
+}
+
+// starredParam 解析「只看星标」开关：1/true → true，0/false → false，空 → 不过滤。
+func starredParam(v string) *bool {
+	if v == "" {
+		return nil
+	}
+	t := v == "1" || v == "true"
+	return &t
+}
+
+// UpdateAssetGovernance 资产治理操作：星标 / 标签 / 备注。
+// POST /api/assets/:id/governance {"starred":true,"tags":["重点"],"note":"..."}
+// 三个字段全部可选，传了才改（部分更新）。
+func (h *AssetHandler) UpdateAssetGovernance(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		utils.BadRequest(c, "非法资产 ID")
+		return
+	}
+	var body struct {
+		Starred *bool     `json:"starred"`
+		Tags    *[]string `json:"tags"`
+		Note    *string   `json:"note"`
+		Ignored *bool     `json:"ignored"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		utils.BadRequest(c, "请求体格式错误")
+		return
+	}
+	if err := h.assets.UpdateSiteGovernance(c.Request.Context(), id, repo.SiteGovernanceInput{
+		Starred: body.Starred,
+		Tags:    body.Tags,
+		Note:    body.Note,
+		Ignored: body.Ignored,
+	}); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			utils.NotFound(c, "资产不存在")
+			return
+		}
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"ok": true})
 }
 
 // ListFingerprintScores 指纹评分列表：项目内资产按指纹命中算 0-100 分。

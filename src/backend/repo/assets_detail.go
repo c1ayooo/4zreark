@@ -91,6 +91,10 @@ func (a *AssetRepo) GetAssetDetail(ctx context.Context, siteID int64) (*AssetDet
 	if a == nil || a.r == nil {
 		return nil, fmt.Errorf("资产仓储未初始化")
 	}
+	// siteColumns 引用治理/证书列，老库先过一遍幂等兜底。
+	if err := a.ensureSiteExtendedSchema(ctx); err != nil {
+		return nil, err
+	}
 
 	site, err := scanSite(a.r.pool.QueryRow(ctx, `SELECT `+siteColumns+`
 		FROM sites s JOIN projects p ON p.id = s.project_id WHERE s.id = $1`, siteID).Scan)

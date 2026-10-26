@@ -237,6 +237,19 @@ func (s *AssetService) ImportRecords(ctx context.Context, projectID int64, sourc
 	return a.ImportRecords(ctx, projectID, source, records)
 }
 
+// UpdateSiteGovernance 星标/标签/备注治理操作。备注限长 2000 字符，
+// 标签清洗（去空白/去重/限长）在 repo 层做。
+func (s *AssetService) UpdateSiteGovernance(ctx context.Context, siteID int64, in repo.SiteGovernanceInput) error {
+	if in.Note != nil && len(strings.TrimSpace(*in.Note)) > 2000 {
+		return fmt.Errorf("备注长度不能超过 2000 字符")
+	}
+	a, err := s.repo()
+	if err != nil {
+		return err
+	}
+	return a.UpdateSiteGovernance(ctx, siteID, in)
+}
+
 // VerifySite 是人工判定（不发网络请求）。真实探测走 VerifyService.ProbeSite。
 func (s *AssetService) VerifySite(ctx context.Context, siteID int64, reachable bool, code int, reason string) error {
 	a, err := s.repo()
@@ -373,6 +386,8 @@ func (s *AssetService) SaveCrawledRoutes(source string, urls []CrawledEndpoint) 
 		routes []repo.RouteInput
 	}
 	byHost := map[string]*group{}
+	// 爬虫发现的认证入口 URL（login/sso/oauth 等），host 在拿到 projectID 后打标
+	authPortalHosts := map[string]bool{}
 	for _, u := range urls {
 		raw := u.URL
 		path, ok := repo.ParseRouteURL(raw, u.Method)
@@ -386,6 +401,9 @@ func (s *AssetService) SaveCrawledRoutes(source string, urls []CrawledEndpoint) 
 		host := parsed.Hostname()
 		if host == "" {
 			continue
+		}
+		if !authPortalHosts[host] && repo.IsAuthPortalURL(raw) {
+			authPortalHosts[host] = true
 		}
 		g := byHost[host]
 		if g == nil {
@@ -403,10 +421,14 @@ func (s *AssetService) SaveCrawledRoutes(source string, urls []CrawledEndpoint) 
 	defer cancel()
 
 	sites, routes := 0, 0
+	authByProject := map[int64][]string{}
 	for _, g := range byHost {
 		siteID, projectID, err := a.SiteIDByHostAny(ctx, g.host)
 		if err != nil {
 			continue // 没有对应站点：跳过
+		}
+		if authPortalHosts[g.host] {
+			authByProject[projectID] = append(authByProject[projectID], g.host)
 		}
 		n, err := a.UpsertSiteRoutes(ctx, siteID, projectID, source, g.routes)
 		if err != nil {
@@ -414,6 +436,14 @@ func (s *AssetService) SaveCrawledRoutes(source string, urls []CrawledEndpoint) 
 		}
 		sites++
 		routes += n
+	}
+	// 认证入口标记：站点 tech 追加 Auth-Portal，资产页可按「重点资产」筛选
+	for projectID, hosts := range authByProject {
+		if n, err := a.MarkAuthPortals(ctx, projectID, hosts); err != nil {
+			log.Printf("[AssetService] 标记认证入口失败 project=%d: %v", projectID, err)
+		} else if n > 0 {
+			log.Printf("[AssetService] 已标记 %d 个认证入口站点（project=%d）", n, projectID)
+		}
 	}
 	return sites, routes, nil
 }

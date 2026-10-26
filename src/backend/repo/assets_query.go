@@ -38,6 +38,9 @@ type AssetQuery struct {
 	WithRecentRecords bool
 	// RecentRecordsLimit 是行内展开条数，缺省 5，上限 20。
 	RecentRecordsLimit int
+	// Starred 只看星标资产（nil=不过滤）；Tag 按标签精确筛选（空=不过滤）。
+	Starred *bool
+	Tag     string
 }
 
 // ConnectivityPolicy 是连通性与清理策略，随列表响应下发，前端不再二次请求。
@@ -238,6 +241,12 @@ func (a *AssetRepo) buildAssetWhere(q AssetQuery) (*whereBuilder, error) {
 	case "interfaces":
 		w.parts = append(w.parts,
 			"EXISTS (SELECT 1 FROM raw_records rr WHERE rr.site_id = s.id AND "+interfacePredicate("rr")+")")
+	case "ignored":
+		w.parts = append(w.parts, "s.ignored")
+	}
+	// 已忽略资产默认从一切视图隐藏，只有 view=ignored 专门查看。
+	if q.View != "ignored" {
+		w.parts = append(w.parts, "not s.ignored")
 	}
 
 	if strings.TrimSpace(q.Q) != "" {
@@ -250,6 +259,17 @@ func (a *AssetRepo) buildAssetWhere(q AssetQuery) (*whereBuilder, error) {
 			w.args = append(w.args, args...)
 			w.next += len(args)
 		}
+	}
+
+	// 治理筛选：星标 / 标签。与 DSL 正交，专供列表页的快捷开关。
+	if q.Starred != nil {
+		w.parts = append(w.parts, "s.starred = "+w.ph())
+		w.args = append(w.args, *q.Starred)
+	}
+	if tag := strings.TrimSpace(q.Tag); tag != "" {
+		w.parts = append(w.parts,
+			"exists (select 1 from jsonb_array_elements_text(s.tags) t where t = "+w.ph()+")")
+		w.args = append(w.args, tag)
 	}
 	return w, nil
 }
@@ -266,11 +286,14 @@ func unsupportedView(view string) (bool, string) {
 	}
 	return true, ""
 }
-
 // ListAssets 是资产列表的唯一入口，按 Kind 走三套 SQL。
 func (a *AssetRepo) ListAssets(ctx context.Context, q AssetQuery) (*AssetPage, error) {
 	if a == nil || a.r == nil {
 		return nil, errUninitialized()
+	}
+	// 治理/证书列在老库上可能还没加（sync.Once 兜底），列表 SQL 引用了它们。
+	if err := a.ensureSiteExtendedSchema(ctx); err != nil {
+		return nil, err
 	}
 	if q.Page < 1 {
 		q.Page = 1

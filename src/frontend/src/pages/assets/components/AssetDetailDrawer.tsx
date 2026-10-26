@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Button, Checkbox, Drawer, Table, Tag } from 'antd'
+import { Star } from 'lucide-react'
 import { assetApi, type Site } from '@/api/assets'
 import { formatDate } from '@/lib/utils'
 import { statusTagClass, type BadgeVariant } from '@/components/ui/StatusTag'
+import { CertExpiryTag } from './GovernanceCard'
 
 export type DrawerTab = 'overview' | 'endpoints' | 'records' | 'fingerprints' | 'verifications'
 
@@ -84,6 +86,8 @@ export default function AssetDetailDrawer({
               <Tag className={statusTagClass(stateVariant(site.state))}>
                 {stateLabel[site.state] ?? site.state}
               </Tag>
+              {site.starred && <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" aria-label="已星标" />}
+              {site.cert_not_after && <CertExpiryTag notAfter={site.cert_not_after} />}
               <span>{site.project_name}</span>
               <span>·</span>
               <span className="tabular-nums">P{site.priority?.replace(/^p/i, '') || '—'} · {site.risk_score}</span>
@@ -147,6 +151,8 @@ export default function AssetDetailDrawer({
                     ['协议 / 端口', `${site.protocol}:${site.port}`],
                     ['首次发现', formatDate(site.first_seen)],
                     ['最近发现', formatDate(site.last_record_at || site.last_seen)],
+                    ...((site.tags?.length ?? 0) > 0 ? [['标签', site.tags!.join(' / ')]] : []),
+                    ...((site.note ?? '') ? [['备注', site.note]] : []),
                   ].map(([label, value]) => (
                     <div key={label} className="flex items-start justify-between gap-3 py-2">
                       <span className="shrink-0 text-muted-foreground">{label}</span>

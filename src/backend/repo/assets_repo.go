@@ -50,6 +50,15 @@ type Site struct {
 	// 存活验证探测时提取；icp_seen_at 记录最近一次提取时间。
 	Icp       string     `json:"icp,omitempty"`
 	IcpSeenAt *time.Time `json:"icp_seen_at,omitempty"`
+	// 治理四件套：星标 / 标签 / 备注 / 忽略（人工运营字段，扫描流程不碰）。
+	// 忽略的资产默认从所有列表视图与拓扑图隐藏，只有 view=ignored 可见。
+	Starred bool     `json:"starred"`
+	Tags    []string `json:"tags"`
+	Note    string   `json:"note"`
+	Ignored bool     `json:"ignored"`
+	// CertNotAfter 是站点当前证书的到期时间（指纹扫描顺带采集），
+	// 证书到期检测循环用它发提醒；未采集过为 nil。
+	CertNotAfter *time.Time `json:"cert_not_after,omitempty"`
 	// Endpoints 是站点的全部入口（协议 + 端口）。
 	// 站点按 host 归并，所以 http:80 / https:443 / http:8080 都挂在这一个站点下，
 	// 端口视图只能从这里读，sites.port 只是 https 优先的展示值。
@@ -98,6 +107,12 @@ type RawRecord struct {
 	IP              string         `json:"ip"`
 	Tech            []string       `json:"tech,omitempty"`
 	Server          string         `json:"server,omitempty"`
+	BodyHash        string         `json:"body_hash,omitempty"`
+	CertOrg         string         `json:"cert_org,omitempty"`
+	CertNotAfter    time.Time      `json:"cert_not_after,omitempty"`
+	CookieNames     []string       `json:"cookie_names,omitempty"`
+	JSFrameworks    []string       `json:"js_frameworks,omitempty"`
+	APIHosts        []string       `json:"api_hosts,omitempty"`
 	IconSHA256      string         `json:"icon_sha256,omitempty"`
 	IconMMH3        int64          `json:"icon_mmh3,omitempty"`
 	IconContentType string         `json:"icon_content_type,omitempty"`
@@ -124,6 +139,7 @@ const siteColumns = `s.id, s.project_id, p.code, p.name, s.host, s.port, s.proto
 	s.verification_status, coalesce(s.verification_reason,''), s.attempts, s.max_attempts,
 	s.first_seen, s.last_seen, s.verified_at, s.next_verification_at, s.last_http_verified_at,
 	s.icp, s.icp_seen_at,
+	s.starred, coalesce(s.tags, '[]'::jsonb), coalesce(s.note, ''), s.ignored, s.cert_not_after,
 	coalesce((SELECT jsonb_agg(jsonb_build_object('scheme', e.scheme, 'port', e.port,
 	                                             'status_code', e.status_code) ORDER BY e.port, e.scheme)
 	            FROM site_endpoints e WHERE e.site_id = s.id), '[]'::jsonb),
@@ -134,13 +150,14 @@ const siteColumns = `s.id, s.project_id, p.code, p.name, s.host, s.port, s.proto
 
 func scanSite(scan func(...any) error) (*Site, error) {
 	var s Site
-	var tech, eps []byte
+	var tech, eps, tags []byte
 	err := scan(&s.ID, &s.ProjectID, &s.ProjectCode, &s.ProjectName, &s.Host, &s.Port,
 		&s.Protocol, &s.Value, &s.IP, &s.HTTPStatus, &s.Title, &s.IconSHA256, &tech,
 		&s.DiscoveryType, &s.State, &s.ConsecutiveFailures, &s.RetryStep, &s.CleanupEligible,
 		&s.VerificationStatus, &s.VerificationReason, &s.Attempts, &s.MaxAttempts,
 		&s.FirstSeen, &s.LastSeen, &s.VerifiedAt, &s.NextVerificationAt, &s.LastHTTPVerifiedAt,
-		&s.Icp, &s.IcpSeenAt, &eps,
+		&s.Icp, &s.IcpSeenAt,
+		&s.Starred, &tags, &s.Note, &s.Ignored, &s.CertNotAfter, &eps,
 		&s.EndpointCount, &s.RecordCount, &s.FingerprintCount, &s.LastRecordAt)
 	if err != nil {
 		return nil, err
@@ -151,6 +168,12 @@ func scanSite(scan func(...any) error) (*Site, error) {
 	}
 	if s.Tech == nil {
 		s.Tech = []string{}
+	}
+	if len(tags) > 0 {
+		_ = json.Unmarshal(tags, &s.Tags)
+	}
+	if s.Tags == nil {
+		s.Tags = []string{}
 	}
 	if len(eps) > 0 {
 		_ = json.Unmarshal(eps, &s.Endpoints)
@@ -307,7 +330,10 @@ type Overview struct {
 	Lost          int64            `json:"lost_count"`
 	NewToday      int64            `json:"new_today"`
 	TopTech       []map[string]any `json:"technology_counts"`
-	RecentEvents  []map[string]any `json:"recent_events"`
+	// SourceCounts 是原始记录按采集来源的分布（subdomain/httpx/crawler/手工导入…），
+	// 支撑「按来源聚合」的概览口径；只取 Top8。
+	SourceCounts []map[string]any `json:"source_counts"`
+	RecentEvents []map[string]any `json:"recent_events"`
 }
 
 func (a *AssetRepo) Overview(ctx context.Context) (*Overview, error) {
@@ -354,6 +380,26 @@ func (a *AssetRepo) Overview(ctx context.Context) (*Overview, error) {
 	}
 	if o.TopTech == nil {
 		o.TopTech = []map[string]any{}
+	}
+	// 来源分布：原始记录按 source 聚合，让「这些资产是谁发现的」一眼可见。
+	srcRows, err := a.r.pool.Query(ctx, `
+		SELECT source, count(*) AS cnt
+		  FROM raw_records
+		 GROUP BY source
+		 ORDER BY cnt DESC
+		 LIMIT 8`)
+	if err == nil {
+		defer srcRows.Close()
+		for srcRows.Next() {
+			var src string
+			var n int64
+			if srcRows.Scan(&src, &n) == nil {
+				o.SourceCounts = append(o.SourceCounts, map[string]any{"source": src, "count": n})
+			}
+		}
+	}
+	if o.SourceCounts == nil {
+		o.SourceCounts = []map[string]any{}
 	}
 	if o.RecentEvents, err = a.RecentEvents(ctx, 10); err != nil {
 		o.RecentEvents = []map[string]any{}
@@ -496,8 +542,10 @@ func (a *AssetRepo) ImportRecords(ctx context.Context, projectID int64, source s
 		var siteInserted bool
 		err = tx.QueryRow(ctx, `
 			INSERT INTO sites (project_id, site_key, host, port, protocol, value, ip, http_status,
-				title, state, verification_status, attempts, max_attempts, first_seen, last_seen, verified_at)
-			VALUES ($1,$2,$3,$4,$5,$6,nullif($7,'')::inet,$8,nullif($9,''),
+				title, body_hash, cert_org, cert_not_after, cookie_names, js_frameworks, api_hosts,
+				state, verification_status, attempts, max_attempts, first_seen, last_seen, verified_at)
+			VALUES ($1,$2,$3,$4,$5,$6,nullif($7,'')::inet,$8,nullif($9,''),nullif($10,''),
+				nullif($11,''),$15,$12,$13,$14,
 				'pending','pending',0,3,now(),now(),null)
 			ON CONFLICT (site_key) DO UPDATE SET
 				last_seen = now(),
@@ -505,10 +553,19 @@ func (a *AssetRepo) ImportRecords(ctx context.Context, projectID int64, source s
 				title = coalesce(EXCLUDED.title, sites.title),
 				ip = coalesce(EXCLUDED.ip, sites.ip),
 				protocol = CASE WHEN EXCLUDED.protocol = 'https' THEN 'https' ELSE sites.protocol END,
+				body_hash = coalesce(EXCLUDED.body_hash, sites.body_hash),
+				cert_org = coalesce(nullif(EXCLUDED.cert_org,''), sites.cert_org),
+				cert_not_after = coalesce(EXCLUDED.cert_not_after, sites.cert_not_after),
+				cookie_names = coalesce(EXCLUDED.cookie_names, sites.cookie_names),
+				js_frameworks = coalesce(EXCLUDED.js_frameworks, sites.js_frameworks),
+				api_hosts = coalesce(EXCLUDED.api_hosts, sites.api_hosts),
 				value = CASE WHEN EXCLUDED.protocol = 'https' THEN EXCLUDED.value ELSE sites.value END,
 				port = CASE WHEN EXCLUDED.protocol = 'https' THEN EXCLUDED.port ELSE sites.port END
 			RETURNING id, (xmax = 0)`,
-			projectID, key, host, port, proto, value, rec.IP, rec.StatusCode, rec.Title).Scan(&siteID, &siteInserted)
+			projectID, key, host, port, proto, value, rec.IP, rec.StatusCode, rec.Title, rec.BodyHash,
+			rec.CertOrg, stringSliceJSONB(rec.CookieNames), stringSliceJSONB(rec.JSFrameworks), stringSliceJSONB(rec.APIHosts),
+			nullIfZeroTime(rec.CertNotAfter),
+		).Scan(&siteID, &siteInserted)
 		if err != nil {
 			return nil, fmt.Errorf("归并站点失败: %w", err)
 		}
@@ -604,6 +661,8 @@ func (a *AssetRepo) ImportRecords(ctx context.Context, projectID int64, source s
 }
 
 // VerifySite 记录一次可达性判定，并按退避阶梯推进下一次检查时间。
+// 失联判死（连续失败达阈值且此前不是 lost）时同事务落 down 事件，
+// 事件时间线里的「宕机」由此而来；恢复侧的 reappear 在 VerifyService。
 func (a *AssetRepo) VerifySite(ctx context.Context, siteID int64, reachable bool, code int, reasonCode string) error {
 	policy := struct {
 		threshold int
@@ -619,6 +678,15 @@ func (a *AssetRepo) VerifySite(ctx context.Context, siteID int64, reachable bool
 		return err
 	}
 	defer tx.Rollback(ctx)
+
+	// 失联判死需要知道旧状态与旧失败计数：此前 reachable/pending 才算「翻转为 lost」，
+	// 已经是 lost 的继续失败不重复报事件。
+	var prevState string
+	var prevFailures int
+	if !reachable {
+		_ = tx.QueryRow(ctx, `SELECT state, consecutive_failures FROM sites WHERE id = $1`, siteID).
+			Scan(&prevState, &prevFailures)
+	}
 
 	if reachable {
 		_, err = tx.Exec(ctx, `
@@ -642,6 +710,20 @@ func (a *AssetRepo) VerifySite(ctx context.Context, siteID int64, reachable bool
 	if err != nil {
 		return err
 	}
+	// 判死瞬间落 down 事件（带失败原因），项目与资产值从站点行补出；
+	// 提交成功后触发 OnSiteDown 通知钩子（若已安装）。
+	var downProjectID int64
+	var downValue string
+	if !reachable && prevState != "lost" && prevFailures+1 >= policy.threshold {
+		if err := tx.QueryRow(ctx, `SELECT project_id, value FROM sites WHERE id = $1`, siteID).
+			Scan(&downProjectID, &downValue); err == nil {
+			if err := insertEventTx(ctx, tx, downProjectID, siteID, nil, "down", "资产失联",
+				map[string]any{"state": prevState, "consecutive_failures": prevFailures},
+				map[string]any{"state": "lost", "consecutive_failures": prevFailures + 1, "reason": reasonCode}); err != nil {
+				return err
+			}
+		}
+	}
 	status := "failed"
 	if reachable {
 		status = "verified"
@@ -650,7 +732,13 @@ func (a *AssetRepo) VerifySite(ctx context.Context, siteID int64, reachable bool
 		VALUES ($1,$2,$3,$4)`, siteID, status, reasonCode, code); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	if downValue != "" && OnSiteDown != nil {
+		OnSiteDown(downProjectID, siteID, downValue, reasonCode)
+	}
+	return nil
 }
 
 // AssetTargetsForDomain 取种子域下已归并站点的全部入口，作为周期回归的执行单元。
@@ -870,10 +958,27 @@ func toJSONB(m map[string]any) []byte {
 }
 
 // anyToJSONB 序列化任意值（含 []string），失败回落 "{}"。
+// stringSliceJSONB 字符串切片转 jsonb：空切片返回 nil（SQL NULL），
+// 让 upsert 的 coalesce 保住既有值，避免空覆盖。
+func stringSliceJSONB(v []string) []byte {
+	if len(v) == 0 {
+		return nil
+	}
+	return anyToJSONB(v)
+}
+
 func anyToJSONB(v any) []byte {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return []byte("{}")
 	}
 	return b
+}
+
+// nullIfZeroTime 零值时间转 SQL NULL，让 upsert 的 coalesce 保住既有证书到期时间。
+func nullIfZeroTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t
 }

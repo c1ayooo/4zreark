@@ -204,6 +204,9 @@ func (s *VerifyService) ProbeSite(ctx context.Context, siteID int64) (*SiteProbe
 				if err := assets.InsertEvent(ctx, before.ProjectID, siteID, nil, "reappear", "失联资产重新出现",
 					map[string]any{"state": before.State}, map[string]any{"state": "reachable"}); err != nil {
 					log.Printf("[Verify] 站点 %d 写入 reappear 事件失败: %v", siteID, err)
+				} else {
+					// 恢复通知（info）：IM 侧与 down 的 critical 通知成对。
+					go NotifySiteReappear(ctx, siteID, before.State)
 				}
 			}
 			afterTitle := before.Title

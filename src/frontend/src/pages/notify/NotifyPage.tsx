@@ -76,6 +76,7 @@ export default function NotifyPage() {
     appSecret: '',
     receiveIdType: 'open_id',
     receiveId: '',
+    minLevel: '' as NotifyConfig['min_level'],
   })
 
   const resetNewChannel = () =>
@@ -89,6 +90,7 @@ export default function NotifyPage() {
       appSecret: '',
       receiveIdType: 'open_id',
       receiveId: '',
+      minLevel: '',
     })
 
   // 获取配置列表
@@ -157,6 +159,19 @@ export default function NotifyPage() {
     },
   })
 
+  // 改渠道最低接收级别：整份配置回传，后端合并脱敏密钥后覆盖保存
+  const minLevelMutation = useMutation({
+    mutationFn: ({ config, minLevel }: { config: NotifyConfig; minLevel: NotifyConfig['min_level'] }) =>
+      notifyApi.updateConfig({ ...config, min_level: minLevel }),
+    onSuccess: () => {
+      toast({ title: '级别设置已保存' })
+      queryClient.invalidateQueries({ queryKey: ['notify-configs'] })
+    },
+    onError: (e: any) => {
+      toast({ title: '保存失败', description: e?.message, variant: 'destructive' })
+    },
+  })
+
   // 切换配置状态
   const toggleMutation = useMutation({
     mutationFn: ({ name, type, enabled }: { name: string; type: string; enabled: boolean }) =>
@@ -199,6 +214,7 @@ export default function NotifyPage() {
       name: newChannel.name,
       type: newChannel.type,
       enabled: true,
+      min_level: newChannel.minLevel || undefined,
     }
 
     if (newChannel.type === 'feishu' && newChannel.mode === 'app') {
@@ -438,6 +454,23 @@ export default function NotifyPage() {
                       >
                         {getTargetSummary(config) || '未配置投递目标'}
                       </div>
+                      <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+                        <span>最低级别</span>
+                        <Select
+                          size="small"
+                          className="w-[150px]"
+                          value={config.min_level || ''}
+                          onChange={(value) =>
+                            minLevelMutation.mutate({ config, minLevel: value as NotifyConfig['min_level'] })
+                          }
+                          disabled={minLevelMutation.isPending}
+                          options={[
+                            { value: '', label: '全部消息' },
+                            { value: 'warning', label: 'warning+' },
+                            { value: 'critical', label: '仅 critical' },
+                          ]}
+                        />
+                      </div>
                       <div className="flex items-center justify-end">
                         <div className="flex gap-1">
                           <Button
@@ -603,6 +636,24 @@ export default function NotifyPage() {
                 { value: 'webhook', label: 'WebHook' },
               ]}
             />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">最低接收级别</label>
+            <Select
+              className="w-full"
+              value={newChannel.minLevel || ''}
+              onChange={(value) =>
+                setNewChannel({ ...newChannel, minLevel: value as NotifyConfig['min_level'] })
+              }
+              options={[
+                { value: '', label: '全部消息（info 及以上）' },
+                { value: 'warning', label: 'warning 及以上' },
+                { value: 'critical', label: '仅 critical' },
+              ]}
+            />
+            <p className="text-xs text-muted-foreground">
+              级别低于门槛的消息不会发到这个渠道，避免普通通知刷屏重要群。
+            </p>
           </div>
           {newChannel.type === 'feishu' && (
             <div className="space-y-2">

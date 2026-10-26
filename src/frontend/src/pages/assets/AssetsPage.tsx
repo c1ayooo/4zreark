@@ -77,6 +77,7 @@ const VIEWS: { value: AssetView; label: string }[] = [
   { value: 'interfaces', label: '接口' },
   { value: 'icons', label: '图标' },
   { value: 'technologies', label: '技术栈' },
+  { value: 'ignored', label: '已忽略' },
 ]
 
 type AssetSort = 'first_seen' | 'risk'
@@ -185,6 +186,7 @@ export default function AssetsPage() {
   })
   const [view, setView] = useState<AssetView>(() => (searchParams.get('view') as AssetView) || '')
   const [siteGroup, setSiteGroup] = useState(() => searchParams.get('site_group') !== '0')
+  const [starredOnly, setStarredOnly] = useState(() => searchParams.get('starred') === '1')
   const [sort, setSort] = useState<AssetSort>(() => (searchParams.get('sort') === 'risk' ? 'risk' : 'first_seen'))
   const [page, setPage] = useState(() => Math.max(1, Number(searchParams.get('page')) || 1))
   const [pageSize, setPageSize] = useState(() => {
@@ -233,7 +235,7 @@ export default function AssetsPage() {
   useEffect(() => {
     setPage(1)
     setCursorStack([undefined])
-  }, [appliedQ, projectId, kind, catalog, view, siteGroup, sort, pageSize])
+  }, [appliedQ, projectId, kind, catalog, view, siteGroup, sort, pageSize, starredOnly])
 
   useEffect(() => {
     // URL 上的 q 还没被应用时先跳过回写，否则会把外部传来的查询条件立即冲掉。
@@ -245,11 +247,12 @@ export default function AssetsPage() {
     if (catalog !== 'all') next.set('catalog', catalog)
     if (view) next.set('view', view)
     if (!siteGroup) next.set('site_group', '0')
+    if (starredOnly) next.set('starred', '1')
     if (sort === 'risk') next.set('sort', 'risk')
     if (pageSize !== 50) next.set('page_size', String(pageSize))
     if (!cursorMode && page > 1) next.set('page', String(page))
     setSearchParams(next, { replace: true })
-  }, [appliedQ, urlQ, projectId, kind, catalog, view, siteGroup, sort, pageSize, page, cursorMode, setSearchParams])
+  }, [appliedQ, urlQ, projectId, kind, catalog, view, siteGroup, sort, pageSize, page, cursorMode, starredOnly, setSearchParams])
 
   const overview = useQuery({ queryKey: ['asset-overview'], queryFn: () => assetApi.overview() })
   const projects = useQuery({ queryKey: ['asset-projects'], queryFn: () => assetApi.projects() })
@@ -257,8 +260,15 @@ export default function AssetsPage() {
   const hasFilters = !!appliedQ || kind !== 'site' || catalog !== 'all' || !!view
 
   // 站点默认/域名/IP 用 keyset；风险排序、展开入口和聚类仍走 page。
+  const listKey = [
+    'assets',
+    cursorMode ? `c:${cursor ?? ''}` : `p:${page}`,
+    pageSize, appliedQ, projectId, kind, catalog, view, siteGroup, riskSort,
+    recentLoaded ? 'recent' : 'plain',
+    starredOnly ? 'starred' : 'all',
+  ] as const
   const list = useQuery({
-    queryKey: ['assets', cursorMode ? `c:${cursor ?? ''}` : `p:${page}`, pageSize, appliedQ, projectId, kind, catalog, view, siteGroup, riskSort, recentLoaded ? 'recent' : 'plain'],
+    queryKey: listKey,
     enabled: !clusterView,
     staleTime: 30_000,
     // 切粒度/视图/排序时保留上一份数据渲染，列表不塌陷成加载态（消除按钮点击时的页面闪烁）。
@@ -275,6 +285,7 @@ export default function AssetsPage() {
         site_group: siteGroup ? 1 : 0,
         sort: riskSort ? 'risk' : undefined,
         ...(recentLoaded ? { with_recent: 1 as const, recent_limit: 3 } : {}),
+        starred: starredOnly || undefined,
       }),
   })
 
@@ -383,6 +394,42 @@ export default function AssetsPage() {
     mutationFn: (site: Site) => assetApi.protect(site.id, 90),
     onSuccess: () => toast({ title: '已设 90 天保护期，期间不会被自动归档' }),
     onError: (e: any) => toast({ title: '设置失败', description: e?.message, variant: 'destructive' }),
+  })
+
+  // 星标开关：本地先翻（列表不闪），失败时回滚靠失效重取。
+  const star = useMutation({
+    mutationFn: ({ site, starred }: { site: Site; starred: boolean }) =>
+      assetApi.governance(site.id, { starred }),
+    onMutate: ({ site, starred }) => {
+      queryClient.setQueryData<any>(listKey, (old: any) => {
+        if (!old?.data?.items) return old
+        return {
+          ...old,
+          data: {
+            ...old.data,
+            items: old.data.items.map((it: any) =>
+              it && typeof it === 'object' && 'id' in it && (it as Site).id === site.id ? { ...it, starred } : it,
+            ),
+          },
+        }
+      })
+    },
+    onError: (e: any) => {
+      toast({ title: '星标操作失败', description: e?.message, variant: 'destructive' })
+      queryClient.invalidateQueries({ queryKey: ['assets'] })
+    },
+  })
+
+  // 忽略开关：乐观更新 + 失败回滚。「已忽略」视图下取消忽略同理。
+  const ignore = useMutation({
+    mutationFn: ({ site, ignored }: { site: Site; ignored: boolean }) =>
+      assetApi.governance(site.id, { ignored }),
+    onSuccess: (_, { ignored }) =>
+      toast({ title: ignored ? '已忽略该资产（默认视图不再显示）' : '已恢复显示该资产' }),
+    onError: (e: any) => {
+      toast({ title: '忽略操作失败', description: e?.message, variant: 'destructive' })
+      queryClient.invalidateQueries({ queryKey: ['assets'] })
+    },
   })
 
   const applyQuery = () => {
@@ -561,6 +608,8 @@ export default function AssetsPage() {
     probe,
     verify,
     protect,
+    star,
+    ignore,
     setDetailSite,
     navigate,
   })
@@ -833,6 +882,11 @@ export default function AssetsPage() {
             onChange={(e) => { setSiteGroup(e.target.checked); setPage(1) }}
           >
             按站点归并
+          </Checkbox>
+        </span>
+        <span className="flex items-center gap-2 text-[13px] text-muted-foreground">
+          <Checkbox checked={starredOnly} onChange={(e) => { setStarredOnly(e.target.checked); setPage(1) }}>
+            只看星标
           </Checkbox>
         </span>
         <div className="flex items-center gap-2">

@@ -177,6 +177,10 @@ func (a *AssetRepo) BuildAssetGraph(ctx context.Context, q AssetQuery) (*AssetGr
 		Edges: []*AssetGraphEdge{},
 		Limit: maxGraphSites,
 	}
+	// WHERE 里引用治理列（not ignored 等），老库先过一遍幂等兜底。
+	if err := a.ensureSiteExtendedSchema(ctx); err != nil {
+		return nil, err
+	}
 
 	w, err := a.buildAssetWhere(AssetQuery{ProjectID: q.ProjectID, Q: q.Q})
 	if err != nil {

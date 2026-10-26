@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -182,4 +183,31 @@ func ParseRouteURL(raw, method string) (path string, ok bool) {
 		p += "?" + u.RawQuery
 	}
 	return p, true
+}
+
+// authPortalURLRe 认证入口 URL 特征：路径含登录/SSO/OAuth/CAS/SAML/auth 段。
+// 前后要求非字母数字边界——/author、/authorize 不误报（auth 后跟字母），oauth2.html 命中。
+var authPortalURLRe = regexp.MustCompile(`(?i)(^|[^a-z0-9])(login|logon|signin|sign-in|sso|oauth|saml|cas|auth)([^a-z]|$)`)
+
+// IsAuthPortalURL 报告 URL 是否携带认证入口特征（爬虫发现的登录/SSO 链接）。
+func IsAuthPortalURL(raw string) bool {
+	return authPortalURLRe.MatchString(raw)
+}
+
+// MarkAuthPortals 给爬虫发现认证入口的站点追加 Auth-Portal 指纹标签，
+// 供资产页/指纹评分按「重点资产：有认证入口」筛选。幂等：已带标签的站点跳过。
+func (a *AssetRepo) MarkAuthPortals(ctx context.Context, projectID int64, hosts []string) (int64, error) {
+	if len(hosts) == 0 {
+		return 0, nil
+	}
+	tag, err := a.r.pool.Exec(ctx, `
+update sites set
+	tech = (coalesce(tech, '[]'::jsonb) || '["Auth-Portal"]'::jsonb),
+	tech_status = 'done'
+where project_id = $1 and host = any($2)
+  and coalesce(tech::text, '') not like '%Auth-Portal%'`, projectID, hosts)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }

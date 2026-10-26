@@ -78,6 +78,12 @@ type AssetHttp struct {
 	StatusCode   int      `json:"status_code"`  // 状态码
 	Server       string   `json:"server"`       // Web服务器
 	ContentType  string   `json:"content_type"` // 内容类型
+	BodyHash     string   `json:"body_hash,omitempty"` // 响应体 MD5：页面模板/版本指纹（fpmine body 聚类用）
+	CertOrg      string   `json:"cert_org,omitempty"`   // TLS 证书 Organization（资产归属）
+	CertNotAfter time.Time `json:"cert_not_after,omitempty"` // TLS 证书到期时间（证书到期提醒用）
+	CookieNames  []string `json:"cookie_names,omitempty"` // Set-Cookie 名集合（框架/网关特征）
+	JSFrameworks []string `json:"js_frameworks,omitempty"` // JS 框架@版本（页面版本指纹）
+	APIHosts     []string `json:"api_hosts,omitempty"`   // JS 引用的域名（跨域 API 归属线索）
 	Technologies []string `json:"technologies"` // 识别的技术栈
 	Fingerprints []string `json:"fingerprints"` // 指纹信息
 	// 图标：扫描阶段顺手抓到就随资产一起入库，前端按 sha256 取图。

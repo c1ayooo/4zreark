@@ -5,12 +5,14 @@ import {
   ChevronDown,
   ChevronUp,
   Eye,
+  EyeOff,
   Globe,
   Lock,
   MoreHorizontal,
   Radar,
   ShieldAlert,
   ShieldCheck,
+  Star,
 } from 'lucide-react'
 import {
   assetApi,
@@ -74,10 +76,11 @@ function SiteIcon({ sha256, alt }: { sha256: string; alt: string }) {
   )
 }
 
-export type SiteColumn = 'icon' | 'risk' | 'status' | 'title' | 'records' | 'project' | 'first_seen' | 'actions'
+export type SiteColumn = 'icon' | 'star' | 'risk' | 'status' | 'title' | 'records' | 'project' | 'first_seen' | 'actions'
 
 export const SITE_COLUMNS: { key: SiteColumn; label: string }[] = [
   { key: 'icon', label: '图标' },
+  { key: 'star', label: '星标' },
   { key: 'risk', label: '风险' },
   { key: 'status', label: '状态码' },
   { key: 'title', label: '标题' },
@@ -88,7 +91,7 @@ export const SITE_COLUMNS: { key: SiteColumn; label: string }[] = [
 ]
 
 export const DEFAULT_SITE_COLUMNS: Record<SiteColumn, boolean> = {
-  icon: true, risk: true, status: true, title: true,
+  icon: true, star: true, risk: true, status: true, title: true,
   records: true, project: true, first_seen: true, actions: true,
 }
 
@@ -140,6 +143,8 @@ export function buildAssetTableParts({
   probe,
   verify,
   protect,
+  star,
+  ignore,
   setDetailSite,
   navigate,
 }: {
@@ -153,6 +158,8 @@ export function buildAssetTableParts({
   probe: { mutate: (site: Site) => void }
   verify: { mutate: (v: { site: Site; reachable: boolean }) => void }
   protect: { mutate: (site: Site) => void }
+  star: { mutate: (v: { site: Site; starred: boolean }) => void }
+  ignore: { mutate: (v: { site: Site; ignored: boolean }) => void }
   setDetailSite: (site: Site) => void
   navigate: (path: string) => void
 }): AssetTableParts {
@@ -189,6 +196,15 @@ export function buildAssetTableParts({
                 {s.technology_stack.length > 0 && ` · ${s.technology_stack.join(', ')}`}
               </span>
             </div>
+            {(s.tags?.length ?? 0) > 0 && (
+              <div className="mt-1 flex flex-wrap items-center gap-1">
+                {s.tags!.map((t) => (
+                  <Tag key={t} className={`${badgeCls('outline')} px-1.5 py-0 text-[11px]`}>
+                    {t}
+                  </Tag>
+                ))}
+              </div>
+            )}
           </>
         ),
       },
@@ -199,6 +215,28 @@ export function buildAssetTableParts({
         width: 52,
         responsive: ['sm'],
         render: (_, s) => <SiteIcon sha256={s.icon_sha256} alt={s.host} />,
+      })
+    }
+    if (siteCols.star) {
+      siteColumns.push({
+        title: '星标',
+        width: 46,
+        render: (_, s) => (
+          <button
+            type="button"
+            aria-label={s.starred ? '取消星标' : '加星标'}
+            title={s.starred ? '取消星标' : '加星标'}
+            className="rounded p-1 hover:bg-muted"
+            onClick={(e) => {
+              e.stopPropagation()
+              star.mutate({ site: s, starred: !s.starred })
+            }}
+          >
+            <Star
+              className={`h-4 w-4 ${s.starred ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground'}`}
+            />
+          </button>
+        ),
       })
     }
     if (siteCols.risk) {
@@ -319,6 +357,17 @@ export function buildAssetTableParts({
                       onClick: () => toggleSiteExpand(s.id),
                     },
                     {
+                      key: 'star',
+                      label: s.starred ? '取消星标' : '加星标',
+                      icon: (
+                        <Star
+                          className={`h-3.5 w-3.5 ${s.starred ? 'fill-amber-400 text-amber-400' : ''}`}
+                          style={{ fontSize: 0 }}
+                        />
+                      ),
+                      onClick: () => star.mutate({ site: s, starred: !s.starred }),
+                    },
+                    {
                       key: 'mark-ok',
                       label: '人工标记可达',
                       icon: <ShieldCheck className="h-3.5 w-3.5" style={{ fontSize: 0 }} />,
@@ -335,6 +384,12 @@ export function buildAssetTableParts({
                       label: '保护 90 天',
                       icon: <Lock className="h-3.5 w-3.5" style={{ fontSize: 0 }} />,
                       onClick: () => protect.mutate(s),
+                    },
+                    {
+                      key: 'ignore',
+                      label: s.ignored ? '取消忽略' : '忽略（默认视图隐藏）',
+                      icon: <EyeOff className="h-3.5 w-3.5" style={{ fontSize: 0 }} />,
+                      onClick: () => ignore.mutate({ site: s, ignored: !s.ignored }),
                     },
                   ],
                 }}

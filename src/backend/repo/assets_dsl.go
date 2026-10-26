@@ -20,6 +20,7 @@ var ErrDSLSyntax = errors.New("资产查询语法错误")
 var assetQueryFields = []string{
 	"text", "app", "status_code", "title", "domain", "host", "ip", "port", "protocol",
 	"icon_hash", "discovery_type", "first_seen", "verified_at", "new_within", "verified_within",
+	"starred", "tag", "note", "ignored",
 }
 
 type dslParser struct {
@@ -353,6 +354,39 @@ func (p *dslParser) buildCond(field, op, val string) (string, error) {
 			col = "s.verified_at"
 		}
 		return fmt.Sprintf("%s >= now() - (%s)::interval", col, p.add(intervalOf(val))), nil
+
+	case "starred", "ignored":
+		truthy := val == "true" || val == "1" || val == "yes" || val == "y"
+		if neg {
+			truthy = !truthy
+		}
+		col := "s.starred"
+		if field == "ignored" {
+			col = "s.ignored"
+		}
+		return fmt.Sprintf("%s = %s", col, p.add(truthy)), nil
+
+	case "tag":
+		cond := ""
+		if op == "==" {
+			cond = fmt.Sprintf("t = %s", p.add(val))
+		} else {
+			cond = fmt.Sprintf("t ILIKE %s", p.add("%"+escapeLike(val)+"%"))
+		}
+		expr := fmt.Sprintf("exists (select 1 from jsonb_array_elements_text(s.tags) t where %s)", cond)
+		if neg {
+			return "(NOT " + expr + ")", nil
+		}
+		return expr, nil
+
+	case "note":
+		if neg {
+			return fmt.Sprintf("(coalesce(s.note,'') = '' OR coalesce(s.note,'') NOT ILIKE %s)", p.add(like(val))), nil
+		}
+		if op == "==" {
+			return fmt.Sprintf("coalesce(s.note,'') = %s", p.add(val)), nil
+		}
+		return fmt.Sprintf("coalesce(s.note,'') ILIKE %s", p.add(like(val))), nil
 
 	default: // text
 		pattern := like(val)

@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -149,5 +150,67 @@ func TestBuildRecordWhereSplitsDSLAndPlain(t *testing.T) {
 
 	if _, err := a.buildRecordWhere(AssetQuery{Q: `title="未闭合`}); err == nil {
 		t.Fatalf("残缺 DSL 应报错")
+	}
+}
+
+// 治理字段（starred/tag/note）的 DSL 编译：星标布尔、标签 jsonb 元素、备注 ILIKE。
+func TestBuildAssetWhereGovernanceFields(t *testing.T) {
+	expr, args, err := BuildAssetWhere(`starred="true"`)
+	if err != nil {
+		t.Fatalf("starred 不应报错: %v", err)
+	}
+	if !strings.Contains(expr, "s.starred = ") || len(args) != 1 || args[0] != true {
+		t.Fatalf("starred 应编译成布尔条件：%s %v", expr, args)
+	}
+
+	expr, _, err = BuildAssetWhere(`starred="false"`)
+	if err != nil {
+		t.Fatalf("starred=false 不应报错: %v", err)
+	}
+	if !strings.Contains(expr, "s.starred = ") {
+		t.Fatalf("starred=false 应编译成布尔条件：%s", expr)
+	}
+
+	expr, args, err = BuildAssetWhere(`tag=="重点"`)
+	if err != nil {
+		t.Fatalf("tag 不应报错: %v", err)
+	}
+	if !strings.Contains(expr, "jsonb_array_elements_text(s.tags)") || len(args) != 1 || args[0] != "重点" {
+		t.Fatalf("tag== 应编译成元素等值：%s %v", expr, args)
+	}
+
+	expr, _, err = BuildAssetWhere(`tag="云"`)
+	if err != nil {
+		t.Fatalf("tag 模糊不应报错: %v", err)
+	}
+	if !strings.Contains(expr, "ILIKE") {
+		t.Fatalf("tag= 应编译成元素模糊匹配：%s", expr)
+	}
+
+	expr, _, err = BuildAssetWhere(`note="内测"`)
+	if err != nil {
+		t.Fatalf("note 不应报错: %v", err)
+	}
+	if !strings.Contains(expr, "coalesce(s.note,'') ILIKE") {
+		t.Fatalf("note= 应编译成 ILIKE：%s", expr)
+	}
+
+	if _, _, err := BuildAssetWhere(`starred="可能"`); err != nil {
+		t.Fatalf("非法布尔值静默按 false 处理，不应报错: %v", err)
+	}
+}
+
+// normalizeTags 清洗：去空白、去重、截断超限标签。
+func TestNormalizeTags(t *testing.T) {
+	got := normalizeTags([]string{" 重点 ", "重点", "", "云", strings.Repeat("x", 100)})
+	if len(got) != 2 || got[0] != "重点" || got[1] != "云" {
+		t.Fatalf("清洗结果不符: %v", got)
+	}
+	many := make([]string, 30)
+	for i := range many {
+		many[i] = fmt.Sprintf("t%d", i)
+	}
+	if len(normalizeTags(many)) != 20 {
+		t.Fatalf("标签数应截断到 20")
 	}
 }

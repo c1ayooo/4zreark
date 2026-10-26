@@ -31,6 +31,7 @@ import { discoveryApi } from '@/api/discovery'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate } from '@/lib/utils'
 import { statusTagClass } from '@/components/ui/StatusTag'
+import { CertExpiryTag, GovernanceCard } from './components/GovernanceCard'
 
 type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info'
 
@@ -634,6 +635,16 @@ export default function AssetDetailPage() {
           )}
         </div>
       )}
+
+      {site.cert_not_after && (
+        <div className="flex items-center gap-2">
+          <CertExpiryTag notAfter={site.cert_not_after} />
+        </div>
+      )}
+
+      <SectionCard title="治理" description="星标 / 标签 / 备注：人工运营字段，扫描流程不会改动。">
+        <GovernanceCard key={site.id} site={site} />
+      </SectionCard>
 
       <div className="grid gap-4 xl:grid-cols-3">
         <div className="space-y-4 xl:col-span-2">

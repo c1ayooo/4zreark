@@ -36,6 +36,14 @@ export interface Site {
   /** 页面正文提取的 ICP 备案/许可证号（多号逗号分隔） */
   icp?: string
   icp_seen_at?: string
+  /** 治理四件套：星标 / 标签 / 备注 / 忽略（人工运营字段） */
+  starred: boolean
+  tags: string[]
+  note: string
+  /** 已忽略的资产默认从列表与拓扑隐藏，只有「已忽略」视图可见 */
+  ignored: boolean
+  /** 站点当前证书到期时间（指纹扫描顺带采集，未采集为空） */
+  cert_not_after?: string | null
   /** 站点的全部入口。站点按 host 归并，端口视图只能从这里读。 */
   endpoints: AssetEndpoint[]
   /** 读时按观测证据实时评分（0-100 / p0-p4），不落库 */
@@ -133,7 +141,7 @@ export interface ConnectivityPolicy {
 
 export type AssetKind = 'site' | 'domain' | 'ip' | 'record'
 export type AssetCatalog = 'all' | 'verified' | 'candidates'
-export type AssetView = '' | 'clues' | 'candidates' | 'lost' | 'interfaces' | 'icons' | 'technologies' | 'apps' | 'media'
+export type AssetView = '' | 'clues' | 'candidates' | 'lost' | 'interfaces' | 'icons' | 'technologies' | 'apps' | 'media' | 'ignored'
 
 export interface RawRecordRow {
   id: number
@@ -210,6 +218,8 @@ export interface OverviewData {
   lost_count: number
   new_today: number
   technology_counts: { key: string; name: string; site_count: number }[]
+  /** 原始记录按采集来源的分布（Top8），支撑「按来源聚合」概览 */
+  source_counts?: { source: string; count: number }[]
   recent_events: {
     id: number
     event_type: string
@@ -251,6 +261,10 @@ export interface AssetQueryParams {
   /** 站点列表顺带返回每站最近几条采集证据 */
   with_recent?: 1
   recent_limit?: number
+  /** 只看星标资产 */
+  starred?: boolean
+  /** 按标签精确筛选 */
+  tag?: string
 }
 
 export const assetApi = {
@@ -294,6 +308,11 @@ export const assetApi = {
   /** 人工删除保护期（这段时间内不会被自动归档） */
   protect: (id: number, days = 90) =>
     api.post<unknown, { code: number; message: string }>(`/assets/${id}/protect`, { days }),
+  /** 治理操作：星标 / 标签 / 备注 / 忽略。字段可选，传了才改 */
+  governance: (
+    id: number,
+    body: { starred?: boolean; tags?: string[]; note?: string; ignored?: boolean },
+  ) => api.post<unknown, { code: number; message: string }>(`/assets/${id}/governance`, body),
   events: (limit = 50) => api.get<unknown, { code: number; data: { items: any[] } }>('/events', { params: { limit } }),
 }
 
@@ -307,6 +326,8 @@ export type AssetGraphKind =
   | 'service'
   | 'endpoint'
   | 'route'
+  // 前端概览懒展开的「还有 N 个」聚合节点，不出现在后端数据里
+  | 'more'
 
 export type AssetGraphRel = 'owns' | 'contains' | 'resolves' | 'exposes' | 'routes'
 

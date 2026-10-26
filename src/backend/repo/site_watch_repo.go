@@ -35,7 +35,7 @@ join lateral (
 	order by (e.scheme = 'https') desc, e.port asc
 	limit 1
 ) e on true
-where s.state = 'reachable' and not s.watch_excluded
+where s.state = 'reachable' and not s.watch_excluded and not s.ignored
   and not exists (select 1 from projects p where p.id = s.project_id and p.collection_paused)
   and (s.content_checked_at is null or s.content_checked_at < now() - make_interval(hours => $1))`
 

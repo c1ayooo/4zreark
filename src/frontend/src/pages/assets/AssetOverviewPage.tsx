@@ -23,6 +23,8 @@ export default function AssetOverviewPage() {
   const d: OverviewData | undefined = overview.data?.data
   const tech = (d?.technology_counts || []).slice(0, 8)
   const maxTech = tech.reduce((m, t) => Math.max(m, t.site_count ?? 0), 0) || 1
+  const sources = (d?.source_counts || []).slice(0, 8)
+  const maxSource = sources.reduce((m, s) => Math.max(m, s.count ?? 0), 0) || 1
   const projectList: AssetProject[] = projects.data?.data || []
 
   const projectColumns: TableProps<AssetProject>['columns'] = [
@@ -170,6 +172,29 @@ export default function AssetOverviewPage() {
           </div>
         </Card>
       </div>
+
+      <Card title={<span className="text-sm">来源分布 · 原始记录 Top 8</span>}>
+        <div className="grid gap-x-8 gap-y-2.5 sm:grid-cols-2">
+          {sources.length === 0 ? (
+            <p className="text-muted-foreground py-4 text-center text-sm sm:col-span-2">还没有采集记录</p>
+          ) : (
+            sources.map((s) => (
+              <div key={s.source} className="space-y-1">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="truncate font-mono">{s.source || '—'}</span>
+                  <span className="text-muted-foreground ml-2 font-mono tabular-nums">{nf.format(s.count ?? 0)}</span>
+                </div>
+                <div className="bg-muted h-1.5 overflow-hidden rounded-full">
+                  <div
+                    className="bg-primary/50 h-full rounded-full"
+                    style={{ width: `${Math.max(4, ((s.count ?? 0) / maxSource) * 100)}%` }}
+                  />
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </Card>
 
       <Card title={<span className="text-sm">最近变更</span>}>
         <div className="space-y-2">

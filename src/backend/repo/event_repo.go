@@ -10,6 +10,11 @@ import (
 // 资产事件（G5）：first_seen / attribute_change / reappear。
 // 事件只记录真实变化，不记录每次探测流水；探测流水仍在 verifications。
 
+// OnSiteDown 站点判死回调：VerifySite 状态翻转为 lost 后触发（提交成功才调）。
+// repo 不能反向依赖 service/notify，由 main 在 master 启动时注入通知钩子；
+// worker 不安装、不发通知。nil = 无订阅方。
+var OnSiteDown func(projectID, siteID int64, value, reason string)
+
 type SiteSnapshot struct {
 	ProjectID  int64
 	State      string
