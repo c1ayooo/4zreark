@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -24,7 +25,21 @@ var upgrader = websocket.Upgrader{
 		if origin == "" {
 			return true
 		}
-		return middleware.OriginAllowed(origin)
+		if middleware.OriginAllowed(origin) {
+			return true
+		}
+		// 同源访问放行：页面由本服务（或其反代）直接托管时，浏览器 WS 必带
+		// Origin 头且等于页面源，而它不在 5173/3000 白名单里；反代场景优先
+		// 比对 X-Forwarded-Host，直连时 Host 即原始地址。
+		u, err := url.Parse(origin)
+		if err != nil {
+			return false
+		}
+		host := r.Header.Get("X-Forwarded-Host")
+		if host == "" {
+			host = r.Host
+		}
+		return u.Host == host
 	},
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,

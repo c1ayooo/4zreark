@@ -2,11 +2,17 @@ package service
 
 import (
 	"context"
+	"crypto/md5"
+	"crypto/tls"
 	"encoding/binary"
 	"errors"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -462,8 +468,63 @@ func (s *CycleService) expandDomainLive(ctx context.Context, projectID int64, ro
 		}
 	}
 
+	// favicon 反查：同图标的资产往往在不同根域名/业务线下——这是域名反查
+	// 覆盖不到的面（新收购、独立站、云上漏网资产）。只用项目内聚类 >= 2 站的
+	// icon（业务前端而非杂项），且只用第一个配了 Key 的引擎，控制按天配额。
+	iconFPs := s.projectIconFingerprints(ctx, projectID, 3)
+	if len(iconFPs) > 0 {
+		iconUsed := ""
+		for _, raw := range engines {
+			engine := strings.ToLower(strings.TrimSpace(raw))
+			if iconUsed != "" || !spacemap.ValidProvider(engine) || strings.TrimSpace(keys[engine]) == "" {
+				continue
+			}
+			hits := 0
+			for _, fp := range iconFPs {
+				q := spacemap.IconQuery(engine, fp.mmh3, fp.md5)
+				if q == "" {
+					continue
+				}
+				rows, qerr := companySearchRows(queryCtx, keys, engine, q, 100)
+				if qerr != nil {
+					warnings = append(warnings, fmt.Sprintf("icon 反查失败（%s %s）：%v", engine, q, qerr))
+					continue
+				}
+				hits++
+				for _, row := range rows {
+					for _, d := range icpquery.DomainsFromRow(engine, row) {
+						domains[d] = true
+					}
+				}
+			}
+			if hits > 0 {
+				iconUsed = engine
+			}
+		}
+		if iconUsed != "" {
+			used = append(used, iconUsed+"-icon")
+			warnings = append(warnings, fmt.Sprintf("icon 反查: %d 个同图标指纹（引擎 %s）", len(iconFPs), iconUsed))
+		}
+	}
+
 	if len(used) == 0 {
-		warnings = append(warnings, "没有可用的 live 数据源，回落到项目内已有站点 / 根域 443")
+		// 引擎全不可用：不再静默回落，改用本地探测兜底——DNS 解析 + 443/80 探活
+		// + 证书 SAN / 页面同域链接提取，把根域的一小圈邻居找出来。
+		warnings = append(warnings, "测绘引擎全部不可用（未配置 Key 或额度耗尽），改用本地探测兜底")
+		probeDomains, probeWarnings := s.probeDomainNeighbors(ctx, root)
+		warnings = append(warnings, probeWarnings...)
+		if len(probeDomains) > 1 {
+			list := make([]string, 0, len(probeDomains))
+			for d := range probeDomains {
+				list = append(list, d)
+			}
+			sort.Strings(list)
+			targets, targetWarnings := s.expandDomainList(ctx, projectID, list, "domain_local_probe", maxTargets)
+			warnings = append(warnings, targetWarnings...)
+			warnings = append(warnings, fmt.Sprintf("本地探测发现 %d 个同域主机，展开 %d 个目标", len(list), len(targets)))
+			return targets, warnings, nil
+		}
+		warnings = append(warnings, "本地探测未发现存活服务或同域邻居")
 		targets, staticWarnings, err := s.expandDomain(ctx, projectID, root, maxTargets)
 		warnings = append(warnings, staticWarnings...)
 		return targets, warnings, err
@@ -493,8 +554,107 @@ func (s *CycleService) expandDomainLive(ctx context.Context, projectID int64, ro
 	return targets, warnings, nil
 }
 
-func (s *CycleService) expandDict(ctx context.Context, value string, capability map[string]any, maxTargets int) ([]repo.TargetInput, []string, error) {
-	base, err := normalizeDomainValue(value)
+// probeDomainNeighbors 引擎不可用时的本地探测：DNS 解析确认存活，再从
+// TLS 证书 SAN 和 443/80 页面里提取同根域主机。只做被动读和单次请求，
+// 慢速原则下每个种子最多两个 HTTP 请求。
+func (s *CycleService) probeDomainNeighbors(ctx context.Context, root string) (map[string]bool, []string) {
+	warnings := []string{}
+	domains := map[string]bool{root: true}
+
+	lookupCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupHost(lookupCtx, root)
+	if err != nil || len(ips) == 0 {
+		warnings = append(warnings, fmt.Sprintf("本地探测: %s DNS 解析失败", root))
+		return domains, warnings
+	}
+	warnings = append(warnings, fmt.Sprintf("本地探测: %s 解析到 %d 个 IP", root, len(ips)))
+
+	scheme, body, sanHosts, err := probeHTTPAndCert(ctx, root)
+	if err != nil {
+		warnings = append(warnings, fmt.Sprintf("本地探测: %s 443/80 均不可达（%v）", root, err))
+		return domains, warnings
+	}
+	warnings = append(warnings, fmt.Sprintf("本地探测: %s %s 存活，证书 SAN %d 个", root, scheme, len(sanHosts)))
+
+	rootLower := strings.ToLower(strings.TrimSuffix(root, "."))
+	for _, h := range sanHosts {
+		h = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
+		if h == "" || strings.HasSuffix(h, "."+rootLower) || h == rootLower {
+			if h != "" {
+				domains[h] = true
+			}
+		}
+	}
+	// 页面同域链接：正则抓取 body 里的同根域主机名（href/src/裸字符串都算）
+	hostRe := regexp.MustCompile(`(?i)([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+` + regexp.QuoteMeta(rootLower))
+	for _, h := range hostRe.FindAllString(body, -1) {
+		h = strings.ToLower(strings.TrimSuffix(h, "."))
+		if len(h) <= len(rootLower)+1 {
+			continue
+		}
+		domains[h] = true
+	}
+	return domains, warnings
+}
+
+// probeHTTPAndCert 探活 443 → 80：TLS 握手顺带取证书 SAN，再 GET 一份首页 body。
+func probeHTTPAndCert(ctx context.Context, host string) (scheme, body string, sanHosts []string, err error) {
+	dialer := &net.Dialer{Timeout: 6 * time.Second}
+	tlsDial := func() (*tls.Conn, error) {
+		return tls.DialWithDialer(dialer, "tcp", host+":443", &tls.Config{
+			InsecureSkipVerify: true,
+			ServerName:         host,
+		})
+	}
+	if conn, derr := tlsDial(); derr == nil {
+		defer conn.Close()
+		state := conn.ConnectionState()
+		for _, cert := range state.PeerCertificates {
+			sanHosts = append(sanHosts, cert.DNSNames...)
+			break
+		}
+		scheme = "https"
+	} else {
+		// 443 不通回落 80；证书 SAN 拿不到就算了
+		scheme = "http"
+	}
+
+	client := &http.Client{
+		Timeout: 8 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+			DialContext:       dialer.DialContext,
+			DisableKeepAlives: true,
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	url := scheme + "://" + host
+	req, rerr := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
+	if rerr != nil {
+		return "", "", sanHosts, rerr
+	}
+	req.Header.Set("User-Agent", "4zreark-collect/1.0")
+	resp, herr := client.Do(req)
+	if herr != nil {
+		if scheme == "https" {
+			return probeHTTPAndCert(ctx, host) // 443 握手通但 GET 失败的场景很少见，回落 80 试一次
+		}
+		return "", "", sanHosts, herr
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+	return scheme, string(b), sanHosts, nil
+}
+
+func (s *CycleService) expandDict(ctx context.Context, value string, capability map[string]any, maxTargets int) ([]repo.TargetInput, []string, error) {	base, err := normalizeDomainValue(value)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -931,4 +1091,63 @@ func capabilityStrings(v any) []string {
 	default:
 		return nil
 	}
+}
+
+
+// iconFP 一次 favicon 反查用的指纹对：mmh3（fofa 口径）+ md5（quake/hunter/zoomeye 口径）。
+type iconFP struct {
+	mmh3 int64
+	md5  string
+}
+
+// projectIconFingerprints 项目内 favicon 聚类（同 mmh3 >= 2 站，即业务前端而非杂项）
+// 的 topN 指纹。md5 从 asset_icons 原始数据现算。
+func (s *CycleService) projectIconFingerprints(ctx context.Context, projectID int64, limit int) []iconFP {
+	// 无 DB 环境（worker 单测/节点进程）直接跳过：favicon 反查是增值面，不是主链路。
+	if repo.Default() == nil {
+		return nil
+	}
+	rows, err := repo.Default().Pool().Query(ctx, `
+select s.icon_mmh3, ai.data
+from sites s join asset_icons ai on ai.sha256 = s.icon_sha256
+where s.project_id = $1 and s.icon_mmh3 is not null`, projectID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	byIcon := map[int64][][]byte{}
+	for rows.Next() {
+		var mmh3 int64
+		var data []byte
+		if err := rows.Scan(&mmh3, &data); err != nil || len(data) == 0 {
+			continue
+		}
+		byIcon[mmh3] = append(byIcon[mmh3], data)
+	}
+	if len(byIcon) == 0 {
+		return nil
+	}
+
+	type cluster struct {
+		mmh3  int64
+		count int
+		data  []byte
+	}
+	var clusters []cluster
+	for mmh3, datas := range byIcon {
+		if len(datas) >= 2 {
+			clusters = append(clusters, cluster{mmh3: mmh3, count: len(datas), data: datas[0]})
+		}
+	}
+	sort.Slice(clusters, func(i, j int) bool { return clusters[i].count > clusters[j].count })
+	if len(clusters) > limit {
+		clusters = clusters[:limit]
+	}
+	out := make([]iconFP, 0, len(clusters))
+	for _, c := range clusters {
+		sum := md5.Sum(c.data)
+		out = append(out, iconFP{mmh3: c.mmh3, md5: hex.EncodeToString(sum[:])})
+	}
+	return out
 }

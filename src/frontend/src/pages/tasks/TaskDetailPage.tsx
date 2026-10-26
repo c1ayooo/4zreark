@@ -35,10 +35,10 @@ import {
   type ResultsTableCtx,
 } from './components/results'
 import { cn, formatDate, getStatusColor } from '@/lib/utils'
-import { 
-  ArrowLeft, Play, Pause, Square, Trash2, RotateCcw, 
+import {
+  ArrowLeft, Play, Pause, Square, Trash2, RotateCcw,
   Search, Download, Settings, ChevronDown,
-  RefreshCw, Pencil
+  RefreshCw, Pencil, Loader2, Check, CircleDashed
 } from 'lucide-react'
 
 // Tab 配置 - ID 对应后端 ResultType；assets 是任务级资产视图（非结果类型）
@@ -447,10 +447,25 @@ export default function TaskDetailPage() {
                   </>
                 )}
               </div>
-              {/* 运行中时显示进度条 */}
-              {task.status === 'running' && (
-                <div className="mt-2 w-64">
-                  <Progress percent={task.progress} showInfo={false} strokeWidth={8} />
+              {/* 进度区：running 实时刷新，completed/failed 定格最后状态——
+                  失败时也能看到死在哪个模块 */}
+              {(task.status === 'running' || task.progressDetails?.modules) && (
+                <div className="mt-3 max-w-3xl">
+                  <div className="flex items-center gap-3">
+                    <Progress
+                      percent={task.status === 'completed' ? 100 : task.progress}
+                      showInfo={false}
+                      strokeWidth={8}
+                      className="flex-1"
+                      trailColor="hsl(var(--muted))"
+                    />
+                    <span className="w-12 text-right text-sm font-medium tabular-nums">
+                      {task.status === 'completed' ? 100 : task.progress}%
+                    </span>
+                  </div>
+                  {task.progressDetails?.modules && (
+                    <ModuleProgressBars details={task.progressDetails} />
+                  )}
                 </div>
               )}
             </div>
@@ -723,5 +738,78 @@ const moduleLabels: Record<string, string> = {
   Crawler: 'Web 爬虫',
   DirScan: '目录扫描',
   Sensitive: '敏感信息',
+  WihProbe: '信息探测',
+}
+
+// 模块在流水线里的先后顺序，用于进度条组排序；未登记的模块追加在尾部
+const moduleOrder = [
+  'SubdomainScan',
+  'DomainVerify',
+  'PortPreparation',
+  'PortScan',
+  'Fingerprint',
+  'WihProbe',
+  'VulnScan',
+  'Crawler',
+  'DirScan',
+  'Sensitive',
+]
+
+// 模块明细进度条组：每个模块一行（名称 + 进度条 + 处理量/产出量）。
+// 失败的任务也显示——能看到死在哪个模块、跑到多少。
+function ModuleProgressBars({
+  details,
+}: {
+  details: NonNullable<Task['progressDetails']>
+}) {
+  const modules = details.modules ?? {}
+  const names = [
+    ...moduleOrder.filter((m) => modules[m]),
+    ...Object.keys(modules).filter((m) => !moduleOrder.includes(m)),
+  ]
+  if (names.length === 0) return null
+
+  return (
+    <div className="mt-3 grid gap-x-8 gap-y-1.5 sm:grid-cols-2">
+      {names.map((name) => {
+        const mp = modules[name]
+        const running = mp.status === 'running'
+        const completed = mp.status === 'completed'
+        const percent = completed ? 100 : Math.min(100, Math.max(0, mp.progress || 0))
+        const countText =
+          mp.total > 0
+            ? `${mp.processed}/${mp.total}`
+            : `${mp.processed}`
+        return (
+          <div key={name} className={cn('flex items-center gap-2.5 text-xs', !completed && !running && 'opacity-60')}>
+            <span className="flex w-24 shrink-0 items-center gap-1.5">
+              {running ? (
+                <Loader2 className="text-primary size-3 animate-spin" />
+              ) : completed ? (
+                <Check className="text-muted-foreground size-3" />
+              ) : (
+                <CircleDashed className="text-muted-foreground size-3" />
+              )}
+              <span className={cn('truncate', running ? 'text-foreground font-medium' : 'text-muted-foreground')}>
+                {moduleLabels[name] || name}
+              </span>
+            </span>
+            <Progress
+              percent={percent}
+              showInfo={false}
+              size={['100%', 4]}
+              className="flex-1"
+              trailColor="hsl(var(--muted))"
+            />
+            <span className="w-28 shrink-0 text-right tabular-nums text-muted-foreground">
+              {percent >= 1 ? `${Math.round(percent)}% · ` : ''}
+              {countText}
+              {mp.output > 0 ? ` · 产出 ${mp.output}` : ''}
+            </span>
+          </div>
+        )
+      })}
+    </div>
+  )
 }
 

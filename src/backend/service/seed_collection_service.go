@@ -26,6 +26,8 @@ type SeedCollectionService struct {
 }
 
 const (
+	// collectQueueSize 内存通道容量＝执行窗口；超出部分留在 DB（queued），
+	// worker 空闲时 refillQueue 补拉接力
 	collectQueueSize  = 100
 	collectJobTimeout = 10 * time.Minute
 )
@@ -45,8 +47,6 @@ func GetSeedCollectionService() *SeedCollectionService {
 	})
 	return collectSvc
 }
-
-var ErrCollectQueueFull = fmt.Errorf("收集队列已满（%d），请稍后再试", collectQueueSize)
 
 // liveCapableKinds 有 live 收集路径的种子种类。
 var liveCapableKinds = map[string]bool{"domain": true, "company": true, "cert": true}
@@ -92,16 +92,10 @@ func (s *SeedCollectionService) Enqueue(ctx context.Context, projectID int64, se
 		return 0, skipped, nil
 	}
 
-	// 去重：同一种子已有 queued/running 任务时跳过
-	existing, err := repo.Default().SeedCollection().ListJobs(ctx, projectID, 200)
+	// 去重：同一种子已有 queued/running 任务时跳过（直查活动作业，不受历史量影响）
+	active, err := repo.Default().SeedCollection().ListActiveSeedIDs(ctx, projectID)
 	if err != nil {
 		return 0, skipped, err
-	}
-	active := map[int64]bool{}
-	for _, j := range existing {
-		if j.Status == "queued" || j.Status == "running" {
-			active[j.SeedID] = true
-		}
 	}
 
 	s.ensureWorker()
@@ -111,22 +105,17 @@ func (s *SeedCollectionService) Enqueue(ctx context.Context, projectID int64, se
 			skipped = append(skipped, fmt.Sprintf("%s（已在队列中）", sd.Value))
 			continue
 		}
-		if len(s.queue) >= cap(s.queue) {
-			skipped = append(skipped, fmt.Sprintf("%s（队列已满）", sd.Value))
-			continue
-		}
 		job, err := repo.Default().SeedCollection().CreateJob(ctx, projectID, sd.ID, sd.Kind, sd.Value)
 		if err != nil {
 			skipped = append(skipped, fmt.Sprintf("%s（入库失败: %v）", sd.Value, err))
 			continue
 		}
+		enqueued++
+		// 通道只是执行窗口：塞不下就留在 DB（queued），worker 空闲时补拉接力，
+		// 全部收集不再受通道容量限制丢任务
 		select {
 		case s.queue <- job.ID:
-			enqueued++
 		default:
-			// 通道满：用独立短超时收尾，请求 ctx 取消不该把任务留在 queued
-			s.finishJob(job.ID, "error", 0, "队列通道满")
-			skipped = append(skipped, fmt.Sprintf("%s（队列已满）", sd.Value))
 		}
 	}
 	return enqueued, skipped, nil
@@ -148,10 +137,37 @@ func (s *SeedCollectionService) ensureWorker() {
 				return
 			case id := <-s.queue:
 				s.runJob(id)
+				s.refillQueue()
 			}
 		}
 	}()
 	log.Printf("[SeedCollect] 收集 worker 已启动")
+}
+
+// refillQueue 通道见底时从 DB 补拉 queued 任务接力执行。
+// 全部收集一次落库全量目标，通道只保留执行窗口，超出部分由这里消化；
+// 重复补拉的任务 ClaimJob 条件更新幂等，不会双跑。
+func (s *SeedCollectionService) refillQueue() {
+	if len(s.queue) > 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	ids, err := repo.Default().SeedCollection().ListQueuedJobIDs(ctx, cap(s.queue))
+	if err != nil {
+		log.Printf("[SeedCollect] 补拉 queued 任务失败: %v", err)
+		return
+	}
+	for _, id := range ids {
+		select {
+		case s.queue <- id:
+		default:
+			return
+		}
+	}
+	if len(ids) > 0 {
+		log.Printf("[SeedCollect] 从库补拉 %d 个收集任务", len(ids))
+	}
 }
 
 // recoverStuckJobs 把上次进程残留的 running/queued 任务重新排入通道。

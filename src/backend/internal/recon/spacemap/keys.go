@@ -3,6 +3,7 @@
 package spacemap
 
 import (
+	"strconv"
 	"fmt"
 	"os"
 	"strings"
@@ -97,6 +98,26 @@ func DomainQuery(provider, domain string) string {
 // DomainQueryTemplate 语法模板展示({d} 为域名占位)。
 func DomainQueryTemplate(provider string) string {
 	return DomainQuery(provider, "{d}")
+}
+
+// IconQuery 某引擎按 favicon hash 反查资产的查询语句。
+// fofa 用 mmh3 十进制（与本系统 sites.icon_mmh3 同口径，base64 76 列折行 + murmur3）；
+// quake/hunter/zoomeye 用 favicon 内容 MD5。不支持反查的引擎返回空串，调用方跳过。
+func IconQuery(provider string, mmh3 int64, md5 string) string {
+	switch normalizeProvider(provider) {
+	case "fofa":
+		return fmt.Sprintf("icon_hash=%q", strconv.FormatInt(mmh3, 10))
+	case "quake", "hunter", "zoomeye":
+		if md5 == "" {
+			return ""
+		}
+		if normalizeProvider(provider) == "hunter" {
+			return fmt.Sprintf("web.icon=%q", md5)
+		}
+		return fmt.Sprintf("favicon:%q", md5)
+	default: // shodan 等无 favicon hash 语法
+		return ""
+	}
 }
 
 // SummarizeRow 把一行引擎原始结果压成单行摘要(工具输出样本用)。

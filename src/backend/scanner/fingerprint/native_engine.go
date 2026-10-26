@@ -560,6 +560,7 @@ func observationFromHTTP(resp *HTTPResponse) reconfp.Observation {
 		ContentType: contentType,
 		IconHash:    resp.IconHash,
 		IconMD5:     resp.IconMD5,
+		Cert:        resp.CertOrg, // cert 规则的匹配数据源（TLS Subject.Organization）
 	}
 }
 

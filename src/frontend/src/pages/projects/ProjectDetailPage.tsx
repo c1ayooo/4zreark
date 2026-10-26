@@ -6,7 +6,6 @@ import {
   ArrowLeft,
   Calendar,
   ChevronDown,
-  ChevronRight,
   Database,
   ExternalLink,
   FileText,
@@ -28,6 +27,7 @@ import type { TableProps } from 'antd'
 
 import {
   projectApi,
+  seedKindLabel,
   type Plan,
   type ProjectInput,
   type Run,
@@ -51,6 +51,7 @@ import {
 import { taskApi, type Task } from '@/api/tasks'
 import { ProjectFormDialog } from '@/components/projects/ProjectFormDialog'
 import { DiscoveryCandidatesPanel } from '@/components/projects/DiscoveryCandidatesPanel'
+import { GitHubMonitorPanel } from '@/components/projects/GitHubMonitorPanel'
 import { ReportGenerateDialog } from '@/components/reports/ReportGenerateDialog'
 import { reportApi, type ReportProfile } from '@/api/reports'
 import { useConfirm } from '@/components/common/confirm-provider'
@@ -128,6 +129,33 @@ function SectionHeader({
   )
 }
 
+// 右栏迷你统计块：label + 数值，双列网格铺开巡航/种子概览
+function MiniStat({
+  label,
+  value,
+  tone,
+  className,
+}: {
+  label: string
+  value: ReactNode
+  tone?: 'primary'
+  className?: string
+}) {
+  return (
+    <div className={cn('bg-muted/30 rounded-lg border px-3 py-2', className)}>
+      <div className="text-muted-foreground text-xs">{label}</div>
+      <div
+        className={cn(
+          'mt-0.5 text-sm font-semibold tabular-nums',
+          tone === 'primary' && 'text-primary',
+        )}
+      >
+        {value}
+      </div>
+    </div>
+  )
+}
+
 
 export default function ProjectDetailPage() {
   const navigate = useNavigate()
@@ -146,9 +174,8 @@ export default function ProjectDetailPage() {
   const [editOpen, setEditOpen] = useState(false)
   const [seedOpen, setSeedOpen] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
-  // 种子表勾选（收集入口）+ 收集队列折叠态
+  // 种子表勾选（收集入口）
   const [selectedSeedIds, setSelectedSeedIds] = useState<number[]>([])
-  const [queueOpen, setQueueOpen] = useState(false)
 
   const reportTemplatesQuery = useQuery({
     queryKey: ['report-templates'],
@@ -196,6 +223,12 @@ export default function ProjectDetailPage() {
     enabled: validId,
     refetchInterval: (query) => ((query.state.data?.data?.active ?? 0) > 0 ? 10000 : false),
   })
+  // 巡航状态：发现轮 + 站点巡检汇总，供右栏「巡航概览」卡
+  const cruiseStatusQuery = useQuery({
+    queryKey: ['project-cruise-status', idNum],
+    queryFn: () => seedCollectionApi.cruiseStatus(idNum),
+    enabled: validId,
+  })
 
   const project = projectQuery.data?.data
   const seeds = seedsQuery.data?.data ?? []
@@ -207,6 +240,25 @@ export default function ProjectDetailPage() {
   const runs = runsQuery.data?.data ?? []
   const tasks = tasksQuery.data?.data.list ?? []
   const tasksTotal = tasksQuery.data?.data.total ?? 0
+  const cruise = cruiseStatusQuery.data?.data
+
+  // 种子构成：按类型分组计数 + 覆盖站点数（domainCountMap 由页面统一下发）
+  const seedBreakdown = (() => {
+    const byKind = new Map<SeedKind, { count: number; sites: number }>()
+    let totalSites = 0
+    for (const s of seeds) {
+      const sites = domainCountMap.get(s.id) ?? 0
+      const e = byKind.get(s.kind) ?? { count: 0, sites: 0 }
+      e.count += 1
+      e.sites += sites
+      byKind.set(s.kind, e)
+      totalSites += sites
+    }
+    return {
+      entries: [...byKind.entries()].sort((a, b) => b[1].count - a[1].count),
+      totalSites,
+    }
+  })()
 
   // 永久删除项目：危险区按钮触发，输项目编码确认；后端级联清任务/资产/巡航等全部归属数据
   const deleteMutation = useMutation({
@@ -393,10 +445,11 @@ export default function ProjectDetailPage() {
       seedCollectionApi.collect(idNum, ids, all),
     onSuccess: (res) => {
       const d = res.data
+      const skipped = d?.skipped ?? []
       toast({
         title: `已入队 ${d?.enqueued ?? 0} 个收集任务`,
-        description: d?.skipped?.length
-          ? `跳过 ${d.skipped.length} 个：${d.skipped.join('、')}`
+        description: skipped.length
+          ? `跳过 ${skipped.length} 个：${skipped.slice(0, 5).join('、')}${skipped.length > 5 ? ' …' : ''}`
           : undefined,
       })
       setSelectedSeedIds([])
@@ -474,7 +527,12 @@ export default function ProjectDetailPage() {
   })
 
 
-  const seedColumns = buildSeedColumns({ domainCountMap, confirm, deleteSeedMutation })
+  const seedColumns = buildSeedColumns({
+    domainCountMap,
+    planBySeedId: new Map(plans.map((p) => [p.seed_id, p])),
+    confirm,
+    deleteSeedMutation,
+  })
 
   const seedRowSelection: TableProps<Seed>['rowSelection'] = {
     selectedRowKeys: selectedSeedIds,
@@ -786,40 +844,12 @@ export default function ProjectDetailPage() {
                     rowSelection={seedRowSelection}
                     pagination={{ pageSize: 10, hideOnSinglePage: true, showSizeChanger: false }}
                   />
-                  <div className="mt-4 border-t pt-3">
-                    <button
-                      type="button"
-                      className="flex items-center gap-1 text-sm font-medium"
-                      onClick={() => setQueueOpen((v) => !v)}
-                    >
-                      {queueOpen ? (
-                        <ChevronDown className="size-4" />
-                      ) : (
-                        <ChevronRight className="size-4" />
-                      )}
-                      收集队列
-                      {collectActive > 0 && <Badge count={collectActive} size="small" />}
-                      <span className="text-muted-foreground ml-1 text-xs font-normal">
-                        最近 {collectJobs.length} 条
-                        {collectActive > 0 ? ` · 进行中 ${collectActive}` : ''}
-                      </span>
-                    </button>
-                    {queueOpen && (
-                      <Table<SeedCollectionJob>
-                        className="mt-2"
-                        columns={jobColumns}
-                        dataSource={collectJobs}
-                        rowKey="id"
-                        loading={collectJobsQuery.isLoading}
-                        size="small"
-                        pagination={{ pageSize: 10, hideOnSinglePage: true, showSizeChanger: false }}
-                      />
-                    )}
-                  </div>
                 </>
               )}
             </div>
           </Card>
+
+          <GitHubMonitorPanel projectId={project.id} />
 
           <Card>
             <SectionHeader
@@ -879,8 +909,8 @@ export default function ProjectDetailPage() {
           </Card>
         </div>
 
-        {/* 右：项目资料（表单式字段） */}
-        <div className="space-y-4">
+        {/* 右：项目资料 + 巡航/队列状态（sticky 吸顶，滚动时右侧始终有内容） */}
+        <div className="space-y-4 xl:sticky xl:top-4 xl:self-start">
           <Card>
             <SectionHeader title="项目资料" description="项目的基本信息与采集状态。" />
             <div className="divide-y">
@@ -920,6 +950,103 @@ export default function ProjectDetailPage() {
                 </p>
               </div>
             </div>
+          </Card>
+
+          <Card>
+            <SectionHeader
+              title="巡航概览"
+              description="自动发现与站点巡检的最新进展。"
+            />
+            {!cruiseStatusQuery.isError && (
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {cruiseStatusQuery.isLoading || !cruise ? (
+                  <Skeleton
+                    className="col-span-2"
+                    active
+                    title={false}
+                    paragraph={{ rows: 4 }}
+                  />
+                ) : (
+                  <>
+                    <MiniStat
+                      className="col-span-2"
+                      label="最近发现轮"
+                      value={
+                        cruise.discovery
+                          ? `${fmtDate(cruise.discovery.ran_at)} · 新增 ${cruise.discovery.new_count}`
+                          : '尚未运行'
+                      }
+                      tone={cruise.discovery ? 'primary' : undefined}
+                    />
+                    <MiniStat
+                      label="待处理候选"
+                      value={cruise.watch.candidates_pending}
+                      tone={cruise.watch.candidates_pending > 0 ? 'primary' : undefined}
+                    />
+                    <MiniStat label="收集进行中" value={cruise.watch.collect_active} />
+                    <MiniStat label="证书透明" value={cruise.discovery?.from_ctlog ?? 0} />
+                    <MiniStat label="测绘引擎" value={cruise.discovery?.from_engines ?? 0} />
+                    <MiniStat label="站点可达" value={cruise.watch.reachable} />
+                    <MiniStat label="24h 已查" value={cruise.watch.checked_24h} />
+                    <MiniStat label="累计变更" value={cruise.watch.changed_total} />
+                  </>
+                )}
+              </div>
+            )}
+          </Card>
+
+          <Card>
+            <SectionHeader
+              title="种子构成"
+              description="监控范围按种子类型拆解；覆盖站点为种子解析出的实际站点数。"
+            />
+            <div className="mt-3">
+              {seedsQuery.isLoading ? (
+                <Skeleton loading active title={false} paragraph={{ rows: 3 }} />
+              ) : seeds.length === 0 ? (
+                <p className="text-muted-foreground py-4 text-center text-sm">
+                  添加种子后这里会展示监控范围的构成。
+                </p>
+              ) : (
+                <div className="divide-y">
+                  {seedBreakdown.entries.map(([kind, e]) => (
+                    <div key={kind} className="flex items-center justify-between gap-3 py-2 text-sm">
+                      <span className="flex items-center gap-2">
+                        <Tag className={badgeCls('outline')}>{seedKindLabel[kind]}</Tag>
+                      </span>
+                      <span className="text-right tabular-nums">
+                        <span className="font-medium">{e.count}</span>
+                        <span className="text-muted-foreground ml-2 text-xs">
+                          覆盖 {e.sites} 站点
+                        </span>
+                      </span>
+                    </div>
+                  ))}
+                  <div className="text-muted-foreground pt-2 text-xs">
+                    共 {seeds.length} 个种子 · 解析出 {seedBreakdown.totalSites} 个站点
+                  </div>
+                </div>
+              )}
+            </div>
+          </Card>
+
+          <Card>
+            <SectionHeader
+              title="收集队列"
+              description="种子收集作业排队串行执行；进行中时每 10 秒刷新。"
+              action={
+                collectActive > 0 ? <Badge count={collectActive} size="small" /> : undefined
+              }
+            />
+            <Table<SeedCollectionJob>
+              className="mt-3"
+              columns={jobColumns}
+              dataSource={collectJobs}
+              rowKey="id"
+              loading={collectJobsQuery.isLoading}
+              size="small"
+              pagination={{ pageSize: 5, hideOnSinglePage: true, showSizeChanger: false }}
+            />
           </Card>
 
         </div>

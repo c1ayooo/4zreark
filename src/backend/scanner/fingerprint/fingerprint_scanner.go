@@ -46,6 +46,12 @@ type FingerprintResult struct {
 	IconData     []byte            `json:"-"`
 	BodyHash     string            `json:"body_hash,omitempty"`
 	BodyLength   int               `json:"body_length,omitempty"`
+	// 响应富化：一次扫描顺带采集的画像字段（fpmine 挖掘与资产分级用）
+	CertOrg      string    `json:"cert_org,omitempty"`       // TLS 证书 Subject.Organization
+	CertNotAfter time.Time `json:"cert_not_after,omitempty"` // TLS 证书到期时间（证书到期提醒用）
+	CookieNames  []string  `json:"cookie_names,omitempty"`   // Set-Cookie 的 cookie 名集合
+	JSFrameworks []string `json:"js_frameworks,omitempty"` // JS bundle 里的框架@版本（vue@3.4.21）
+	APIHosts    []string `json:"api_hosts,omitempty"`     // JS 里引用的 API/资源域名（跨域归属线索）
 	Fingerprints []Fingerprint     `json:"fingerprints"`
 	Technologies []string          `json:"technologies,omitempty"`
 	CMS          string            `json:"cms,omitempty"`
@@ -224,8 +230,19 @@ func (s *FingerprintScanner) ScanFingerprint(ctx context.Context, target string)
 	result.IconData = iconData
 	result.IconType = iconType
 
+	// 证书归属先进 result：cert 规则的匹配数据源（富化随后复用，不重复取）
+	if resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
+		cert := resp.TLS.PeerCertificates[0]
+		result.CertOrg = strings.Join(cert.Subject.Organization, " ")
+		result.CertNotAfter = cert.NotAfter
+	}
+
 	// Use DSL engine for fingerprint detection
 	s.detectFingerprintsWithDSL(result, bodyStr, iconHash, iconMD5)
+
+	// 响应富化：证书归属 / cookie 名集合 / JS 框架版本与 API 域名。
+	// JS 分析最多再发 2 个请求（同域脚本），失败静默——画像字段容错。
+	s.enrichResponse(ctx, result, resp, bodyStr)
 
 	// Sort fingerprints by confidence
 	sort.Slice(result.Fingerprints, func(i, j int) bool {
@@ -234,6 +251,169 @@ func (s *FingerprintScanner) ScanFingerprint(ctx context.Context, target string)
 
 	result.ScanTime = time.Since(start) / time.Millisecond
 	return result
+}
+
+// enrichResponse 采集响应画像：TLS 证书归属、Set-Cookie 名集合、JS 框架版本
+// 与 JS 里引用的域名（跨域 API 归属线索）。所有失败静默——这些是增值字段。
+func (s *FingerprintScanner) enrichResponse(ctx context.Context, result *FingerprintResult, resp *http.Response, body string) {
+	// 证书归属：ScanFingerprint 已提前提取（cert 规则数据源），这里不重复取
+
+	// cookie 名集合：Set-Cookie 每条取等号前的名字（框架/网关特征，如 tenantId）
+	cookieNames := map[string]bool{}
+	for _, sc := range resp.Header.Values("Set-Cookie") {
+		if i := strings.IndexByte(sc, '='); i > 0 {
+			name := strings.TrimSpace(sc[:i])
+			if name != "" && len(name) <= 64 {
+				cookieNames[strings.ToLower(name)] = true
+			}
+		}
+	}
+	for name := range cookieNames {
+		result.CookieNames = append(result.CookieNames, name)
+	}
+	sort.Strings(result.CookieNames)
+
+	// JS 元数据：抓同域脚本（最多 2 个）提取框架版本与引用域名
+	jsContents := s.fetchSameOriginScripts(ctx, result.URL, body)
+	frameworks := map[string]bool{}
+	apiHosts := map[string]int{}
+	for _, js := range jsContents {
+		for _, f := range extractJSFrameworks(js) {
+			frameworks[f] = true
+		}
+		for host, n := range extractReferencedHosts(js) {
+			apiHosts[host] += n
+		}
+	}
+	for f := range frameworks {
+		result.JSFrameworks = append(result.JSFrameworks, f)
+	}
+	sort.Strings(result.JSFrameworks)
+	type hostCount struct {
+		host  string
+		count int
+	}
+	var hc []hostCount
+	for h, n := range apiHosts {
+		hc = append(hc, hostCount{h, n})
+	}
+	sort.Slice(hc, func(i, j int) bool {
+		if hc[i].count != hc[j].count {
+			return hc[i].count > hc[j].count
+		}
+		return hc[i].host < hc[j].host
+	})
+	for i, h := range hc {
+		if i >= 8 {
+			break
+		}
+		result.APIHosts = append(result.APIHosts, h.host)
+	}
+}
+
+// fetchSameOriginScripts 从 body 提取同域 script src 并下载内容（最多 2 个、每个 512KB）。
+func (s *FingerprintScanner) fetchSameOriginScripts(ctx context.Context, pageURL, body string) []string {
+	base, err := url.Parse(pageURL)
+	if err != nil {
+		return nil
+	}
+	scriptRe := regexp.MustCompile(`(?i)<script[^>]+src=["']([^"']+)["']`)
+	var candidates []string
+	for _, m := range scriptRe.FindAllStringSubmatch(body, -1) {
+		u, uerr := base.Parse(m[1])
+		if uerr != nil {
+			continue
+		}
+		if u.Host != base.Host || u.Path == "" || strings.HasSuffix(u.Path, ".css") {
+			continue
+		}
+		candidates = append(candidates, u.String())
+		if len(candidates) >= 2 {
+			break
+		}
+	}
+	var out []string
+	for _, jsURL := range candidates {
+		jsCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		req, rerr := http.NewRequestWithContext(jsCtx, http.MethodGet, jsURL, nil)
+		if rerr != nil {
+			cancel()
+			continue
+		}
+		req.Header.Set("User-Agent", useragent.Pick())
+		resp, gerr := s.HTTPClient.Do(req)
+		if gerr != nil {
+			cancel()
+			continue
+		}
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+		resp.Body.Close()
+		cancel()
+		if len(b) > 0 {
+			out = append(out, string(b))
+		}
+	}
+	return out
+}
+
+// jsFrameworkRes 常见前端框架/组件库的版本特征（文件名 + 内容两种形态）。
+var jsFrameworkRes = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b(vue|react|angular|jquery|element-ui|element-plus|antd|ant-design|bootstrap|layui|echarts|chart\.js|axios|moment|dayjs|lodash|next|nuxt)\.?(?:runtime|global|prod|common|min)?\.?v?([0-9]+\.[0-9]+(?:\.[0-9]+)?)`),
+	regexp.MustCompile(`(?i)(element-ui|element-plus|ant-design-vue|ant-design|view-design|iview)[@/ -]v?([0-9]+\.[0-9]+\.[0-9]+)`),
+}
+
+// extractJSFrameworks 从 JS 内容提取 "框架@版本" 列表。
+func extractJSFrameworks(js string) []string {
+	found := map[string]bool{}
+	for _, re := range jsFrameworkRes {
+		for _, m := range re.FindAllStringSubmatch(js, 20) {
+			// 两个正则都是两捕获组（框架名, 版本）；越界防御避免带崩扫描进程
+			if len(m) < 3 {
+				continue
+			}
+			name := strings.ToLower(strings.TrimSuffix(m[1], "."))
+			ver := m[2]
+			if name == "" || ver == "" {
+				continue
+			}
+			// 通用 version 字段匹配时 m[1] 可能不是框架名，跳过无名词命中
+			if !strings.ContainsAny(name, "abcdefghijklmnopqrstuvwxyz") {
+				continue
+			}
+			found[name+"@"+ver] = true
+		}
+	}
+	out := make([]string, 0, len(found))
+	for f := range found {
+		out = append(out, f)
+	}
+	return out
+}
+
+// referencedHostRe 页面/JS 里的绝对 URL 主机。
+var referencedHostRe = regexp.MustCompile(`https?://([a-zA-Z0-9][a-zA-Z0-9.-]*\.[a-zA-Z]{2,})(?::\d+)?`)
+
+// cdnHosts 公共 CDN/文档域，不算资产归属线索。
+var cdnHosts = map[string]bool{
+	"unpkg.com": true, "cdn.jsdelivr.net": true, "cdnjs.cloudflare.com": true,
+	"cdn.bootcdn.net": true, "cdn.staticfile.org": true, "lib.sinaapp.com": true,
+	"fonts.googleapis.com": true, "fonts.gstatic.com": true, "www.w3.org": true,
+	"github.com": true, "gitlab.com": true, "stackoverflow.com": true,
+	"beian.miit.gov.cn": true, "beian.gov.cn": true,
+	"registry.npmmirror.com": true, "npm.elemecdn.com": true, "lf3-cdn-tos.bytecdnapi.com": true,
+}
+
+// extractReferencedHosts 统计 JS 内容里引用的域名频次（排除公共 CDN）。
+func extractReferencedHosts(js string) map[string]int {
+	counts := map[string]int{}
+	for _, m := range referencedHostRe.FindAllStringSubmatch(js, 500) {
+		h := strings.ToLower(m[1])
+		if cdnHosts[h] || strings.HasSuffix(h, ".example.com") {
+			continue
+		}
+		counts[h]++
+	}
+	return counts
 }
 
 // loadFingerprintRules loads fingerprint rules from YAML files
@@ -300,6 +480,7 @@ func (s *FingerprintScanner) detectFingerprintsWithDSL(result *FingerprintResult
 			URL:        result.URL,
 			IconHash:   iconHash,
 			IconMD5:    iconMD5,
+			CertOrg:    result.CertOrg,
 		}
 
 		dslMatches := s.DSLEngine.AnalyzeResponse(dslResp)

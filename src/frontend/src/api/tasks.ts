@@ -135,6 +135,9 @@ export interface TaskConfig {
   // 扫描节奏（除漏洞扫描外全模块生效）
   rate_per_sec?: number
   target_delay_ms?: number
+  // 爬虫保护：每站页数 / 深度上限（留空用引擎默认 100 页 / 3 层）
+  max_pages?: number
+  max_depth?: number
 }
 
 export interface TaskResult {

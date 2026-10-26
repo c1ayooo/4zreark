@@ -35,6 +35,7 @@ type SeedCollectionRepo interface {
 	FinishJob(ctx context.Context, id string, status string, found int, errMsg string) error
 	ListJobs(ctx context.Context, projectID int64, limit int) ([]SeedCollectionJob, error)
 	CountActive(ctx context.Context, projectID int64) (int64, error)
+	ListActiveSeedIDs(ctx context.Context, projectID int64) (map[int64]bool, error)
 }
 
 type seedCollectionRepo struct{ r *Repo }
@@ -145,6 +146,27 @@ func (c *seedCollectionRepo) CountActive(ctx context.Context, projectID int64) (
 select count(*) from seed_collection_jobs
 where project_id = $1 and status in ('queued','running')`, projectID).Scan(&n)
 	return n, err
+}
+
+// ListActiveSeedIDs 项目内仍处于 queued/running 的种子 ID 集合。
+// 入队去重用：不受历史作业量影响，比翻最近 N 条作业再过滤可靠。
+func (c *seedCollectionRepo) ListActiveSeedIDs(ctx context.Context, projectID int64) (map[int64]bool, error) {
+	rows, err := c.r.pool.Query(ctx, `
+select distinct seed_id from seed_collection_jobs
+where project_id = $1 and status in ('queued','running')`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
 }
 
 // ---------------------------------------------------------------------------

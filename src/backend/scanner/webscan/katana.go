@@ -22,7 +22,9 @@ type KatanaScanner struct {
 	Depth            int // 爬取深度
 	Concurrency      int // 并发数
 	Timeout          int // 超时时间(秒)
-	RateLimit        int // 每秒请求数
+	RateLimit        int // 每秒请求数（全局）
+	HostRateLimit    int // 每主机每秒请求数（保护单业务站，0=不启用）
+	MaxDomainPages   int // 每域爬取页数上限（katana -mdp，引擎层止损；0=不限）
 	TempDir          string
 	ExecutionTimeout int // 执行超时时间（分钟）
 	// Headless 起无头浏览器执行 JS 路由，SPA 场景才有实质产出；
@@ -137,6 +139,14 @@ func (k *KatanaScanner) commonArgs(outputPath string) []string {
 		"-jc",  // 解析 JS 里的链接与接口
 		"-jsl", // jsluice：从 JS 内容里提取 API/端点（内存占用高，流式单目标可接受）
 		"-kf", "all",
+	}
+	// 引擎层节奏钳制：每主机限速保护单业务站（多目标并发时全局 -rl 对单站过快），
+	// 每域页数在 katana 内部止损——模块层 MaxPages 只截产出，不减少实际请求量。
+	if k.HostRateLimit > 0 {
+		args = append(args, "-hrl", fmt.Sprintf("%d", k.HostRateLimit))
+	}
+	if k.MaxDomainPages > 0 {
+		args = append(args, "-mdp", fmt.Sprintf("%d", k.MaxDomainPages))
 	}
 	if k.Headless {
 		// -no-sandbox：worker 跑在 WSL/rootless，浏览器沙箱起不来；

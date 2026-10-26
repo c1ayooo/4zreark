@@ -138,9 +138,13 @@ func (pt *ProgressTracker) IncrementModuleProcessed(moduleName string, count int
 		mp.ProcessedItems += count
 		if mp.TotalItems > 0 {
 			mp.Progress = float64(mp.ProcessedItems) / float64(mp.TotalItems) * 100
-			if mp.Progress > 100 {
-				mp.Progress = 100
-			}
+		} else {
+			// 流式模块总数未知（输入由上游动态产生）：软进度随处理量单调逼近
+			// 100 但永不自封完成，完成态由 CompleteModule 显式置 100。
+			mp.Progress = 100 * float64(mp.ProcessedItems) / float64(mp.ProcessedItems+50)
+		}
+		if mp.Progress > 100 {
+			mp.Progress = 100
 		}
 	}
 

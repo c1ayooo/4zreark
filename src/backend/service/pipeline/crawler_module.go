@@ -2,8 +2,10 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"log"
 	neturl "net/url"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -39,8 +41,14 @@ const (
 // SetScope 设置任务授权边界。
 // SetRate 收紧 katana 的并发与速率，跟随任务级节奏。
 // katana 的并发与扫描模块并发解耦：钳制在 3..10，总速率仍由 -rl 兜底，
-// 不会突破任务级上限。
+// 不会突破任务级上限。hostRate>0 时把每主机每秒也钳住——多目标并发下
+// 全局速率对单业务站仍然过快，这是「不影响业务」的关键一道闸。
 func (m *CrawlerModule) SetRate(ratePerSec, concurrency int) {
+	m.SetRatePerHost(ratePerSec, 0, concurrency)
+}
+
+// SetRatePerHost 在 SetRate 基础上额外设定每主机速率与每域页数。
+func (m *CrawlerModule) SetRatePerHost(ratePerSec, hostRate, concurrency int) {
 	if m.katanaScanner == nil {
 		return
 	}
@@ -57,6 +65,22 @@ func (m *CrawlerModule) SetRate(ratePerSec, concurrency int) {
 	}
 	if ratePerSec > 0 {
 		m.katanaScanner.RateLimit = ratePerSec
+	}
+	// 每主机速率：未显式配置时取全局速率的一半（多目标并发下单站压力减半），
+	// 但不低于 5 req/s——再低爬虫会因超时大量空转，反而拉长对站点的观察窗口。
+	if hostRate > 0 {
+		m.katanaScanner.HostRateLimit = hostRate
+	} else if ratePerSec > 0 {
+		h := ratePerSec / 2
+		if h < 5 {
+			h = 5
+		}
+		m.katanaScanner.HostRateLimit = h
+	}
+	// 每域页数：未配置时给保守默认（100 页/域），防单站深钻；
+	// 模块层 MaxPages（任务 watch_crawl 的 30 页口径）仍然生效。
+	if m.katanaScanner.MaxDomainPages <= 0 {
+		m.katanaScanner.MaxDomainPages = 100
 	}
 }
 
@@ -388,12 +412,61 @@ type DirScanModule struct {
 	resultChan   chan interface{}
 	concurrency  int
 	wordlist     []string
+	// learnedPaths 是字典自学习晋升的热词；执行时写成附加词表文件，
+	// 连同基础词表（或 spray 默认字典）一起传给 spray，绝不替代原词表。
+	learnedPaths []string
+	learnedFile  string
+	learnedOnce  sync.Once
 	batchMode    bool          // 批量模式
 	batchSize    int           // 批量大小
 	batchTimeout time.Duration // 批量收集超时
 	enableBackup bool          // 扫描备份文件
 	enableCommon bool          // 扫描通用文件
 	scope        *scope.Scope
+}
+
+// SetLearnedPaths 注入学习热词（任务 config 随单下发）。
+func (m *DirScanModule) SetLearnedPaths(paths []string) {
+	if len(paths) > 0 {
+		m.learnedPaths = paths
+	}
+}
+
+// resolveWordlists 计算本次 spray 使用的词表文件列表，学习热词懒写临时文件。
+func (m *DirScanModule) resolveWordlists() []string {
+	if len(m.learnedPaths) == 0 {
+		return m.wordlist
+	}
+	m.learnedOnce.Do(func() {
+		f, err := os.CreateTemp("", "zre-learned-paths-*.txt")
+		if err != nil {
+			log.Printf("[DirScan] 学习热词写临时词表失败，本次不追加: %v", err)
+			m.learnedPaths = nil
+			return
+		}
+		for _, p := range m.learnedPaths {
+			fmt.Fprintln(f, p)
+		}
+		f.Close()
+		m.learnedFile = f.Name()
+		// 模块 ctx 随流水线结束而取消，届时清掉临时文件。
+		go func(path string) {
+			<-m.ctx.Done()
+			os.Remove(path)
+		}(m.learnedFile)
+		log.Printf("[DirScan] 学习热词 %d 条已写入附加词表 %s", len(m.learnedPaths), m.learnedFile)
+	})
+	if m.learnedFile == "" {
+		return m.wordlist
+	}
+	// 基础词表为空时带上 spray 默认字典：热词是追加，不能变成「只有热词」。
+	if len(m.wordlist) == 0 {
+		if base := m.sprayScanner.GetDefaultWordlistPath(); base != "" {
+			return []string{base, m.learnedFile}
+		}
+		return []string{m.learnedFile}
+	}
+	return append(append([]string{}, m.wordlist...), m.learnedFile)
 }
 
 // SetRate 收紧 spray 的并发与速率，让它跟随任务级节奏。
@@ -581,7 +654,7 @@ processBatch:
 	ctx, cancel := context.WithTimeout(m.ctx, 60*time.Minute)
 	defer cancel()
 
-	result, err := m.sprayScanner.ScanBatchWithWordlist(ctx, urlsToScan, m.wordlist)
+	result, err := m.sprayScanner.ScanBatchWithWordlist(ctx, urlsToScan, m.resolveWordlists())
 	if err != nil {
 		log.Printf("[%s] Spray batch scan error: %v", m.name, err)
 	}
@@ -733,7 +806,7 @@ func (m *DirScanModule) scanWithSpray(asset AssetHttp) {
 	ctx, cancel := context.WithTimeout(m.ctx, 15*time.Minute)
 	defer cancel()
 
-	result, err := m.sprayScanner.ScanWithWordlist(ctx, target, m.wordlist)
+	result, err := m.sprayScanner.ScanWithWordlist(ctx, target, m.resolveWordlists())
 	if err != nil {
 		log.Printf("[%s] Spray error for %s: %v", m.name, target, err)
 		return

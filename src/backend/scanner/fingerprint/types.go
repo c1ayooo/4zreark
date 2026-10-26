@@ -64,6 +64,7 @@ type HTTPResponse struct {
 	URL        string
 	IconHash   string // mmh3 hash of favicon
 	IconMD5    string // MD5 of favicon
+	CertOrg    string // TLS 证书 Subject.Organization：cert 规则的匹配数据源
 }
 
 // GetHeader returns a header value (case-insensitive)

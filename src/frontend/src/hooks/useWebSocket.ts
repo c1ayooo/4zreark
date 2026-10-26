@@ -64,11 +64,11 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}) {
         const host = window.location.host // includes port
         wsUrl = `${protocol}//${host}${authQuery}`
       } else {
-        // In production, use the API base URL
+        // 生产模式：后端单进程托管前端时走同源；独立部署/反代用 VITE_API_PORT 指向真实后端
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-        const host = window.location.hostname
-        const port = import.meta.env.VITE_API_PORT || '8080'
-        wsUrl = `${protocol}//${host}:${port}${authQuery}`
+        const apiPort = import.meta.env.VITE_API_PORT
+        const host = apiPort ? `${window.location.hostname}:${apiPort}` : window.location.host
+        wsUrl = `${protocol}//${host}${authQuery}`
       }
 
       const ws = new WebSocket(wsUrl)

@@ -21,6 +21,7 @@ import {
   Globe,
   Link2,
   type LucideIcon,
+  MoreHorizontal,
   Network,
   Radio,
   Route,
@@ -34,7 +35,7 @@ import type {
   AssetGraphNode,
   AssetGraphRel,
 } from '@/api/assets'
-import { computeLayout } from '@/lib/graph-layout'
+import { computeLayout, computeTreeLayout } from '@/lib/graph-layout'
 import { cn } from '@/lib/utils'
 
 type Kind = AssetGraphNode['kind']
@@ -49,6 +50,8 @@ const kindMeta: Record<Kind, KindMeta> = {
   service: { label: '服务', icon: Radio, hex: '#64748b' },
   endpoint: { label: '入口', icon: Link2, hex: '#94a3b8' },
   route: { label: '路由', icon: Route, hex: '#94a3b8' },
+  // 「还有 N 个」聚合节点：点击加载同层下一批
+  more: { label: '更多', icon: MoreHorizontal, hex: '#94a3b8' },
 }
 
 // 关系线只保留一个强调色，其余用中性灰；层级由位置和文案表达，不靠彩虹。
@@ -76,67 +79,169 @@ const stateText: Record<ReachState, string> = {
   lost: '失联',
 }
 
-// 概览只渲染项目/根域名/IP，子域、服务、入口、路由折叠成计数，避免几千节点挤成一列。
-// 全量视图保留全部节点，用于搜索或项目筛选后的细节排查。
-function buildGraphView(nodes: AssetGraphNode[], edges: AssetGraphEdge[], showAll: boolean) {
-  if (showAll) {
-    return { nodes, edges, counts: new Map<string, Record<string, number>>() }
-  }
+// 每层展开最多显示多少个子节点，超出部分收进「还有 N 个」聚合节点。
+// 这是概览的性能闸门：同屏节点数 = 已展开路径 × 每层限量，与资产总量无关。
+const PER_BATCH = 25
 
+// 把平铺的子域名按 DNS 后缀重建为树：api.dev.meituan.com 挂到已存在的
+// dev.meituan.com（或根域名）下。只重定向 root→sub 的 contains 边，
+// 中间层不造虚拟节点，节点数始终等于真实资产数。
+function withDomainHierarchy(nodes: AssetGraphNode[], edges: AssetGraphEdge[]): AssetGraphEdge[] {
+  const known = new Set(nodes.map((n) => n.key))
+  const needReroot = nodes.filter((n) => n.kind === 'subdomain')
+  if (needReroot.length === 0) return edges
+
+  const parentOverride = new Map<string, string>()
+  for (const n of needReroot) {
+    const host = (n.host || n.label).toLowerCase().replace(/\.$/, '')
+    const parts = host.split('.')
+    // 依次去掉最左一段，找已存在的最长后缀父域（子域或根域名）
+    for (let i = 1; i < parts.length - 1; i++) {
+      const candidate = parts.slice(i).join('.')
+      const parentKey = known.has(`h:${candidate}`) ? `h:${candidate}` : known.has(`d:${candidate}`) ? `d:${candidate}` : ''
+      if (parentKey) {
+        parentOverride.set(n.key, parentKey)
+        break
+      }
+    }
+  }
+  if (parentOverride.size === 0) return edges
+
+  return edges.map((e) => {
+    // 只有 contains 边的 dst 是子域名；service/ip 等边的 src 是子域名本身，不受影响
+    const parent = parentOverride.get(e.dst)
+    return parent && e.rel === 'contains' ? { ...e, src: parent } : e
+  })
+}
+
+type ExpandedState = {
+  /** 已展开的节点 key：可见性完全由它派生 */
+  expanded: Set<string>
+  /** 每个节点已展开的批数（key → batch index，0 表示第一批） */
+  batches: Map<string, number>
+}
+
+// children 索引 + 每节点直接子节点数。按 kind 分层、label 排序，保证展开顺序稳定。
+function buildChildrenIndex(nodes: AssetGraphNode[], edges: AssetGraphEdge[]) {
   const nodeByKey = new Map(nodes.map((n) => [n.key, n]))
-  const roots = nodes.filter((n) => n.kind === 'root_domain')
-  const projects = nodes.filter((n) => n.kind === 'project')
-  // 概览是「星座」而不是全量节点图：有根域名时只显示项目和根域名，
-  // 根域名节点上给子域/服务/入口计数；没有根域名（纯 IP 资产）时最多显示 12 个 IP。
-  const visibleNodes =
-    roots.length > 0
-      ? [...projects, ...roots]
-      : [...projects, ...nodes.filter((n) => n.kind === 'ip').slice(0, 12)]
-  const visibleSet = new Set(visibleNodes.map((n) => n.key))
-
-  const children = new Map<string, AssetGraphEdge[]>()
-  const parentOf = new Map<string, string>()
+  const kindOrder: Record<string, number> = {
+    root_domain: 0,
+    subdomain: 1,
+    ip: 2,
+    service: 3,
+    endpoint: 4,
+    route: 5,
+  }
+  const children = new Map<string, AssetGraphNode[]>()
   for (const e of edges) {
+    const child = nodeByKey.get(e.dst)
+    if (!child) continue
     const list = children.get(e.src)
-    if (list) list.push(e)
-    else children.set(e.src, [e])
-    if (!parentOf.has(e.dst)) parentOf.set(e.dst, e.src)
+    if (list) list.push(child)
+    else children.set(e.src, [child])
   }
+  for (const list of children.values()) {
+    list.sort(
+      (a, b) =>
+        (kindOrder[a.kind] ?? 9) - (kindOrder[b.kind] ?? 9) || a.label.localeCompare(b.label),
+    )
+  }
+  return children
+}
 
-  const counts = new Map<string, Record<string, number>>()
-  for (const root of visibleNodes) {
+// 某节点子树内各 kind 的节点数。带 memo 占位防环，整体 O(节点数)。
+function makeSubtreeTally(children: Map<string, AssetGraphNode[]>) {
+  const cache = new Map<string, Record<string, number>>()
+  const tallyOf = (key: string): Record<string, number> => {
+    const cached = cache.get(key)
+    if (cached) return cached
     const tally: Record<string, number> = {}
-    const stack = [...(children.get(root.key) ?? [])]
-    const seen = new Set<string>()
-    while (stack.length > 0) {
-      const edge = stack.pop()!
-      if (seen.has(edge.dst)) continue
-      seen.add(edge.dst)
-      const child = nodeByKey.get(edge.dst)
-      if (child) tally[child.kind] = (tally[child.kind] ?? 0) + 1
-      stack.push(...(children.get(edge.dst) ?? []))
+    cache.set(key, tally) // 先占位防环
+    for (const child of children.get(key) ?? []) {
+      if (child.kind === 'more') continue
+      tally[child.kind] = (tally[child.kind] ?? 0) + 1
+      const sub = tallyOf(child.key)
+      for (const k in sub) tally[k] = (tally[k] ?? 0) + sub[k]
     }
-    counts.set(root.key, tally)
+    return tally
   }
+  return tallyOf
+}
 
+// 概览 = 从根集合出发的懒展开树。可见节点 = 根集合 ∪ 各已展开节点的子集（每层限量）。
+function buildExpandableView(
+  nodes: AssetGraphNode[],
+  edges: AssetGraphEdge[],
+  state: ExpandedState,
+) {
+  const children = buildChildrenIndex(nodes, edges)
+  const tallyOf = makeSubtreeTally(children)
+
+  const visibleNodes: AssetGraphNode[] = []
   const visibleEdges: AssetGraphEdge[] = []
-  const edgeSeen = new Set<string>()
-  for (const e of edges) {
-    if (!visibleSet.has(e.dst)) continue
-    let src = e.src
-    const guard = new Set<string>()
-    while (src && !visibleSet.has(src) && parentOf.has(src) && !guard.has(src)) {
-      guard.add(src)
-      src = parentOf.get(src)!
+
+  const walk = (key: string, force = false) => {
+    // force：项目/IP 根节点是纯结构层，始终展开其子层
+    if (!force && !state.expanded.has(key)) return
+    const kids = children.get(key) ?? []
+    const batch = state.batches.get(key) ?? 0
+    const shown = kids.slice(0, (batch + 1) * PER_BATCH)
+    for (const child of shown) {
+      visibleNodes.push(child)
+      visibleEdges.push({ src: key, dst: child.key, rel: 'contains' })
+      walk(child.key)
     }
-    if (!visibleSet.has(src) || src === e.dst) continue
-    const key = `${src}|${e.dst}`
-    if (edgeSeen.has(key)) continue
-    edgeSeen.add(key)
-    visibleEdges.push({ src, dst: e.dst, rel: e.rel })
+    if (kids.length > shown.length) {
+      // 「还有 N 个」聚合节点：点击向父节点追加下一批
+      const remaining = kids.length - shown.length
+      const moreKey = `more:${key}:${batch}`
+      visibleNodes.push({
+        key: moreKey,
+        kind: 'more',
+        label: `还有 ${remaining} 个…`,
+      })
+      visibleEdges.push({ src: key, dst: moreKey, rel: 'contains' })
+    }
   }
 
-  return { nodes: visibleNodes, edges: visibleEdges, counts }
+  const projects = nodes.filter((n) => n.kind === 'project')
+  const roots = nodes.filter((n) => n.kind === 'root_domain')
+  if (roots.length > 0) {
+    for (const p of projects) {
+      visibleNodes.push(p)
+      walk(p.key, true)
+    }
+  } else {
+    // 纯 IP 资产：最多 12 个 IP 做根，同样可展开到服务/入口/路由
+    const ips = nodes.filter((n) => n.kind === 'ip').slice(0, 12)
+    for (const p of projects) {
+      visibleNodes.push(p)
+      walk(p.key, true)
+    }
+    for (const ip of ips) {
+      visibleNodes.push(ip)
+      walk(ip.key, true)
+    }
+  }
+
+  const directChildCount = (key: string) => (children.get(key) ?? []).filter((c) => c.kind !== 'more').length
+  const counts = new Map<string, Record<string, number>>()
+  for (const n of visibleNodes) {
+    if (n.kind === 'more') continue
+    counts.set(n.key, tallyOf(n.key))
+  }
+
+  return { nodes: visibleNodes, edges: visibleEdges, counts, directChildCount }
+}
+
+// 全量 = 全部节点 + DNS 层级重定向后的边，一次渲染。返回结构与概览一致。
+function buildFullView(nodes: AssetGraphNode[], edges: AssetGraphEdge[]) {
+  return {
+    nodes,
+    edges,
+    counts: new Map<string, Record<string, number>>(),
+    directChildCount: (_key: string) => 0,
+  }
 }
 
 function summary(n: AssetGraphNode): string {
@@ -157,12 +262,15 @@ type NodeData = {
   counts?: Record<string, number>
   overview?: boolean
   vertical?: boolean
+  /** 概览懒展开：直接子节点数、是否已展开 */
+  childCount?: number
+  expanded?: boolean
 }
 type GraphRFNode = RFNode<NodeData, 'asset'>
 
 function AssetNode({ data, selected }: NodeProps<GraphRFNode>) {
   const n = data.node
-  const meta = kindMeta[n.kind]
+  const meta = kindMeta[n.kind] ?? kindMeta.subdomain
   const Icon = meta.icon
   const state = reachState(n)
   const label = n.kind === 'project' ? data.rootLabel : meta.label
@@ -174,10 +282,15 @@ function AssetNode({ data, selected }: NodeProps<GraphRFNode>) {
           counts.subdomain ? `子域 ${counts.subdomain}` : '',
           counts.service ? `服务 ${counts.service}` : '',
           counts.endpoint ? `入口 ${counts.endpoint}` : '',
+          counts.route ? `路由 ${counts.route}` : '',
         ]
           .filter(Boolean)
           .join(' · ')
       : ''
+
+  // 展开状态提示：有子节点未展开 → 「+N」；已展开 → 「收起」
+  const expandable = data.overview && (data.childCount ?? 0) > 0
+  const expandText = expandable ? (data.expanded ? '收起' : `+${data.childCount}`) : ''
 
   return (
     <div
@@ -212,9 +325,20 @@ function AssetNode({ data, selected }: NodeProps<GraphRFNode>) {
         <div className="px-3 pb-1.5 text-xs tabular-nums text-muted-foreground">{countText}</div>
       )}
       <div className="flex items-center justify-between gap-2 border-t px-3 py-1.5">
-        <span className={cn('text-xs', state === 'reachable' ? 'text-primary' : 'text-muted-foreground')}>
-          {state ? stateText[state] : label}
-        </span>
+        {expandable ? (
+          <span
+            className={cn(
+              'inline-flex items-center gap-1 rounded-sm px-1 text-xs tabular-nums',
+              data.expanded ? 'text-muted-foreground' : 'bg-primary/10 text-primary'
+            )}
+          >
+            {expandText}
+          </span>
+        ) : (
+          <span className={cn('text-xs', state === 'reachable' ? 'text-primary' : 'text-muted-foreground')}>
+            {state ? stateText[state] : label}
+          </span>
+        )}
         <span className="max-w-[8rem] shrink-0 truncate text-xs tabular-nums text-muted-foreground">
           {n.key}
         </span>
@@ -279,6 +403,9 @@ export function AssetGraphCanvas({
     if (onShowAllChange) onShowAllChange(value)
     else setLocalShowAll(value)
   }
+  // 概览懒展开状态：expanded 是可见性来源，batches 记录每层已展开的批次
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [batches, setBatches] = useState<Map<string, number>>(new Map())
   const [isMobile, setIsMobile] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches
   )
@@ -297,17 +424,19 @@ export function AssetGraphCanvas({
   // 会自激成无限渲染。
   const allNodes = useMemo(() => data?.nodes ?? [], [data])
   const allEdges = useMemo(() => data?.edges ?? [], [data])
+  // 子域名按 DNS 后缀重建父子（summary 数据只有项目/根域名，无需处理）
+  const structuredEdges = useMemo(
+    () => (data?.summary ? allEdges : withDomainHierarchy(allNodes, allEdges)),
+    [data, allNodes, allEdges],
+  )
   const graphView = useMemo(() => {
-    // 后端摘要只返回项目/根域名，计数直接用它；全量数据才在本地折叠。
-    if (data?.summary) {
-      return {
-        nodes: allNodes,
-        edges: allEdges,
-        counts: new Map(Object.entries(data.counts ?? {})),
-      }
+    if (showAll) {
+      const view = buildFullView(allNodes, structuredEdges)
+      return { ...view, counts: new Map<string, Record<string, number>>() }
     }
-    return buildGraphView(allNodes, allEdges, showAll)
-  }, [data, allNodes, allEdges, showAll])
+    const view = buildExpandableView(allNodes, structuredEdges, { expanded, batches })
+    return view
+  }, [data, allNodes, allEdges, structuredEdges, showAll, expanded, batches])
   const nodes = graphView.nodes
   const edges = graphView.edges
 
@@ -322,16 +451,29 @@ export function AssetGraphCanvas({
       }
       return pos
     }
+    // 概览是懒展开生成的纯树：树布局让每一层的父节点都垂直居中于自己的
+    // 子块（项目→根域名、根域名→子域名同样对称）；全量图有跨层多父边，
+    // 仍用分层布局。
+    if (!showAll)
+      return computeTreeLayout(
+        nodes.map((n) => ({ id: n.key })),
+        edges.map((e) => ({ src: e.src, dst: e.dst })),
+      )
     return computeLayout(
       nodes.map((n) => ({ id: n.key })),
       edges.map((e) => ({ src: e.src, dst: e.dst })),
     )
   }, [isMobile, showAll, nodes, edges])
 
-  // 结构签名：只有节点集合或状态变化才重建 React Flow 数据。
+  // 结构签名：节点集合、状态、展开状态任一变化才重建 React Flow 数据。
   const viewSig = useMemo(
-    () => `${showAll ? 'all' : 'overview'}|${isMobile ? 'mobile' : 'desktop'}|${nodes.map((n) => `${n.key}:${n.state ?? ''}`).join(',')}|${edges.length}`,
-    [showAll, isMobile, nodes, edges],
+    () =>
+      `${showAll ? 'all' : 'overview'}|${isMobile ? 'mobile' : 'desktop'}|${nodes
+        .map((n) => `${n.key}:${n.state ?? ''}`)
+        .join(',')}|${edges.length}|${[...expanded].sort().join(',')}|${[...batches.entries()]
+        .map(([k, v]) => `${k}:${v}`)
+        .join(',')}`,
+    [showAll, isMobile, nodes, edges, expanded, batches],
   )
 
   useEffect(() => {
@@ -346,8 +488,10 @@ export function AssetGraphCanvas({
           node: n,
           rootLabel,
           counts: graphView.counts.get(n.key),
-          overview: Boolean(data?.summary) || !showAll,
+          overview: !showAll,
           vertical: isMobile && !showAll,
+          childCount: graphView.directChildCount?.(n.key) ?? 0,
+          expanded: n.kind === 'project' || expanded.has(n.key),
         },
         sourcePosition: isMobile && !showAll ? Position.Bottom : Position.Right,
         targetPosition: isMobile && !showAll ? Position.Top : Position.Left,
@@ -383,7 +527,30 @@ export function AssetGraphCanvas({
     if (selected && !nodes.some((n) => n.key === selected.key)) setSelected(null)
   }, [nodes, selected])
 
-  const kindLabel = (k: Kind) => (k === 'project' ? rootLabel : kindMeta[k].label)
+  const kindLabel = (k: Kind) => (k === 'project' ? rootLabel : kindMeta[k]?.label ?? k)
+
+  // 概览点击：more 聚合节点 → 父节点追加下一批；普通节点 → 选中详情 + 切换展开
+  const handleNodeClick = (node: GraphRFNode) => {
+    const n = node.data.node
+    if (!showAll && n.kind === 'more') {
+      const rest = n.key.slice('more:'.length)
+      const idx = rest.lastIndexOf(':')
+      const parentKey = idx > 0 ? rest.slice(0, idx) : ''
+      if (parentKey) {
+        setBatches((prev) => new Map(prev).set(parentKey, (prev.get(parentKey) ?? 0) + 1))
+      }
+      return
+    }
+    setSelected(n)
+    if (!showAll) {
+      setExpanded((prev) => {
+        const next = new Set(prev)
+        if (next.has(n.key)) next.delete(n.key)
+        else next.add(n.key)
+        return next
+      })
+    }
+  }
 
   return (
     <div className={cn('relative w-full overflow-hidden rounded-xl', className ?? 'h-auto min-h-[600px] lg:h-[72vh]')}>
@@ -489,7 +656,8 @@ export function AssetGraphCanvas({
                 </span>
               </div>
               <p className="text-muted-foreground/80 border-border/60 border-t pt-2 leading-relaxed">
-                概览把子域、服务、入口折叠为计数；全量用于筛选后的细节排查。可拖拽节点、滚轮缩放。
+                概览点击节点逐层展开（每层最多 {PER_BATCH} 个，超出收进「还有 N 个」）；子域名按
+                DNS 层级嵌套。全量用于筛选后的细节排查。可拖拽节点、滚轮缩放。
               </p>
             </div>
           </aside>
@@ -501,7 +669,7 @@ export function AssetGraphCanvas({
               edges={rfEdges}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
-              onNodeClick={(_, node) => setSelected(node.data.node)}
+              onNodeClick={(_, node) => handleNodeClick(node as GraphRFNode)}
               nodeTypes={nodeTypes}
               fitView
               fitViewOptions={{ padding: 0.2 }}

@@ -142,8 +142,9 @@ export const taskColumns: TableProps<Task>['columns'] = [
   },
 ]
 
-export const buildSeedColumns = ({ domainCountMap, confirm, deleteSeedMutation }: {
+export const buildSeedColumns = ({ domainCountMap, planBySeedId, confirm, deleteSeedMutation }: {
   domainCountMap: Map<number, number>
+  planBySeedId: Map<number, Plan>
   confirm: ConfirmFn
   deleteSeedMutation: { mutate: (seedId: number) => void }
 }): TableProps<Seed>['columns'] => [
@@ -151,6 +152,7 @@ export const buildSeedColumns = ({ domainCountMap, confirm, deleteSeedMutation }
     title: '类型',
     dataIndex: 'kind',
     key: 'kind',
+    width: 96,
     render: (_, seed) => (
       <Tag className={badgeCls('outline')}>{seedKindLabel[seed.kind] || seed.kind}</Tag>
     ),
@@ -160,20 +162,23 @@ export const buildSeedColumns = ({ domainCountMap, confirm, deleteSeedMutation }
     dataIndex: 'value',
     key: 'value',
     render: (_, seed) => (
-      <div className="max-w-[280px] truncate font-mono text-xs">
-        {seed.value}
-        {seed.kind === 'domain' && (
-          <div className="text-muted-foreground mt-1 font-sans text-[11px]">
-            覆盖 {domainCountMap.get(seed.id) ?? 0} 个站点
-          </div>
-        )}
-      </div>
+      <div className="max-w-[420px] truncate font-mono text-xs">{seed.value}</div>
+    ),
+  },
+  {
+    title: '覆盖站点',
+    dataIndex: 'site_count',
+    key: 'site_count',
+    width: 90,
+    render: (_, seed) => (
+      <span className="text-sm tabular-nums">{domainCountMap.get(seed.id) ?? 0}</span>
     ),
   },
   {
     title: '状态',
     dataIndex: 'enabled',
     key: 'enabled',
+    width: 80,
     render: (_, seed) => (
       <Tag className={badgeCls(seed.enabled ? 'success' : 'secondary')}>
         {seed.enabled ? '启用' : '停用'}
@@ -181,9 +186,33 @@ export const buildSeedColumns = ({ domainCountMap, confirm, deleteSeedMutation }
     ),
   },
   {
+    title: '监控计划',
+    dataIndex: 'plan',
+    key: 'plan',
+    width: 170,
+    render: (_, seed) => {
+      const plan = planBySeedId.get(seed.id)
+      if (!plan) return <span className="text-muted-foreground text-xs">—</span>
+      return (
+        <span className="flex items-center gap-2 whitespace-nowrap text-xs">
+          <Tag className={badgeCls(plan.enabled ? 'success' : 'warning')}>
+            {plan.enabled ? '启用' : '停用'}
+          </Tag>
+          <span className="text-muted-foreground">
+            每 {plan.interval_hours} 小时
+            {plan.trigger_mode !== 'interval'
+              ? ` · ${planTriggerModeLabel[plan.trigger_mode] ?? plan.trigger_mode}`
+              : ''}
+          </span>
+        </span>
+      )
+    },
+  },
+  {
     title: '创建时间',
     dataIndex: 'created_at',
     key: 'created_at',
+    width: 150,
     render: (_, seed) => (
       <span className="text-muted-foreground text-xs">{fmtDate(seed.created_at)}</span>
     ),

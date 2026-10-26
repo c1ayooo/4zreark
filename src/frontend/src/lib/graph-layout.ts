@@ -126,3 +126,62 @@ export function computeLayout<N extends LayoutNode, E extends LayoutEdge>(
   })
   return pos
 }
+
+// 树布局：森林后序遍历，叶子按序占据 y 游标，父节点垂直居中于其子块。
+// 概览懒展开树用它——「项目 → 根域名」「根域名 → 子域名」每一层都对称，
+// 这一点是逐列向全局中线居中的分层布局做不到的。要求图为森林（单父）。
+export function computeTreeLayout<N extends LayoutNode, E extends LayoutEdge>(
+  nodes: N[],
+  edges: E[],
+): Map<string, Position> {
+  const pos = new Map<string, Position>()
+  const childOf = new Map<string, string[]>()
+  const hasParent = new Set<string>()
+  for (const e of edges) {
+    pushMap(childOf, e.src, e.dst)
+    hasParent.add(e.dst)
+  }
+  // 同一子节点若被多条边指向（不该发生在树上），只保留第一条，保证单父
+  for (const [k, list] of childOf) {
+    const dedup: string[] = []
+    const set = new Set<string>()
+    for (const v of list) {
+      if (!set.has(v)) {
+        set.add(v)
+        dedup.push(v)
+      }
+    }
+    childOf.set(k, dedup)
+  }
+
+  let cursor = 0
+  const place = (id: string, depth: number): number => {
+    const kids = childOf.get(id) ?? []
+    let y: number
+    if (kids.length === 0) {
+      y = cursor * ROW_H
+      cursor += 1
+    } else {
+      const first = place(kids[0], depth + 1)
+      let last = first
+      for (let i = 1; i < kids.length; i++) {
+        last = place(kids[i], depth + 1)
+      }
+      y = (first + last) / 2
+    }
+    pos.set(id, { x: depth * COL_W, y })
+    return y
+  }
+
+  for (const n of nodes) {
+    if (!hasParent.has(n.id)) place(n.id, 0)
+  }
+  // 保险：环上的节点没有根入口，补一个位置避免丢失
+  for (const n of nodes) {
+    if (!pos.has(n.id)) {
+      pos.set(n.id, { x: 0, y: cursor * ROW_H })
+      cursor += 1
+    }
+  }
+  return pos
+}

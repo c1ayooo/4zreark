@@ -513,7 +513,55 @@ export default function TaskCreateForm({
           </div>
         </div>
         <p className="text-xs text-muted-foreground">
-          漏洞扫描不受限制；数值越小越快，越容易被目标封 IP。
+          漏洞扫描不受限制；数值越小越快，越容易被目标封 IP。多目标并发时爬虫对单站额外按全局速率的一半限速。
+        </p>
+      </div>
+
+      {/* 爬虫保护：每站页数/深度上限，防止深钻拖垮业务站 */}
+      <div className="space-y-2">
+        <label className="text-sm font-medium">爬虫保护</label>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <label className="text-xs text-muted-foreground">每站最多爬取页数</label>
+            <Input
+              type="number"
+              min={0}
+              max={5000}
+              placeholder="100"
+              value={formData.config.max_pages ?? ''}
+              onChange={(e) =>
+                setFormData({
+                  ...formData,
+                  config: {
+                    ...formData.config,
+                    max_pages: e.target.value === '' ? undefined : Number(e.target.value),
+                  },
+                })
+              }
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs text-muted-foreground">爬取深度（层）</label>
+            <Input
+              type="number"
+              min={0}
+              max={10}
+              placeholder="3"
+              value={formData.config.max_depth ?? ''}
+              onChange={(e) =>
+                setFormData({
+                  ...formData,
+                  config: {
+                    ...formData.config,
+                    max_depth: e.target.value === '' ? undefined : Number(e.target.value),
+                  },
+                })
+              }
+            />
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          留空用默认（100 页 / 3 层）。引擎层生效：到达上限后爬虫停止发请求，不只是截断结果。
         </p>
       </div>
 

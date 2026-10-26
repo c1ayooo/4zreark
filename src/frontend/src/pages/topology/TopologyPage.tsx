@@ -16,12 +16,10 @@ export default function TopologyPage() {
   const [data, setData] = useState<AssetGraphData | null>(null)
   const [loading, setLoading] = useState(true)
   const [showAll, setShowAll] = useState(false)
-  const [fullLoading, setFullLoading] = useState(false)
 
   // 轮询签名：结构没变就不 setData，避免节点位置被重置。
   const sigRef = useRef('')
   const requestSeq = useRef(0)
-  const showAllRef = useRef(false)
 
   // 后端 q 是资产 DSL（host = "x"）。这里把裸关键字自动包成 host 条件，
   // 含操作符的输入按 DSL 原样透传，避免用户必须记住语法。
@@ -32,15 +30,15 @@ export default function TopologyPage() {
     return `host = "${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
   }
 
-  const fetchGraph = useCallback(async (mode: 'summary' | 'full' = 'summary') => {
+  // 概览/全量共用同一份全量数据：概览在前端懒展开渲染（每层限量），
+  // 全量一次铺开。这样点击展开不需要额外的按需请求。
+  const fetchGraph = useCallback(async () => {
     const seq = ++requestSeq.current
-    if (mode === 'full') setFullLoading(true)
-    else setLoading(true)
+    setLoading(true)
     try {
       const res = await assetApi.graph({
         project_id: projectID || undefined,
         q: buildQuery(keyword),
-        mode,
       })
       if (seq !== requestSeq.current) return
       const g = res.data
@@ -61,28 +59,23 @@ export default function TopologyPage() {
     } finally {
       if (seq === requestSeq.current) {
         setLoading(false)
-        setFullLoading(false)
       }
     }
   }, [projectID, keyword])
 
   useEffect(() => {
-    showAllRef.current = showAll
-  }, [showAll])
-
-  useEffect(() => {
     sigRef.current = ''
     setShowAll(false)
-    fetchGraph('summary')
+    fetchGraph()
     const timer = setInterval(() => {
-      // 隐藏标签页不轮询；全量模式也不自动拉，避免反复下载大图。
-      if (document.visibilityState === 'visible' && !showAllRef.current) {
-        fetchGraph('summary')
+      // 隐藏标签页不轮询
+      if (document.visibilityState === 'visible') {
+        fetchGraph()
       }
-    }, 30000)
+    }, 60000)
     const onVisible = () => {
-      if (document.visibilityState === 'visible' && !showAllRef.current) {
-        fetchGraph('summary')
+      if (document.visibilityState === 'visible') {
+        fetchGraph()
       }
     }
     document.addEventListener('visibilitychange', onVisible)
@@ -91,11 +84,6 @@ export default function TopologyPage() {
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [fetchGraph])
-
-  const changeShowAll = (value: boolean) => {
-    setShowAll(value)
-    fetchGraph(value ? 'full' : 'summary')
-  }
 
   const { data: projectsRes } = useQuery({
     queryKey: ['projects'],
@@ -119,7 +107,7 @@ export default function TopologyPage() {
         <div>
           <h1 className="text-2xl font-bold">资产星图</h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            项目 → 根域名 → 子域名 → IP → 服务 → 入口，左到右分层。
+            项目 → 根域名 → 子域名 → 子子域名 → 服务 → 接口/入口，点击节点逐层展开。
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -142,7 +130,7 @@ export default function TopologyPage() {
             }}
             prefix={<Search className="h-4 w-4 text-muted-foreground" />}
           />
-          <Button size="small" onClick={() => fetchGraph(showAll ? 'full' : 'summary')} disabled={loading || fullLoading}>
+          <Button size="small" onClick={() => fetchGraph()} disabled={loading}>
             <RefreshCw className={cn('mr-2 h-4 w-4', loading && 'animate-spin')} />
             刷新
           </Button>
@@ -150,12 +138,14 @@ export default function TopologyPage() {
       </div>
 
       <Card styles={{ body: { padding: 0 } }}>
+        {/* key 绑定筛选条件：切换项目/搜索后画布重建，丢弃上一个视图的
+            节点坐标与展开状态，避免新旧布局混杂错位 */}
         <AssetGraphCanvas
+          key={`topo-${projectID}-${keyword}`}
           data={data}
           loading={loading}
           showAll={showAll}
-          onShowAllChange={changeShowAll}
-          loadingFull={fullLoading}
+          onShowAllChange={setShowAll}
         />
       </Card>
     </div>
