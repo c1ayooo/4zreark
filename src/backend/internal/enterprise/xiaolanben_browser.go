@@ -33,6 +33,17 @@ var xlbRodLogged = false
 var xlbRodPage *rod.Page
 var xlbRodBrowser *rod.Browser
 
+// xlbOpMu 全部页面级操作（导航/XHR/截图）共用一把锁：签名通道是进程级单页，
+// 深度采集 BFS 与手工检索并发时会互相取消在途导航（实测 -32000 navigated or closed）。
+// 串行化之后同源操作排队执行；不同 provider 不受影响。
+var xlbOpMu sync.Mutex
+
+// lockXlbOp 取操作锁并返回释放函数。
+func lockXlbOp() func() {
+	xlbOpMu.Lock()
+	return func() { xlbOpMu.Unlock() }
+}
+
 // osStat 供测试替换。
 var osStat = os.Stat
 
@@ -163,6 +174,7 @@ func (p *xiaolanbenProvider) xlbFetchInPage(ctx context.Context, path string) (s
 }
 
 func (p *xiaolanbenProvider) xlbFetchOnce(ctx context.Context, path string) (string, int, error) {
+	defer lockXlbOp()()
 	page, err := p.xlbSignPage(ctx)
 	if err != nil {
 		return "", 0, err
@@ -278,6 +290,7 @@ func (p *xiaolanbenProvider) Domains(ctx context.Context, extID string, page, si
 
 // xlbDetail 详情：导航详情页，从 __INITIAL_STATE__.companyDetail 提取。
 func (p *xiaolanbenProvider) xlbDetail(ctx context.Context, extID string) (*CompanyDetail, error) {
+	defer lockXlbOp()()
 	page, err := p.xlbSignPage(ctx)
 	if err != nil {
 		return nil, err
@@ -298,13 +311,16 @@ func (p *xiaolanbenProvider) xlbDetail(ctx context.Context, extID string) (*Comp
 		if (bi.website) extra.push(bi.website);
 		if (bi.dom && /^[a-zA-Z0-9][a-zA-Z0-9-]*(\.[a-zA-Z0-9][a-zA-Z0-9-]*)+$/.test(String(bi.dom)) && bi.dom !== bi.website) extra.push(bi.dom);
 		const phones = Array.isArray(bi.phones) ? bi.phones : [];
+		// 全字段 String 强转：上游字段类型不稳定（openStatus 实测出现过数字型状态码），
+		// Go 端解析目标全是 string。
+		const str = (v) => v === undefined || v === null ? '' : String(v);
 		return JSON.stringify({
-			name: bi.companyName || bi.name || '',
-			legalPerson: bi.realBossName || bi.legalPersonName || '',
-			openStatus: bi.companyStatusName || bi.statusTag || '',
-			phone: phones[0] || bi.phoneNumber || '',
-			email: bi.email || '',
-			websites: ws.map(x => x.domain || x.url || x.website || '').filter(Boolean).concat(extra),
+			name: str(bi.companyName || bi.name || ''),
+			legalPerson: str(bi.realBossName || bi.legalPersonName || ''),
+			openStatus: str(bi.companyStatusName || bi.statusTag || ''),
+			phone: str(phones[0] || bi.phoneNumber || ''),
+			email: str(bi.email || ''),
+			websites: ws.map(x => str(x.domain || x.url || x.website || '')).filter(Boolean).concat(extra),
 			investments: inv.map(x => ({ n: x.name || x.entName || '', eid: x.eid || x.id || '' })),
 		});
 	}`)
@@ -336,6 +352,7 @@ func (p *xiaolanbenProvider) xlbDetail(ctx context.Context, extID string) (*Comp
 
 // xlbCompanyList 详情页企业列表（listKey：investments=分支/投资、groupCompanies=集团成员）。
 func (p *xiaolanbenProvider) xlbCompanyList(ctx context.Context, extID, listKey string, pageNum, size int) ([]CompanyRef, bool, error) {
+	defer lockXlbOp()()
 	page, err := p.xlbSignPage(ctx)
 	if err != nil {
 		return nil, false, err

@@ -147,7 +147,13 @@ func (c *Collector) walk(ctx context.Context, provider Provider, job Job, root C
 
 		detail, err := provider.Detail(ctx, cur.ref.ExtID)
 		if err != nil {
-			return targets, fmt.Errorf("获取企业详情失败(%s): %w", cur.ref.Name, err)
+			// 单节点详情失败不中止任务：记录后跳过该节点（含其子展开），
+			// 一个坏公司不应该毁掉整轮数十节点的穿透。
+			c.log.Printf("[enterprise] 详情失败，跳过节点(%s/%s): %v", cur.ref.Name, cur.ref.ExtID, err)
+			if err := c.pace(ctx); err != nil {
+				return targets, err
+			}
+			continue
 		}
 		if err := c.pace(ctx); err != nil {
 			return targets, err

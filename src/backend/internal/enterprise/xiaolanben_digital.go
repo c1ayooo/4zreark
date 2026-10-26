@@ -216,6 +216,7 @@ func (p *xiaolanbenProvider) DigitalAssets(ctx context.Context, extID string, pa
 	if p.xlbChromeBin() == "" {
 		return nil, false, p.queryBlocked("数字资产")
 	}
+	defer lockXlbOp()()
 	page, err := p.xlbSignPage(ctx)
 	if err != nil {
 		return nil, false, err
