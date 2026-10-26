@@ -48,7 +48,7 @@ services:
     volumes:
       - ./config:/app/config:ro
       - ./tools:/app/tools:ro
-      - ../frontend/dist:/app/frontend/dist:ro
+      - ./frontend/dist:/app/frontend/dist:ro
     environment:
       - CONFIG_PATH=/app/config/config.yaml
       - ZRE_FRONTEND_DIST=/app/frontend/dist

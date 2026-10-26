@@ -170,25 +170,23 @@
 ## 仓库结构
 
 ```text
-.
-├── src/backend/          Go 后端、扫描器、队列、节点网关
-│   ├── api/              HTTP / WebSocket / 节点网关
-│   ├── config/           配置、字典、Nuclei 模板
-│   ├── internal/         浏览器、指纹、验证、凭据、recon 能力包
-│   ├── models/           数据模型
-│   ├── repo/             PostgreSQL 仓储
-│   ├── router/           路由装配
-│   ├── scanner/          子域、端口、指纹、Web、漏洞扫描
-│   ├── service/          业务服务、任务执行器、巡航、报告
-│   └── docs/             后端使用文档
-├── src/frontend/         React 前端
-├── docs/                 设计、交接、SQL 迁移与现场记录
-├── scripts/              节点打包等运维脚本
-└── src/backend/configs/  验证 playbook
-```
+.                        仓库根 = Go module 根（module github.com/c1ayooo/4zreark）
+├── main.go              入口
+├── api/                 HTTP / WebSocket / 节点网关
+├── config/              配置、字典、Nuclei 模板
+├── configs/             验证 playbook
+├── internal/            浏览器、指纹、验证、凭据、recon 能力包
+├── models/              数据模型
+├── repo/                PostgreSQL 仓储
+├── router/              路由装配
+├── scanner/             子域、端口、指纹、Web、漏洞扫描
+├── service/             业务服务、任务执行器、巡航、报告
+├── frontend/            React 前端
+├── docs/                使用文档与 SQL 迁移（docs/sql）
+└── scripts/             节点打包等运维脚本
 
 > 侦察能力源码原以独立的 `reconkit/` module 存在，2026-10 已并入
-> `src/backend/internal/recon/` 并确认无差异后删除；`internal/recon` 是唯一正本。
+> `internal/recon/` 并确认无差异后删除；`internal/recon` 是唯一正本。
 
 ---
 
@@ -229,8 +227,6 @@ psql -h 127.0.0.1 -U zre -d zreark -v ON_ERROR_STOP=1 \
 ### 3. 构建后端
 
 ```bash
-cd src/backend
-
 export CGO_ENABLED=1
 go build -trimpath -ldflags="-s -w" -o 4zreark .
 ```
@@ -238,18 +234,16 @@ go build -trimpath -ldflags="-s -w" -o 4zreark .
 ### 4. 构建前端
 
 ```bash
-cd src/frontend
+cd frontend
 npm ci
 npm run build
 ```
 
-产物在 `src/frontend/dist`。后端默认从 `../frontend/dist` 读取；路径不同时设置 `ZRE_FRONTEND_DIST`。
+产物在 `frontend/dist`。后端默认按 `ZRE_FRONTEND_DIST → ./frontend/dist → ./dist` 顺序查找；路径不同时设置 `ZRE_FRONTEND_DIST`。
 
 ### 5. 启动 master
 
 ```bash
-cd src/backend
-
 export ZRE_PG_PASSWORD='你的数据库密码'
 export ZRE_SECRET_KEY="$(openssl rand -hex 32)"   # 数据源凭据加密密钥，务必固定保存
 
@@ -286,7 +280,7 @@ worker 不配置 PostgreSQL。若平台使用自签 CA，把 CA 放到 worker �
 
 `all` 会在本机执行扫描，适合开发和联调，不建议作为生产拓扑。
 
-> 仓库里的 `src/backend/Dockerfile` 和 `src/backend/docker-compose.yml` 是 Mongo/Redis 时期的历史文件，尚未按当前 PostgreSQL-only 运行时更新。生产部署请使用上面的二进制/systemd 方式，或先把这两个文件改成 PostgreSQL 版本再使用。
+> 仓库里的 `Dockerfile` 和 `docker-compose.yml` 是 Mongo/Redis 时期的历史文件，尚未按当前 PostgreSQL-only 运行时更新。生产部署请使用上面的二进制/systemd 方式，或先把这两个文件改成 PostgreSQL 版本再使用。
 
 ### 8. systemd 示例
 
@@ -300,10 +294,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/4zreark/src/backend
+WorkingDirectory=/opt/4zreark
 Environment=ZRE_PG_PASSWORD=change-me
 Environment=ZRE_SECRET_KEY=change-me-to-a-fixed-32-byte-key
-ExecStart=/opt/4zreark/src/backend/4zreark -role master
+ExecStart=/opt/4zreark/4zreark -role master
 Restart=always
 RestartSec=3
 
@@ -322,7 +316,7 @@ worker 用同一份二进制，只把 `ExecStart` 换成 `-role worker -platform
 
 ## 配置
 
-配置文件：`src/backend/config/config.yaml`。环境变量优先级更高，适合容器和密钥注入。
+配置文件：`config/config.yaml`。环境变量优先级更高，适合容器和密钥注入。
 
 常用环境变量：
 
@@ -350,19 +344,18 @@ worker 用同一份二进制，只把 `ExecStart` 换成 `-role worker -platform
 
 ```bash
 # 后端
-cd src/backend
 gofmt -w .
 go build ./...
 go vet ./...
 go test ./...
 
 # 前端
-cd src/frontend
+cd frontend
 npx tsc --noEmit
 npm run build
 ```
 
-集成测试使用本机 PostgreSQL，连接参数见 `src/backend/test` 的测试辅助代码和交接文档。
+集成测试使用本机 PostgreSQL，连接参数见 `test/` 的测试辅助代码。
 
 ---
 

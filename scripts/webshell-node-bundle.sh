@@ -12,8 +12,8 @@
 #       [--proxy socks5://relay:1080] [--out ./bundle-web-01] [--chunk 6] \
 #       [--with-tools]
 #
-# 不给 --binary 时用 src/backend 现场编译（linux/amd64 静态二进制）。
-# --with-tools 把平台托管工具（src/backend/data/tools/linux/ 下的 gogo/spray/
+# 不给 --binary 时用 仓库根现场编译（linux/amd64 静态二进制）。
+# --with-tools 把平台托管工具（data/tools/linux/ 下的 gogo/spray/
 # katana/rem，由 toolruntime 维护）打成 tools/<name>.gz.part* 分片随包携带；
 # 不加该参数时，worker 上线后也会通过节点网关按清单自动同步，只是首次任务前
 # 需要等一个心跳周期。
@@ -55,7 +55,7 @@ done
 PLATFORM="${PLATFORM%/}"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BACKEND="$ROOT/src/backend"
+BACKEND="$ROOT"
 OUT="${OUT:-$PWD/bundle-$NAME}"
 
 WORK="$(mktemp -d)"
