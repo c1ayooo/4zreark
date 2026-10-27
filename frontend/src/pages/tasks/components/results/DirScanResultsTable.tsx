@@ -3,6 +3,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { formatDate } from '@/lib/utils'
 import { indexColumn, ResultTable, TAG_DESTRUCTIVE, TAG_PRIMARY, TAG_SECONDARY } from './shared'
 import type { ResultsTableCtx } from './shared'
+import { safeExternalURL } from '@/lib/safeUrl'
 
 export default function DirScanResultsTable({ ctx }: { ctx: ResultsTableCtx }) {
   const columns: ColumnsType<Record<string, unknown>> = [
@@ -17,7 +18,7 @@ export default function DirScanResultsTable({ ctx }: { ctx: ResultsTableCtx }) {
         const data = (item.data || item) as Record<string, unknown>
         return (
           <a
-            href={data.url as string}
+            href={safeExternalURL(data.url as string) ?? undefined}
             target="_blank"
             rel="noopener noreferrer"
             className="text-primary hover:underline"

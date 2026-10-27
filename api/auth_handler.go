@@ -70,11 +70,17 @@ func (h *AuthHandler) Register(c *gin.Context) {
 // 只在内存里：重启清零可接受（防在线爆破足够，PG 里已有 token 黑名单等持久状态）。
 var loginAttemptLimiter = newFailureLimiter(10, 15*time.Minute)
 
+// loginIPLimiter 独立的按 IP 全局限速（审计 M10）：同一来源换用户名爆破
+// 一样会被拦。50 次/15 分钟——正常用户与单人多账号误试远够不到。
+var loginIPLimiter = newFailureLimiter(50, 15*time.Minute)
+
 // Login handles user login
 // POST /api/auth/login
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req struct {
-		Username string `json:"username" binding:"required"`
+		// 审计 M10：用户名限长 64——超长串既无业务意义，也曾是放大
+		// 限流器内存的工具。
+		Username string `json:"username" binding:"required,max=64"`
 		Password string `json:"password" binding:"required"`
 	}
 
@@ -83,7 +89,14 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	key := c.ClientIP() + "|" + req.Username
+	// 按 IP 全局限速先行：换用户名也绕不过同一来源的累计失败。
+	ipKey := c.ClientIP()
+	if loginIPLimiter.blocked(ipKey) {
+		utils.Error(c, utils.ErrCodeTooManyRequests, "尝试次数过多，请 15 分钟后再试")
+		return
+	}
+
+	key := ipKey + "|" + req.Username
 	if loginAttemptLimiter.blocked(key) {
 		utils.Error(c, utils.ErrCodeTooManyRequests, "尝试次数过多，请 15 分钟后再试")
 		return
@@ -92,10 +105,12 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	token, user, err := h.userService.Login(req.Username, req.Password)
 	if err != nil {
 		loginAttemptLimiter.fail(key)
+		loginIPLimiter.fail(ipKey)
 		utils.Error(c, utils.ErrCodePasswordWrong, err.Error())
 		return
 	}
 	loginAttemptLimiter.reset(key)
+	loginIPLimiter.reset(ipKey)
 
 	utils.Success(c, gin.H{
 		"token": token,

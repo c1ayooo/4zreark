@@ -138,7 +138,9 @@ func (c *Client) clientFor(proxy string) *http.Client {
 	}
 	transport := &http.Transport{
 		MaxIdleConnsPerHost: 30,
-		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true}, // 对齐 Rust danger_accept_invalid_certs
+		// 审计 M7：恢复证书校验。固定上游（工信部官网）不存在扫描任意目标的
+		// 证书链兼容问题；会话 token 与备案查询不容中间人读取/篡改。
+		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 	}
 	if p := normalizeProxy(proxy); p != "" {
 		if u, err := url.Parse(p); err == nil {

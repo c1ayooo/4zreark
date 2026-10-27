@@ -18,6 +18,7 @@ import {
   Sparkles,
   Loader2,
 } from 'lucide-react'
+import { safeExternalURL } from '@/lib/safeUrl'
 
 const SEVERITY_LABEL: Record<string, string> = {
   critical: '严重',
@@ -418,7 +419,7 @@ function IntelDetailDialog({
           )}
           {item.source_url && (
             <a
-              href={item.source_url}
+              href={safeExternalURL(item.source_url) ?? undefined}
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-1 text-primary hover:underline"

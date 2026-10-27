@@ -2,6 +2,7 @@ import { Modal, Tag } from 'antd'
 import { cn, getSeverityColor } from '@/lib/utils'
 import { DetailBlock, Section } from './DetailBits'
 
+import { safeExternalURL } from '@/lib/safeUrl'
 // 漏洞详情弹窗:fields 来自 scan_results 的自由 json,按存在性渲染。
 export default function VulnDetailModal({
   vuln,
@@ -70,7 +71,7 @@ export default function VulnDetailModal({
                   {(selectedVuln.reference as string[]).map((r) => (
                     <li key={r}>
                       <a
-                        href={r}
+                        href={safeExternalURL(r) ?? undefined}
                         target="_blank"
                         rel="noreferrer"
                         className="text-primary break-all hover:underline"

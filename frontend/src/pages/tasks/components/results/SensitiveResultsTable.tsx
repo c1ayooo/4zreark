@@ -3,6 +3,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { formatDate } from '@/lib/utils'
 import { indexColumn, ResultTable, TAG_DESTRUCTIVE, TAG_PRIMARY, TAG_SECONDARY } from './shared'
 import type { ResultsTableCtx } from './shared'
+import { safeExternalURL } from '@/lib/safeUrl'
 
 export default function SensitiveResultsTable({ ctx }: { ctx: ResultsTableCtx }) {
   const columns: ColumnsType<Record<string, unknown>> = [
@@ -14,7 +15,7 @@ export default function SensitiveResultsTable({ ctx }: { ctx: ResultsTableCtx })
       ellipsis: true,
       render: (_, item) => (
         <a
-          href={item.url as string}
+          href={safeExternalURL(item.url as string) ?? undefined}
           target="_blank"
           rel="noopener noreferrer"
           className="text-primary hover:underline"

@@ -80,8 +80,10 @@ func normalizeProjectInput(in repo.ProjectInput, creating bool) (repo.ProjectInp
 	}
 	if in.HomepageURL != "" {
 		u, err := url.Parse(in.HomepageURL)
-		if err != nil || u.Scheme == "" || u.Host == "" {
-			return in, errors.New("主页地址需要是完整的 URL")
+		// 审计 M16：主页会渲染成可点击链接，只放行 http/https，
+		// 拒绝 javascript:// 之类能通过「有 scheme 有 host」检查的可执行协议。
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return in, errors.New("主页地址需要是完整的 http/https URL")
 		}
 	}
 	if in.CycleDays == 0 {

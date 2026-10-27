@@ -7,6 +7,7 @@ import { githubMonitorApi, type GitHubFinding } from '@/api/githubMonitor'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate } from '@/lib/utils'
 
+import { safeExternalURL } from '@/lib/safeUrl'
 // GitHub 泄露监控（4zreco 迁移）：关键词在 GitHub 公开仓库搜索凭据泄露。
 // 规则按项目绑定；规则名带项目名前缀，findings 溯源到本项目。
 
@@ -120,7 +121,7 @@ export function GitHubMonitorPanel({ projectId }: { projectId: number }) {
       dataIndex: 'repository',
       key: 'repository',
       render: (_, f) => (
-        <a href={f.html_url} target="_blank" rel="noreferrer" className="font-mono text-xs hover:underline">
+        <a href={safeExternalURL(f.html_url) ?? undefined} target="_blank" rel="noreferrer" className="font-mono text-xs hover:underline">
           {f.repository}
         </a>
       ),

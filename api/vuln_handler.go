@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -88,6 +89,10 @@ func (h *VulnHandler) CreateVulnerability(c *gin.Context) {
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+	if bad := firstUnsafeReference(req.References); bad != "" {
+		utils.BadRequest(c, "参考链接只允许 http/https 协议: "+bad)
 		return
 	}
 
@@ -296,6 +301,10 @@ func (h *VulnHandler) CreatePOC(c *gin.Context) {
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+	if bad := firstUnsafeReference(req.References); bad != "" {
+		utils.BadRequest(c, "参考链接只允许 http/https 协议: "+bad)
 		return
 	}
 
@@ -600,4 +609,20 @@ func (h *VulnHandler) GetVulnsByTask(c *gin.Context) {
 	}
 
 	utils.SuccessWithPagination(c, vulns, total, page, pageSize)
+}
+
+// firstUnsafeReference 返回第一个协议不合规的参考链接（安全审计 M16）：
+// 只放行 http/https，拒绝 javascript:/data: 等可执行协议的存储型 XSS 注入。
+func firstUnsafeReference(refs []string) string {
+	for _, r := range refs {
+		trimmed := strings.TrimSpace(r)
+		if trimmed == "" {
+			continue
+		}
+		u, err := url.Parse(trimmed)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			return trimmed
+		}
+	}
+	return ""
 }

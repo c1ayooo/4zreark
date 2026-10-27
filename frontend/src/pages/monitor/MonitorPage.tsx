@@ -24,6 +24,7 @@ import {
 } from 'lucide-react'
 import { statusTagClass } from '@/components/ui/StatusTag'
 
+import { safeExternalURL } from '@/lib/safeUrl'
 const monitorTypeLabels: Record<MonitorType, string> = {
   content_hash: '内容哈希',
   dom_structure: 'DOM结构',
@@ -198,7 +199,7 @@ export default function MonitorPage() {
       key: 'url',
       render: (v: string) => (
         <a
-          href={v}
+          href={safeExternalURL(v) ?? undefined}
           target="_blank"
           rel="noopener noreferrer"
           className="block max-w-xs truncate text-primary hover:underline"

@@ -60,6 +60,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { cn, formatNumber } from '@/lib/utils'
 import { statusTagClass } from '@/components/ui/StatusTag'
 
+import { safeExternalURL } from '@/lib/safeUrl'
 const regionLabel = (region: string) => {
   if (!region) return '—'
   if (region === 'domestic') return '国内'
@@ -932,7 +933,7 @@ export default function ProjectDetailPage() {
               <InfoRow label="主页">
                 {project.homepage_url ? (
                   <a
-                    href={project.homepage_url}
+                    href={safeExternalURL(project.homepage_url) ?? undefined}
                     target="_blank"
                     rel="noreferrer"
                     className="text-primary inline-flex items-center gap-1 hover:underline"

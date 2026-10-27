@@ -9,6 +9,7 @@ import EmptyState from '@/components/common/EmptyState'
 import CreateTaskFromAssetsDialog from '@/components/tasks/CreateTaskFromAssetsDialog'
 import { useToast } from '@/components/ui/use-toast'
 
+import { safeExternalURL } from '@/lib/safeUrl'
 interface TaskAssetsViewProps {
   taskId: string
   /** 任务状态决定空态文案：没开始跑 / 正在跑 / 跑完了但没资产，三种提示完全不同 */
@@ -227,7 +228,7 @@ export default function TaskAssetsView({ taskId, taskStatus, stats, onOpenTab, p
       className: 'font-mono text-xs',
       render: (_, item) => (
         <a
-          href={`${item.protocol}://${item.host}${item.port && item.port !== 80 && item.port !== 443 ? `:${item.port}` : ''}`}
+          href={safeExternalURL(`${item.protocol}://${item.host}${item.port && item.port !== 80 && item.port !== 443 ? `:${item.port}` : ''}`) ?? undefined}
           target="_blank"
           rel="noreferrer"
           className="text-primary inline-flex items-center gap-1 hover:underline"

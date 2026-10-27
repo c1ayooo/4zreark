@@ -4,6 +4,7 @@ import { ExternalLink } from 'lucide-react'
 import { cn, formatDate } from '@/lib/utils'
 import { indexColumn, ResultTable, TAG_DESTRUCTIVE, TAG_PRIMARY, TAG_SECONDARY } from './shared'
 import type { ResultsTableCtx } from './shared'
+import { safeExternalURL } from '@/lib/safeUrl'
 
 export default function ServiceResultsTable({ ctx }: { ctx: ResultsTableCtx }) {
   const columns: ColumnsType<Record<string, unknown>> = [
@@ -13,7 +14,7 @@ export default function ServiceResultsTable({ ctx }: { ctx: ResultsTableCtx }) {
       key: 'url',
       render: (_, item) => (
         <a
-          href={item.url as string}
+          href={safeExternalURL(item.url as string) ?? undefined}
           target="_blank"
           rel="noopener noreferrer"
           className="text-primary hover:underline flex items-center gap-1 max-w-xs truncate"

@@ -3,6 +3,7 @@ import { Button, Card, Input, Select, Tag } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
 import { toolsApi, type GithubDork, type GithubLeakCandidate } from '@/api/tools'
 
+import { safeExternalURL } from '@/lib/safeUrl'
 export default function GithubLeakPanel() {
   const { toast } = useToast()
   const [dorks, setDorks] = useState<GithubDork[]>([])
@@ -74,7 +75,7 @@ export default function GithubLeakPanel() {
                 <div className="flex flex-wrap items-center gap-2">
                   <Tag color={c.Severity === 'high' || c.Severity === 'critical' ? 'error' : undefined}>{c.SecretType || c.RuleName}</Tag>
                   <span className="text-xs text-muted-foreground">{c.Confidence}</span>
-                  <a className="ml-auto text-xs text-blue-600 hover:underline" href={c.HTMLURL} target="_blank" rel="noreferrer">打开文件</a>
+                  <a className="ml-auto text-xs text-blue-600 hover:underline" href={safeExternalURL(c.HTMLURL) ?? undefined} target="_blank" rel="noreferrer">打开文件</a>
                 </div>
                 <div className="font-mono text-xs break-all">{c.Repository}/{c.Path}</div>
               </div>

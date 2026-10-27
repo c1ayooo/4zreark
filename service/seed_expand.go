@@ -608,12 +608,12 @@ func probeHTTPAndCert(ctx context.Context, host string) (scheme, body string, sa
 		})
 	}
 	if conn, derr := tlsDial(); derr == nil {
-		defer conn.Close()
 		state := conn.ConnectionState()
 		for _, cert := range state.PeerCertificates {
 			sanHosts = append(sanHosts, cert.DNSNames...)
 			break
 		}
+		conn.Close()
 		scheme = "https"
 	} else {
 		// 443 不通回落 80；证书 SAN 拿不到就算了
@@ -634,24 +634,37 @@ func probeHTTPAndCert(ctx context.Context, host string) (scheme, body string, sa
 			return nil
 		},
 	}
-	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	url := scheme + "://" + host
-	req, rerr := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
-	if rerr != nil {
-		return "", "", sanHosts, rerr
+	// 审计 M17：每个 scheme 至多尝试一次，不再自递归——443 握手通但 GET 持续
+	// 失败的恶意目标曾造成无界递归（连接/调用栈/请求量失控）。每次重试前检查
+	// 取消状态，响应体读完立即关闭。
+	schemes := []string{scheme}
+	if scheme == "https" {
+		schemes = append(schemes, "http")
 	}
-	req.Header.Set("User-Agent", "4zreark-collect/1.0")
-	resp, herr := client.Do(req)
-	if herr != nil {
-		if scheme == "https" {
-			return probeHTTPAndCert(ctx, host) // 443 握手通但 GET 失败的场景很少见，回落 80 试一次
+	var lastErr error
+	for _, sc := range schemes {
+		if cerr := ctx.Err(); cerr != nil {
+			return "", "", sanHosts, cerr
 		}
-		return "", "", sanHosts, herr
+		reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		req, rerr := http.NewRequestWithContext(reqCtx, http.MethodGet, sc+"://"+host, nil)
+		if rerr != nil {
+			cancel()
+			return "", "", sanHosts, rerr
+		}
+		req.Header.Set("User-Agent", "4zreark-collect/1.0")
+		resp, herr := client.Do(req)
+		if herr != nil {
+			cancel()
+			lastErr = herr
+			continue
+		}
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+		resp.Body.Close()
+		cancel()
+		return sc, string(b), sanHosts, nil
 	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
-	return scheme, string(b), sanHosts, nil
+	return "", "", sanHosts, lastErr
 }
 
 func (s *CycleService) expandDict(ctx context.Context, value string, capability map[string]any, maxTargets int) ([]repo.TargetInput, []string, error) {	base, err := normalizeDomainValue(value)

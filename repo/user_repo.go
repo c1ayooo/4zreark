@@ -139,6 +139,14 @@ func (r *userRepo) UpdateFields(ctx context.Context, id string, fields map[strin
 		return nil
 	}
 	sets = append(sets, "updated_at = now()")
+	// 审计 M1：改密 / 降权 / 状态变更（含通用管理接口）必须同步失效旧会话——
+	// token_version 递增后，持旧 JWT 的请求与刷新全部被吊销检查拦截。
+	for _, k := range []string{"password", "role", "status"} {
+		if _, touched := fields[k]; touched {
+			sets = append(sets, "token_version = token_version + 1")
+			break
+		}
+	}
 	args = append(args, id)
 
 	stmt := "update users set " + strings.Join(sets, ", ") + fmt.Sprintf(" where id = $%d", i)
