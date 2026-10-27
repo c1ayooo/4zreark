@@ -171,7 +171,13 @@ func (h *Hub) WebSocketHandler(c *gin.Context) {
 		utils.Error(c, utils.ErrCodeTokenInvalid, "WebSocket 连接需要有效 token（?token=）")
 		return
 	}
-	if service.NewUserService().IsTokenRevoked(token, claims.UserID, claims.Ver) {
+	// 失败关闭（审计 M2）：吊销检查出错时拒绝建立 WebSocket，不让被吊销令牌连入。
+	revoked, rerr := service.NewUserService().IsTokenRevoked(token, claims.UserID, claims.Ver)
+	if rerr != nil {
+		utils.Error(c, 503, "认证服务暂不可用，请稍后重试")
+		return
+	}
+	if revoked {
 		utils.Error(c, utils.ErrCodeTokenInvalid, "Token已失效")
 		return
 	}

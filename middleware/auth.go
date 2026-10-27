@@ -39,8 +39,15 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// 一次查询同时校验：单端登出黑名单 + 全端失效版本号
-		if userService.IsTokenRevoked(tokenString, claims.UserID, claims.Ver) {
+		// 一次查询同时校验：单端登出黑名单 + 全端失效版本号。
+		// 失败关闭（审计 M2）：数据层不可用/查询出错时拒绝，不视为「未吊销」。
+		revoked, rerr := userService.IsTokenRevoked(tokenString, claims.UserID, claims.Ver)
+		if rerr != nil {
+			utils.Error(c, 503, "认证服务暂不可用，请稍后重试")
+			c.Abort()
+			return
+		}
+		if revoked {
 			utils.Unauthorized(c, "Token已失效，请重新登录")
 			c.Abort()
 			return
@@ -96,6 +103,37 @@ func AdminMiddleware() gin.HandlerFunc {
 
 // RequirePermission 按动作权限码校验；admin 始终放行。
 // 权限点来自 roles.permissions（v4 §18.2），不在前端隐藏按钮代替。
+// SelfOrPermission 按资源归属放行：URL 里的 :id 与当前登录用户一致（本人）
+// 或具备指定权限时通过，否则 403。用于含 PII 的用户详情等「本人可读、管理可改」的接口。
+func SelfOrPermission(code string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		role, _ := c.Get("role")
+		roleName, _ := role.(string)
+		uid, _ := c.Get("user_id")
+		if selfID, _ := uid.(string); selfID != "" && selfID == c.Param("id") {
+			c.Next()
+			return
+		}
+		if roleName == "admin" {
+			c.Next()
+			return
+		}
+		r := repo.Default()
+		if r == nil {
+			utils.Error(c, utils.ErrCodeDatabaseError, "数据层未初始化")
+			c.Abort()
+			return
+		}
+		ok, err := r.Roles().HasPermission(c.Request.Context(), roleName, code)
+		if err != nil || !ok {
+			utils.Forbidden(c, "权限不足")
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
 func RequirePermission(code string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role, exists := c.Get("role")

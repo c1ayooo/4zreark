@@ -400,19 +400,20 @@ func (s *UserService) BlacklistToken(token string) error {
 }
 
 // IsTokenRevoked 一次查询同时校验「单端登出黑名单」与「全端失效版本号」。
-// 校验失败时按可用性优先返回 false，与改造前的取法一致。
-func (s *UserService) IsTokenRevoked(token string, userID string, ver int) bool {
+// 安全基线（审计 M2）：数据层错误时返回 error，由调用方失败关闭（拒绝认证），
+// 不再按可用性优先放行——吊销检查失灵期间，被吊销的令牌必须拿不到任何授权。
+func (s *UserService) IsTokenRevoked(token string, userID string, ver int) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	ur, err := s.users()
 	if err != nil {
-		return false
+		return false, err
 	}
 	revoked, err := ur.IsTokenRevoked(ctx, hashToken(token), userID, ver)
 	if err != nil {
 		log.Printf("[Auth] 校验 token 失败: %v", err)
-		return false
+		return false, err
 	}
-	return revoked
+	return revoked, nil
 }

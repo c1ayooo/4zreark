@@ -144,7 +144,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				protected.POST("/verifications/batches", middleware.RequirePermission("asset:write"), verificationHandler.ExecuteBatch)
 				protected.GET("/assets/:id", middleware.RequirePermission("asset:read"), assetHandler.GetAsset)
 				protected.GET("/assets/:id/records", middleware.RequirePermission("asset:read"), assetHandler.ListSiteRecords)
-				protected.POST("/assets/:id/verify", assetHandler.VerifyAsset)
+				protected.POST("/assets/:id/verify", middleware.RequirePermission("asset:write"), assetHandler.VerifyAsset)
 				protected.GET("/events", middleware.RequirePermission("asset:read"), assetHandler.ListEvents)
 				protected.GET("/changes", compatHandler.Changes)
 				protected.GET("/history-retention", middleware.RequirePermission("settings:write"), retentionHandler.Policy)
@@ -157,8 +157,9 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				protected.GET("/relations/index-status", middleware.RequirePermission("governance:read"), govHandler.RelationIndexStatus)
 				// 单条边的证据行（关系图谱点边查看）；静态路径避免与 index-status 冲突。
 				protected.GET("/relations/evidence", middleware.RequirePermission("governance:read"), govHandler.RelationEdgeEvidence)
-				protected.GET("/asset-relations", govHandler.ListRelations)
-				protected.GET("/asset-relations/index-status", govHandler.RelationIndexStatus)
+				// 审计 M12：别名路由与 /relations 同一处理器，权限口径必须一致。
+				protected.GET("/asset-relations", middleware.RequirePermission("governance:read"), govHandler.ListRelations)
+				protected.GET("/asset-relations/index-status", middleware.RequirePermission("governance:read"), govHandler.RelationIndexStatus)
 				protected.POST("/governance/relations/rebuild", middleware.RequirePermission("governance:write"), govHandler.RebuildRelations)
 				protected.POST("/governance/replay-results", middleware.RequirePermission("governance:write"), govHandler.ReplayResults)
 				protected.GET("/seeds", middleware.RequirePermission("governance:read"), govHandler.ListSeeds)
@@ -238,7 +239,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 			userGroup := protected.Group("/users")
 			{
 				userGroup.GET("", middleware.AdminMiddleware(), userHandler.ListUsers)
-				userGroup.GET("/:id", userHandler.GetUser)
+				userGroup.GET("/:id", middleware.SelfOrPermission("user:manage"), userHandler.GetUser)
 				userGroup.POST("", middleware.RequirePermission("user:manage"), userHandler.CreateUser)
 				userGroup.PUT("/:id", middleware.RequirePermission("user:manage"), userHandler.UpdateUser)
 				userGroup.PATCH("/:id", middleware.RequirePermission("user:manage"), userHandler.UpdateUser)

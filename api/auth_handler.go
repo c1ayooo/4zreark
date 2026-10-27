@@ -232,7 +232,17 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	// 与 AuthMiddleware 同一套吊销检查：已登出（进黑名单）或版本号已失效的
 	// token 不得换新，否则用户登出无法止损被窃 token。
 	claims, err := utils.ParseToken(req.Token)
-	if err == nil && h.userService.IsTokenRevoked(req.Token, claims.UserID, claims.Ver) {
+	if err != nil {
+		utils.Error(c, utils.ErrCodeTokenInvalid, "Token无效或已过期")
+		return
+	}
+	// 失败关闭（审计 M2）：吊销检查出错时拒绝续期，不让被吊销令牌换新。
+	revoked, rerr := h.userService.IsTokenRevoked(req.Token, claims.UserID, claims.Ver)
+	if rerr != nil {
+		utils.Error(c, 503, "认证服务暂不可用，请稍后重试")
+		return
+	}
+	if revoked {
 		utils.Error(c, utils.ErrCodeTokenInvalid, "Token已失效")
 		return
 	}
