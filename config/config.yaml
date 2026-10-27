@@ -5,6 +5,19 @@ server:
   port: 8080
   mode: "release"  # debug, release, test
   public_url: ""   # 平台对外访问地址（通知「前往处置」按钮链接前缀），如 http://x.x.x.x:8080
+  # 原生 TLS（审计 M11）：成对配置后主 Web 直接 HTTPS，无需反代。
+  # tls_cert: "/etc/4zreark/tls/fullchain.pem"
+  # tls_key:  "/etc/4zreark/tls/privkey.pem"
+  tls_cert: ""
+  tls_key: ""
+  # 强制 HTTPS：反向代理终止 TLS 的部署开启后，明文请求 301 到 https 并下发 HSTS。
+  # 环境变量 ZRE_FORCE_HTTPS / ZRE_TLS_CERT / ZRE_TLS_KEY 可覆盖。
+  force_https: false
+
+auth:
+  # 公开注册默认关闭（审计 H1）：空注册码一律拒绝；显式开启后新账号才允许无码注册
+  # （默认只读角色）。环境变量 ZRE_ALLOW_PUBLIC_REGISTRATION 可覆盖。
+  allow_public_registration: false
 
 jwt:
   # 生产必须换掉：控制面启动时检测到默认值会拒绝运行（除非 ZRE_ALLOW_DEFAULT_SECRET=1）。

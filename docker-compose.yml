@@ -25,8 +25,10 @@ services:
       - "work_mem=16MB"
     volumes:
       - pg_data:/var/lib/postgresql/data
+    # 审计 M11：数据库只绑本机回环，不对宿主机网卡发布；
+    # 容器网内 app 经服务名 postgres 访问。确需外部调试时临时改 127.0.0.1 已足够。
     ports:
-      - "25433:5432"
+      - "127.0.0.1:25433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U zre -d zreark"]
       interval: 5s
@@ -63,6 +65,11 @@ services:
       - ZRE_PG_DBNAME=zreark
       - ZRE_PG_PASSWORD=${ZRE_PG_PASSWORD}
       - ZRE_JWT_SECRET=${ZRE_JWT_SECRET:?需要设置 ZRE_JWT_SECRET}
+      # 传输安全（审计 M11）：反代终止 TLS 时置 force_https=1（明文 301 + HSTS）；
+      # 无反代时可挂载证书走原生 TLS：ZRE_TLS_CERT/ZRE_TLS_KEY 指向容器内路径。
+      # - ZRE_FORCE_HTTPS=1
+      # - ZRE_TLS_CERT=/app/tls/fullchain.pem
+      # - ZRE_TLS_KEY=/app/tls/privkey.pem
 
 volumes:
   pg_data:

@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/spf13/viper"
@@ -13,6 +14,7 @@ import (
 type Config struct {
 	Server     ServerConfig     `mapstructure:"server"`
 	JWT        JWTConfig        `mapstructure:"jwt"`
+	Auth       AuthConfig       `mapstructure:"auth"`
 	Postgres   PostgresConfig   `mapstructure:"postgres"`
 	Scanner    ScannerConfig    `mapstructure:"scanner"`
 	Node       NodeConfig       `mapstructure:"node"`
@@ -20,6 +22,12 @@ type Config struct {
 	Alert      AlertConfig      `mapstructure:"alert"`
 	ThirdParty ThirdPartyConfig `mapstructure:"thirdparty"`
 	AutoVerify AutoVerifyConfig `mapstructure:"auto_verify"`
+}
+
+// AuthConfig 认证边界。公开注册默认关闭（安全审计 H1）：空注册码一律拒绝，
+// 显式开启后新账号才允许无码注册——新账号默认只读角色，仍不带项目数据授权之外的权限。
+type AuthConfig struct {
+	AllowPublicRegistration bool `mapstructure:"allow_public_registration"`
 }
 
 // AutoVerifyConfig 是指纹命中后的自动 nuclei 最小验证。
@@ -38,6 +46,13 @@ type ServerConfig struct {
 	// PublicURL 平台对外访问地址（如 https://x.x.x.x:8080），通知消息里的
 	// 「前往处置」按钮用它拼绝对链接；空 = 不渲染按钮。
 	PublicURL string `mapstructure:"public_url"`
+	// TLS 证书/密钥：同时配置后主 Web 在 server.port 上直接以 HTTPS 提供
+	// 服务（原生 TLS，无需反代）。两者必须成对出现，配一缺一拒绝启动。
+	TLSCert string `mapstructure:"tls_cert"`
+	TLSKey  string `mapstructure:"tls_key"`
+	// ForceHTTPS 强制 HTTPS（安全审计 M11）：反向代理终止 TLS 的部署开启后，
+	// 明文请求一律 301 到 https，并下发 HSTS 头。原生 TLS 模式自动生效。
+	ForceHTTPS bool `mapstructure:"force_https"`
 }
 
 type JWTConfig struct {
@@ -226,6 +241,7 @@ func LoadConfig(path string) *Config {
 
 		applyPostgresEnv(cfg)
 		applyNodeEnv(cfg)
+		applySecurityEnv(cfg)
 	})
 
 	return cfg
@@ -249,6 +265,7 @@ func LoadConfigRaw(raw []byte) *Config {
 
 		applyPostgresEnv(cfg)
 		applyNodeEnv(cfg)
+		applySecurityEnv(cfg)
 	})
 
 	return cfg
@@ -315,6 +332,29 @@ func applyNodeEnv(c *Config) {
 		if n, err := strconv.Atoi(v); err == nil {
 			c.Node.HeartbeatInterval = n
 		}
+	}
+}
+
+// applySecurityEnv 应用安全边界相关环境变量（TLS / 强制 HTTPS / 注册开关），
+// 优先级与其它段一致：环境变量 > 配置文件。
+func applySecurityEnv(c *Config) {
+	if v := os.Getenv("ZRE_TLS_CERT"); v != "" {
+		c.Server.TLSCert = v
+	}
+	if v := os.Getenv("ZRE_TLS_KEY"); v != "" {
+		c.Server.TLSKey = v
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("ZRE_FORCE_HTTPS"))) {
+	case "1", "true", "yes", "on":
+		c.Server.ForceHTTPS = true
+	case "0", "false", "no", "off":
+		c.Server.ForceHTTPS = false
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("ZRE_ALLOW_PUBLIC_REGISTRATION"))) {
+	case "1", "true", "yes", "on":
+		c.Auth.AllowPublicRegistration = true
+	case "0", "false", "no", "off":
+		c.Auth.AllowPublicRegistration = false
 	}
 }
 

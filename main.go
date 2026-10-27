@@ -393,16 +393,44 @@ func main() {
 
 	// Start server
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
-	log.Printf("Server starting on %s", addr)
 
 	// Graceful shutdown：http.Server 才有 Shutdown；r.Run 裸起做不到。
-	srv := &http.Server{Addr: addr, Handler: r}
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("[FATAL] Failed to start server: %v", err)
-			os.Exit(1)
+	// 超时配置（审计 M11/A）：防慢速连接占满 fd 与请求体无界读取。
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      120 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+	// 原生 TLS（审计 M11）：证书/密钥成对配置时主 Web 直接 HTTPS；配一缺一拒绝启动。
+	nativeTLS := cfg.Server.TLSCert != "" || cfg.Server.TLSKey != ""
+	if nativeTLS && (cfg.Server.TLSCert == "" || cfg.Server.TLSKey == "") {
+		log.Fatal("[FATAL] server.tls_cert 与 server.tls_key 必须成对配置")
+	}
+	if nativeTLS {
+		log.Printf("Server starting on %s (TLS, 强制 HTTPS)", addr)
+		go func() {
+			if err := srv.ListenAndServeTLS(cfg.Server.TLSCert, cfg.Server.TLSKey); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("[FATAL] Failed to start TLS server: %v", err)
+				os.Exit(1)
+			}
+		}()
+	} else {
+		if cfg.Server.ForceHTTPS {
+			log.Printf("Server starting on %s (HTTP, force_https: 明文请求将 301 到 HTTPS)", addr)
+		} else {
+			log.Printf("Server starting on %s (HTTP)", addr)
 		}
-	}()
+		go func() {
+			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("[FATAL] Failed to start server: %v", err)
+				os.Exit(1)
+			}
+		}()
+	}
 
 	waitForShutdown("server", gatewayErr)
 

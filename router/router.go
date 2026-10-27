@@ -34,6 +34,9 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 	}
 
 	// Middleware
+	// 强制 HTTPS（审计 M11）：原生 TLS 或 force_https 开启时，明文请求 301 + HSTS。
+	// 挂在最前，任何路由（含静态资源与健康检查）都在边界内。
+	r.Use(middleware.ForceHTTPS())
 	r.Use(middleware.CORSMiddleware())
 	// 请求体上限：未单独设限的 JSON 端点统一封顶，防超大 body 撑爆内存。
 	r.Use(middleware.MaxBodyLimit(32 << 20))

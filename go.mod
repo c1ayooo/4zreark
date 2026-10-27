@@ -8,7 +8,7 @@ require (
 	github.com/dop251/goja_nodejs v0.0.0-20260918173711-b481721df8a2
 	github.com/gin-gonic/gin v1.9.1
 	github.com/go-rod/rod v0.116.2
-	github.com/golang-jwt/jwt/v5 v5.2.0
+	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/google/uuid v1.5.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/imroc/req/v3 v3.61.0

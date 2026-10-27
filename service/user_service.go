@@ -2,10 +2,13 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"log"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/c1ayooo/4zreark/models"
@@ -292,7 +295,11 @@ func (s *UserService) SetUserStatus(userID string, status int) error {
 	return nil
 }
 
-// InitAdmin creates default admin user if not exists
+// InitAdmin creates default admin user if not exists.
+// 安全基线（审计 H2）：不再使用固定的公开默认口令。新建管理员时生成随机口令，
+// 仅在创建那一次打印到 stdout（配合 MustChangePassword 强制首登改密）；
+// 自动化部署可用 ZRE_ADMIN_PASSWORD 显式注入初始口令。存量库不受影响，
+// 仍在用旧默认口令 admin123 的账户会被补强制改密标记。
 func (s *UserService) InitAdmin() error {
 	ctx, cancel := dbCtx()
 	defer cancel()
@@ -302,7 +309,11 @@ func (s *UserService) InitAdmin() error {
 		return err
 	}
 
-	hashedPassword, err := utils.HashPassword("admin123")
+	initialPassword, err := generateAdminPassword()
+	if err != nil {
+		return err
+	}
+	hashedPassword, err := utils.HashPassword(initialPassword)
 	if err != nil {
 		return err
 	}
@@ -314,7 +325,7 @@ func (s *UserService) InitAdmin() error {
 		Email:    "admin@localhost",
 		Role:     "admin",
 		Status:   1,
-		// 初始口令是公开的默认值：置强制改密标记，登录后只能改密直到完成。
+		// 初始口令只出现这一次：置强制改密标记，登录后只能改密直到完成。
 		MustChangePassword: true,
 	})
 	if err != nil {
@@ -322,13 +333,13 @@ func (s *UserService) InitAdmin() error {
 	}
 	if created {
 		log.Printf("[InitAdmin] Admin user created successfully")
-		log.Printf("[InitAdmin] 警告：admin 使用默认口令 admin123，首次登录会被要求立即修改。")
+		log.Printf("[InitAdmin] ===== admin 初始口令（仅此一次显示，请立即登录修改）: %s =====", initialPassword)
 	} else {
 		log.Printf("[InitAdmin] Admin user already exists")
 		// 存量部署：默认口令未改则补上强制改密标记（迁移加列后这里兜底补数据）。
 		if admin, gerr := ur.GetByUsername(ctx, "admin"); gerr == nil && admin != nil &&
 			utils.CheckPassword("admin123", admin.Password) {
-			log.Printf("[InitAdmin] 警告：admin 账户仍在使用默认口令 admin123，已置强制改密标记。")
+			log.Printf("[InitAdmin] 警告：admin 账户仍在使用旧默认口令，已置强制改密标记，请立即修改。")
 			if !admin.MustChangePassword {
 				if uerr := ur.UpdateFields(ctx, admin.ID.Hex(),
 					map[string]any{"must_change_password": true}); uerr != nil {
@@ -338,6 +349,27 @@ func (s *UserService) InitAdmin() error {
 		}
 	}
 	return nil
+}
+
+// generateAdminPassword 生成初始管理员口令：env 显式注入优先（自动化部署），
+// 否则 crypto/rand 生成 20 位无歧义字符随机串（去掉 0O1lI 等易混字符）。
+func generateAdminPassword() (string, error) {
+	if v := strings.TrimSpace(os.Getenv("ZRE_ADMIN_PASSWORD")); v != "" {
+		if len(v) < 12 {
+			return "", errors.New("ZRE_ADMIN_PASSWORD 至少 12 位")
+		}
+		return v, nil
+	}
+	const alphabet = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	out := make([]byte, 20)
+	buf := make([]byte, 20)
+	if _, err := rand.Read(buf); err != nil {
+		return "", errors.New("生成随机口令失败: " + err.Error())
+	}
+	for i, b := range buf {
+		out[i] = alphabet[int(b)%len(alphabet)]
+	}
+	return string(out), nil
 }
 
 // hashToken 只存摘要：库里不出现令牌原文。

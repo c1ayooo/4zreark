@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/c1ayooo/4zreark/config"
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/service"
 	"github.com/c1ayooo/4zreark/utils"
@@ -44,12 +45,17 @@ func (h *AuthHandler) Register(c *gin.Context) {
 			utils.BadRequest(c, err.Error())
 			return
 		}
-	} else {
+	} else if config.GetConfig().Auth.AllowPublicRegistration {
+		// 公开注册默认关闭（审计 H1）：空注册码只有在配置显式开启时才放行。
+		// 即便开启，新账号也只是默认只读角色，不获得任何项目数据之外的授权。
 		user, err = h.userService.Register(req.Username, req.Password, req.Email)
 		if err != nil {
 			utils.Error(c, utils.ErrCodeDuplicate, err.Error())
 			return
 		}
+	} else {
+		utils.Error(c, utils.ErrCodeForbidden, "注册码必填：本平台默认不开放公开注册，请向管理员获取注册码")
+		return
 	}
 
 	utils.SuccessWithMessage(c, "注册成功", gin.H{

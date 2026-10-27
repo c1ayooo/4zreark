@@ -2,6 +2,7 @@ package utils
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/c1ayooo/4zreark/config"
@@ -53,9 +54,18 @@ func GenerateTokenClaims(userID, username, role string, ver int, mustChange bool
 	return token.SignedString([]byte(cfg.JWT.Secret))
 }
 
-// ParseToken parses and validates a JWT token
+// ParseToken parses and validates a JWT token.
+// 前置校验（审计 M9，CVE-2025-30204 同形风险）：依赖库 v5.2.2 已修分段资源放大，
+// 这里再做长度与段数快拒，未认证输入在进入解析器前就被丢弃。
 func ParseToken(tokenString string) (*Claims, error) {
 	cfg := config.GetConfig()
+
+	if len(tokenString) == 0 || len(tokenString) > 4096 {
+		return nil, errors.New("invalid token")
+	}
+	if strings.Count(tokenString, ".") != 2 {
+		return nil, errors.New("invalid token")
+	}
 
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
