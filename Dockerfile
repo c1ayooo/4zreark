@@ -12,23 +12,29 @@ RUN npm run build
 
 # ---- 后端 ----
 FROM golang:1.26-alpine AS builder
+# GOPROXY 可按网络环境覆盖：docker build --build-arg GOPROXY=https://goproxy.cn,direct .
+# 模块经代理下载，不需要 git；基础镜像已带 ca-certificates。
+ARG GOPROXY=https://proxy.golang.org,direct
 WORKDIR /src
-RUN apk add --no-cache git ca-certificates
 COPY go.mod go.sum ./
-RUN go env -w GOPROXY=https://proxy.golang.org,direct && go mod download
+RUN go env -w GOPROXY=${GOPROXY} && go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/server .
 
 # ---- 运行时 ----
+# 本层零网络下载（apk 在受限网络下不可靠）：证书复用 golang 基础镜像的，
+# 时区用 Go 自带的 zoneinfo.zip（Go 运行时优先读 ZONEINFO 环境变量）。
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 
+COPY --from=builder /usr/local/go/lib/time/zoneinfo.zip /app/zoneinfo.zip
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /out/server /app/server
 COPY --from=frontend /web/dist /app/frontend/dist
 COPY config /app/config
 
 # 外部扫描工具（tools/<os>/）不在镜像内，运行时按需挂载宿主机目录。
+ENV ZONEINFO=/app/zoneinfo.zip
 ENV ZRE_FRONTEND_DIST=/app/frontend/dist
 EXPOSE 8080 9443
 ENTRYPOINT ["/app/server"]
