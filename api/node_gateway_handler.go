@@ -90,7 +90,8 @@ func (h *NodeGatewayHandler) GetTask(c *gin.Context) {
 		utils.NotFound(c, err.Error())
 		return
 	}
-	if task.NodeID != "" && task.NodeID != node.NodeID {
+	// 审计 M14：空归属任务对节点一律拒绝，控制面显式派单后节点才能访问；
+	if task.NodeID == "" || task.NodeID != node.NodeID {
 		utils.Forbidden(c, "任务未分配给该节点")
 		return
 	}
@@ -106,7 +107,8 @@ func (h *NodeGatewayHandler) UpdateTask(c *gin.Context) {
 		utils.NotFound(c, err.Error())
 		return
 	}
-	if task.NodeID != "" && task.NodeID != node.NodeID {
+	// 审计 M14：空归属任务对节点一律拒绝，控制面显式派单后节点才能访问；
+	if task.NodeID == "" || task.NodeID != node.NodeID {
 		utils.Forbidden(c, "任务未分配给该节点")
 		return
 	}
@@ -121,7 +123,9 @@ func (h *NodeGatewayHandler) UpdateTask(c *gin.Context) {
 		"started_at": true, "completed_at": true, "last_error": true,
 		"discovered_assets": true, "discovered_ports": true, "discovered_vulns": true,
 		"total_targets": true, "scanned_targets": true, "last_scanned_index": true,
-		"completed_stages": true, "node_id": true,
+		"completed_stages": true,
+		// "node_id" 已移除（审计 M14）：节点不能改派/清空/认领任务归属，
+		// 归属只能由控制面派单逻辑修改。
 	}
 	updates := make(map[string]interface{}, len(raw))
 	for k, v := range raw {
@@ -158,7 +162,8 @@ func (h *NodeGatewayHandler) TouchTask(c *gin.Context) {
 		utils.NotFound(c, err.Error())
 		return
 	}
-	if task.NodeID != "" && task.NodeID != node.NodeID {
+	// 审计 M14：空归属任务对节点一律拒绝，控制面显式派单后节点才能访问；
+	if task.NodeID == "" || task.NodeID != node.NodeID {
 		utils.Forbidden(c, "任务未分配给该节点")
 		return
 	}
@@ -178,7 +183,8 @@ func (h *NodeGatewayHandler) PostResults(c *gin.Context) {
 		utils.NotFound(c, err.Error())
 		return
 	}
-	if task.NodeID != "" && task.NodeID != node.NodeID {
+	// 审计 M14：空归属任务对节点一律拒绝，控制面显式派单后节点才能访问；
+	if task.NodeID == "" || task.NodeID != node.NodeID {
 		utils.Forbidden(c, "任务未分配给该节点")
 		return
 	}
@@ -221,7 +227,8 @@ func (h *NodeGatewayHandler) PostAssets(c *gin.Context) {
 		utils.NotFound(c, err.Error())
 		return
 	}
-	if task.NodeID != "" && task.NodeID != node.NodeID {
+	// 审计 M14：空归属任务对节点一律拒绝，控制面显式派单后节点才能访问；
+	if task.NodeID == "" || task.NodeID != node.NodeID {
 		utils.Forbidden(c, "任务未分配给该节点")
 		return
 	}
@@ -269,7 +276,8 @@ func (h *NodeGatewayHandler) PostCDN(c *gin.Context) {
 		utils.NotFound(c, err.Error())
 		return
 	}
-	if task.NodeID != "" && task.NodeID != node.NodeID {
+	// 审计 M14：空归属任务对节点一律拒绝，控制面显式派单后节点才能访问；
+	if task.NodeID == "" || task.NodeID != node.NodeID {
 		utils.Forbidden(c, "任务未分配给该节点")
 		return
 	}
@@ -298,7 +306,8 @@ func (h *NodeGatewayHandler) PostDictLearning(c *gin.Context) {
 		utils.NotFound(c, err.Error())
 		return
 	}
-	if task.NodeID != "" && task.NodeID != node.NodeID {
+	// 审计 M14：空归属任务对节点一律拒绝，控制面显式派单后节点才能访问；
+	if task.NodeID == "" || task.NodeID != node.NodeID {
 		utils.Forbidden(c, "任务未分配给该节点")
 		return
 	}

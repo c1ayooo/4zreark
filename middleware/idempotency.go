@@ -30,6 +30,15 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 			c.Next()
 			return
 		}
+		// 审计 M5：一次性秘密端点禁用响应缓存——「只显示一次」的 API Key、
+		// 节点 token、注册码不能以明文落库或经重放再返回。
+		path := c.Request.URL.Path
+		for _, prefix := range secretEndpointPrefixes {
+			if strings.HasPrefix(path, prefix) {
+				c.Next()
+				return
+			}
+		}
 		rawKey := strings.TrimSpace(c.GetHeader(idempotencyHeader))
 		if rawKey == "" {
 			c.Next()
@@ -126,4 +135,12 @@ func (w *captureWriter) Status() int {
 		return 200
 	}
 	return w.status
+}
+
+// secretEndpointPrefixes 是响应体含一次性秘密、禁止幂等缓存的端点前缀（审计 M5）。
+// 重放这些请求返回 409/重新执行，绝不从缓存回放秘密。
+var secretEndpointPrefixes = []string{
+	"/api/api-keys",          // CreatedAPIKey.Key 明文只显示一次
+	"/api/nodes/enroll",      // EnrollNode 节点 token 只显示一次
+	"/api/registration-codes", // 注册码明文
 }

@@ -53,8 +53,16 @@ func tunnelDir() string {
 	return filepath.Join(os.TempDir(), "4zreark-tunnels")
 }
 
-func tunnelFilePath(nodeID string) string {
-	return filepath.Join(tunnelDir(), nodeID+".json")
+func tunnelFilePath(nodeID string) (string, error) {
+	// 审计 M4：路径拼接后必须仍位于隧道目录内——用 Rel 做最终边界校验，
+	// 不信任节点 ID 的形态（纵深防御，注册侧另有白名单）。
+	base := tunnelDir()
+	full := filepath.Join(base, nodeID+".json")
+	rel, err := filepath.Rel(base, full)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("非法节点 ID: %q", nodeID)
+	}
+	return full, nil
 }
 
 func findRemBinary() (string, error) {
@@ -213,7 +221,12 @@ func startLocalRemTunnel(nodeID string, platformPort, tunnelPort, relayPort int,
 		LogPath: logPath, CreatedAt: time.Now(),
 	}
 	data, _ := json.Marshal(info)
-	if err := os.WriteFile(tunnelFilePath(nodeID), data, 0o600); err != nil {
+	recPath, perr := tunnelFilePath(nodeID)
+	if perr != nil {
+		_ = terminateProcess(pid)
+		return perr
+	}
+	if err := os.WriteFile(recPath, data, 0o600); err != nil {
 		_ = terminateProcess(pid)
 		return fmt.Errorf("写入隧道记录失败: %w", err)
 	}
@@ -221,7 +234,7 @@ func startLocalRemTunnel(nodeID string, platformPort, tunnelPort, relayPort int,
 	time.Sleep(2 * time.Second)
 	if !processAlive(pid) {
 		logTail := readFileTail(logPath, 3000)
-		_ = os.Remove(tunnelFilePath(nodeID))
+		_ = os.Remove(recPath)
 		return fmt.Errorf("本地 rem 已退出:\n%s", logTail)
 	}
 	return nil
@@ -229,7 +242,11 @@ func startLocalRemTunnel(nodeID string, platformPort, tunnelPort, relayPort int,
 
 // stopLocalRemTunnel 在节点删除/吊销时停止平台侧隧道客户端。
 func stopLocalRemTunnel(nodeID string) {
-	path := tunnelFilePath(nodeID)
+	// 审计 M4：非法 ID 直接返回，不触碰任何文件
+	path, perr := tunnelFilePath(nodeID)
+	if perr != nil {
+		return
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return

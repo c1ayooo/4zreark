@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"context"
 	"net"
 	"time"
@@ -31,9 +32,11 @@ func (h *StatusHandler) Status(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
 	defer cancel()
 	if err := repo.Default().Ping(ctx); err != nil {
+		// 审计 L1：公开健康检查只给固定状态，数据库错误细节（含内部地址）
+		// 进日志而不出接口。
+		log.Printf("[Status] 数据库探活失败: %v", err)
 		out["database"] = "down"
 		out["status"] = "degraded"
-		out["database_error"] = err.Error()
 	} else {
 		out["database"] = "ok"
 	}
@@ -43,7 +46,13 @@ func (h *StatusHandler) Status(c *gin.Context) {
 // DNSStatus GET /dns/status
 // 只做一次短超时的公网解析，回答「当前进程的 DNS 是否可用」。
 func (h *StatusHandler) DNSStatus(c *gin.Context) {
+	// 审计 L1：该接口已移到认证内（router），任意主机名的 DNS 解析不再
+	// 对匿名开放；错误细节只给状态不给原始报错。
 	host := c.DefaultQuery("host", "example.com")
+	if host != "" && !isPlainHostname(host) {
+		utils.BadRequest(c, "host 需为普通主机名")
+		return
+	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancel()
 
@@ -59,4 +68,20 @@ func (h *StatusHandler) DNSStatus(c *gin.Context) {
 		addrs = append(addrs, ip.String())
 	}
 	utils.Success(c, gin.H{"ok": true, "host": host, "elapsed_ms": elapsed, "addresses": addrs})
+}
+
+// isPlainHostname 限制 DNS 探测目标为普通主机名（字母数字点连字符，≤253），
+// 拒绝把该接口当任意解析 oracle 使用。
+func isPlainHostname(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	for _, r := range host {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }

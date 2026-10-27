@@ -22,7 +22,9 @@ func SetupRouter() *gin.Engine {
 }
 
 func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
-	r := gin.Default()
+	// 审计 M8：脱敏访问日志——WebSocket JWT 与其它凭据类 query 参数不落日志。
+	r := gin.New()
+	r.Use(middleware.SanitizedLogger(), gin.Recovery())
 
 	// 审计日志的 ClientIP 默认可被 X-Forwarded-For 伪造（gin 默认信任所有代理）。
 	// 默认不信任任何代理头，ClientIP 取直连地址；反向代理部署用
@@ -65,8 +67,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 		authHandler := api.NewAuthHandler()
 		statusHandler := api.NewStatusHandler()
 		apiGroup.GET("/status", statusHandler.Status)
-		r.GET("/dns/status", statusHandler.DNSStatus)
-		authGroup := apiGroup.Group("/auth")
+				authGroup := apiGroup.Group("/auth")
 		{
 			authGroup.POST("/login", authHandler.Login)
 			authGroup.POST("/register", authHandler.Register)
@@ -128,6 +129,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				protected.GET("/assets", middleware.RequirePermission("asset:read"), assetHandler.ListAssets)
 				protected.GET("/assets/graph", middleware.RequirePermission("asset:read"), assetHandler.AssetGraph)
 				protected.GET("/assets/routes", middleware.RequirePermission("asset:read"), assetHandler.ListSiteRoutes)
+				protected.GET("/dns/status", statusHandler.DNSStatus)
 				protected.GET("/assets/query-check", middleware.RequirePermission("asset:read"), assetHandler.CheckQuery)
 				protected.GET("/assets/icons", middleware.RequirePermission("asset:read"), assetHandler.IconClusters)
 				protected.GET("/assets/technologies", middleware.RequirePermission("asset:read"), assetHandler.TechClusters)

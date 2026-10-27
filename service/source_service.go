@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/c1ayooo/4zreark/internal/useragent"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -174,6 +175,12 @@ func (s *SourceService) Test(ctx context.Context, id int64) (*SourceTestResult, 
 		return res, nil
 	}
 
+	// 审计 M6：凭据测试的 endpoint 必须落在 GitHub 主机白名单内——
+	// 已存 token 只发给官方/显式批准的企业版主机，不跟随重定向。
+	if err := CheckSourceEndpointHost(endpoint); err != nil {
+		_ = r.RecordTest(ctx, id, false, err.Error())
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -188,7 +195,10 @@ func (s *SourceService) Test(ctx context.Context, id int64) (*SourceTestResult, 
 			}
 		}
 	}
-	client := &http.Client{Timeout: 8 * time.Second}
+	// 不跟随重定向：Authorization 头不得被 30x 带去别的主机。
+	client := &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
 	resp, err := client.Do(req)
 	res.ElapsedMS = time.Since(start).Milliseconds()
 	if err != nil {
@@ -372,4 +382,37 @@ func randomHex(n int) string {
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b)
+}
+
+// allowedSourceHosts 是凭据测试允许的 GitHub 主机白名单（审计 M6）。
+// 企业版（GHE）主机用 ZRE_GITHUB_EXTRA_HOSTS（逗号分隔域名）显式放行。
+func allowedSourceHosts() map[string]bool {
+	hosts := map[string]bool{
+		"github.com":       true,
+		"api.github.com":   true,
+		"raw.github.com":   true,
+		"gist.github.com":  true,
+	}
+	if extra := strings.TrimSpace(os.Getenv("ZRE_GITHUB_EXTRA_HOSTS")); extra != "" {
+		for _, h := range strings.Split(extra, ",") {
+			if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+				hosts[h] = true
+			}
+		}
+	}
+	return hosts
+}
+
+// CheckSourceEndpointHost 校验 endpoint 的 scheme 与主机：
+// 必须 https 且主机精确命中白名单（防 "evil-github.com" 这类后缀仿冒）。
+func CheckSourceEndpointHost(endpoint string) error {
+	u, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return errors.New("endpoint 必须是完整的 https URL")
+	}
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	if !allowedSourceHosts()[host] {
+		return fmt.Errorf("endpoint 主机 %q 不在 GitHub 白名单内（企业版主机用 ZRE_GITHUB_EXTRA_HOSTS 放行）", host)
+	}
+	return nil
 }

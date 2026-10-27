@@ -1,6 +1,8 @@
 package api
 
 import (
+	"errors"
+	"fmt"
 	"strconv"
 
 	"github.com/c1ayooo/4zreark/models"
@@ -188,6 +190,12 @@ func (h *NodeHandler) RegisterNode(c *gin.Context) {
 		return
 	}
 
+	// 审计 M4：节点 ID 强制白名单（字母/数字/下划线/连字符，≤64），
+	// 拒绝路径分隔符与 ".."，隧道记录文件路径不再可被构造逃逸。
+	if err := validateNodeID(req.NodeID); err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
 	node := &models.ScannerNode{
 		NodeID:            req.NodeID,
 		Name:              req.Name,
@@ -318,4 +326,23 @@ func (h *NodeHandler) GetNodeStats(c *gin.Context) {
 	}
 
 	utils.Success(c, stats)
+}
+
+// validateNodeID 节点 ID 白名单（审计 M4）：非空且 ≤64 字符，
+// 只允许字母/数字/下划线/连字符；空值由服务层生成 UUID。
+func validateNodeID(id string) error {
+	if id == "" {
+		return nil
+	}
+	if len(id) > 64 {
+		return errors.New("node_id 最长 64 字符")
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+		default:
+			return fmt.Errorf("node_id 只允许字母/数字/下划线/连字符，收到 %q", id)
+		}
+	}
+	return nil
 }
