@@ -1,0 +1,38 @@
+# 构建上下文瘦身 + 隐私边界：本地数据、文档与凭据一律不进构建上下文，
+# 即使误写 COPY 也不会进入镜像层。
+.git
+.zcode/
+
+# 本地业务数据与备份（含真实资产数据，绝不入镜像）
+data/
+backups/
+backup_*.sql
+*.sql.gz
+
+# 本地文档（含授权目标信息）
+docs/*.md
+frontend/UI_DESIGN.md
+*.local
+
+# 参考素材与历史发版包
+reference/
+releases/
+*.zip
+
+# 依赖与构建产物（镜像内自行构建）
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# 运行时产物
+test/data/
+test/*.stat
+.sock.lock
+cmd/tmptls/
+__pycache__/
+*.log
+
+# 编排与流水线自身（运行镜像不需要）
+Dockerfile
+docker-compose.yml
+.github

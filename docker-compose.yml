@@ -1,5 +1,7 @@
 # 单机部署编排。存储只有 PostgreSQL 16（代码已全面 PG 化，
 # 不再依赖 MongoDB / Redis；旧 compose 里的 mongo/redis 已移除）。
+# 镜像默认取 GitHub 官方容器仓库（ghcr.io）的发布版；本地改动用
+# `docker compose build app` 构建（Dockerfile 多阶段，前端在镜像内构建）。
 # 凭据通过环境变量注入，不要写死在文件里：
 #   ZRE_PG_PASSWORD  数据库密码（必需）
 #   ZRE_JWT_SECRET   JWT 签名密钥（必需，openssl rand -hex 32）
@@ -33,7 +35,9 @@ services:
       start_period: 10s
 
   app:
-    image: zreark-app
+    # 发布版：ghcr.io 自动构建（Release 工作流，多架构 amd64/arm64）。
+    # 本地构建：docker compose build app（image 标签会被 build 覆盖）。
+    image: ghcr.io/c1ayooo/4zreark:${ZRE_IMAGE_TAG:-latest}
     container_name: zreark_app
     build:
       context: .
@@ -46,9 +50,10 @@ services:
       postgres:
         condition: service_healthy
     volumes:
+      # config 覆盖镜像内模板（不覆盖也能起：真实凭据走环境变量）；
+      # tools 是外部扫描工具（gitignore 不入库），按宿主机路径挂载。
       - ./config:/app/config:ro
       - ./tools:/app/tools:ro
-      - ./frontend/dist:/app/frontend/dist:ro
     environment:
       - CONFIG_PATH=/app/config/config.yaml
       - ZRE_FRONTEND_DIST=/app/frontend/dist
@@ -58,7 +63,6 @@ services:
       - ZRE_PG_DBNAME=zreark
       - ZRE_PG_PASSWORD=${ZRE_PG_PASSWORD}
       - ZRE_JWT_SECRET=${ZRE_JWT_SECRET:?需要设置 ZRE_JWT_SECRET}
-    command: ["/app/server"]
 
 volumes:
   pg_data:
