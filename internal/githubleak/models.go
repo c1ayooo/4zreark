@@ -428,8 +428,9 @@ type Finding struct {
 	Fingerprint   string `json:"fingerprint"`
 	MaskedExcerpt string `json:"masked_excerpt"`
 	HTMLURL       string `json:"html_url"`
-	// SecretValue 命中的明文凭据（平台授权环境下直接展示研判；服务日志不打该字段）。
-	SecretValue string `json:"secret_value,omitempty"`
+	// SecretValue 命中的明文凭据：只进库（安全审计 H4），任何 JSON 出口
+	// （API/导出/通知）都不再携带；研判通过 masked_excerpt 与锚点定位原文。
+	SecretValue string `json:"-"`
 	// VerifyStatus 验证结论（valid/invalid/restricted/unverifiable，检测→验证闭环落库）；
 	// VerifyEvidence 为脱敏证据摘要（厂商错误码/账号归属），均由「验证」入口/Agent 回写。
 	VerifyStatus   string `json:"verify_status,omitempty"`

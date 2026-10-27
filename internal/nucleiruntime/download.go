@@ -88,6 +88,12 @@ func (m *Manager) installBinary(ctx context.Context, version string, progress fu
 		return fmt.Errorf("写入下载文件失败: %w", err)
 	}
 
+	// 审计 M15：先过 SHA256 完整性校验，再解压/试跑/替换。
+	// 校验失败在此返回，恶意替换的下载物不会获得执行机会。
+	if err := m.verifyAgainstChecksums(ctx, version, tmpName); err != nil {
+		return err
+	}
+
 	_, binaryName, err := assetName(version, runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		return err

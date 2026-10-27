@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/c1ayooo/4zreark/config"
+	"github.com/c1ayooo/4zreark/internal/creds"
 	"github.com/c1ayooo/4zreark/internal/toolruntime"
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/service"
@@ -43,6 +44,9 @@ func (h *NodeHandler) DeployNode(c *gin.Context) {
 		Password      string   `json:"password"`
 		PrivateKey    string   `json:"private_key"`
 		KeyPassphrase string   `json:"key_passphrase"`
+		// OverwriteFingerprint 主机重装等合法换钥场景：显式替换 known-hosts 里
+		// 的旧指纹（审计 H3）。不传时指纹不匹配的连接直接拒绝。
+		OverwriteFingerprint bool `json:"overwrite_fingerprint"`
 		Name          string   `json:"name"`
 		MaxTasks      int      `json:"max_tasks"`
 		Capabilities  []string `json:"capabilities"`
@@ -260,10 +264,18 @@ func (h *NodeHandler) DeployNode(c *gin.Context) {
 		utils.BadRequest(c, err.Error())
 		return
 	}
+	// 审计 H3：SSH 部署强制验证主机身份（TOFU known-hosts），不再忽略主机密钥。
+	// 首次部署记录指纹，之后不匹配即拒绝——防中间人窃取 SSH 凭据与节点 token。
+	hostKeyCB, _, hkErr := creds.SSHHostKeyCallback(host, port, req.OverwriteFingerprint)
+	if hkErr != nil {
+		cleanup()
+		utils.BadRequest(c, hkErr.Error())
+		return
+	}
 	sshCfg := &ssh.ClientConfig{
 		User:            req.Username,
 		Auth:            auth,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hostKeyCB,
 		Timeout:         15 * time.Second,
 	}
 	addr := net.JoinHostPort(host, strconv.Itoa(port))

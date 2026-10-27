@@ -21,6 +21,8 @@ type SSHProbeInput struct {
 	Password   string // 与 Key 二选一
 	PrivateKey string // PEM 私钥(可选)
 	Timeout    time.Duration
+	// OverwriteFingerprint 主机重装后显式替换已记录指纹（审计 H3）。
+	OverwriteFingerprint bool
 }
 
 // SSHProbeResult 实连结论:存活性 + 认证结果 + 权限面。
@@ -63,10 +65,16 @@ func VerifySSH(ctx context.Context, in SSHProbeInput) (*SSHProbeResult, error) {
 		return nil, fmt.Errorf("password 与 private_key 至少提供一项")
 	}
 
+	// 审计 H3：凭据探测同样验证主机身份（TOFU known-hosts），不匹配即拒绝，
+	// 避免拿真实凭据去连假冒主机（凭据被窃取后可用于部署节点）。
+	hostKeyCB, _, hkErr := SSHHostKeyCallback(in.Host, in.Port, in.OverwriteFingerprint)
+	if hkErr != nil {
+		return nil, hkErr
+	}
 	cfg := &ssh.ClientConfig{
 		User:            in.Username,
 		Auth:            authMethods,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // 凭据验证场景:不校验主机指纹(测试目标)
+		HostKeyCallback: hostKeyCB,
 		Timeout:         timeout,
 		BannerCallback:  func(b string) error { return nil },
 	}

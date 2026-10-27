@@ -148,10 +148,22 @@ func keyValueLine(c Candidate) string {
 	if len(value) > maxValueBytes {
 		return ""
 	}
+	// 审计 H4：通知渠道（邮件/Webhook）不再携带明文，只发首末 4 字符锚点，
+	// 与 masked_excerpt 的 <redacted:类型|v:首4…末4> 同一比对语义。
 	if label := strings.TrimSpace(c.SecretKey); label != "" {
-		return label + ": " + value
+		return label + ": " + maskSecretAnchor(value)
 	}
-	return "key: " + value
+	return "key: " + maskSecretAnchor(value)
+}
+
+// maskSecretAnchor 把凭据值缩成首末 4 字符锚点；太短没有锚点价值，全掩码。
+func maskSecretAnchor(value string) string {
+	const keep = 4
+	r := []rune(value)
+	if len(r) <= keep*2 {
+		return strings.Repeat("*", len(r))
+	}
+	return string(r[:keep]) + "…" + string(r[len(r)-keep:])
 }
 
 // valueAnchor 从脱敏摘录 <redacted:类型|v:首4…末4> 中提取密钥值首尾锚点，

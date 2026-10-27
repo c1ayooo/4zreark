@@ -186,7 +186,9 @@ func recordAutoVerifyHit(ctx context.Context, hit vulnverify.HitResult) (string,
 			Severity: hit.Severity, Request: hit.Request, Response: hit.Response,
 			CurlCommand: hit.CurlCommand, Extracted: hit.ExtractedResults,
 		}); ferr == nil && f != nil {
-			vuln.Description += fmt.Sprintf("\n\n[自动提取] %s/%s: %s", f.Category, f.Kind, f.Data)
+			// 审计 H4：描述面向所有登录用户可读，提取出的凭据（SFTP 密码、
+			// git config 口令）必须先掩码；路径/标题类信息保留研判价值。
+			vuln.Description += fmt.Sprintf("\n\n[自动提取] %s/%s: %s", f.Category, f.Kind, maskExtractedData(f.Kind, f.Data))
 		}
 	}
 	vulnSvc := NewVulnService()
@@ -344,4 +346,50 @@ func (s *VulnVerifyService) Stats(ctx context.Context, days int) (*VerifyStats, 
 		}
 	}
 	return out, rows.Err()
+}
+
+// maskExtractedData 对自动验证提取出的结构化数据按类别脱敏（审计 H4）：
+// sftp JSON 的 password 与 git config 的口令行缩成首末 2 字符锚点；
+// 备份文件路径、phpinfo 标题等非凭据信息原样保留。
+func maskExtractedData(kind, data string) string {
+	maskValue := func(v string) string {
+		r := []rune(v)
+		if len(r) <= 4 {
+			return strings.Repeat("*", len(r))
+		}
+		return string(r[:2]) + "…" + string(r[len(r)-2:])
+	}
+	switch kind {
+	case "sftp":
+		trimmed := strings.TrimSpace(data)
+		if strings.HasPrefix(trimmed, "{") {
+			var m map[string]any
+			if err := json.Unmarshal([]byte(trimmed), &m); err == nil {
+				for _, key := range []string{"password", "private_key"} {
+					if v, ok := m[key].(string); ok && v != "" {
+						m[key] = maskValue(v)
+					}
+				}
+				if out, jerr := json.Marshal(m); jerr == nil {
+					return string(out)
+				}
+			}
+		}
+		return maskValue(trimmed)
+	case "git_config":
+		lines := strings.Split(data, "\n")
+		for i, line := range lines {
+			lower := strings.ToLower(line)
+			for _, field := range []string{"password", "passwd", "pwd", "token", "secret"} {
+				if idx := strings.Index(lower, field+" = "); idx >= 0 {
+					val := strings.TrimSpace(line[idx+len(field)+3:])
+					lines[i] = line[:idx+len(field)+3] + maskValue(val)
+					break
+				}
+			}
+		}
+		return strings.Join(lines, "\n")
+	default:
+		return data
+	}
 }
