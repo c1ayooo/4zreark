@@ -44,6 +44,8 @@ export const MCP_SCOPES: MCPScopeInfo[] = [
   { name: 'vulns:write', label: '改漏洞', group: '漏洞', description: '创建/编辑/删除漏洞、改状态与复核（仅全项目 key）', dangerous: true },
   { name: 'pocs:read', label: '读 POC', group: 'POC', description: '查看 POC 模板与统计（仅全项目 key）', dangerous: false },
   { name: 'pocs:write', label: '改 POC', group: 'POC', description: '创建/编辑/删除/启停 POC（仅全项目 key）', dangerous: true },
+  { name: 'enterprise:read', label: '读企业', group: '企业', description: '查看企业数据源、深度采集任务状态与采集上限', dangerous: false },
+  { name: 'enterprise:write', label: '企业采集', group: '企业', description: '发起/取消子公司深度采集、调整采集上限（热更新，立即生效）', dangerous: true },
 ]
 
 export const MCP_SCOPE_GROUPS = Array.from(new Set(MCP_SCOPES.map((s) => s.group)))

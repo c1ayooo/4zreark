@@ -222,3 +222,39 @@ func TestMCPToolScopeEnforcement(t *testing.T) {
 		t.Fatalf("绑定项目的 key 调漏洞工具应拒绝，实际 %+v", res)
 	}
 }
+
+// 企业域工具的权限与边界：读工具要 enterprise:read，写工具要 enterprise:write；
+// 采集上限是全局配置，项目绑定的 key 连写权限有了也不能改。
+// 这些断言都落在触碰数据层之前（权限门/参数校验），不依赖数据库；
+// 上限热更新本体由 TestCollectorLimitsHotReload 在 collector 层覆盖。
+func TestMCPEnterpriseToolScopes(t *testing.T) {
+	s := NewMCPService()
+	call := func(scopes []string, projectID *int64, name string, args map[string]any) *mcpToolResult {
+		key := &repo.APIKey{ID: 1, Scopes: scopes, ProjectID: projectID}
+		params, _ := json.Marshal(map[string]any{"name": name, "arguments": args})
+		resp, err := s.Handle(context.Background(), &RPCRequest{
+			JSONRPC: "2.0", ID: json.RawMessage("1"), Method: "tools/call", Params: params,
+		}, key)
+		if err != nil {
+			t.Fatalf("Handle: %v", err)
+		}
+		return resp.Result.(*mcpToolResult)
+	}
+
+	if res := call([]string{ScopeAssetsRead}, nil, "get_enterprise_settings", map[string]any{}); !res.IsError || !strings.Contains(res.Content[0].Text, ScopeEnterpriseRead) {
+		t.Fatalf("缺少 enterprise:read 时应拒绝，实际 %+v", res)
+	}
+	if res := call([]string{ScopeEnterpriseRead}, nil, "enterprise_discover", map[string]any{"ext_id": "x", "name": "x"}); !res.IsError || !strings.Contains(res.Content[0].Text, ScopeEnterpriseWrite) {
+		t.Fatalf("缺少 enterprise:write 时深度采集应拒绝，实际 %+v", res)
+	}
+
+	// 项目绑定的 key：即使有写权限也改不了全局上限（requireGlobalKey 在读写库之前拦截）
+	bound := int64(1)
+	if res := call([]string{ScopeEnterpriseWrite}, &bound, "update_enterprise_settings", map[string]any{"max_depth": int64(9)}); !res.IsError || !strings.Contains(res.Content[0].Text, "全部项目") {
+		t.Fatalf("绑定项目的 key 调整全局上限应拒绝，实际 %+v", res)
+	}
+	// 全项目 key + 写权限但一个参数都没给：参数校验应拒绝
+	if res := call([]string{ScopeEnterpriseWrite}, nil, "update_enterprise_settings", map[string]any{}); !res.IsError || !strings.Contains(res.Content[0].Text, "至少提供") {
+		t.Fatalf("空参数应被拒绝，实际 %+v", res)
+	}
+}

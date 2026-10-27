@@ -88,6 +88,7 @@ type MCPService struct {
 	scans      *ScanService
 	vulns      *VulnService
 	pocs       *POCService
+	enterprise *EnterpriseService
 }
 
 func NewMCPService() *MCPService {
@@ -99,6 +100,7 @@ func NewMCPService() *MCPService {
 		scans:      NewScanService(),
 		vulns:      NewVulnService(),
 		pocs:       NewPOCService(),
+		enterprise: NewEnterpriseService(),
 	}
 }
 
@@ -112,6 +114,7 @@ func (s *MCPService) toolRegistry() []mcpToolHandler {
 	out = append(out, s.scanTools()...)
 	out = append(out, s.vulnTools()...)
 	out = append(out, s.pocTools()...)
+	out = append(out, s.enterpriseTools()...)
 	return out
 }
 

@@ -23,6 +23,8 @@ const (
 	ScopeVulnsWrite      = "vulns:write"
 	ScopePOCsRead        = "pocs:read"
 	ScopePOCsWrite       = "pocs:write"
+	ScopeEnterpriseRead  = "enterprise:read"
+	ScopeEnterpriseWrite = "enterprise:write"
 )
 
 // ScopeInfo 是设置页渲染权限选项与说明的唯一来源。
@@ -48,6 +50,8 @@ var ScopeCatalog = []ScopeInfo{
 	{ScopeVulnsWrite, "改漏洞", "漏洞", "创建/编辑/删除漏洞、改状态与复核（仅全项目 key）", true},
 	{ScopePOCsRead, "读 POC", "POC", "查看 POC 模板与统计（仅全项目 key）", false},
 	{ScopePOCsWrite, "改 POC", "POC", "创建/编辑/删除/启停 POC（仅全项目 key）", true},
+	{ScopeEnterpriseRead, "读企业", "企业", "查看企业数据源、深度采集任务状态与采集上限", false},
+	{ScopeEnterpriseWrite, "企业采集", "企业", "发起/取消子公司深度采集、调整采集上限（热更新，立即生效）", true},
 }
 
 // AllScopes 按目录顺序返回全部权限点，供 UI 或校验使用。

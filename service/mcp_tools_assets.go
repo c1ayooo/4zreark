@@ -43,13 +43,13 @@ func (s *MCPService) assetTools() []mcpToolHandler {
 			Tool: mcpTool{
 				Name:        "list_assets",
 				Title:       "查询项目资产",
-				Description: "按项目分页查询归并后的资产。kind 选择粒度（site/domain/ip），catalog 选择是否只看已确认资产，view 切换线索/候选/失联视图，q 支持平台 DSL 查询。",
+				Description: "按项目分页查询归并后的资产。kind 选择粒度（site/domain/ip/record），catalog 选择是否只看已确认资产，view 切换线索/接口/爬虫/失联视图，q 支持平台 DSL 查询（记录级字段 url/method/content_type/source/is_interface 在站点粒度按「带此类记录」过滤）。",
 				InputSchema: inputSchema(map[string]any{
 					"project_id": map[string]any{"type": "integer", "minimum": 1, "description": "项目 ID；绑定项目的 key 可省略"},
-					"q":          map[string]any{"type": "string", "description": "查询串，支持平台 DSL（如 host=example.com、status=200、tech=nginx）"},
-					"kind":       map[string]any{"type": "string", "enum": []string{"site", "domain", "ip"}, "default": "site", "description": "资产粒度"},
+					"q":          map[string]any{"type": "string", "description": "查询串，平台 DSL（如 host=\"example.com\"、status_code=\"200\"、app=\"nginx\"、source=\"katana\"、is_interface=\"true\"、method=\"POST\"）"},
+					"kind":       map[string]any{"type": "string", "enum": []string{"site", "domain", "ip", "record"}, "default": "site", "description": "资产粒度；record=原始记录（不归并）"},
 					"catalog":    map[string]any{"type": "string", "enum": []string{"all", "verified", "candidates"}, "default": "all", "description": "是否只看已确认资产"},
-					"view":       map[string]any{"type": "string", "enum": []string{"", "clues", "candidates", "lost"}, "description": "线索/候选/失联视图，留空为全部"},
+					"view":       map[string]any{"type": "string", "enum": []string{"", "clues", "candidates", "lost", "interfaces", "crawler"}, "description": "视图：线索/候选/失联/接口候选/爬虫发现，留空为全部"},
 					"site_group": map[string]any{"type": "boolean", "default": true, "description": "true=按站点归并；false=展开到入口（仅 kind=site）"},
 					"sort":       map[string]any{"type": "string", "enum": []string{"first_seen", "risk"}, "description": "排序：first_seen（默认）或 risk"},
 					"page":       map[string]any{"type": "integer", "minimum": 1, "default": 1},
