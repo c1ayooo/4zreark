@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
@@ -62,12 +63,14 @@ func NewJSAuditModule(ctx context.Context, nextModule ModuleRunner, concurrency 
 		scanner:      scanner,
 		templatesDir: templatesDir,
 		concurrency:  concurrency,
+		// 审计 M3：抓取扫描目标的 JS，连接级校验（scan 档）
 		client: &http.Client{
 			Timeout: jsAuditFetchTimeout,
 			Transport: &http.Transport{
 				MaxIdleConns:        32,
 				MaxIdleConnsPerHost: 8,
 				IdleConnTimeout:     60 * time.Second,
+				DialContext:         safehttp.NewDialer(safehttp.ModeScan, 10*time.Second).DialContext,
 			},
 		},
 		files: make(map[string]string),

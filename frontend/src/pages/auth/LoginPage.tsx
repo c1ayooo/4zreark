@@ -6,6 +6,7 @@ import { Button, Card, Input } from 'antd'
 import { useAuthStore } from '@/store/auth'
 import { authApi } from '@/api/auth'
 import { useToast } from '@/components/ui/use-toast'
+import { DecryptText } from '@/components/common/DecryptText'
 
 export default function LoginPage() {
   const navigate = useNavigate()

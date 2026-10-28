@@ -10,6 +10,7 @@
 package cdnorigin
 
 import (
+	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -69,7 +70,8 @@ func Find(ctx context.Context, domain string, opts Options) ([]Origin, error) {
 	}
 	client := opts.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: timeout}
+		// 审计 M3：CDN 源站探测的目标是授权资产，scan 档（禁 loopback/云元数据）
+		client = safehttp.Client(safehttp.ModeScan, timeout)
 	}
 	pool := opts.Resolver
 	if pool == nil {

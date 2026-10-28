@@ -1,9 +1,9 @@
 package service
 
 import (
+	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"context"
 	"errors"
-	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -66,7 +66,8 @@ func (s *ToolkitService) VerifyCloudCredential(ctx context.Context, in CloudCred
 	if !creds.ValidProvider(in.Provider) {
 		return creds.VerifyResult{}, errors.New("不支持的云厂商（aliyun/tencent/aws/huawei/volc）")
 	}
-	client := &http.Client{Timeout: 20 * time.Second}
+	// 审计 M3：携云凭据出站走 strict 档（私网/loopback/元数据全禁，官方 API 固定上游）。
+	client := safehttp.Client(safehttp.ModeStrict, 20*time.Second)
 	return creds.Verify(ctx, client, in.Provider, in.AccessKeyID, in.SecretKey)
 }
 

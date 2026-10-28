@@ -17,6 +17,7 @@
 package miit
 
 import (
+	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"bytes"
 	"context"
 	"crypto/md5"
@@ -147,7 +148,8 @@ func (c *Client) clientFor(proxy string) *http.Client {
 			transport.Proxy = http.ProxyURL(u)
 		}
 	}
-	hc := &http.Client{Transport: transport, Timeout: c.timeout}
+	// 审计 M3：固定上游（工信部官网）出站，连接级校验（scan 档）。
+	hc := &http.Client{Transport: safehttp.WithSafeControl(transport, c.timeout), Timeout: c.timeout}
 	c.clients[proxy] = hc
 	return hc
 }

@@ -107,3 +107,13 @@ func Client(mode Mode, timeout time.Duration) *http.Client {
 		},
 	}
 }
+
+// WithSafeControl 给既有 Transport 补上连接级 SSRF 校验（审计 M3）：
+// DialContext 为空时套安全 Dialer（经代理时校验由代理出口承接）；
+// 调用方已自定义 DialContext 的由其自行负责校验。返回同一 Transport 便于链式。
+func WithSafeControl(tr *http.Transport, timeout time.Duration) *http.Transport {
+	if tr != nil && tr.DialContext == nil {
+		tr.DialContext = NewDialer(ModeScan, timeout).DialContext
+	}
+	return tr
+}

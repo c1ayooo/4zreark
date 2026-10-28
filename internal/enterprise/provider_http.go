@@ -1,6 +1,7 @@
 package enterprise
 
 import (
+	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -36,7 +37,9 @@ func newWebClient(base, proxy string, timeout time.Duration) (*webClient, error)
 	}
 	return &webClient{
 		base: strings.TrimRight(base, "/"),
-		http: &http.Client{Timeout: timeout, Transport: transport},
+		// 审计 M3：数据源站点是固定公网上游，连接级校验（scan 档）；
+		// 走代理时校验由代理出口承接（Control 看到的是代理地址）。
+		http: &http.Client{Timeout: timeout, Transport: safehttp.WithSafeControl(transport, timeout)},
 		headers: map[string]string{
 			"User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
 			"Accept":          "application/json, text/plain, */*",

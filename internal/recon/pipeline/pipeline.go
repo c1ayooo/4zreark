@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/c1ayooo/4zreark/internal/recon/brute"
+	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"github.com/c1ayooo/4zreark/internal/recon/dnsres"
 	"github.com/c1ayooo/4zreark/internal/recon/fingerprint"
 	"github.com/c1ayooo/4zreark/internal/recon/permute"
@@ -298,11 +299,10 @@ func Run(ctx context.Context, opts Options, progress Progress) (*Result, error) 
 	if opts.EnableHTTP {
 		client := opts.HTTPClient
 		if client == nil {
-			client = &http.Client{
-				Timeout: 10 * time.Second,
-				CheckRedirect: func(*http.Request, []*http.Request) error {
-					return http.ErrUseLastResponse
-				},
+			// 审计 M3：HTTP 指纹阶段目标为授权资产，scan 档
+			client = safehttp.Client(safehttp.ModeScan, 10*time.Second)
+			client.CheckRedirect = func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
 			}
 		}
 		type httpTarget struct {
