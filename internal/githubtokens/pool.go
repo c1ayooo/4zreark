@@ -5,6 +5,7 @@ package githubtokens
 
 import (
 
+	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"github.com/c1ayooo/4zreark/internal/secretbox"
 	"context"
 	"crypto/rand"
@@ -358,7 +359,9 @@ type Pool struct {
 }
 
 func NewPool(store *Store) *Pool {
-	return &Pool{store: store, http: &http.Client{Timeout: 15 * time.Second}}
+	// 审计 M3/M6：携 token 出站走安全客户端（strict：私网/loopback/元数据全禁，
+	// 官方 API 固定 host，无重定向外发面）。
+	return &Pool{store: store, http: safehttp.Client(safehttp.ModeStrict, 15*time.Second)}
 }
 
 // HTTPClient 供外部额度采集共用。

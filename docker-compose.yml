@@ -7,6 +7,8 @@
 #   ZRE_JWT_SECRET   JWT 签名密钥（必需，openssl rand -hex 32）
 services:
   postgres:
+    # 供应链加固：正式部署建议把 tag 换成 digest 锚定（如 postgres:16-alpine@sha256:<digest>），
+    # 避免可变标签在拉取时被上游变更。当前保留 tag 便于跟随官方补丁。
     image: postgres:16-alpine
     container_name: zreark_postgres
     restart: unless-stopped
