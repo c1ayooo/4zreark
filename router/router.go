@@ -118,6 +118,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				protected.GET("/project-cycle/status", projectOpsHandler.CycleStatus)
 				protected.GET("/projects/:id", middleware.RequirePermission("project:read"), assetHandler.GetProject)
 				protected.POST("/projects", middleware.RequirePermission("project:write"), assetHandler.CreateProject)
+				protected.POST("/projects/:id/onboard", middleware.RequirePermission("run:execute"), api.NewOnboardHandler().Onboard)
 				protected.PUT("/projects/:id", middleware.RequirePermission("project:write"), assetHandler.UpdateProject)
 				protected.PATCH("/projects/:id", middleware.RequirePermission("project:write"), assetHandler.UpdateProject)
 				protected.POST("/projects/:id/pause", middleware.RequirePermission("project:write"), assetHandler.PauseProject)

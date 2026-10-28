@@ -10,6 +10,7 @@ import {
   Layers,
   Plus,
   RefreshCw,
+  Rocket,
   Sprout,
   Trash2,
 } from 'lucide-react'
@@ -17,6 +18,7 @@ import { Button, Card, Skeleton, Tag } from 'antd'
 
 import { projectApi, type Project, type ProjectInput } from '@/api/projects'
 import { ProjectFormDialog } from '@/components/projects/ProjectFormDialog'
+import OnboardDialog from '@/components/projects/OnboardDialog'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate } from '@/lib/utils'
 
@@ -137,6 +139,7 @@ export default function ProjectsPage() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const [createOpen, setCreateOpen] = useState(false)
+  const [onboardOpen, setOnboardOpen] = useState(false)
 
   const projects = useQuery({ queryKey: ['projects'], queryFn: () => projectApi.list() })
 
@@ -175,6 +178,10 @@ export default function ProjectsPage() {
           >
             <RefreshCw className={cn('mr-2 h-4 w-4', projects.isFetching && 'animate-spin')} />
             刷新
+          </Button>
+          <Button size="small" onClick={() => setOnboardOpen(true)}>
+            <Rocket className="mr-2 h-4 w-4" />
+            一键侦察
           </Button>
           <Button type="primary" size="small" onClick={() => setCreateOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
@@ -231,6 +238,7 @@ export default function ProjectsPage() {
         onOpenChange={setCreateOpen}
         onSubmit={(input) => createMutation.mutateAsync(input)}
       />
+      <OnboardDialog open={onboardOpen} onClose={() => setOnboardOpen(false)} />
     </div>
   )
 }

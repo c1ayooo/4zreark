@@ -141,18 +141,9 @@ export default function TaskCreateForm({
       ? `默认节点（${defaultNode.data.data.node_id}）`
       : '默认节点（未设置，任意在线节点）'
 
-  // 创建任务
+  // 创建任务（拆单提交：成功/失败提示统一在 handleSubmit 里收口）
   const createMutation = useMutation({
     mutationFn: taskApi.createTask,
-    onSuccess: () => {
-      toast({ title: '任务创建成功' })
-      queryClient.invalidateQueries({ queryKey: ['tasks'] })
-      onCreated?.()
-      if (variant === 'dialog') resetForm()
-    },
-    onError: (error: Error) => {
-      toast({ title: '创建失败', description: error.message, variant: 'destructive' })
-    },
   })
 
   const resetForm = () => {
@@ -195,7 +186,7 @@ export default function TaskCreateForm({
     return 'custom'
   }
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!formData.name.trim()) {
       toast({ title: '请输入任务名称', variant: 'destructive' })
       return
@@ -230,39 +221,78 @@ export default function TaskCreateForm({
       return
     }
 
-    // 服务识别 / 暴露面探测 / 存量线索是独立任务类型，暂不支持与其他扫描阶段组合
-    const exclusive = ['service_detect', 'exposure_scan', 'clue_hunt']
-    const selected = formData.config.scanTypes || []
-    if (selected.some((t) => exclusive.includes(t)) && selected.length > 1) {
-      toast({
-        title: '服务识别 / 暴露面探测 / 存量线索需单独创建任务',
-        description: '这些任务不含端口扫描、爬虫等阶段，请只勾选其中一项',
-        variant: 'destructive',
-      })
-      return
-    }
-
     const types = [...new Set(targets.map(detectTargetType))]
     const targetType = types.length === 1 ? types[0] : 'mixed'
-    const taskType = getTaskType(formData.config.scanTypes || [])
 
     // 转换配置字段为后端格式：对话框旧行为会额外补 snake_case 的 scan_types，页面旧行为原样提交
-    const configForBackend =
-      variant === 'dialog'
-        ? { ...formData.config, scan_types: formData.config.scanTypes }
-        : formData.config
+    const configForBackend = (cfg: TaskConfig) =>
+      variant === 'dialog' ? { ...cfg, scan_types: cfg.scanTypes } : cfg
 
-    createMutation.mutate({
-      name: formData.name,
-      projectId,
-      type: taskType,
-      targets: targets,
-      targetType: targetType,
-      description: formData.description,
-      config: configForBackend,
-      // 未选节点时不带 node_id（跟随系统默认节点）
-      ...(nodeId ? { nodeId } : {}),
-    })
+    // 独立执行器类型（服务识别/暴露面探测/存量线索）与流水线阶段不同执行器，
+    // 勾选组合时自动拆成多个任务一次提交：流水线阶段合一个 custom 任务，
+    // 每个独立类型单独一个任务——不再限制「只能勾一项」。
+    const selected = formData.config.scanTypes || []
+    const STANDALONE = ['service_detect', 'exposure_scan', 'clue_hunt']
+    const standaloneTypes = selected.filter((t) => STANDALONE.includes(t))
+    const pipelineTypes = selected.filter((t) => !STANDALONE.includes(t))
+
+    const jobs: Array<{ label: string; type: string; config: TaskConfig }> = []
+    if (pipelineTypes.length > 0) {
+      jobs.push({
+        label: '',
+        type: getTaskType(pipelineTypes),
+        config: { ...formData.config, scanTypes: pipelineTypes },
+      })
+    }
+    const standaloneLabels: Record<string, string> = {
+      service_detect: '服务识别',
+      exposure_scan: '暴露面探测',
+      clue_hunt: '存量线索',
+    }
+    for (const t of standaloneTypes) {
+      jobs.push({
+        label: ` · ${standaloneLabels[t]}`,
+        type: t,
+        config: { ...formData.config, scanTypes: [t] },
+      })
+    }
+
+    try {
+      let failed = 0
+      for (const j of jobs) {
+        try {
+          await createMutation.mutateAsync({
+            name: formData.name + j.label,
+            projectId,
+            type: j.type,
+            targets: targets,
+            targetType: targetType,
+            description: formData.description,
+            config: configForBackend(j.config),
+            // 未选节点时不带 node_id（跟随系统默认节点）
+            ...(nodeId ? { nodeId } : {}),
+          })
+        } catch (e) {
+          failed++
+          toast({
+            title: `${j.label ? formData.name + j.label : '任务'}创建失败`,
+            description: (e as Error)?.message,
+            variant: 'destructive',
+          })
+        }
+      }
+      if (jobs.length > failed) {
+        toast({
+          title: failed > 0 ? `已创建 ${jobs.length - failed}/${jobs.length} 个任务` : `已创建 ${jobs.length} 个任务`,
+          description: jobs.length > 1 ? '独立执行器类型已自动拆单' : undefined,
+        })
+        queryClient.invalidateQueries({ queryKey: ['tasks'] })
+        onCreated?.()
+        if (variant === 'dialog') resetForm()
+      }
+    } catch {
+      // 不应到这里：内部已逐个兜底
+    }
   }
 
   // 套用模板：只覆盖「扫什么 + 扫多快」，名称/目标/项目保持用户已填的内容

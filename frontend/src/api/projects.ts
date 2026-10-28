@@ -123,6 +123,24 @@ export const projectApi = {
   get: (id: number) => api.get<unknown, ApiResponse<Project>>(`/projects/${id}`),
   create: (body: ProjectInput) =>
     api.post<unknown, ApiResponse<Project>>('/projects', body),
+  // 一键侦察：公司名 → 企业深度采集 → 完成后后端自动创建后续扫描任务
+  onboard: (
+    id: number,
+    body: {
+      provider: string
+      keyword: string
+      depth?: number
+      max_nodes?: number
+      cookie?: string
+      username?: string
+      password?: string
+      proxy_url?: string
+    }
+  ) =>
+    api.post<unknown, ApiResponse<{ job: { id: string; status: string } }>>(
+      `/projects/${id}/onboard`,
+      body
+    ),
   update: (id: number, body: ProjectInput) =>
     api.put<unknown, ApiResponse<Project>>(`/projects/${id}`, body),
   pause: (id: number, reason = '') =>
