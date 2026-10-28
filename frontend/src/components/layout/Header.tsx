@@ -8,6 +8,7 @@ import { useAppStore } from '@/store/app'
 import { notifyApi, type InAppNotification } from '@/api/notify'
 import { cn, formatDate } from '@/lib/utils'
 import { Bell, CheckCheck, Sun, Moon, User, LogOut, Settings, Search, Menu, ChevronRight } from 'lucide-react'
+import { SystemUpdateButton } from '@/components/system/SystemUpdateDialog'
 import { navCurrentLabel } from '@/components/layout/Sidebar'
 import { notificationLink } from '@/lib/notifyLink'
 
@@ -124,6 +125,9 @@ export default function Header({ onMenuClick }: { onMenuClick?: () => void }) {
       </div>
 
       <div className="flex items-center gap-2">
+        {/* 版本 / 系统更新 */}
+        <SystemUpdateButton />
+
         {/* Theme Toggle */}
         <Button
           type="text"

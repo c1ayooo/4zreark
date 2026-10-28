@@ -21,6 +21,9 @@ var (
 	configSourceMu sync.RWMutex
 	configSource   []byte
 	updatingFlag   int32
+
+	// AppVersion 平台版本号（main 经 ldflags 注入，本地构建为 dev）。
+	AppVersion = "dev"
 )
 
 // SetConfigSource 留存启动时读到的配置原文。

@@ -32,6 +32,14 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// AppVersion 平台版本号；Release 构建经 ldflags 注入（-X .../service.AppVersion）。
+// 本地/源码构建为 "dev"。
+var AppVersion = "dev"
+
+func init() {
+	service.AppVersion = AppVersion
+}
+
 func main() {
 	// 分布式部署时用命令行覆盖节点身份；配置文件/service 环境变量同样生效。
 	roleFlag := flag.String("role", "", "节点角色: all|master|worker（覆盖配置）")

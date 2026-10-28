@@ -67,6 +67,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 		authHandler := api.NewAuthHandler()
 		statusHandler := api.NewStatusHandler()
 		apiGroup.GET("/status", statusHandler.Status)
+		apiGroup.GET("/system/version", api.NewSystemUpdateHandler().Version)
 				authGroup := apiGroup.Group("/auth")
 		{
 			authGroup.POST("/login", authHandler.Login)
@@ -127,6 +128,8 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				protected.DELETE("/projects/:id/icon", middleware.RequirePermission("project:write"), projectOpsHandler.DeleteIcon)
 				protected.GET("/projects/:id/collection-state", middleware.RequirePermission("project:read"), projectOpsHandler.CollectionState)
 				protected.GET("/projects/:id/collect-overview", middleware.RequirePermission("project:read"), api.NewCollectOverviewHandler().GetCollectOverview)
+				protected.GET("/system/update/status", middleware.RequirePermission("settings:write"), api.NewSystemUpdateHandler().UpdateStatus)
+				protected.POST("/system/update", middleware.RequirePermission("settings:write"), api.NewSystemUpdateHandler().StartUpdate)
 				protected.DELETE("/projects/:id", middleware.RequirePermission("project:delete"), projectOpsHandler.DeleteProject)
 				protected.GET("/assets", middleware.RequirePermission("asset:read"), assetHandler.ListAssets)
 				protected.GET("/assets/graph", middleware.RequirePermission("asset:read"), assetHandler.AssetGraph)
