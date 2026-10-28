@@ -39,6 +39,12 @@ func TestForbidden(t *testing.T) {
 	if Forbidden(ModeScan, nil) != true {
 		t.Fatalf("nil IP 应拒绝")
 	}
+	// Permissive 档（历史逃生口语义）：全放行
+	for _, ip := range []string{"127.0.0.1", "169.254.169.254", "10.0.0.1", "8.8.8.8"} {
+		if Forbidden(ModePermissive, net.ParseIP(ip)) {
+			t.Fatalf("Permissive(%s) 应放行", ip)
+		}
+	}
 }
 
 // 连接级校验：非 IP 目标拒绝（伪造的 Dialer 调用不经 Transport 解析）。

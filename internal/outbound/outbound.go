@@ -305,8 +305,9 @@ func (r *Resolver) HTTPClient(ctx context.Context, module string, timeout time.D
 //   - 其余模块 scan（内网资产合法，loopback/云元数据一律禁）。
 func safeModeFor(module string) safehttp.Mode {
 	if module == "notify" {
+		// 逃生口沿用 validateWebhookURL 的历史语义：完全放行（含本机服务）。
 		if os.Getenv("ZRE_NOTIFY_ALLOW_PRIVATE") == "1" {
-			return safehttp.ModeScan
+			return safehttp.ModePermissive
 		}
 		return safehttp.ModeStrict
 	}

@@ -12,6 +12,8 @@ import (
 )
 
 func TestFeishuAppNotifierTokenAndSend(t *testing.T) {
+	// 通知器测试用 httptest 本地服务模拟飞书 API，需放行私有地址（生产语义不变）。
+	t.Setenv("ZRE_NOTIFY_ALLOW_PRIVATE", "1")
 	var tokenCalls, messageCalls int
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -83,6 +85,8 @@ func TestFeishuAppNotifierTokenAndSend(t *testing.T) {
 }
 
 func TestFeishuAppNotifierRequiresReceiver(t *testing.T) {
+	// 通知器测试用 httptest 本地服务模拟飞书 API，需放行私有地址（生产语义不变）。
+	t.Setenv("ZRE_NOTIFY_ALLOW_PRIVATE", "1")
 	n := NewFeishuAppNotifier("cli_test", "secret_test", "chat_id", "")
 	err := n.Send(context.Background(), &NotifyMessage{
 		Level: NotifyLevelInfo, Title: "t", Timestamp: time.Now(),
@@ -94,6 +98,8 @@ func TestFeishuAppNotifierRequiresReceiver(t *testing.T) {
 
 // TestFeishuAppNotifierLive 只有显式设置 ZRE_FEISHU_LIVE=1 时才发真实消息。
 func TestFeishuAppNotifierLive(t *testing.T) {
+	// 通知器测试用 httptest 本地服务模拟飞书 API，需放行私有地址（生产语义不变）。
+	t.Setenv("ZRE_NOTIFY_ALLOW_PRIVATE", "1")
 	if os.Getenv("ZRE_FEISHU_LIVE") != "1" {
 		t.Skip("设置 ZRE_FEISHU_LIVE=1 才执行真实飞书发送")
 	}

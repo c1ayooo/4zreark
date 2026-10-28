@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -29,10 +31,30 @@ type Mode int
 const (
 	ModeScan Mode = iota
 	ModeStrict
+	// ModePermissive 全放行——仅对应 ZRE_NOTIFY_ALLOW_PRIVATE=1 的历史语义
+	// （内部服务 webhook 合法，含本机服务）与测试环境的本地模拟服务。
+	ModePermissive
 )
+
+// envOverrideOnce 支撑测试逃生口：ZRE_SAFEHTTP_ALLOW_PRIVATE=1 时全放行。
+// 仅测试进程使用（httptest 监听 127.0.0.1），生产部署不应设置该变量。
+var (
+	envOverrideOnce sync.Once
+	envPermissive   bool
+)
+
+func envAllowsAll() bool {
+	envOverrideOnce.Do(func() {
+		envPermissive = os.Getenv("ZRE_SAFEHTTP_ALLOW_PRIVATE") == "1"
+	})
+	return envPermissive
+}
 
 // Forbidden 判定一个 IP 是否禁止直连。
 func Forbidden(mode Mode, ip net.IP) bool {
+	if mode == ModePermissive || envAllowsAll() {
+		return false
+	}
 	if ip == nil {
 		return true
 	}

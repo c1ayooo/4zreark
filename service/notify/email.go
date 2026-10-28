@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"html/template"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -35,7 +36,8 @@ func (n *EmailNotifier) Type() NotifyType {
 }
 
 func (n *EmailNotifier) Send(ctx context.Context, msg *NotifyMessage) error {
-	subject := fmt.Sprintf("[%s] %s", msg.Level, msg.Title)
+	// 安全审计 §5（邮件 HTML）：标题进 Subject 头——剥离 CRLF 防头部注入。
+	subject := fmt.Sprintf("[%s] %s", msg.Level, stripMailCRLF(msg.Title))
 
 	// 构建 HTML 邮件内容
 	body := n.buildHTMLBody(msg)
@@ -68,6 +70,8 @@ func (n *EmailNotifier) buildHTMLBody(msg *NotifyMessage) string {
 		color = "#f97316" // orange
 	}
 
+	// 安全审计 §5：通知内容来源广泛（任务名/漏洞标题/命中摘录），HTML 邮件
+	// 里一律转义后再拼接，杜绝邮件客户端内的脚本执行。换行转 <br> 在转义之后。
 	return fmt.Sprintf(`
 <!DOCTYPE html>
 <html>
@@ -104,8 +108,19 @@ func (n *EmailNotifier) buildHTMLBody(msg *NotifyMessage) string {
     </div>
 </body>
 </html>
-`, color, msg.Title, msg.Level, msg.Source, msg.Timestamp.Format("2006-01-02 15:04:05"),
-		strings.ReplaceAll(msg.Content, "\n", "<br>"))
+`, color,
+		template.HTMLEscapeString(msg.Title),
+		template.HTMLEscapeString(string(msg.Level)),
+		template.HTMLEscapeString(msg.Source),
+		msg.Timestamp.Format("2006-01-02 15:04:05"),
+		strings.ReplaceAll(template.HTMLEscapeString(msg.Content), "\n", "<br>"),
+	)
+}
+
+// stripMailCRLF 剥离 CR/LF：Subject 是邮件头，换行可注入伪造头。
+func stripMailCRLF(s string) string {
+	r := strings.NewReplacer("\r", "", "\n", " ")
+	return strings.TrimSpace(r.Replace(s))
 }
 
 func (n *EmailNotifier) sendMail(message string) error {

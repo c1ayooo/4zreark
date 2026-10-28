@@ -1,6 +1,7 @@
 package service
 
 import (
+	"os"
 	"context"
 	"errors"
 	"net"
@@ -12,6 +13,11 @@ import (
 	"testing"
 	"time"
 )
+
+// 探测逻辑的单元测试以 httptest（127.0.0.1）为目标；连接级 SSRF 校验在生产
+// 禁 loopback，测试进程显式放行（仅本测试二进制生效）。
+func init() { os.Setenv("ZRE_SAFEHTTP_ALLOW_PRIVATE", "1") }
+
 
 // 403/404/500 也算连通：只要拿到 HTTP 响应，就证明这个入口还活着。
 func TestProbeReachableStatuses(t *testing.T) {
