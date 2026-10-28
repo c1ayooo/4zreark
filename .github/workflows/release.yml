@@ -87,8 +87,8 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ${{ env.IMAGE }}:${{ github.ref_name }}-amd64
-          cache-from: type=gha scope=amd64
-          cache-to: type=gha scope=amd64,mode=max
+          cache-from: type=gha,scope=amd64
+          cache-to: type=gha,scope=amd64,mode=max
 
   image-arm64:
     runs-on: ubuntu-24.04-arm
@@ -110,8 +110,8 @@ jobs:
           platforms: linux/arm64
           push: true
           tags: ${{ env.IMAGE }}:${{ github.ref_name }}-arm64
-          cache-from: type=gha scope=arm64
-          cache-to: type=gha scope=arm64,mode=max
+          cache-from: type=gha,scope=arm64
+          cache-to: type=gha,scope=arm64,mode=max
 
   release:
     needs: [binaries, image-amd64, image-arm64]
