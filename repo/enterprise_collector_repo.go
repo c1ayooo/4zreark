@@ -255,8 +255,67 @@ func scanEnterpriseJob(row interface{ Scan(...any) error }) (enterprise.Job, err
 	return j, nil
 }
 
+// CollectSiteCount 项目站点数（采集概览用）。
+func (r *Repo) CollectSiteCount(ctx context.Context, projectID int64) (int, error) {
+	var n int
+	err := r.pool.QueryRow(ctx, `select count(*) from sites where project_id = $1`, projectID).Scan(&n)
+	return n, err
+}
+
+// CollectEntityCount 按实体类型计数（采集概览用）。
+func (r *Repo) CollectEntityCount(ctx context.Context, projectID int64) (map[string]int, error) {
+	rows, err := r.pool.Query(ctx,
+		`select entity_type, count(*) from enterprise_entities where project_id = $1 group by entity_type`,
+		projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var typ string
+		var n int
+		if err := rows.Scan(&typ, &n); err != nil {
+			return nil, err
+		}
+		out[typ] = n
+	}
+	return out, rows.Err()
+}
+
+// CollectCandidateCount 按候选状态计数，并回传无备案号（不会自动转种子）的候选数。
+func (r *Repo) CollectCandidateCount(ctx context.Context, projectID int64) (map[string]int, int, error) {
+	rows, err := r.pool.Query(ctx,
+		`select status, count(*) from enterprise_candidates where project_id = $1 group by status`,
+		projectID)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var status string
+		var n int
+		if err := rows.Scan(&status, &n); err != nil {
+			return nil, 0, err
+		}
+		out[status] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	var noICP int
+	if err := r.pool.QueryRow(ctx,
+		`select count(*) from enterprise_candidates where project_id = $1 and status = 'candidate' and icp = ''`,
+		projectID).Scan(&noICP); err != nil {
+		return nil, 0, err
+	}
+	return out, noICP, nil
+}
+
 // ListEnterpriseCandidates 列出候选域名。
-func (r *Repo) ListEnterpriseCandidates(ctx context.Context, projectID int64, status string, limit int) ([]enterprise.CandidateAsset, error) {	if limit <= 0 || limit > 500 {
+func (r *Repo) ListEnterpriseCandidates(ctx context.Context, projectID int64, status string, limit int) ([]enterprise.CandidateAsset, error) {
+	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
 	q := `select id, coalesce(job_id,''), project_id::text, domain,

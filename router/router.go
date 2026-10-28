@@ -126,6 +126,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				protected.PUT("/projects/:id/icon", middleware.RequirePermission("project:write"), projectOpsHandler.UploadIcon)
 				protected.DELETE("/projects/:id/icon", middleware.RequirePermission("project:write"), projectOpsHandler.DeleteIcon)
 				protected.GET("/projects/:id/collection-state", middleware.RequirePermission("project:read"), projectOpsHandler.CollectionState)
+				protected.GET("/projects/:id/collect-overview", middleware.RequirePermission("project:read"), api.NewCollectOverviewHandler().GetCollectOverview)
 				protected.DELETE("/projects/:id", middleware.RequirePermission("project:delete"), projectOpsHandler.DeleteProject)
 				protected.GET("/assets", middleware.RequirePermission("asset:read"), assetHandler.ListAssets)
 				protected.GET("/assets/graph", middleware.RequirePermission("asset:read"), assetHandler.AssetGraph)

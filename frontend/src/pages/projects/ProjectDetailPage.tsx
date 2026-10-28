@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import ProjectAssessmentCard from '@/components/projects/ProjectAssessmentCard'
+import CollectOverviewCard from '@/components/projects/CollectOverviewCard'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
@@ -592,6 +593,15 @@ export default function ProjectDetailPage() {
   return (
     <div className="space-y-4">
       <ProjectAssessmentCard projectId={idNum} />
+      <Card styles={{ body: { padding: '12px 16px' } }}>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-semibold">采集详情</h2>
+          <Link to="/enterprise">
+            <Button size="small">企业身份页</Button>
+          </Link>
+        </div>
+        <CollectOverviewCard projectId={idNum} canEdit />
+      </Card>
       {/* 顶部：面包屑 + 项目身份 + 操作 */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-3">

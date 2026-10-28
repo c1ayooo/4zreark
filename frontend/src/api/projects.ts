@@ -1,5 +1,35 @@
 import api, { ApiResponse } from '@/lib/api'
 
+// 采集概览（项目详情「采集详情」卡片）
+export interface CollectJobRow {
+  provider: string
+  keyword: string
+  status: string
+  nodes: number
+  entities: number
+  domains: number
+  digital: number
+  error: string
+  created_at: string
+  finished_at?: string
+}
+
+export interface CollectQualityNote {
+  level: 'error' | 'warn' | 'info' | string
+  message: string
+}
+
+export interface CollectOverview {
+  entity_total: number
+  entity_type: Record<string, number>
+  seed_count: number
+  candidates: Record<string, number>
+  candidate_no_icp: number
+  site_count: number
+  jobs: CollectJobRow[]
+  quality: CollectQualityNote[]
+}
+
 export interface Project {
   id: number
   code: string
@@ -141,6 +171,10 @@ export const projectApi = {
       `/projects/${id}/onboard`,
       body
     ),
+
+  // 采集概览：采集到了什么 / 任务状态 / 质量信号（发现漏采、上限中止、待确认候选）
+  collectOverview: (id: number) =>
+    api.get<unknown, ApiResponse<CollectOverview>>(`/projects/${id}/collect-overview`),
   update: (id: number, body: ProjectInput) =>
     api.put<unknown, ApiResponse<Project>>(`/projects/${id}`, body),
   pause: (id: number, reason = '') =>
