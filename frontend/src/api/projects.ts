@@ -153,12 +153,12 @@ export const projectApi = {
   get: (id: number) => api.get<unknown, ApiResponse<Project>>(`/projects/${id}`),
   create: (body: ProjectInput) =>
     api.post<unknown, ApiResponse<Project>>('/projects', body),
-  // 一键侦察：公司名 → 企业深度采集 → 完成后后端自动创建后续扫描任务
+  // 一键侦察：公司名称或域名 → 多平台并行采集（归一去重）→ 完成后自动创建扫描任务
   onboard: (
     id: number,
     body: {
-      provider: string
       keyword: string
+      providers?: string[]
       depth?: number
       max_nodes?: number
       cookie?: string
@@ -167,7 +167,7 @@ export const projectApi = {
       proxy_url?: string
     }
   ) =>
-    api.post<unknown, ApiResponse<{ job: { id: string; status: string } }>>(
+    api.post<unknown, ApiResponse<{ mode: string; keyword: string; jobs: { id: string; status: string }[]; job_errors: string[]; domain?: string; tasks_created: number }>>(
       `/projects/${id}/onboard`,
       body
     ),

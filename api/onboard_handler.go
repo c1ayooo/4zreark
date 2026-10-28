@@ -9,7 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// OnboardHandler 项目一键侦察：公司名 → 企业采集 → 采集完成后自动创建扫描任务。
+// OnboardHandler 项目一键侦察：公司名称或域名 → 多平台并行采集 → 采集完成后自动创建扫描任务。
 type OnboardHandler struct {
 	svc *service.EnterpriseService
 }
@@ -31,12 +31,14 @@ func (h *OnboardHandler) Onboard(c *gin.Context) {
 		return
 	}
 	body.ProjectID = projectID
-	job, err := h.svc.Onboard(c.Request.Context(), body)
+	start, err := h.svc.Onboard(c.Request.Context(), body)
 	if err != nil {
 		utils.BadRequest(c, err.Error())
 		return
 	}
-	utils.SuccessWithMessage(c, "一键侦察已启动：企业采集完成后将自动创建扫描任务", gin.H{
-		"job": job,
-	})
+	msg := "一键侦察已启动：多平台采集完成后将自动创建扫描任务"
+	if start.Mode == "domain" && start.TasksCreated > 0 {
+		msg = "域名已落种子并直接创建扫描任务（未能反查到主办单位，企业采集未启动）"
+	}
+	utils.SuccessWithMessage(c, msg, start)
 }
