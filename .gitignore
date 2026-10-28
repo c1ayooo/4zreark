@@ -47,3 +47,4 @@ internal/recon/fingerprint/seeds/custom-icons.yaml
 
 # 本地设计文档（只在本地保留）
 frontend/UI_DESIGN.md
+dist/
