@@ -41,14 +41,18 @@ func TestParseEHoleFinger(t *testing.T) {
 			t.Fatalf("规则 %s 未过 DSL 校验: %v", r.Name, err)
 		}
 	}
-	// 多关键字 AND + 小写化
-	seeyon := rules[0]
-	want := `(body = "/seeyon/common/" && body = "login")`
-	if seeyon.Expression != want {
-		t.Fatalf("seeyon 表达式 = %s, want %s", seeyon.Expression, want)
+	// 多关键字 AND + 小写化。按名字查找：底层 map 遍历顺序不保证，
+	// 下标断言在全量并发测试下会偶发对调（flaky）。
+	byName := map[string]string{}
+	for _, r := range rules {
+		byName[r.Name] = r.Expression
 	}
-	if rules[1].Expression != `(header = "x-fw")` {
-		t.Fatalf("header 表达式 = %s", rules[1].Expression)
+	want := `(body = "/seeyon/common/" && body = "login")`
+	if byName["Seeyon"] != want {
+		t.Fatalf("seeyon 表达式 = %s, want %s", byName["Seeyon"], want)
+	}
+	if byName["Firewall"] != `(header = "x-fw")` {
+		t.Fatalf("header 表达式 = %s", byName["Firewall"])
 	}
 	// 非 gzip 输入也要能处理（上游可能直接给明文）
 	if _, _, err := ParseEHoleFinger([]byte(`{"fingerprint":[]}`)); err != nil {
@@ -77,7 +81,16 @@ func TestParseGobyFinger(t *testing.T) {
 	if len(rules) != 2 {
 		t.Fatalf("rules=%d stats=%+v", len(rules), stats)
 	}
-	router := rules[0]
+	// 按名字查找 Router-X（map 遍历顺序不保证，下标断言会偶发 flaky）
+	var router *Rule
+	for i := range rules {
+		if rules[i].Name == "Router-X" {
+			router = &rules[i]
+		}
+	}
+	if router == nil {
+		t.Fatalf("Router-X 规则缺失: %+v", rules)
+	}
 	// logic 原文代换：保留上游的空格
 	if !strings.Contains(router.Expression, `(banner="Router X GUI")`) ||
 		!strings.Contains(router.Expression, `(banner="realm=\\\"X") && (banner="Server: X")`) {

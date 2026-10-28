@@ -43,6 +43,16 @@ func MigratePlaintextSecrets(ctx context.Context) {
 	// 4) 通知配置 JSON（密钥字段）
 	total += migrateNotifyConfigs(mctx)
 
+	// 5) 审计 M5 收尾：清空幂等缓存的历史响应体——修复前的版本曾把
+	// API Key / 节点 token 的明文存进 idempotency_keys.body（24h TTL）。
+	// 三个一次性秘密端点已跳过缓存，不会再积累；清空后重放视为未缓存
+	// 重新执行，语义安全。整表删除等价于一次缓存冷启动。
+	if tag, err := r.Pool().Exec(mctx, `delete from idempotency_keys`); err != nil {
+		log.Printf("[M13] 清理幂等缓存历史响应失败: %v", err)
+	} else if tag.RowsAffected() > 0 {
+		log.Printf("[M13] 已清理幂等缓存历史响应 %d 条（可能含修复前落库的秘密明文）", tag.RowsAffected())
+	}
+
 	if total > 0 {
 		log.Printf("[M13] 存量凭据迁移完成：共加密 %d 个字段", total)
 	} else {
