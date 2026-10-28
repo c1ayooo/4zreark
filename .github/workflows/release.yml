@@ -115,7 +115,9 @@ jobs:
 
   release:
     needs: [binaries, image-amd64, image-arm64]
-    runs-on: ubuntu-latest
+    # ubuntu-latest 池在 release job 上连续三次 Set up job failure（同 run 的
+    # binaries/image-amd64 都成功）；换固定版本池绕开。
+    runs-on: ubuntu-24.04
     steps:
       - name: Login to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
