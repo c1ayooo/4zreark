@@ -318,21 +318,32 @@ func runSelfUpdate(targetVersion string) {
 		return
 	}
 
-	// 3. sha256 校验（对照 checksums.txt）
+	// 3. sha256 校验（对照 checksums.txt）——校验是安全底线，拉不到校验文件视为失败
 	setUpdateState(UpdateVerifying, 100, downloaded, tarSize, targetVersion, "")
-	if checksumURL != "" {
-		sums, cerr := fetchText(ctx, checksumURL)
-		if cerr == nil {
-			want := findChecksum(sums, wantTar)
-			if want != "" {
-				got, herr := fileSHA256(tmpTar)
-				if herr != nil || got != want {
-					_ = os.Remove(tmpTar)
-					setUpdateState(UpdateError, 0, 0, 0, targetVersion, "校验失败: want="+shortHash(want)+" got="+shortHash(got))
-					return
-				}
-			}
-		}
+	resp2, err := ghGet(ctx, checksumURL, 3)
+	if err != nil {
+		_ = os.Remove(tmpTar)
+		setUpdateState(UpdateError, 0, 0, 0, targetVersion, "拉取 checksums.txt 失败: "+err.Error())
+		return
+	}
+	sumsBytes, err := io.ReadAll(io.LimitReader(resp2.Body, 1<<20))
+	resp2.Body.Close()
+	if err != nil {
+		_ = os.Remove(tmpTar)
+		setUpdateState(UpdateError, 0, 0, 0, targetVersion, err.Error())
+		return
+	}
+	want := findChecksum(string(sumsBytes), wantTar)
+	if want == "" {
+		_ = os.Remove(tmpTar)
+		setUpdateState(UpdateError, 0, 0, 0, targetVersion, "checksums.txt 中没有 "+wantTar)
+		return
+	}
+	got, herr := fileSHA256(tmpTar)
+	if herr != nil || got != want {
+		_ = os.Remove(tmpTar)
+		setUpdateState(UpdateError, 0, 0, 0, targetVersion, "校验失败: want="+shortHash(want)+" got="+shortHash(got))
+		return
 	}
 
 	// 4. 解出 server 二进制
@@ -409,7 +420,6 @@ func shortHash(s string) string {
 	return s
 }
 
-
 // downloadReleaseAsset 单路下载（带 30 秒无进展看门狗），写 dest 并实时回报进度。
 func downloadReleaseAsset(ctx context.Context, url, dest string, useEnvProxy bool, downloaded *int64, total int64, targetVersion string) error {
 	transport := &http.Transport{Proxy: nil}
@@ -454,6 +464,11 @@ func downloadReleaseAsset(ctx context.Context, url, dest string, useEnvProxy boo
 		}
 		if rerr != nil {
 			if strings.Contains(rerr.Error(), "EOF") {
+				// 流"正常"结束也必须核对字节数：被掐断的连接同样以 EOF 收尾，
+				// 短包不解压直接判失败（否则截断包会在解压阶段才暴露）
+				if total > 0 && *downloaded < total {
+					return fmt.Errorf("下载不完整 %d/%d 字节，连接被中途掐断", *downloaded, total)
+				}
 				return nil
 			}
 			return rerr
