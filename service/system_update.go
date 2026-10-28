@@ -253,7 +253,9 @@ func StartSelfUpdate(targetVersion string) (UpdateState, error) {
 }
 
 func runSelfUpdate(targetVersion string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	// 45 分钟总上限：出网代理速度 ~15KB/s 时 25MB 资产要跑 28 分钟，
+	// 10 分钟的旧上限会在下载中段把整体 ctx 掐死（表现为"两路均失败"）。
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
 
 	// 1. 找到目标版本对应平台架构的 tar.gz 资产
@@ -291,58 +293,30 @@ func runSelfUpdate(targetVersion string) {
 	dir := filepath.Dir(exe)
 	tmpTar := filepath.Join(dir, ".update.new.tar.gz")
 
-	setUpdateState(UpdateDownloading, 0, 0, tarSize, targetVersion, "")
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tarURL, nil)
-	if err != nil {
-		setUpdateState(UpdateError, 0, 0, 0, targetVersion, err.Error())
-		return
-	}
-	client := updateHTTPClient(10 * time.Minute)
-	resp, err := client.Do(req)
-	if err != nil {
-		setUpdateState(UpdateError, 0, 0, 0, targetVersion, "下载失败: "+err.Error())
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		setUpdateState(UpdateError, 0, 0, 0, targetVersion, fmt.Sprintf("下载返回 %d", resp.StatusCode))
-		return
-	}
-	if tarSize <= 0 && resp.ContentLength > 0 {
-		tarSize = resp.ContentLength
-	}
-	f, err := os.OpenFile(tmpTar, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
-		setUpdateState(UpdateError, 0, 0, 0, targetVersion, err.Error())
-		return
-	}
+	// 下载双路重试：GitHub 的 release CDN 直连会被间歇性掐断（实测 1KB/s 停滞），
+	// 出网代理反而能跑满（15KB/s）。第一路强制直连 + 30 秒无进展看门狗，
+	// 第二路走环境代理（ProxyFromEnvironment，服务进程继承 https_proxy）。
 	var downloaded int64
-	buf := make([]byte, 64<<10)
-	for {
-		n, rerr := resp.Body.Read(buf)
-		if n > 0 {
-			downloaded += int64(n)
-			if _, werr := f.Write(buf[:n]); werr != nil {
-				f.Close()
-				setUpdateState(UpdateError, 0, 0, 0, targetVersion, werr.Error())
-				return
-			}
-			if tarSize > 0 {
-				setUpdateState(UpdateDownloading, float64(downloaded)/float64(tarSize)*100, downloaded, tarSize, targetVersion, "")
-			} else {
-				setUpdateState(UpdateDownloading, 0, downloaded, 0, targetVersion, "")
-			}
-		}
-		if rerr != nil {
-			if rerr.Error() != "EOF" && !strings.Contains(rerr.Error(), "EOF") {
-				f.Close()
-				setUpdateState(UpdateError, 0, 0, 0, targetVersion, "读取下载流失败: "+rerr.Error())
-				return
-			}
+	downloadErr := error(nil)
+	for _, mode := range []struct {
+		label    string
+		useProxy bool
+	}{
+		{"直连", false},
+		{"环境代理", true},
+	} {
+		downloaded = 0
+		downloadErr = downloadReleaseAsset(ctx, tarURL, tmpTar, mode.useProxy, &downloaded, tarSize, targetVersion)
+		if downloadErr == nil {
 			break
 		}
+		log.Printf("[self-update] %s下载失败（已取 %d 字节）: %v，切换下一路", mode.label, downloaded, downloadErr)
+		setUpdateState(UpdateDownloading, 0, 0, tarSize, targetVersion, "")
 	}
-	f.Close()
+	if downloadErr != nil {
+		setUpdateState(UpdateError, 0, 0, 0, targetVersion, "两路下载均失败（直连+环境代理）: "+downloadErr.Error())
+		return
+	}
 
 	// 3. sha256 校验（对照 checksums.txt）
 	setUpdateState(UpdateVerifying, 100, downloaded, tarSize, targetVersion, "")
@@ -433,6 +407,62 @@ func shortHash(s string) string {
 		return s[:12]
 	}
 	return s
+}
+
+
+// downloadReleaseAsset 单路下载（带 30 秒无进展看门狗），写 dest 并实时回报进度。
+func downloadReleaseAsset(ctx context.Context, url, dest string, useEnvProxy bool, downloaded *int64, total int64, targetVersion string) error {
+	transport := &http.Transport{Proxy: nil}
+	if useEnvProxy {
+		transport = &http.Transport{Proxy: http.ProxyFromEnvironment}
+	}
+	client := &http.Client{Timeout: 10 * time.Minute, Transport: transport}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	if total <= 0 && resp.ContentLength > 0 {
+		total = resp.ContentLength
+	}
+	f, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	var lastProgress time.Time = time.Now()
+	buf := make([]byte, 64<<10)
+	for {
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			*downloaded += int64(n)
+			lastProgress = time.Now()
+			if _, werr := f.Write(buf[:n]); werr != nil {
+				return werr
+			}
+			if total > 0 {
+				setUpdateState(UpdateDownloading, float64(*downloaded)/float64(total)*100, *downloaded, total, targetVersion, "")
+			}
+		}
+		if rerr != nil {
+			if strings.Contains(rerr.Error(), "EOF") {
+				return nil
+			}
+			return rerr
+		}
+		// 看门狗：连接挂起无数据超过 30 秒，放弃本路换下一路
+		if time.Since(lastProgress) > 30*time.Second {
+			return fmt.Errorf("30 秒无进展，疑似连接被掐断")
+		}
+	}
 }
 
 // extractServerBinary 从 tar.gz 里解出 server 二进制到 dir/.update.new。
