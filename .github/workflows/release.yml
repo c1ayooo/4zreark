@@ -117,10 +117,14 @@ jobs:
 
   release:
     needs: [binaries, image-amd64, image-arm64]
-    # ubuntu-latest 池在 release job 上连续三次 Set up job failure（同 run 的
-    # binaries/image-amd64 都成功）；换固定版本池绕开。
+    # ubuntu-latest 池在 release job 上连续三次 Set up job failure：根因是
+    # download-artifact 的 SHA 手抄损坏，job 启动时解析 action 失败（与 runner 池无关，
+    # 换池是误诊）。修正 SHA 后暴露出缺 Checkout 的新问题，一并补上。
     runs-on: ubuntu-24.04
     steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
       - name: Login to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
