@@ -137,11 +137,12 @@ func (pt *ProgressTracker) IncrementModuleProcessed(moduleName string, count int
 	if mp, ok := pt.moduleProgress[moduleName]; ok {
 		mp.ProcessedItems += count
 		if mp.TotalItems > 0 {
+			// 真分子分母：进度 = 已处理 / 总数
 			mp.Progress = float64(mp.ProcessedItems) / float64(mp.TotalItems) * 100
 		} else {
-			// 流式模块总数未知（输入由上游动态产生）：软进度随处理量单调逼近
-			// 100 但永不自封完成，完成态由 CompleteModule 显式置 100。
-			mp.Progress = 100 * float64(mp.ProcessedItems) / float64(mp.ProcessedItems+50)
+			// 流式模块总数未知（输入由上游动态产生）：软进度按处理量单调爬升，
+			// 封顶 95——完成态由 CompleteModule 显式置 100，绝不自封完成。
+			mp.Progress = min(95, float64(mp.ProcessedItems)*2)
 		}
 		if mp.Progress > 100 {
 			mp.Progress = 100
@@ -183,26 +184,27 @@ func (pt *ProgressTracker) GetOverallProgress() int {
 	return pt.calculateOverallProgress()
 }
 
-// calculateOverallProgress 计算总体进度（内部方法，需要持有锁）
+// calculateOverallProgress 计算总体进度（内部方法，需要持有锁）。
+// 按「全部启用模块」的权重归一：未启动的模块按 0 计——进度从 0 单调涨到 100，
+// 不会因为新模块启动而回跳；这是阶段层的分子/分母（已推进权重 / 总权重）。
 func (pt *ProgressTracker) calculateOverallProgress() int {
 	var totalProgress float64
-	var activeWeight float64
+	var totalWeight float64
 
-	for moduleName, mp := range pt.moduleProgress {
-		weight, ok := pt.moduleWeights[moduleName]
+	for moduleName, weight := range pt.moduleWeights {
+		totalWeight += weight
+		mp, ok := pt.moduleProgress[moduleName]
 		if !ok {
-			weight = 10 // 默认权重
+			continue // 未启动：贡献 0 进度
 		}
-		activeWeight += weight
 		totalProgress += (mp.Progress / 100) * weight
 	}
 
-	if activeWeight == 0 {
+	if totalWeight == 0 {
 		return 0
 	}
 
-	// 归一化到已激活模块的权重比例
-	progress := int(totalProgress / activeWeight * 100)
+	progress := int(totalProgress / totalWeight * 100)
 	if progress > 100 {
 		progress = 100
 	}

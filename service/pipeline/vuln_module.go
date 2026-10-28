@@ -173,6 +173,9 @@ func (m *VulnScanModule) ModuleRun() error {
 	}()
 
 	// 处理输入
+	// 进度追踪：模块启动 + 逐条处理计数（软进度，完成态由 ReportModuleComplete 置 100）
+	m.ReportModuleStart(0)
+	defer m.ReportModuleComplete()
 	for {
 		select {
 		case <-m.ctx.Done():
@@ -192,6 +195,7 @@ func (m *VulnScanModule) ModuleRun() error {
 				nextModuleRun.Wait()
 				return nil
 			}
+			m.ReportProgress(1, 0)
 
 			// 获取扫描目标 + 指纹技术栈
 			target, techs := m.extractTarget(data)

@@ -1049,6 +1049,25 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 
 	scanPipe := pipeline.NewStreamingPipelineWithProgress(ctx, task, config, len(task.Targets), progressCallback)
 
+	// 进度落库与结果数解耦：每 10 秒持久化一次分子分母快照。
+	// 之前只在产出结果且 resultCount%50==0 时写库，产出少的阶段进度条永远不动。
+	progressStop := make(chan struct{})
+	defer close(progressStop)
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-progressStop:
+				return
+			case <-ticker.C:
+				if tracker := scanPipe.GetProgressTracker(); tracker != nil {
+					e.updateProgressWithDetails(task, tracker.GetReport())
+				}
+			}
+		}
+	}()
+
 	// 注册正在运行的任务；已有同 ID 任务在跑（River 重试/重复推送）则本执行放弃
 	if !e.registerRunningTask(taskID, cancel, scanPipe) {
 		log.Printf("[TaskExecutor] 任务 %s 已在本节点执行中，跳过重复启动", taskID)
@@ -1502,14 +1521,7 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 		flushAssets(false)
 		// 学习热词同样小批冲刷，长任务崩掉也不丢一批以上的观测。
 		flushLearning(false)
-
-		// 定期更新进度（基于结果数量，进度追踪器会更精确地计算）
-		if resultCount%50 == 0 {
-			if tracker := scanPipe.GetProgressTracker(); tracker != nil {
-				report := tracker.GetReport()
-				e.updateProgressWithDetails(task, report)
-			}
-		}
+		// 进度落库由 10s ticker 统一负责（函数入口处启动），不再按结果数门控。
 	}
 
 	// 扫描结束：把最后不足一批的资产/路由与结果补写。

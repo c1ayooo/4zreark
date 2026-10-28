@@ -86,7 +86,9 @@ func (m *SensitiveModule) ModuleRun() error {
 		}
 	}()
 
-	// 处理输入
+	// 处理输入（进度追踪：逐条处理计数，软进度封顶 95）
+	m.ReportModuleStart(0)
+	defer m.ReportModuleComplete()
 	for {
 		select {
 		case <-m.ctx.Done():
@@ -97,6 +99,7 @@ func (m *SensitiveModule) ModuleRun() error {
 			return nil
 
 		case data, ok := <-m.input:
+			m.ReportProgress(1, 0)
 			if !ok {
 				allWg.Wait()
 				close(m.resultChan)

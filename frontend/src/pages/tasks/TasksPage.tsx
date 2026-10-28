@@ -168,24 +168,37 @@ export default function TasksPage() {
       width: 190,
       align: 'right',
       responsive: ['sm'],
-      render: (_, task) => (
-        <div className="w-28 text-left md:w-40">
-          <Progress percent={task.progress} showInfo={false} strokeWidth={8} />
-          <div className="flex justify-between text-xs text-muted-foreground mt-1">
-            <span>{task.progress}%</span>
-            {task.status === 'running' && task.progressDetails && (
-              <span className="truncate ml-1" title={task.progressDetails.current_module}>
-                {task.progressDetails.current_module || '扫描中...'}
+      render: (_, task) => {
+        // 分子/分母：取当前运行模块的 已处理/总数（total=0 为流式阶段，只显示已处理数）
+        let fraction = ''
+        const cur = task.progressDetails?.current_module
+        const mods = task.progressDetails?.modules
+        if (task.status === 'running' && cur && mods?.[cur]) {
+          const m = mods[cur]
+          fraction = m.total > 0 ? `${m.processed}/${m.total}` : `${m.processed} 条`
+        }
+        return (
+          <div className="w-28 text-left md:w-40">
+            <Progress percent={task.progress} showInfo={false} strokeWidth={8} />
+            <div className="flex justify-between text-xs text-muted-foreground mt-1">
+              <span>
+                {task.progress}%
+                {fraction && <span className="ml-1 font-mono">({fraction})</span>}
               </span>
+              {task.status === 'running' && task.progressDetails && (
+                <span className="truncate ml-1" title={task.progressDetails.current_module}>
+                  {task.progressDetails.current_module || '扫描中...'}
+                </span>
+              )}
+            </div>
+            {task.status === 'running' && task.progressDetails?.estimated_time_left && (
+              <div className="text-xs text-muted-foreground">
+                剩余: {task.progressDetails.estimated_time_left}
+              </div>
             )}
           </div>
-          {task.status === 'running' && task.progressDetails?.estimated_time_left && (
-            <div className="text-xs text-muted-foreground">
-              剩余: {task.progressDetails.estimated_time_left}
-            </div>
-          )}
-        </div>
-      ),
+        )
+      },
     },
     {
       title: '创建时间',
