@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at       timestamptz NOT NULL DEFAULT now(),
     updated_at       timestamptz NOT NULL DEFAULT now(),
     -- 取值来自 models.TaskType，前端 TaskCreatePage 用的也是这一套
-    CONSTRAINT tasks_type_chk CHECK (type IN ('asset_discovery','port_scan','fingerprint','vuln_scan','subdomain','takeover','dir_scan','crawler','bruteforce','monitor','full','custom')),
+    CONSTRAINT tasks_type_chk CHECK (type IN ('asset_discovery','port_scan','fingerprint','vuln_scan','subdomain','takeover','dir_scan','crawler','bruteforce','monitor','full','custom','service_identify','service_detect','exposure_scan','clue_hunt')),
     CONSTRAINT tasks_status_chk CHECK (status IN ('pending','running','paused','completed','failed','cancelled')),
     CONSTRAINT tasks_progress_chk CHECK (progress BETWEEN 0 AND 100)
 );

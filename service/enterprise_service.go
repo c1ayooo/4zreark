@@ -265,13 +265,15 @@ var (
 	// enterpriseSettings 持久化深度采集硬上限（data/enterprise/settings.json）。
 	// 内存里的 collector 上限随 SetEnterpriseSettings 即时改写（热更新），
 	// 文件只保证进程重启后仍是用户配的值。
-	enterpriseSettings *fileSettings
+	enterpriseSettings     *fileSettings
+	enterpriseSettingsOnce sync.Once
 )
 
+// enterpriseSettingsStore 惰性初始化设置文件句柄。
+// 注意：这里绝不能再拿 enterpriseCollectorMu——collector() 的首次初始化
+// 在持锁临界区内调用本函数，重入同一把锁会自死锁（Go Mutex 不可重入）。
 func enterpriseSettingsStore() *fileSettings {
-	enterpriseCollectorMu.Lock()
-	defer enterpriseCollectorMu.Unlock()
-	if enterpriseSettings == nil {
+	enterpriseSettingsOnce.Do(func() {
 		root := os.Getenv("ZRE_DATA_DIR")
 		if strings.TrimSpace(root) == "" {
 			root = "data"
@@ -280,7 +282,7 @@ func enterpriseSettingsStore() *fileSettings {
 		// SetSetting 走临时文件 + rename，目录缺失会让保存直接失败
 		_ = os.MkdirAll(dir, 0o750)
 		enterpriseSettings = newFileSettings(filepath.Join(dir, "settings.json"))
-	}
+	})
 	return enterpriseSettings
 }
 
