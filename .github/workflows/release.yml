@@ -53,6 +53,8 @@ jobs:
               go build -trimpath -ldflags="-s -w -X main.AppVersion=${VERSION}" \
               -o "dist/4zreark_${VERSION}_linux_${arch}/server" .
             cp -r config "dist/4zreark_${VERSION}_linux_${arch}/config"
+            # 前端产物随包分发：server 从 ./dist 托管页面（serveFrontend 的最后回退路径）
+            cp -r frontend/dist "dist/4zreark_${VERSION}_linux_${arch}/dist"
             tar -czf "dist/4zreark_${VERSION}_linux_${arch}.tar.gz" \
               -C dist "4zreark_${VERSION}_linux_${arch}"
           done
