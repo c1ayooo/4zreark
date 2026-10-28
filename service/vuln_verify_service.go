@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"errors"
 	"fmt"
 	"log"
@@ -170,8 +171,11 @@ func recordAutoVerifyHit(ctx context.Context, hit vulnverify.HitResult) (string,
 		Target:     firstNonEmptyStr(hit.MatchedAt, hit.Target),
 		Method:     "GET",
 		Evidence:   hit.MatchedAt,
-		Request:    hit.Request,
-		Response:   hit.Response,
+		// 审计 H4：原始报文面向所有登录用户可读，落库前对凭据模式统一脱敏
+		//（Authorization/Cookie/口令参数），研判需要明文的场景走后续的秘密
+		// 读取授权（产品决策项）。
+		Request:    maskRawTraffic(hit.Request),
+		Response:   maskRawTraffic(hit.Response),
 		Scanner:    "nuclei-auto",
 		Tags:       []string{"auto-verify", hit.Product},
 	}
@@ -392,4 +396,25 @@ func maskExtractedData(kind, data string) string {
 	default:
 		return data
 	}
+}
+
+// rawTrafficSecretPatterns 是原始报文里常见的凭据携带模式（审计 H4）：
+// 认证头、Cookie、口令参数——值统一替换为 [REDACTED]，模式名保留可读。
+var rawTrafficSecretPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)(authorization:\s*(?:bearer|basic|token)\s+)[^\r\n" ]+`),
+	regexp.MustCompile(`(?i)(set-cookie:\s*[^=\r\n]+=\s*)[^\r\n;]+`),
+	regexp.MustCompile(`(?i)(cookie:\s*[^=\r\n]+=\s*)[^\r\n;]+`),
+	regexp.MustCompile(`(?i)(password|passwd|pwd|pass|token|api[_-]?key|access[_-]?key|secret)(=|: ?|": ?")([^"\r\n& ]{1,})`),
+}
+
+// maskRawTraffic 对原始请求/响应报文做凭据模式掩码。多次应用幂等：
+// 已是 [REDACTED] 的值不再命中（模式里排除方括号段）。
+func maskRawTraffic(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	for _, re := range rawTrafficSecretPatterns {
+		raw = re.ReplaceAllString(raw, "${1}[REDACTED]")
+	}
+	return raw
 }
