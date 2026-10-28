@@ -1,6 +1,9 @@
 package repo
 
 import (
+	"fmt"
+
+	"github.com/c1ayooo/4zreark/internal/secretbox"
 	"context"
 	"encoding/json"
 	"errors"
@@ -169,6 +172,12 @@ from github_monitor_settings where project_id = $1`, projectID).
 	if err != nil {
 		return nil, err
 	}
+	// 审计 M13：双读——enc:v1: 解密，存量明文原样返回（迁移共存期）。
+	if plain, derr := secretbox.DecryptText(token); derr != nil {
+		return nil, fmt.Errorf("解密监控 token 失败: %w", derr)
+	} else {
+		token = plain
+	}
 	s.Token = token
 	s.TokenConfigured = token != ""
 	return s, nil
@@ -178,6 +187,11 @@ func (g *githubMonitorRepo) UpsertSettings(ctx context.Context, s *GitHubMonitor
 	if err := g.ensureSchema(ctx); err != nil {
 		return err
 	}
+	// 审计 M13：token 信封加密落库；空 token 语义不变（表示"沿用旧值"）。
+	encToken, encErr := secretbox.EncryptText(s.Token)
+	if encErr != nil {
+		return fmt.Errorf("加密监控 token 失败: %w", encErr)
+	}
 	_, err := g.r.pool.Exec(ctx, `
 insert into github_monitor_settings (project_id, enabled, token, interval_seconds, updated)
 values ($1,$2,$3,$4,now())
@@ -185,7 +199,7 @@ on conflict (project_id) do update set
 	enabled = excluded.enabled,
 	token = case when excluded.token != '' then excluded.token else github_monitor_settings.token end,
 	interval_seconds = excluded.interval_seconds,
-	updated = now()`, s.ProjectID, s.Enabled, s.Token, s.IntervalSeconds)
+	updated = now()`, s.ProjectID, s.Enabled, encToken, s.IntervalSeconds)
 	return err
 }
 

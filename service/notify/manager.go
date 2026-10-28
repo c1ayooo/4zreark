@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/secretbox"
 	"github.com/c1ayooo/4zreark/repo"
 )
 
@@ -112,6 +113,22 @@ func (m *NotifyManager) loadConfigs() {
 		c.Name = rec.Name
 		c.Type = NotifyType(rec.Type)
 		c.Enabled = rec.Enabled
+		// 审计 M13：双读——enc:v1: 前缀解密，存量明文原样返回（迁移共存期）。
+		for _, f := range []struct {
+			get func() string
+			set func(string)
+		}{
+			{func() string { return c.DingTalkSecret }, func(v string) { c.DingTalkSecret = v }},
+			{func() string { return c.FeishuSecret }, func(v string) { c.FeishuSecret = v }},
+			{func() string { return c.FeishuAppSecret }, func(v string) { c.FeishuAppSecret = v }},
+			{func() string { return c.SMTPPassword }, func(v string) { c.SMTPPassword = v }},
+		} {
+			if plain, derr := secretbox.DecryptText(f.get()); derr != nil {
+				log.Printf("[Notify] 配置 %s/%s 密钥字段解密失败: %v", rec.Name, rec.Type, derr)
+			} else {
+				f.set(plain)
+			}
+		}
 		m.configs = append(m.configs, c)
 	}
 	m.rebuildNotifiers()
@@ -158,7 +175,33 @@ func (m *NotifyManager) persistConfig(c NotifyConfig) {
 	if r == nil {
 		return
 	}
-	raw, err := json.Marshal(c)
+	// 审计 M13：密钥字段信封加密后再落 JSON（secretbox；密钥 ZRE_SECRET_KEY）。
+	enc := c
+	if v, e := secretbox.EncryptText(enc.DingTalkSecret); e == nil {
+		enc.DingTalkSecret = v
+	} else {
+		log.Printf("[Notify] 钉钉 secret 加密失败（保存为空，避免明文落库）: %v", e)
+		enc.DingTalkSecret = ""
+	}
+	if v, e := secretbox.EncryptText(enc.FeishuSecret); e == nil {
+		enc.FeishuSecret = v
+	} else {
+		log.Printf("[Notify] 飞书 secret 加密失败: %v", e)
+		enc.FeishuSecret = ""
+	}
+	if v, e := secretbox.EncryptText(enc.FeishuAppSecret); e == nil {
+		enc.FeishuAppSecret = v
+	} else {
+		log.Printf("[Notify] 飞书 AppSecret 加密失败: %v", e)
+		enc.FeishuAppSecret = ""
+	}
+	if v, e := secretbox.EncryptText(enc.SMTPPassword); e == nil {
+		enc.SMTPPassword = v
+	} else {
+		log.Printf("[Notify] SMTP 口令加密失败: %v", e)
+		enc.SMTPPassword = ""
+	}
+	raw, err := json.Marshal(enc)
 	if err != nil {
 		log.Printf("[Notify] 配置序列化失败: %v", err)
 		return

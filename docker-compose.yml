@@ -65,6 +65,9 @@ services:
       - ZRE_PG_DBNAME=zreark
       - ZRE_PG_PASSWORD=${ZRE_PG_PASSWORD}
       - ZRE_JWT_SECRET=${ZRE_JWT_SECRET:?需要设置 ZRE_JWT_SECRET}
+      # 审计 M13：数据源凭据/Token 池/通知密钥的信封加密主密钥（openssl rand -hex 32）。
+      # 未配置时这些凭据无法保存，存量明文会在配置后首次重启时自动迁移加密。
+      - ZRE_SECRET_KEY=${ZRE_SECRET_KEY:-}
       # 传输安全（审计 M11）：反代终止 TLS 时置 force_https=1（明文 301 + HSTS）；
       # 无反代时可挂载证书走原生 TLS：ZRE_TLS_CERT/ZRE_TLS_KEY 指向容器内路径。
       # - ZRE_FORCE_HTTPS=1

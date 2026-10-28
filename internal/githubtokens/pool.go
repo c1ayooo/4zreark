@@ -4,6 +4,8 @@
 package githubtokens
 
 import (
+
+	"github.com/c1ayooo/4zreark/internal/secretbox"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -164,8 +166,13 @@ func (s *Store) Add(ctx context.Context, label, token string) (Token, error) {
 	if err != nil {
 		return Token{}, err
 	}
+	// 审计 M13：token 信封加密落库（secretbox；密钥 ZRE_SECRET_KEY）。
+	encToken, encErr := secretbox.EncryptText(token)
+	if encErr != nil {
+		return Token{}, fmt.Errorf("加密 token 失败: %w", encErr)
+	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO github_token_pool (id,label,token,created_at,updated_at) VALUES ($1,$2,$3,$4,$5)`,
-		id, label, token, now, now)
+		id, label, encToken, now, now)
 	if err != nil {
 		return Token{}, err
 	}
@@ -223,6 +230,12 @@ func scanToken(row interface{ Scan(...any) error }) (Token, error) {
 	var resetAt, checkedAt sql.NullTime
 	if err := row.Scan(&t.ID, &t.Label, &t.Token, &enabled, &t.RateLimit, &t.RateRemaining, &t.RateUsed, &resetAt, &checkedAt, &t.CreatedAt); err != nil {
 		return Token{}, err
+	}
+	// 审计 M13：双读——enc:v1: 解密，存量明文原样返回（迁移共存期）。
+	if plain, derr := secretbox.DecryptText(t.Token); derr != nil {
+		return Token{}, fmt.Errorf("解密 token 失败: %w", derr)
+	} else {
+		t.Token = plain
 	}
 	t.Enabled = enabled != 0
 	t.Masked = maskToken(t.Token)

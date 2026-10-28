@@ -133,6 +133,10 @@ func main() {
 	// 出网代理解析的数据源：规则同步/工具下载/情报等出网点从这里取代理设置。
 	outbound.SetStore(repo.Default().Settings())
 
+	// 安全审计 M13：存量明文凭据（数据源会话 / Token 池 / 监控 / 通知）启动迁移。
+	// 未配置 ZRE_SECRET_KEY 时跳过并告警；配置后重启自动完成。
+	go service.MigratePlaintextSecrets(context.Background())
+
 	// 恢复上次部署的 rem 反连隧道：进程还活着则跳过，死了就按记录重新拉起。
 	api.RestoreRemTunnels()
 

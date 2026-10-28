@@ -1,6 +1,9 @@
 package repo
 
 import (
+	"fmt"
+
+	"github.com/c1ayooo/4zreark/internal/secretbox"
 	"context"
 	"errors"
 	"time"
@@ -50,14 +53,23 @@ func (r *datasourceSessionRepo) Get(ctx context.Context, provider string) (*Data
 }
 
 func (r *datasourceSessionRepo) Upsert(ctx context.Context, s *DatasourceSession) error {
-	_, err := r.r.pool.Exec(ctx, `
+	// 审计 M13：cookie/password 信封加密后落库（secretbox；密钥 ZRE_SECRET_KEY）。
+	enc, err := secretbox.EncryptText(s.Cookie)
+	if err != nil {
+		return fmt.Errorf("加密会话 Cookie 失败: %w", err)
+	}
+	encPwd, err := secretbox.EncryptText(s.Password)
+	if err != nil {
+		return fmt.Errorf("加密会话口令失败: %w", err)
+	}
+	_, uerr := r.r.pool.Exec(ctx, `
 insert into datasource_sessions (provider, cookie, username, password, status, last_login_at)
 values ($1,$2,$3,$4,$5,$6)
 on conflict (provider) do update set
     cookie = excluded.cookie, username = excluded.username, password = excluded.password,
     status = excluded.status, last_login_at = excluded.last_login_at, updated_at = now()`,
-		s.Provider, s.Cookie, s.Username, s.Password, s.Status, s.LastLoginAt)
-	return err
+		s.Provider, enc, s.Username, encPwd, s.Status, s.LastLoginAt)
+	return uerr
 }
 
 func (r *datasourceSessionRepo) MarkStatus(ctx context.Context, provider, status string) error {
@@ -108,6 +120,17 @@ func scanDatasourceSession(rs rowScanner) (*DatasourceSession, error) {
 	if err := rs.Scan(&s.Provider, &s.Cookie, &s.Username, &s.Password, &s.Status,
 		&s.LastLoginAt, &createdAt, &updatedAt); err != nil {
 		return nil, err
+	}
+	// 审计 M13：读路径双读——enc:v1: 前缀解密，存量明文原样返回（迁移共存期）。
+	if dec, derr := secretbox.DecryptText(s.Cookie); derr != nil {
+		return nil, fmt.Errorf("解密会话 Cookie 失败: %w", derr)
+	} else {
+		s.Cookie = dec
+	}
+	if dec, derr := secretbox.DecryptText(s.Password); derr != nil {
+		return nil, fmt.Errorf("解密会话口令失败: %w", derr)
+	} else {
+		s.Password = dec
 	}
 	s.CreatedAt = timeFromPG(&createdAt)
 	s.UpdatedAt = timeFromPG(&updatedAt)
