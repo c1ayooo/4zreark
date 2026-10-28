@@ -109,11 +109,7 @@ export default function LoginPage() {
           </div>
         </div>
         <div className="mt-6 flex flex-col gap-4 border-t pt-6">
-          <Button
-            htmlType="submit"
-            className="w-full"
-            loading={loginMutation.isPending}
-          >
+          <Button htmlType="submit" type="primary" block loading={loginMutation.isPending}>
             登录
           </Button>
           <p className="text-center text-xs text-muted-foreground">
