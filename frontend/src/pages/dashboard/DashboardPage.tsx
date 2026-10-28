@@ -833,7 +833,10 @@ export default function DashboardPage() {
         </Link>
         <Link to="/tasks" className="rounded-lg transition-shadow hover:shadow-md">
           <Card className="h-full">
-            <p className="text-[13px] text-muted-foreground">运行中任务</p>
+            <p className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
+              {running > 0 && <PulseDot />}
+              运行中任务
+            </p>
             <CountUp value={running} />
             <p className="mt-1 text-[13px] text-muted-foreground">
               共 {formatNumber(stats?.tasks?.total ?? 0)} 个任务

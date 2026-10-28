@@ -75,7 +75,9 @@ export default function LoginPage() {
             className="h-16 w-16 rounded-xl dark:invert"
           />
         </div>
-        <div className="text-2xl font-bold tracking-tight">4zreark</div>
+        <div className="text-2xl font-bold tracking-tight">
+          <DecryptText text="4zreark" />
+        </div>
         <p className="text-sm text-muted-foreground">资产侦察与漏洞管理平台</p>
       </div>
       <form onSubmit={handleSubmit} className="mt-6">

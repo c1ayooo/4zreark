@@ -5,6 +5,7 @@ import { Button, Input, Progress, Select, Table, Tag } from 'antd'
 import type { TableProps } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
 import EmptyState from '@/components/common/EmptyState'
+import { PulseDot } from '@/components/common/PulseDot'
 import { cn, formatDate, getStatusColor } from '@/lib/utils'
 import {
   Plus,
@@ -155,6 +156,7 @@ export default function TasksPage() {
       width: 90,
       render: (status: Task['status']) => (
         <Tag className={cn(getStatusColor(status))}>
+          {status === 'running' && <PulseDot className="mr-1.5 align-[-0.125em]" />}
           {getStatusLabel(status)}
         </Tag>
       ),
