@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/c1ayooo/4zreark/internal/extractor"
+	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"io"
 	"net"
 	"net/http"
@@ -91,9 +92,11 @@ var probeClient = &http.Client{
 		IdleConnTimeout:       30 * time.Second,
 		TLSHandshakeTimeout:   6 * time.Second,
 		ResponseHeaderTimeout: 6 * time.Second,
+		// 审计 M3：连接级 SSRF 校验（ModeScan：内网资产合法，loopback/云元数据禁）
 		DialContext: (&net.Dialer{
-			Timeout:   5 * time.Second,
-			KeepAlive: 30 * time.Second,
+			Timeout: 5 * time.Second,
+			// KeepAlive 经 safehttp 控制版本保留
+			Control: safehttp.NewDialer(safehttp.ModeScan, 5*time.Second).Control,
 		}).DialContext,
 	},
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {

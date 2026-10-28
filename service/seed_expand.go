@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"github.com/c1ayooo/4zreark/internal/recon/spacemap"
 	"github.com/c1ayooo/4zreark/internal/recon/spacemap/certquery"
 	"github.com/c1ayooo/4zreark/internal/recon/spacemap/icpquery"
@@ -600,7 +601,12 @@ func (s *CycleService) probeDomainNeighbors(ctx context.Context, root string) (m
 
 // probeHTTPAndCert 探活 443 → 80：TLS 握手顺带取证书 SAN，再 GET 一份首页 body。
 func probeHTTPAndCert(ctx context.Context, host string) (scheme, body string, sanHosts []string, err error) {
-	dialer := &net.Dialer{Timeout: 6 * time.Second}
+	// 审计 M3：连接级 SSRF 校验挂在 Dialer.Control（ModeScan：内网资产合法，
+	// loopback/云元数据禁）——TLS 拨号与 HTTP 拨号都经它，逐跳生效。
+	dialer := &net.Dialer{
+		Timeout: 6 * time.Second,
+		Control: safehttp.NewDialer(safehttp.ModeScan, 6*time.Second).Control,
+	}
 	tlsDial := func() (*tls.Conn, error) {
 		return tls.DialWithDialer(dialer, "tcp", host+":443", &tls.Config{
 			InsecureSkipVerify: true,

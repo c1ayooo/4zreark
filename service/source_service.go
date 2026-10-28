@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"github.com/c1ayooo/4zreark/internal/useragent"
 	"net/http"
 	"net/url"
@@ -195,10 +196,12 @@ func (s *SourceService) Test(ctx context.Context, id int64) (*SourceTestResult, 
 			}
 		}
 	}
-	// 不跟随重定向：Authorization 头不得被 30x 带去别的主机。
-	client := &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
+	// 审计 M6+M3：不跟随重定向（Authorization 不得被 30x 带走），
+	// 且走凭据出站档位（ModeStrict：私网/loopback/云元数据全禁）。
+	client := safehttp.Client(safehttp.ModeStrict, 8*time.Second)
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
-	}}
+	}
 	resp, err := client.Do(req)
 	res.ElapsedMS = time.Since(start).Milliseconds()
 	if err != nil {

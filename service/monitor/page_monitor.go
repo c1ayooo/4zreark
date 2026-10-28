@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
@@ -100,9 +101,7 @@ type MonitorConfig struct {
 // NewPageMonitor 创建页面监控器
 func NewPageMonitor() *PageMonitor {
 	return &PageMonitor{
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		client: safehttp.Client(safehttp.ModeScan, 30*time.Second), // 审计 M3：连接级校验,
 		pages:  make(map[string]*MonitoredPage),
 		stopCh: make(chan struct{}),
 	}

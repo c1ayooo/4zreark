@@ -22,9 +22,12 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/c1ayooo/4zreark/internal/safehttp"
 )
 
 // SettingsKey 配置在 app_settings 里的键。
@@ -281,13 +284,33 @@ func (r *Resolver) ProxyFuncFor(ctx context.Context, module string) func(*http.R
 }
 
 // HTTPClient 按模块代理构造带超时的客户端，供按请求新建客户端的出网点使用。
+// 安全审计 M3：直连时挂连接级校验（Dialer.Control），每个实际连接（含重定向
+// 每一跳）在 connect 前被校验——DNS rebinding 窗口不复存在。经代理出站时
+// 目标校验由代理出口策略承接（Control 看到的是代理地址）。
 func (r *Resolver) HTTPClient(ctx context.Context, module string, timeout time.Duration) *http.Client {
 	tr := &http.Transport{Proxy: r.ProxyFuncFor(ctx, module)}
+	if _, proxy, err := r.resolve(ctx, module); err == nil && proxy == nil {
+		tr.DialContext = safehttp.NewDialer(safeModeFor(module), timeout).DialContext
+	}
 	c := &http.Client{Transport: tr}
 	if timeout > 0 {
 		c.Timeout = timeout
 	}
 	return c
+}
+
+// safeModeFor 出网模块的 SSRF 防护档位：
+//   - notify（webhook 等凭据出站）默认 strict（禁私网，与 URL 前置校验同策略），
+//     ZRE_NOTIFY_ALLOW_PRIVATE=1 时降级为 scan（内部服务 webhook 是合法目标）；
+//   - 其余模块 scan（内网资产合法，loopback/云元数据一律禁）。
+func safeModeFor(module string) safehttp.Mode {
+	if module == "notify" {
+		if os.Getenv("ZRE_NOTIFY_ALLOW_PRIVATE") == "1" {
+			return safehttp.ModeScan
+		}
+		return safehttp.ModeStrict
+	}
+	return safehttp.ModeScan
 }
 
 // ---------------------------------------------------------------- 进程级快捷入口
