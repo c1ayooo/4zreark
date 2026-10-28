@@ -26,7 +26,7 @@ require (
 	github.com/spf13/viper v1.18.2
 	github.com/tidwall/gjson v1.20.0
 	github.com/twmb/murmur3 v1.1.8
-	github.com/xuri/excelize/v2 v2.11.1-0.20260930021559-01a9ff32fb3c
+	github.com/xuri/excelize/v2 v2.11.0
 	golang.org/x/crypto v0.58.0
 	golang.org/x/image v0.47.0
 	golang.org/x/net v0.62.0
@@ -41,6 +41,8 @@ require (
 	github.com/chenzhuoyu/base64x v0.0.0-20221115062448-fe3a3abad311 // indirect
 	github.com/dlclark/regexp2/v2 v2.8.1 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
+	github.com/fumiama/go-docx v0.0.0-20250506085032-0c30fd09304b // indirect
+	github.com/fumiama/imgsz v0.0.2 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.2 // indirect
 	github.com/gin-contrib/sse v0.1.0 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect

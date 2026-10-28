@@ -189,5 +189,27 @@ const assetTemplate = `<!DOCTYPE html>
 </table>
 {{end}}
 
+{{if gt .TaskSummary.Total 0}}
+<h2>{{.SectionNo.Tasks}}任务执行</h2>
+<p class="placeholder">项目累计 {{.TaskSummary.Total}} 个扫描任务：运行中 {{.TaskSummary.Running}} · 排队中 {{.TaskSummary.Pending}} · 已完成 {{.TaskSummary.Completed}} · 失败 {{.TaskSummary.Failed}} · 其他 {{.TaskSummary.Other}}。</p>
+{{if .Tasks}}
+<table>
+  <thead><tr><th>任务</th><th>类型</th><th>状态</th><th>进度</th><th>创建时间</th></tr></thead>
+  <tbody>
+  {{range .Tasks}}
+  <tr>
+    <td class="tgt">{{.Name}}</td>
+    <td>{{.TaskType}}</td>
+    <td>{{taskStatusLabel .Status}}</td>
+    <td class="num">{{.Progress}}%</td>
+    <td class="mono">{{.CreatedAt}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{if gt (add .TaskSummary.Running .TaskSummary.Pending) 0}}<div class="warn">存在未完成任务：本报告基于当前已落库数据生成，未完成任务的新增结果不在其中。</div>{{end}}
+{{end}}
+{{end}}
+
 <div class="footer-note">本报告由 4zreark 自动生成 · 交付模板：{{.Profile.Name}}{{if .Delivery.Classification}} · 密级：{{.Delivery.Classification}}{{end}}{{if .Delivery.ReportNo}} · 报告编号：{{.Delivery.ReportNo}}{{end}} · 资产数据来自平台台账，可按站点与原始记录回溯</div>
 </div></body></html>`

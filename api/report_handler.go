@@ -99,6 +99,10 @@ func (h *ReportHandler) DownloadReport(c *gin.Context) {
 		ext = ".pdf"
 	case "markdown", "md":
 		ext = ".md"
+	case "docx", "word":
+		ext = ".docx"
+	case "xlsx", "excel":
+		ext = ".xlsx"
 	}
 	c.FileAttachment(path, name+ext)
 }

@@ -33,6 +33,10 @@ type AssetReport struct {
 	HighRisk    []AssetSiteRow
 	Limitations []string
 	Notes       []string
+	// Tasks 任务执行维度：TaskSummary 覆盖项目全部任务，
+	// Tasks 明细行按创建时间倒序截断（报告只展示最近的任务）。
+	Tasks       []AssetTaskRow
+	TaskSummary AssetTaskSummary
 	// Truncated 非空时表示清单被模板上限截断，内容是一句给读者看的说明。
 	Truncated string
 }
@@ -92,6 +96,45 @@ type NameCount struct {
 	Pct int `json:"pct,omitempty"`
 }
 
+// AssetTaskRow 任务执行明细行（报告「任务执行」章节）。
+type AssetTaskRow struct {
+	Name      string
+	TaskType  string
+	Status    string
+	Progress  int
+	CreatedAt string
+}
+
+// AssetTaskSummary 任务执行概况：Total 为项目全部任务数，
+// 其余为按状态的计数（暂停/取消等归入 Other）。
+type AssetTaskSummary struct {
+	Total     int
+	Running   int
+	Pending   int
+	Completed int
+	Failed    int
+	Other     int
+}
+
+// TaskStatusLabel 任务状态中文标签（markdown/docx/xlsx 渲染共用）。
+func TaskStatusLabel(s string) string {
+	switch s {
+	case "pending":
+		return "排队中"
+	case "running":
+		return "运行中"
+	case "completed":
+		return "已完成"
+	case "failed":
+		return "失败"
+	case "paused":
+		return "已暂停"
+	case "cancelled":
+		return "已取消"
+	}
+	return s
+}
+
 type PortCount struct {
 	Scheme string
 	Port   int
@@ -104,9 +147,11 @@ type PortCount struct {
 func RenderAssetHTML(r *AssetReport) ([]byte, error) {
 	r.normalize()
 	tmpl, err := template.New("asset-report").Funcs(template.FuncMap{
-		"stateClass": assetStateClass,
-		"stateLabel": assetStateLabel,
-		"safeURL":    func(s string) template.URL { return template.URL(s) },
+		"stateClass":      assetStateClass,
+		"stateLabel":      assetStateLabel,
+		"safeURL":         func(s string) template.URL { return template.URL(s) },
+		"taskStatusLabel": TaskStatusLabel,
+		"add":             func(a, b int) int { return a + b },
 	}).Parse(assetTemplate)
 	if err != nil {
 		return nil, fmt.Errorf("解析资产报告模板失败: %w", err)
@@ -230,6 +275,24 @@ func RenderAssetMarkdown(r *AssetReport) ([]byte, error) {
 	}
 	if r.Truncated != "" {
 		b.WriteString("> " + r.Truncated + "\n\n")
+	}
+
+	if r.TaskSummary.Total > 0 {
+		b.WriteString("## " + no.Tasks + "任务执行\n\n")
+		b.WriteString(fmt.Sprintf("项目累计 **%d** 个扫描任务：运行中 %d、排队中 %d、已完成 %d、失败 %d、其他 %d。\n\n",
+			r.TaskSummary.Total, r.TaskSummary.Running, r.TaskSummary.Pending,
+			r.TaskSummary.Completed, r.TaskSummary.Failed, r.TaskSummary.Other))
+		if len(r.Tasks) > 0 {
+			b.WriteString("| 任务 | 类型 | 状态 | 进度 | 创建时间 |\n|---|---|---|---|---|\n")
+			for _, t := range r.Tasks {
+				b.WriteString(fmt.Sprintf("| %s | %s | %s | %d%% | %s |\n",
+					t.Name, t.TaskType, TaskStatusLabel(t.Status), t.Progress, t.CreatedAt))
+			}
+			b.WriteString("\n")
+			if r.TaskSummary.Running+r.TaskSummary.Pending > 0 {
+				b.WriteString("> 存在未完成任务：本报告基于当前已落库数据生成，未完成任务的新增结果不在其中。\n\n")
+			}
+		}
 	}
 
 	b.WriteString("\n---\n\n*本报告由 4zreark 自动生成（交付模板：" + p.Name + "）。资产数据来自平台资产台账，可按站点 / 原始记录回溯。*\n")

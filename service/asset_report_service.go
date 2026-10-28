@@ -89,6 +89,35 @@ func buildAssetDoc(ctx context.Context, assets *repo.AssetRepo, project *repo.Pr
 	}
 	doc.HighRisk = reportTopRiskSites(sites, 10)
 
+	// 任务执行维度：全量状态计数 + 最近 20 条明细（List 按创建时间倒序）。
+	if tasks, _, terr := repo.Default().Tasks().List(ctx, "", "", "", project.ID, 1, 500); terr == nil {
+		doc.TaskSummary.Total = len(tasks)
+		const taskDetailCap = 20
+		for i, t := range tasks {
+			switch t.Status {
+			case "running":
+				doc.TaskSummary.Running++
+			case "pending":
+				doc.TaskSummary.Pending++
+			case "completed":
+				doc.TaskSummary.Completed++
+			case "failed":
+				doc.TaskSummary.Failed++
+			default:
+				doc.TaskSummary.Other++
+			}
+			if i < taskDetailCap {
+				doc.Tasks = append(doc.Tasks, report.AssetTaskRow{
+					Name:      t.Name,
+					TaskType:  string(t.Type),
+					Status:    string(t.Status),
+					Progress:  t.Progress,
+					CreatedAt: t.CreatedAt.Format("2006-01-02 15:04"),
+				})
+			}
+		}
+	}
+
 	doc.Notes = append(doc.Notes, buildAssetNotes(project, summary)...)
 	doc.Limitations = assetLimitations(project)
 	return doc, nil

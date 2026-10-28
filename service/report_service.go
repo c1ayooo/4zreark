@@ -180,6 +180,10 @@ func formatOf(f string) string {
 		return "markdown"
 	case "pdf":
 		return "pdf"
+	case "docx", "word":
+		return "docx"
+	case "xlsx", "excel":
+		return "xlsx"
 	default:
 		return "html"
 	}
@@ -211,6 +215,18 @@ func (s *ReportService) render(ctx context.Context, store repo.VulnRepo, in Repo
 		}
 		return report.RenderMarkdown(vulnDoc)
 	}
+	renderDocx := func() ([]byte, error) {
+		if assetDoc != nil {
+			return report.RenderAssetDocx(assetDoc)
+		}
+		return report.RenderVulnDocx(vulnDoc)
+	}
+	renderXlsx := func() ([]byte, error) {
+		if assetDoc != nil {
+			return report.RenderAssetXlsx(assetDoc)
+		}
+		return report.RenderVulnXlsx(vulnDoc)
+	}
 
 	outDir := filepath.Join("data", "reports")
 	if err := os.MkdirAll(outDir, 0o750); err != nil {
@@ -229,6 +245,20 @@ func (s *ReportService) render(ctx context.Context, store repo.VulnRepo, in Repo
 		data, err = renderMD()
 		if err == nil {
 			filePath = filepath.Join(outDir, base+".md")
+			err = os.WriteFile(filePath, data, 0o600)
+		}
+	case "docx":
+		// Word 走纯 Go 生成，无外部依赖、无降级。
+		data, err = renderDocx()
+		if err == nil {
+			filePath = filepath.Join(outDir, base+".docx")
+			err = os.WriteFile(filePath, data, 0o600)
+		}
+	case "xlsx":
+		// Excel 走纯 Go 生成，无外部依赖、无降级。
+		data, err = renderXlsx()
+		if err == nil {
+			filePath = filepath.Join(outDir, base+".xlsx")
 			err = os.WriteFile(filePath, data, 0o600)
 		}
 	case "pdf":

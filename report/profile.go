@@ -66,6 +66,7 @@ type SectionNumbers struct {
 	Stats       string
 	Domains     string
 	Sites       string
+	Tasks       string
 	Vulns       string
 	Details     string
 	Remediation string
@@ -130,6 +131,7 @@ func (p Profile) assetSections() SectionNumbers {
 	out.Stats = pick(true)
 	out.Domains = pick(true)
 	out.Sites = pick(true)
+	out.Tasks = pick(true)
 	return out
 }
 
@@ -139,7 +141,7 @@ var vulnProfiles = map[string]Profile{
 		Type:               "vuln",
 		Name:               "客户交付版",
 		Description:        "完整甲方交付格式：执行摘要、范围与评级、资产概览、漏洞明细、证据报文、修复优先级、事实与工具统计。",
-		Formats:            []string{"html", "pdf", "markdown"},
+		Formats:            []string{"html", "pdf", "markdown", "docx", "xlsx"},
 		ShowRatingStandard: true,
 		ShowAssetOverview:  true,
 		ShowOverview:       true,
@@ -157,7 +159,7 @@ var vulnProfiles = map[string]Profile{
 		Type:               "vuln",
 		Name:               "SRC 报送版",
 		Description:        "面向 SRC 平台报送：保留漏洞总览、复现与证据、修复建议，去掉黑板事实、工具统计、攻击链与全量证据附录。",
-		Formats:            []string{"html", "pdf", "markdown"},
+		Formats:            []string{"html", "pdf", "markdown", "docx", "xlsx"},
 		ShowRatingStandard: true,
 		ShowAssetOverview:  true,
 		ShowOverview:       true,
@@ -175,7 +177,7 @@ var vulnProfiles = map[string]Profile{
 		Type:               "vuln",
 		Name:               "内部简报版",
 		Description:        "只保留高危及以上漏洞：一页概览 + 明细要点 + 修复优先级，不输出报文证据、事实与工具统计。",
-		Formats:            []string{"html", "pdf", "markdown"},
+		Formats:            []string{"html", "pdf", "markdown", "docx", "xlsx"},
 		MinSeverity:        "high",
 		ShowRatingStandard: false,
 		ShowAssetOverview:  true,
@@ -198,7 +200,7 @@ var assetProfiles = map[string]Profile{
 		Type:               "asset",
 		Name:               "资产测绘完整版",
 		Description:        "信息收集交付格式：域名清单、站点清单、端口服务与指纹分布、首见时间与来源，全部站点逐条列出。",
-		Formats:            []string{"html", "pdf", "markdown"},
+		Formats:            []string{"html", "pdf", "markdown", "docx", "xlsx"},
 		MaxRows:            500,
 		ShowRatingStandard: true,
 		ShowAssetOverview:  true,
@@ -217,7 +219,7 @@ var assetProfiles = map[string]Profile{
 		Type:               "asset",
 		Name:               "SRC 资产报送版",
 		Description:        "面向 SRC 报送：域名与站点清单收敛到 200 行，保留端口服务与指纹分布，省略评级标准说明。",
-		Formats:            []string{"html", "pdf", "markdown"},
+		Formats:            []string{"html", "pdf", "markdown", "docx", "xlsx"},
 		MaxRows:            200,
 		ShowRatingStandard: false,
 		ShowAssetOverview:  true,
@@ -236,7 +238,7 @@ var assetProfiles = map[string]Profile{
 		Type:               "asset",
 		Name:               "内部资产简报",
 		Description:        "内部快速摸底：只出域名清单与高危站点，端口服务与指纹分布合并进统计，最多 100 行。",
-		Formats:            []string{"html", "pdf", "markdown"},
+		Formats:            []string{"html", "pdf", "markdown", "docx", "xlsx"},
 		MaxRows:            100,
 		ShowRatingStandard: false,
 		ShowAssetOverview:  true,

@@ -24,7 +24,7 @@ export interface ReportDelivery {
 export interface GeneratedReport {
   id: string
   name: string
-  type: 'html' | 'pdf' | 'markdown' | string
+  type: 'html' | 'pdf' | 'markdown' | 'docx' | 'xlsx' | string
   report_kind: ReportKind
   template: string
   file_path: string
@@ -53,7 +53,7 @@ export const reportApi = {
     project_id?: number
     name?: string
     title?: string
-    format?: 'html' | 'pdf' | 'markdown'
+    format?: 'html' | 'pdf' | 'markdown' | 'docx' | 'xlsx'
     kind?: ReportKind
     template?: string
     delivery?: ReportDelivery
@@ -67,7 +67,16 @@ export const reportApi = {
   // 下载走 axios 拿 blob，避免浏览器直接打开 JSON 错误页。
   download: async (report: GeneratedReport): Promise<void> => {
     const res = await api.get(`/reports/${report.id}/download`, { responseType: 'blob' })
-    const ext = report.type === 'pdf' ? '.pdf' : report.type === 'markdown' ? '.md' : '.html'
+    const ext =
+      report.type === 'pdf'
+        ? '.pdf'
+        : report.type === 'markdown'
+          ? '.md'
+          : report.type === 'docx'
+            ? '.docx'
+            : report.type === 'xlsx'
+              ? '.xlsx'
+              : '.html'
     const url = window.URL.createObjectURL(new Blob([res.data]))
     const a = document.createElement('a')
     a.href = url

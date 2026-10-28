@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { reportApi, type ReportProfile } from '@/api/reports'
+import { taskApi } from '@/api/tasks'
 import { Button, Input, Modal, Select, Tabs } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
+import { useConfirm } from '@/components/common/confirm-provider'
 import { FileText } from 'lucide-react'
 
 export type ReportKind = 'asset' | 'vuln'
@@ -31,8 +33,9 @@ export function ReportGenerateDialog({
   templates,
 }: ReportGenerateDialogProps) {
   const { toast } = useToast()
+  const confirm = useConfirm()
   const [kind, setKind] = useState<ReportKind>(defaultKind)
-  const [format, setFormat] = useState<'html' | 'pdf' | 'markdown'>('html')
+  const [format, setFormat] = useState<'html' | 'pdf' | 'markdown' | 'docx' | 'xlsx'>('html')
   const [title, setTitle] = useState('')
   const [clientName, setClientName] = useState('')
   const [reportNo, setReportNo] = useState('')
@@ -53,6 +56,32 @@ export function ReportGenerateDialog({
       setTemplate('')
     }
   }, [open, defaultKind])
+
+  // 项目绑定时（资产报告），生成前检查是否有未完成任务：
+  // 有则弹确认——报告永远基于当前已落库数据快照，不等待任务跑完。
+  const unfinished = useQuery({
+    queryKey: ['report-unfinished', projectId],
+    queryFn: async () => {
+      const [running, pending] = await Promise.all([
+        taskApi.getTasks({ projectId, status: 'running', pageSize: 1 }),
+        taskApi.getTasks({ projectId, status: 'pending', pageSize: 1 }),
+      ])
+      return (running.data?.total ?? 0) + (pending.data?.total ?? 0)
+    },
+    enabled: open && !!projectId,
+    staleTime: 10_000,
+  })
+
+  const submit = async () => {
+    const n = unfinished.data ?? 0
+    if (n > 0) {
+      const okToGo = await confirm(
+        `该项目有 ${n} 个任务未完成，报告将基于当前已有数据生成（不含未完成任务后续产出）。继续？`
+      )
+      if (!okToGo) return
+    }
+    mutation.mutate()
+  }
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -108,7 +137,7 @@ export function ReportGenerateDialog({
         <div className="flex justify-end gap-2">
           <Button onClick={() => onOpenChange(false)}>取消</Button>
           <Button
-            onClick={() => mutation.mutate()}
+            onClick={() => submit()}
             loading={mutation.isPending}
             disabled={mutation.isPending || (kind === 'asset' && !projectId)}
           >
@@ -189,6 +218,8 @@ export function ReportGenerateDialog({
               { value: 'html', label: 'HTML' },
               { value: 'pdf', label: 'PDF（无浏览器时降级 HTML）' },
               { value: 'markdown', label: 'Markdown' },
+              { value: 'docx', label: 'Word（.docx）' },
+              { value: 'xlsx', label: 'Excel（.xlsx，台账分表）' },
             ]}
           />
         </div>
