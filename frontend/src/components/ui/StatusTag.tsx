@@ -16,11 +16,12 @@ export type BadgeVariant =
 
 const variantClass: Record<BadgeVariant, string> = {
   default: 'border-transparent bg-primary text-primary-foreground',
-  success: 'border-transparent bg-primary text-primary-foreground',
+  // 纯白轻线（G 打样）：成功/警示/提示用柔色底 + 深色字的胶囊，不再用实心色块
+  success: 'border-transparent bg-accent text-accent-foreground',
   secondary: 'border-transparent bg-secondary text-secondary-foreground',
   destructive: 'border-transparent bg-destructive text-destructive-foreground',
-  warning: 'border-transparent bg-yellow-500 text-black',
-  info: 'border-transparent bg-blue-500 text-white',
+  warning: 'border-transparent bg-amber-500/15 text-amber-700 dark:text-amber-400',
+  info: 'border-transparent bg-blue-500/15 text-blue-700 dark:text-blue-400',
   outline: 'text-foreground',
 }
 

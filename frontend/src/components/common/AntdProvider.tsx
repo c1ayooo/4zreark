@@ -70,12 +70,12 @@ export function AntdProvider({ children }: { children: ReactNode }) {
 
   const themeConfig = useMemo(() => {
     void varEpoch
-    const primary = cssVarToHex('--primary', dark ? '#3fc98a' : '#297a52')
-    const bg = cssVarToHex('--background', dark ? '#11161b' : '#f5f7f9')
-    const card = cssVarToHex('--card', dark ? '#161a20' : '#ffffff')
-    const border = cssVarToHex('--border', dark ? '#323842' : '#d8dee4')
-    const mutedFg = cssVarToHex('--muted-foreground', dark ? '#98a2b3' : '#5c6672')
-    const destructive = cssVarToHex('--destructive', dark ? '#e05252' : '#b22424')
+    const primary = cssVarToHex('--primary', dark ? '#2fb569' : '#16a34a')
+    const bg = cssVarToHex('--background', dark ? '#101216' : '#fbfbfd')
+    const card = cssVarToHex('--card', dark ? '#141820' : '#ffffff')
+    const border = cssVarToHex('--border', dark ? '#23272e' : '#ececf0')
+    const mutedFg = cssVarToHex('--muted-foreground', dark ? '#8d94a3' : '#7c8089')
+    const destructive = cssVarToHex('--destructive', dark ? '#e5476d' : '#e11d48')
     return {
       algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
       token: {
@@ -88,10 +88,10 @@ export function AntdProvider({ children }: { children: ReactNode }) {
         colorBorderSecondary: border,
         colorTextSecondary: mutedFg,
         colorError: destructive,
-        colorWarning: '#d48806',
-        // 圆角是明确的产品偏好：8/12px 的柔和圆角，与 Tailwind 侧 --radius: 0.5rem 对齐
-        borderRadius: 8,
-        borderRadiusLG: 12,
+        colorWarning: '#d97706',
+        // 纯白轻线圆角体系：控件 12px、卡片/弹层 20px；按钮与标签另走 overrides 全胶囊
+        borderRadius: 12,
+        borderRadiusLG: 20,
         fontFamily:
           "'Noto Sans SC Variable', 'Noto Sans SC', -apple-system, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif",
         fontSize: 14,
@@ -102,8 +102,23 @@ export function AntdProvider({ children }: { children: ReactNode }) {
         motionEaseOut: 'cubic-bezier(0.215, 0.61, 0.355, 1)',
       },
       components: {
-        Table: { cellPaddingBlockSM: 6, cellPaddingInlineSM: 10, headerBg: dark ? '#1b2028' : '#f0f2f5' },
-        Menu: { itemBorderRadius: 8, itemMarginInline: 6 },
+        Table: {
+          cellPaddingBlockSM: 6,
+          cellPaddingInlineSM: 10,
+          // 纯白轻线：表头无底色、淡色文字，行 hover 用轻灰
+          headerBg: 'transparent',
+          headerSplitColor: 'transparent',
+          headerColor: mutedFg,
+          rowHoverBg: dark ? '#1a1f27' : '#f4f4f6',
+        },
+        Menu: {
+          // 侧栏菜单胶囊化：选中项 = 柔绿底 + 深绿字
+          itemBorderRadius: 999,
+          itemMarginInline: 8,
+          itemHeight: 34,
+          itemSelectedBg: cssVarToHex('--accent', dark ? '#1d3a28' : '#ecfdf3'),
+          itemSelectedColor: cssVarToHex('--accent-foreground', dark ? '#7fd6a4' : '#14713f'),
+        },
         Modal: { contentBg: card, headerBg: card },
         Card: { paddingLG: 16 },
       },

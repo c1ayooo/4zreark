@@ -5,7 +5,27 @@
 .ant-popover-inner,
 .ant-dropdown-menu,
 .ant-select-dropdown {
-  border-radius: 6px;
+  border-radius: 14px;
+}
+
+/* 纯白轻线（G 打样定稿）：按钮 / 标签 / 分段器全胶囊 */
+.ant-btn {
+  border-radius: 999px;
+}
+.ant-tag {
+  border-radius: 999px;
+}
+.ant-segmented {
+  border-radius: 999px;
+}
+.ant-segmented .ant-segmented-item,
+.ant-segmented .ant-segmented-thumb {
+  border-radius: 999px;
+}
+/* 分页器小方块跟着圆一点，与胶囊语言协调 */
+.ant-pagination .ant-pagination-item,
+.ant-pagination .ant-pagination-button {
+  border-radius: 999px;
 }
 
 /* 动效降级：系统开了减少动态效果时，antd 内建动画/过渡全部直切 */

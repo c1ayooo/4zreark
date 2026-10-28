@@ -4,49 +4,50 @@
 
 @layer base {
   :root {
-    /* 冷灰底 + 深绿强调：去掉偏黄的 cream 底，颜色只留给数据和操作。 */
-    --background: 210 16% 97%;
-    --foreground: 210 18% 12%;
+    /* 纯白轻线（G 方向打样定稿）：近纯白底 + 发丝线边框，投影最轻，
+       绿色只做强调（按钮/选中/链接），彩色状态收进胶囊标签。 */
+    --background: 240 30% 99%;
+    --foreground: 220 10% 10%;
     --card: 0 0% 100%;
-    --card-foreground: 210 18% 12%;
+    --card-foreground: 220 10% 10%;
     --popover: 0 0% 100%;
-    --popover-foreground: 210 18% 12%;
-    --primary: 154 42% 28%;
+    --popover-foreground: 220 10% 10%;
+    --primary: 142 71% 35%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 210 10% 94%;
-    --secondary-foreground: 210 15% 15%;
-    --muted: 210 10% 95%;
-    --muted-foreground: 210 8% 40%;
-    --accent: 154 18% 93%;
-    --accent-foreground: 154 30% 18%;
-    --destructive: 0 64% 42%;
+    --secondary: 220 8% 96%;
+    --secondary-foreground: 220 8% 30%;
+    --muted: 220 8% 96%;
+    --muted-foreground: 215 5% 51%;
+    --accent: 142 65% 95%;
+    --accent-foreground: 150 70% 24%;
+    --destructive: 347 77% 48%;
     --destructive-foreground: 0 0% 100%;
-    --border: 210 10% 87%;
-    --input: 210 10% 87%;
-    --ring: 154 42% 28%;
-    --radius: 0.5rem;
+    --border: 240 12% 93%;
+    --input: 240 12% 93%;
+    --ring: 142 71% 35%;
+    --radius: 1rem;
   }
 
   .dark {
-    --background: 210 20% 8%;
-    --foreground: 210 15% 94%;
-    --card: 210 18% 10%;
-    --card-foreground: 210 15% 94%;
-    --popover: 210 18% 10%;
-    --popover-foreground: 210 15% 94%;
-    --primary: 154 40% 52%;
-    --primary-foreground: 210 20% 8%;
-    --secondary: 210 12% 16%;
-    --secondary-foreground: 210 15% 94%;
-    --muted: 210 12% 16%;
-    --muted-foreground: 210 8% 65%;
-    --accent: 210 12% 18%;
-    --accent-foreground: 210 15% 94%;
-    --destructive: 0 58% 48%;
+    --background: 220 16% 8%;
+    --foreground: 220 12% 93%;
+    --card: 220 14% 11%;
+    --card-foreground: 220 12% 93%;
+    --popover: 220 14% 12%;
+    --popover-foreground: 220 12% 93%;
+    --primary: 142 60% 46%;
+    --primary-foreground: 220 20% 8%;
+    --secondary: 220 10% 17%;
+    --secondary-foreground: 220 10% 90%;
+    --muted: 220 10% 16%;
+    --muted-foreground: 215 8% 62%;
+    --accent: 142 35% 15%;
+    --accent-foreground: 142 60% 75%;
+    --destructive: 347 75% 55%;
     --destructive-foreground: 0 0% 100%;
-    --border: 210 10% 22%;
-    --input: 210 10% 22%;
-    --ring: 154 40% 52%;
+    --border: 220 10% 20%;
+    --input: 220 10% 20%;
+    --ring: 142 60% 46%;
   }
 }
 
