@@ -135,6 +135,16 @@ func (g *GoGoScanner) SetThreads(n int) {
 	g.mu.Unlock()
 }
 
+// ClampThreads 只收紧不放大：大端口集模式下把 gogo 线程压到封顶值以下。
+// gogo 默认 1000 并发对外网目标极易触发封 IP，用户预期"可以慢"。
+func (g *GoGoScanner) ClampThreads(cap int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.Threads > cap {
+		g.Threads = cap
+	}
+}
+
 func (g *GoGoScanner) snapshot() (threads, timeout int) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

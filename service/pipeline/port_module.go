@@ -22,6 +22,9 @@ type PortScanModule struct {
 	resultChan  chan interface{}
 	portRange   string
 	scanMode    string
+	// maxThreads 大端口集的线程封顶（0 = 不限制）。gogo 默认 1000 并发，
+	// 扫描面一大就会触发目标侧封 IP；用户预期"可以慢"。
+	maxThreads  int
 	ratePerSec  int
 	concurrency int
 	targetDelay time.Duration
@@ -40,9 +43,31 @@ func (m *PortScanModule) SetRate(ratePerSec, concurrency int, delay time.Duratio
 		// gogo 是进程级单例，线程数走锁更新，避免与并发任务的扫描竞争。
 		if m.gogoScanner != nil {
 			m.gogoScanner.SetThreads(concurrency)
+			m.applyThreadCap()
 		}
 	}
 	m.targetDelay = delay
+}
+
+// applyThreadCap 把 gogo 线程压回当前模式的封顶值（SetRate 抬高后在这里压回；
+// gogo 是多任务共享单例，别的任务也可能抬高过线程）。
+func (m *PortScanModule) applyThreadCap() {
+	if m.maxThreads > 0 && m.gogoScanner != nil {
+		m.gogoScanner.ClampThreads(m.maxThreads)
+	}
+}
+
+// portThreadCap 各扫描模式的线程封顶：扫描面越大越容易被封 IP（可以慢）。
+func portThreadCap(scanMode string) int {
+	switch scanMode {
+	case "top2000":
+		return 200
+	case "top5000":
+		return 100
+	case "full":
+		return 80
+	}
+	return 0
 }
 
 // NewPortScanModule 创建端口扫描模块
@@ -65,7 +90,9 @@ func NewPortScanModule(ctx context.Context, nextModule ModuleRunner, portRange, 
 		resultChan:  make(chan interface{}, 1000),
 		portRange:   portRange,
 		scanMode:    scanMode,
+		maxThreads:  portThreadCap(scanMode),
 	}
+	m.applyThreadCap()
 	return m
 }
 
@@ -225,6 +252,7 @@ func (m *PortScanModule) scanPorts(ds DomainSkip) {
 
 	var scanResult *core.ScanResult
 	var err error
+	m.applyThreadCap()
 
 	// 根据扫描模式选择扫描方式
 	switch m.scanMode {
