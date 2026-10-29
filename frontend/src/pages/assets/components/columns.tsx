@@ -172,41 +172,47 @@ export function buildAssetTableParts({
     const siteColumns: TableProps<Site>['columns'] = [
       {
         title: '资产',
-        render: (_, s) => (
-          <>
-            <div className="break-all text-sm font-medium">{s.value}</div>
-            <div className="mt-1 flex flex-wrap items-center gap-1">
-              {(s.endpoints ?? []).length > 0 ? (
-                (s.endpoints ?? []).map((e) => (
-                  <span
-                    key={`${e.scheme}-${e.port}`}
-                    title={`最近状态码 ${e.status_code || '—'}`}
-                    className="rounded-sm bg-muted px-1.5 py-0.5 text-[13px] text-muted-foreground"
-                  >
-                    {e.scheme}:{e.port}
+        render: (_, s) => {
+          // 单行紧凑：完整入口/技术栈/标签点行看抽屉，表内只留前几项 + 溢出计数
+          const eps = s.endpoints ?? []
+          const epExtra = eps.length > 3 ? eps.length - 3 : 0
+          const techs = s.technology_stack
+          const techExtra = techs.length > 2 ? techs.length - 2 : 0
+          const tagExtra = (s.tags?.length ?? 0) > 2 ? s.tags!.length - 2 : 0
+          return (
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium">{s.value}</div>
+              <div className="text-muted-foreground mt-0.5 flex items-center gap-1 overflow-hidden whitespace-nowrap text-[13px]">
+                {eps.length > 0 ? (
+                  <>
+                    {eps.slice(0, 3).map((e) => (
+                      <span
+                        key={`${e.scheme}-${e.port}`}
+                        title={`最近状态码 ${e.status_code || '—'}`}
+                        className="rounded-sm bg-muted px-1.5 py-0.5"
+                      >
+                        {e.scheme}:{e.port}
+                      </span>
+                    ))}
+                    {epExtra > 0 && <span className="text-[11px]">+{epExtra}</span>}
+                  </>
+                ) : (
+                  <span>
+                    {s.protocol}:{s.port}
                   </span>
-                ))
-              ) : (
-                <span className="text-[13px] text-muted-foreground">
-                  {s.protocol}:{s.port}
-                </span>
-              )}
-              <span className="ml-1 text-[13px] text-muted-foreground">
-                {s.ip || '—'}
-                {s.technology_stack.length > 0 && ` · ${s.technology_stack.join(', ')}`}
-              </span>
-            </div>
-            {(s.tags?.length ?? 0) > 0 && (
-              <div className="mt-1 flex flex-wrap items-center gap-1">
-                {s.tags!.map((t) => (
-                  <Tag key={t} className={`${badgeCls('outline')} px-1.5 py-0 text-[11px]`}>
-                    {t}
-                  </Tag>
-                ))}
+                )}
+                <span className="truncate">{s.ip || '—'}</span>
+                {techs.length > 0 && (
+                  <span className="truncate">
+                    · {techs.slice(0, 2).join(', ')}
+                    {techExtra > 0 && ` +${techExtra}`}
+                  </span>
+                )}
+                {tagExtra > 0 && <span className="text-[11px]">· 标签 +{tagExtra}</span>}
               </div>
-            )}
-          </>
-        ),
+            </div>
+          )
+        },
       },
     ]
     if (siteCols.icon) {
@@ -487,9 +493,9 @@ export function buildAssetTableParts({
         render: (_, row) => {
           const r = row as RawRecordRow
           return (
-            <>
-              <div className="flex items-start gap-1.5">
-                <div className="break-all text-sm font-medium">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <div className="truncate text-sm font-medium">
                   {r.value || `${r.protocol}://${r.host}:${r.port}`}
                 </div>
                 {r.is_interface && (
@@ -499,10 +505,10 @@ export function buildAssetTableParts({
                   <Tag className={`${badgeCls('outline')} shrink-0 text-[11px]`}>爬虫</Tag>
                 )}
               </div>
-              <div className="text-xs text-muted-foreground">
+              <div className="text-muted-foreground truncate text-xs">
                 {r.host}:{r.port} · {r.protocol}
               </div>
-            </>
+            </div>
           )
         },
       },
