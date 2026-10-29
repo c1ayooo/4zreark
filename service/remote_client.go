@@ -232,6 +232,27 @@ func (c *RemoteClient) UpdateTask(ctx context.Context, taskID string, updates ma
 }
 
 // TouchTask 节点活性心跳：只推进任务 updated_at。
+// ClaimTask 执行认领上报（跨执行器分配凭证）。
+func (c *RemoteClient) ClaimTask(ctx context.Context, taskID, executorID, claimNodeID string) (bool, error) {
+	var out struct {
+		Claimed bool `json:"claimed"`
+	}
+	err := c.call(ctx, http.MethodPost,
+		fmt.Sprintf("/api/node/tasks/%s/claim", taskID),
+		map[string]any{"executor_id": executorID, "claim_node_id": claimNodeID}, &out)
+	if err != nil {
+		return false, err
+	}
+	return out.Claimed, nil
+}
+
+// ReleaseTask 释放执行认领。
+func (c *RemoteClient) ReleaseTask(ctx context.Context, taskID string) error {
+	return c.call(ctx, http.MethodPost,
+		fmt.Sprintf("/api/node/tasks/%s/claim", taskID),
+		map[string]any{"executor_id": ""}, nil)
+}
+
 // AddTaskLogCategory 把动作日志上报给平台（worker 侧无库，经网关落 task_logs）。
 func (c *RemoteClient) AddTaskLogCategory(ctx context.Context, taskID, category, level, message string) error {
 	return c.call(ctx, http.MethodPost,
@@ -310,6 +331,14 @@ func (s *remoteTaskStore) UpdateTask(taskID string, updates map[string]interface
 
 func (s *remoteTaskStore) AddLogCategory(ctx context.Context, taskID, category, level, message, detail string) error {
 	return s.client.AddTaskLogCategory(ctx, taskID, category, level, message)
+}
+
+func (s *remoteTaskStore) ClaimExecution(ctx context.Context, taskID, executorID, claimNodeID string) (bool, error) {
+	return s.client.ClaimTask(ctx, taskID, executorID, claimNodeID)
+}
+
+func (s *remoteTaskStore) ReleaseExecution(ctx context.Context, taskID string) error {
+	return s.client.ReleaseTask(ctx, taskID)
 }
 
 func (s *remoteTaskStore) TouchTask(taskID string) error {

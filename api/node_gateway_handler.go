@@ -98,6 +98,38 @@ func (h *NodeGatewayHandler) GetTask(c *gin.Context) {
 	utils.Success(c, task)
 }
 
+// ClaimTask POST /api/node/tasks/:id/claim — 执行认领（跨执行器分配凭证）。
+// executor_id 非空：原子抢占（未被认领才成功，同时把任务归属落到本节点）；
+// executor_id 为空：释放本节点已认领的任务（完成/失败收尾）。
+func (h *NodeGatewayHandler) ClaimTask(c *gin.Context) {
+	node := nodeFromContext(c)
+	taskID := c.Param("id")
+	var body struct {
+		ExecutorID  string `json:"executor_id"`
+		ClaimNodeID string `json:"claim_node_id"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		utils.BadRequest(c, "参数错误")
+		return
+	}
+	task, err := h.tasks.GetTaskByID(taskID)
+	if err != nil {
+		utils.NotFound(c, err.Error())
+		return
+	}
+	// 归属校验：只能操作派给本节点的任务，或认领尚未归属的任务
+	if task.NodeID != "" && task.NodeID != node.NodeID {
+		utils.Forbidden(c, "任务未分配给该节点")
+		return
+	}
+	claimed, err := h.tasks.ClaimExecution(c.Request.Context(), taskID, body.ExecutorID, node.NodeID)
+	if err != nil {
+		utils.Error(c, utils.ErrCodeInternalError, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"claimed": claimed})
+}
+
 // AddTaskLog POST /api/node/tasks/:id/logs — 节点上报动作日志（worker 侧无库）。
 func (h *NodeGatewayHandler) AddTaskLog(c *gin.Context) {
 	node := nodeFromContext(c)

@@ -40,6 +40,10 @@ type taskStore interface {
 	TouchTask(taskID string) error
 	// AddLogCategory 动作日志：本地 taskRepo 直写，worker 远程代理经网关落库。
 	AddLogCategory(ctx context.Context, taskID, category, level, message, detail string) error
+	// ClaimExecution 执行认领（跨执行器分配凭证）：false = 已被认领，本执行放弃。
+	ClaimExecution(ctx context.Context, taskID, executorID, claimNodeID string) (bool, error)
+	// ReleaseExecution 释放认领（完成/失败时）。
+	ReleaseExecution(ctx context.Context, taskID string) error
 }
 
 // resultStore 是执行器需要的结果落库能力：本地是 *ResultService，远程 worker 走 HTTP。
@@ -1096,6 +1100,15 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 		}
 	}()
 
+	// 执行认领（跨执行器分配凭证）：双跑在这里被拒绝，认领失败的执行直接收尾
+	claimed := e.claimExecution(task)
+	if !claimed {
+		cancel()
+		e.finishJob(jobID, "")
+		return
+	}
+	defer e.releaseExecution(task)
+
 	// 注册正在运行的任务；已有同 ID 任务在跑（River 重试/重复推送）则本执行放弃
 	if !e.registerRunningTask(taskID, cancel, scanPipe) {
 		log.Printf("[TaskExecutor] 任务 %s 已在本节点执行中，跳过重复启动", taskID)
@@ -1611,6 +1624,48 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 		return
 	}
 	e.completeTask(task, jobID, resultCount)
+}
+
+// claimExecution 执行认领：false = 已被其他执行器认领（River 重试/重复投递），本执行放弃。
+// 认领成功的执行在完成/失败时释放；进程重启残留的 running 认领由 StaleReaper 回收。
+func (e *TaskExecutor) claimExecution(task *models.Task) bool {
+	if e.taskService == nil {
+		return true // 单测/无库场景：跳过认领
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	claimed, err := e.taskService.ClaimExecution(ctx, task.ID.Hex(), e.executorID(), "")
+	if err != nil {
+		log.Printf("[TaskExecutor] 执行认领失败（保守放弃）: %v", err)
+		return false
+	}
+	if !claimed {
+		log.Printf("[TaskExecutor] 任务 %s 已被其他执行器认领，本执行放弃", task.ID.Hex())
+	}
+	return claimed
+}
+
+// releaseExecution 释放执行认领。
+func (e *TaskExecutor) releaseExecution(task *models.Task) {
+	if e.taskService == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := e.taskService.ReleaseExecution(ctx, task.ID.Hex()); err != nil {
+		log.Printf("[TaskExecutor] 释放执行认领失败: %v", err)
+	}
+}
+
+// executorID 本执行器的分配凭证身份。
+func (e *TaskExecutor) executorID() string {
+	if e.nodeName != "" {
+		return e.nodeName
+	}
+	if e.nodeID != "" {
+		return e.nodeID
+	}
+	return "master"
 }
 
 // logAction 任务动作日志：master 直接落库；worker 经网关上报（无库）。

@@ -44,6 +44,11 @@ type TaskRepo interface {
 	ListActionLogs(ctx context.Context, projectID int64, category, level, q string, page, pageSize int) ([]*ActionLogRow, int64, error)
 	// PurgeTaskLogs 清理 N 天前的运行日志。
 	PurgeTaskLogs(ctx context.Context, olderThanDays int) (int64, error)
+	// ClaimExecution 执行认领（分配凭证）：原子抢占，executor_id 已被其他执行器
+	// 占用时返回 false——双跑在入口处被拒绝。认领成功后用 ReleaseExecution 释放。
+	ClaimExecution(ctx context.Context, taskID, executorID, claimNodeID string) (bool, error)
+	// ReleaseExecution 释放执行认领（完成/失败/回收时）。
+	ReleaseExecution(ctx context.Context, taskID string) error
 	ListLogs(ctx context.Context, taskID string, page, pageSize int) ([]*models.TaskLog, int64, error)
 }
 
@@ -716,6 +721,26 @@ func (r *taskRepo) DeleteTemplate(ctx context.Context, id string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+
+// --- 执行认领 ---
+
+func (r *taskRepo) ClaimExecution(ctx context.Context, taskID, executorID, claimNodeID string) (bool, error) {
+	tag, err := r.r.pool.Exec(ctx,
+		`update tasks set executor_id = $2, node_id = coalesce(nullif($3, ''), node_id)
+		  where id = $1 and executor_id = ''`,
+		taskID, executorID, claimNodeID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (r *taskRepo) ReleaseExecution(ctx context.Context, taskID string) error {
+	_, err := r.r.pool.Exec(ctx,
+		`update tasks set executor_id = '' where id = $1`, taskID)
+	return err
 }
 
 // --- 任务日志 ---

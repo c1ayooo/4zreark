@@ -707,6 +707,24 @@ func (s *TaskService) DeleteTaskTemplate(templateID string) error {
 	return nil
 }
 
+// ClaimExecution 执行认领：原子抢占 executor_id，已被认领返回 false。
+func (s *TaskService) ClaimExecution(ctx context.Context, taskID, executorID, claimNodeID string) (bool, error) {
+	tasks, _, err := s.stores()
+	if err != nil {
+		return false, err
+	}
+	return tasks.ClaimExecution(ctx, taskID, executorID, claimNodeID)
+}
+
+// ReleaseExecution 释放执行认领。
+func (s *TaskService) ReleaseExecution(ctx context.Context, taskID string) error {
+	tasks, _, err := s.stores()
+	if err != nil {
+		return err
+	}
+	return tasks.ReleaseExecution(ctx, taskID)
+}
+
 // AddLogCategory 带功能分类的动作日志（worker 经网关上报 / master 侧埋点共用）。
 func (s *TaskService) AddLogCategory(ctx context.Context, taskID, category, level, message, detail string) error {
 	tasks, _, err := s.stores()
