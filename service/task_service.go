@@ -707,6 +707,15 @@ func (s *TaskService) DeleteTaskTemplate(templateID string) error {
 	return nil
 }
 
+// AddLogCategory 带功能分类的动作日志（worker 经网关上报 / master 侧埋点共用）。
+func (s *TaskService) AddLogCategory(ctx context.Context, taskID, category, level, message, detail string) error {
+	tasks, _, err := s.stores()
+	if err != nil {
+		return err
+	}
+	return tasks.AddLogCategory(ctx, taskID, category, level, message, detail)
+}
+
 // AddTaskLog adds a log entry for a task
 func (s *TaskService) AddTaskLog(taskID string, level string, message string, detail string) error {
 	ctx, cancel := dbCtx()

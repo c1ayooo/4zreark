@@ -56,6 +56,7 @@ export default function TaskLogsPage() {
   const [page, setPage] = useState(1)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [retentionDays, setRetentionDays] = useState(14)
+  const [detailRow, setDetailRow] = useState<ActionLogRow | null>(null)
 
   useEffect(() => { setPage(1) }, [category, level, projectId])
 
@@ -250,6 +251,10 @@ export default function TaskLogsPage() {
           loading={logs.isLoading}
           size="small"
           locale={{ emptyText: '暂无日志（任务执行的动作会实时写入）' }}
+          onRow={(r) => ({
+            className: 'cursor-pointer',
+            onClick: () => setDetailRow(r),
+          })}
           pagination={{
             current: page,
             pageSize: PAGE_SIZE,
@@ -282,6 +287,42 @@ export default function TaskLogsPage() {
             保存并立即清理
           </Button>
         </div>
+      </Modal>
+
+      <Modal open={!!detailRow} onCancel={() => setDetailRow(null)} footer={null} title="日志详情" width={560}>
+        {detailRow && (
+          <div className="space-y-2 text-sm">
+            <div className="flex items-center gap-2">
+              {taskLogCategories.find((c) => c.value === detailRow.category)?.label && (
+                <Tag className={statusTagClass('outline')}>
+                  {taskLogCategories.find((c) => c.value === detailRow.category)?.label}
+                </Tag>
+              )}
+              <Tag className={statusTagClass(detailRow.level === 'error' ? 'destructive' : detailRow.level === 'success' ? 'success' : 'outline')}>
+                {levelLabel[detailRow.level] ?? detailRow.level}
+              </Tag>
+            </div>
+            <div className="rounded-lg border p-3 text-sm leading-relaxed whitespace-pre-wrap break-words">
+              {detailRow.title}
+            </div>
+            <dl className="space-y-1.5">
+              <div className="flex gap-2">
+                <dt className="w-16 shrink-0 text-muted-foreground">时间</dt>
+                <dd className="font-mono text-xs">{formatDate(detailRow.created_at)}</dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="w-16 shrink-0 text-muted-foreground">状态</dt>
+                <dd>{detailRow.status ? (jobStatusLabel[detailRow.status] ?? detailRow.status) : '—'}</dd>
+              </div>
+              {detailRow.detail && (
+                <div className="flex gap-2">
+                  <dt className="w-16 shrink-0 text-muted-foreground">详情</dt>
+                  <dd className="whitespace-pre-wrap break-words">{detailRow.detail}</dd>
+                </div>
+              )}
+            </dl>
+          </div>
+        )}
       </Modal>
     </div>
   )

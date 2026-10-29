@@ -811,6 +811,7 @@ func SetupNodeGatewayRouter(nodeHub *api.NodeHub, binaryHandler *api.NodeBinaryH
 		nodeAPI.PUT("/tasks/:id", nodeGateway.UpdateTask)
 		nodeAPI.PUT("/tasks/:id/touch", nodeGateway.TouchTask)
 		nodeAPI.POST("/tasks/:id/results", nodeGateway.PostResults)
+		nodeAPI.POST("/tasks/:id/logs", nodeGateway.AddTaskLog)
 		nodeAPI.POST("/tasks/:id/assets", nodeGateway.PostAssets)
 		nodeAPI.POST("/tasks/:id/cdn", nodeGateway.PostCDN)
 		nodeAPI.POST("/tasks/:id/dict-learning", nodeGateway.PostDictLearning)

@@ -98,6 +98,42 @@ func (h *NodeGatewayHandler) GetTask(c *gin.Context) {
 	utils.Success(c, task)
 }
 
+// AddTaskLog POST /api/node/tasks/:id/logs — 节点上报动作日志（worker 侧无库）。
+func (h *NodeGatewayHandler) AddTaskLog(c *gin.Context) {
+	node := nodeFromContext(c)
+	taskID := c.Param("id")
+	task, err := h.tasks.GetTaskByID(taskID)
+	if err != nil {
+		utils.NotFound(c, err.Error())
+		return
+	}
+	if task.NodeID == "" || task.NodeID != node.NodeID {
+		utils.Forbidden(c, "任务未分配给该节点")
+		return
+	}
+	var body struct {
+		Category string `json:"category"`
+		Level    string `json:"level"`
+		Message  string `json:"message"`
+		Detail   string `json:"detail"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.Message) == "" {
+		utils.BadRequest(c, "category 与 message 必填")
+		return
+	}
+	if body.Category == "" {
+		body.Category = "system"
+	}
+	if body.Level == "" {
+		body.Level = "info"
+	}
+	if err := h.tasks.AddLogCategory(c.Request.Context(), taskID, body.Category, body.Level, body.Message, body.Detail); err != nil {
+		utils.Error(c, utils.ErrCodeInternalError, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"ok": true})
+}
+
 // UpdateTask 更新任务进度/状态。只允许执行过程中的字段，防止节点改目标/归属。
 func (h *NodeGatewayHandler) UpdateTask(c *gin.Context) {
 	node := nodeFromContext(c)

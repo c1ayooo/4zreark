@@ -38,6 +38,8 @@ type taskStore interface {
 	GetTaskByID(taskID string) (*models.Task, error)
 	UpdateTask(taskID string, updates map[string]interface{}) error
 	TouchTask(taskID string) error
+	// AddLogCategory 动作日志：本地 taskRepo 直写，worker 远程代理经网关落库。
+	AddLogCategory(ctx context.Context, taskID, category, level, message, detail string) error
 }
 
 // resultStore 是执行器需要的结果落库能力：本地是 *ResultService，远程 worker 走 HTTP。
@@ -1047,8 +1049,7 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 	config.LearnedSubdomainWords = task.Config.LearnedSubdomainWords
 	config.LearnedPaths = task.Config.LearnedPaths
 
-	LogTaskAction(task.ID.Hex(), string(task.Type), "info",
-		fmt.Sprintf("开始执行：%d 个目标", len(task.Targets)))
+	e.logAction(task, string(task.Type), "info", fmt.Sprintf("开始执行：%d 个目标", len(task.Targets)))
 	scanPipe := pipeline.NewStreamingPipelineWithProgress(ctx, task, config, len(task.Targets), progressCallback)
 	// 纯端口扫描流（无子域阶段）没有上游来设分母：目标数就是端口扫描的分母。
 	if config.PortScan && !config.SubdomainScan && len(task.Targets) > 0 {
@@ -1076,7 +1077,7 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 					// 阶段切换动作日志（功能分类 = 阶段）
 					if cur := report.CurrentModule; cur != "" && cur != lastModule {
 						if lastModule != "" {
-							LogTaskAction(task.ID.Hex(), moduleCategory(cur), "info", "进入 "+stageLabel(cur)+" 阶段")
+							e.logAction(task, moduleCategory(cur), "info", "进入 "+stageLabel(cur)+" 阶段")
 						}
 						lastModule = cur
 					}
@@ -1593,6 +1594,19 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 	e.completeTask(task, jobID, resultCount)
 }
 
+// logAction 任务动作日志：master 直接落库；worker 经网关上报（无库）。
+func (e *TaskExecutor) logAction(task *models.Task, category, level, message string) {
+	if e.taskService == nil {
+		return
+	}
+	// master=taskRepo 直写；worker=remoteTaskStore 经网关上报（无库）
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := e.taskService.AddLogCategory(ctx, task.ID.Hex(), category, level, message, ""); err != nil {
+		log.Printf("[TaskExecutor] 动作日志写入失败: %v", err)
+	}
+}
+
 // updateProgress 更新任务进度（简单版本）
 func (e *TaskExecutor) updateProgress(task *models.Task, progress int) {
 	// 执行器的纯扫描逻辑允许被单测直接调用（没有 taskService 时不落库）
@@ -1657,8 +1671,7 @@ func (e *TaskExecutor) completeTask(task *models.Task, jobID int64, resultCount 
 		"completed_at": time.Now(),
 		"result_count": resultCount,
 	})
-	LogTaskAction(task.ID.Hex(), string(task.Type), "success",
-		fmt.Sprintf("执行完成，产出 %d 条结果", resultCount))
+	e.logAction(task, string(task.Type), "success", fmt.Sprintf("执行完成，产出 %d 条结果", resultCount))
 	log.Printf("[TaskExecutor] Task %s completed with %d results", task.ID.Hex(), resultCount)
 	e.finishJob(jobID, "")
 
@@ -1683,7 +1696,7 @@ func (e *TaskExecutor) failTask(task *models.Task, jobID int64, errMsg string) {
 		"completed_at": time.Now(),
 		"last_error":   errMsg,
 	})
-	LogTaskAction(task.ID.Hex(), string(task.Type), "error", "执行失败："+errMsg)
+	e.logAction(task, string(task.Type), "error", "执行失败："+errMsg)
 	log.Printf("[TaskExecutor] Task %s failed: %s", task.ID.Hex(), errMsg)
 	e.finishJob(jobID, errMsg)
 

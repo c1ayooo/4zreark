@@ -232,6 +232,14 @@ func (c *RemoteClient) UpdateTask(ctx context.Context, taskID string, updates ma
 }
 
 // TouchTask 节点活性心跳：只推进任务 updated_at。
+// AddTaskLogCategory 把动作日志上报给平台（worker 侧无库，经网关落 task_logs）。
+func (c *RemoteClient) AddTaskLogCategory(ctx context.Context, taskID, category, level, message string) error {
+	return c.call(ctx, http.MethodPost,
+		fmt.Sprintf("/api/node/tasks/%s/logs", taskID),
+		map[string]any{"category": category, "level": level, "message": message},
+		nil)
+}
+
 func (c *RemoteClient) TouchTask(ctx context.Context, taskID string) error {
 	return c.call(ctx, http.MethodPut, "/api/node/tasks/"+taskID+"/touch", nil, nil)
 }
@@ -298,6 +306,10 @@ func (s *remoteTaskStore) UpdateTask(taskID string, updates map[string]interface
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	return s.client.UpdateTask(ctx, taskID, updates)
+}
+
+func (s *remoteTaskStore) AddLogCategory(ctx context.Context, taskID, category, level, message, detail string) error {
+	return s.client.AddTaskLogCategory(ctx, taskID, category, level, message)
 }
 
 func (s *remoteTaskStore) TouchTask(taskID string) error {
