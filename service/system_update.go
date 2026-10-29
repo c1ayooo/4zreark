@@ -302,8 +302,8 @@ func runSelfUpdate(targetVersion string) {
 		label    string
 		useProxy bool
 	}{
-		{"直连", false},
 		{"环境代理", true},
+		{"直连", false},
 	} {
 		downloaded = 0
 		downloadErr = downloadReleaseAsset(ctx, tarURL, tmpTar, mode.useProxy, &downloaded, tarSize, targetVersion)
@@ -426,7 +426,7 @@ func downloadReleaseAsset(ctx context.Context, url, dest string, useEnvProxy boo
 	if useEnvProxy {
 		transport = &http.Transport{Proxy: http.ProxyFromEnvironment}
 	}
-	client := &http.Client{Timeout: 10 * time.Minute, Transport: transport}
+	client := &http.Client{Timeout: 60 * time.Minute, Transport: transport}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
