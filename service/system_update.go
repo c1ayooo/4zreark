@@ -449,6 +449,7 @@ func downloadReleaseAsset(ctx context.Context, url, dest string, useEnvProxy boo
 	defer f.Close()
 
 	var lastProgress time.Time = time.Now()
+	lastProgressBytes := int64(0)
 	buf := make([]byte, 64<<10)
 	for {
 		n, rerr := resp.Body.Read(buf)
@@ -473,9 +474,20 @@ func downloadReleaseAsset(ctx context.Context, url, dest string, useEnvProxy boo
 			}
 			return rerr
 		}
-		// 看门狗：连接挂起无数据超过 30 秒，放弃本路换下一路
+		// 看门狗（速度感知）：完全停滞 30 秒，或 30 秒内进展不足 64KB（<2KB/s，
+		// 实测直连 GitHub CDN 会被压到这个量级），放弃本路换下一路
 		if time.Since(lastProgress) > 30*time.Second {
-			return fmt.Errorf("30 秒无进展，疑似连接被掐断")
+			return fmt.Errorf("30 秒完全无进展，疑似连接被掐断")
+		}
+		if time.Since(lastProgress) > 30*time.Second {
+			if *downloaded == lastProgressBytes {
+				return fmt.Errorf("30 秒完全无进展，疑似连接被掐断")
+			}
+			if *downloaded-lastProgressBytes < 64<<10 {
+				return fmt.Errorf("下载速度过低（30 秒 <64KB），切换线路")
+			}
+			lastProgressBytes = *downloaded
+			lastProgress = time.Now()
 		}
 	}
 }
