@@ -1050,6 +1050,12 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 	LogTaskAction(task.ID.Hex(), string(task.Type), "info",
 		fmt.Sprintf("开始执行：%d 个目标", len(task.Targets)))
 	scanPipe := pipeline.NewStreamingPipelineWithProgress(ctx, task, config, len(task.Targets), progressCallback)
+	// 纯端口扫描流（无子域阶段）没有上游来设分母：目标数就是端口扫描的分母。
+	if config.PortScan && !config.SubdomainScan && len(task.Targets) > 0 {
+		if tracker := scanPipe.GetProgressTracker(); tracker != nil {
+			tracker.UpdateModuleTotal("PortScan", len(task.Targets))
+		}
+	}
 
 	// 进度落库与结果数解耦：每 10 秒持久化一次分子分母快照。
 	// 之前只在产出结果且 resultCount%50==0 时写库，产出少的阶段进度条永远不动。
