@@ -7,6 +7,7 @@ import (
 )
 
 // captureModule 只收不处理：接收上游转发，供测试断言。
+// ModuleRun 必须空转——上游会链式启动它，任何 range 排水都会吃掉待断言的条目。
 type captureModule struct {
 	BaseModule
 }
@@ -18,11 +19,7 @@ func newCaptureModule() *captureModule {
 	return m
 }
 
-func (m *captureModule) ModuleRun() error {
-	for range m.input {
-	}
-	return nil
-}
+func (m *captureModule) ModuleRun() error { return nil }
 
 // 只给 IP/CIDR 的任务此前会被子域模块当域名枚举，白烧测绘配额且 IP 永远进不了
 // 端口阶段（任务空转零结果）。旁路后必须以 DomainSkip 形式出现在下游。
@@ -53,10 +50,14 @@ func TestSubdomainModuleBypassesIPOrCIDR(t *testing.T) {
 	deadline := time.After(15 * time.Second)
 	for _, w := range wants {
 		var v interface{}
+		var open bool
 		select {
-		case v = <-next.GetInput():
+		case v, open = <-next.GetInput():
 		case <-deadline:
 			t.Fatalf("超时：旁路结果未产出，已收到 %d/%d", len(wants)-len(wants), 2)
+		}
+		if !open {
+			t.Fatal("下游输入通道过早关闭")
 		}
 		ds, ok := v.(DomainSkip)
 		if !ok {
@@ -86,8 +87,10 @@ func TestSubdomainModuleBypassesIPOrCIDR(t *testing.T) {
 	}
 
 	select {
-	case extra := <-next.GetInput():
-		t.Fatalf("不应有多余输出: %+v", extra)
+	case extra, open := <-next.GetInput():
+		if open {
+			t.Fatalf("不应有多余输出: %+v", extra)
+		}
 	case <-time.After(500 * time.Millisecond):
 	}
 	select {
