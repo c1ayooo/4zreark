@@ -13,6 +13,8 @@ import (
 
 // PipelineConfig 流水线配置
 type PipelineConfig struct {
+	// ModuleLogSink 模块运行明细出口（executor 装配时注入，落 task_logs 供任务日志页展示）
+	ModuleLogSink func(module, level, message string)
 	// 子域名扫描
 	SubdomainScan          bool `json:"subdomain_scan"`
 	SubdomainMaxEnumTime   int  `json:"subdomain_max_enum_time"` // 分钟
@@ -186,12 +188,46 @@ func NewStreamingPipeline(ctx context.Context, task *models.Task, config *Pipeli
 func NewStreamingPipelineWithProgress(ctx context.Context, task *models.Task, config *PipelineConfig, totalTargets int, callback ProgressCallback) *StreamingPipeline {
 	p := NewStreamingPipeline(ctx, task, config)
 	p.progressTracker = NewProgressTracker(totalTargets, callback)
+	p.wireModuleLogSink()
 
 	// 根据配置设置启用的模块权重
 	enabledModules := p.getEnabledModules()
 	p.progressTracker.SetModuleWeights(enabledModules)
 
 	return p
+}
+
+// wireModuleLogSink 把运行明细出口接到已构造的模块上（executor 注入 ModuleLogSink）。
+func (p *StreamingPipeline) wireModuleLogSink() {
+	if p.config == nil || p.config.ModuleLogSink == nil {
+		return
+	}
+	sinkFor := func(name string) func(module, level, message string) {
+		return func(module, level, message string) {
+			p.config.ModuleLogSink(name, level, message)
+		}
+	}
+	if p.subdomainModule != nil {
+		p.subdomainModule.SetLogSink(sinkFor("SubdomainScan"))
+	}
+	if p.portScanModule != nil {
+		p.portScanModule.SetLogSink(sinkFor("PortScan"))
+	}
+	if p.fingerprintModule != nil {
+		p.fingerprintModule.SetLogSink(sinkFor("Fingerprint"))
+	}
+	if p.crawlerModule != nil {
+		p.crawlerModule.SetLogSink(sinkFor("Crawler"))
+	}
+	if p.dirScanModule != nil {
+		p.dirScanModule.SetLogSink(sinkFor("DirScan"))
+	}
+	if p.sensitiveModule != nil {
+		p.sensitiveModule.SetLogSink(sinkFor("Sensitive"))
+	}
+	if p.vulnScanModule != nil {
+		p.vulnScanModule.SetLogSink(sinkFor("VulnScan"))
+	}
 }
 
 // SetProgressCallback 设置进度回调

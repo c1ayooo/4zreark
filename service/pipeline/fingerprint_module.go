@@ -81,6 +81,9 @@ func (m *FingerprintModule) ModuleRun() error {
 			forwarded++
 			// 报告输出
 			m.ReportOutput(1)
+			if forwarded%25 == 0 {
+				m.Logf("info", "指纹识别：累计 %d 个站点", forwarded)
+			}
 			// 发送到下一个模块
 			if m.nextModule != nil {
 				select {

@@ -2,7 +2,9 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
 	"sync"
 )
 
@@ -156,6 +158,30 @@ type BaseModule struct {
 	ctx             context.Context
 	dupChecker      *DuplicateChecker
 	progressTracker *ProgressTracker
+	// logSink 模块运行明细出口（流水线装配时接入，落 task_logs 供任务日志页展示）
+	logSink func(level, message string)
+}
+
+// Logf 写一条模块运行明细（过程日志）。nil-safe；空消息忽略。
+func (m *BaseModule) Logf(level, format string, args ...any) {
+	if m.logSink == nil {
+		return
+	}
+	msg := strings.TrimSpace(fmt.Sprintf(format, args...))
+	if msg == "" {
+		return
+	}
+	m.logSink(level, msg)
+}
+
+// SetLogSink 接运行明细出口（转发时自动带模块名）。
+func (m *BaseModule) SetLogSink(sink func(module, level, message string)) {
+	if sink == nil {
+		return
+	}
+	m.logSink = func(level, message string) {
+		sink(m.name, level, message)
+	}
 }
 
 // SetInput 设置输入通道

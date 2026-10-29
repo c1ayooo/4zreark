@@ -1069,13 +1069,17 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 	progressStop := make(chan struct{})
 	defer close(progressStop)
 	prevStatus := map[string]string{}
-	// 运行明细缓冲：里程碑事件先进缓冲，10s ticker 批量落 task_logs
+	// 运行明细缓冲：里程碑/阶段/漏洞事件先进缓冲，10s ticker 批量落 task_logs
 	var logMu sync.Mutex
 	var logRows []repo.TaskLogInsert
-	pushLog := func(category, message string) {
+	pushLog := func(category, level, message string) {
 		logMu.Lock()
-		logRows = append(logRows, repo.TaskLogInsert{Category: category, Level: "info", Message: message})
+		logRows = append(logRows, repo.TaskLogInsert{Category: category, Level: level, Message: message})
 		logMu.Unlock()
+	}
+	// 模块运行明细出口：模块内部的过程日志经此进缓冲，10s ticker 批量落库
+	config.ModuleLogSink = func(module, level, message string) {
+		pushLog(moduleCategory(module), level, message)
 	}
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
@@ -1108,10 +1112,10 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 					}
 					prevStatus[name] = mp.Status
 					if !seen && mp.Status == "running" {
-						e.logAction(task, moduleCategory(name), "info", "进入 "+stageLabel(name)+" 阶段")
+						pushLog(moduleCategory(name), "info", "进入 "+stageLabel(name)+" 阶段")
 					}
 					if mp.Status == "completed" {
-						e.logAction(task, moduleCategory(name), "success",
+						pushLog(moduleCategory(name), "success",
 							fmt.Sprintf("%s阶段完成：处理 %d 项 · 产出 %d 项", stageLabel(name), mp.ProcessedItems, mp.OutputItems))
 					}
 				}
@@ -1279,7 +1283,7 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 		case pipeline.SubdomainResult:
 			subdomainCount++
 			if subdomainCount%25 == 0 {
-				pushLog("subdomain", fmt.Sprintf("子域名收集：累计发现 %d 个子域名", subdomainCount))
+				pushLog("subdomain", "info", fmt.Sprintf("子域名收集：累计发现 %d 个子域名", subdomainCount))
 			}
 			// 字典学习：相对根域的首标签（爆破词位置），任务内去重后计频。
 			if lbl := ExtractSubdomainLabel(r.Host, r.RootDomain); lbl != "" {
@@ -1320,7 +1324,7 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 			if r.Port != "" {
 				portCount++
 				if portCount%50 == 0 {
-					pushLog("port_scan", fmt.Sprintf("端口扫描：累计发现 %d 个开放端口", portCount))
+					pushLog("port_scan", "info", fmt.Sprintf("端口扫描：累计发现 %d 个开放端口", portCount))
 				}
 				scanResult = &models.ScanResult{
 					TaskID:      task.ID,
@@ -1411,11 +1415,11 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 			// 漏洞发现即时入日志：按严重度定级别（严重/高危=错误，中危=警告）
 			switch strings.ToLower(r.Severity) {
 			case "critical", "high":
-				e.logAction(task, "vuln_scan", "error", fmt.Sprintf("发现%s漏洞 %s @ %s", sevCN(r.Severity), r.Name, r.Target))
+				pushLog("vuln_scan", "error", fmt.Sprintf("发现%s漏洞 %s @ %s", sevCN(r.Severity), r.Name, r.Target))
 			case "medium":
-				e.logAction(task, "vuln_scan", "warn", fmt.Sprintf("发现中危漏洞 %s @ %s", r.Name, r.Target))
+				pushLog("vuln_scan", "warn", fmt.Sprintf("发现中危漏洞 %s @ %s", r.Name, r.Target))
 			default:
-				e.logAction(task, "vuln_scan", "info", fmt.Sprintf("发现漏洞 %s @ %s", r.Name, r.Target))
+				pushLog("vuln_scan", "info", fmt.Sprintf("发现漏洞 %s @ %s", r.Name, r.Target))
 			}
 			scanResult = &models.ScanResult{
 				TaskID:      task.ID,
@@ -1446,7 +1450,7 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 			}
 			urlCount++
 			if urlCount%100 == 0 {
-				pushLog("crawler", fmt.Sprintf("Web 爬虫：累计发现 %d 个 URL", urlCount))
+				pushLog("crawler", "info", fmt.Sprintf("Web 爬虫：累计发现 %d 个 URL", urlCount))
 			}
 			// 字典学习：目录扫描/爬虫发现的路径归一后计频（去 ID 段与文件名）。
 			if p := ExtractLearnedPath(r.Output); p != "" {

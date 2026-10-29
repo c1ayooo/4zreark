@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -192,6 +193,9 @@ func (m *SubdomainScanModule) ModuleRun() error {
 			forwarded++
 			// 报告输出
 			m.ReportOutput(1)
+			if forwarded%25 == 0 {
+				m.Logf("info", "子域名收集：累计发现 %d 个子域名", forwarded)
+			}
 			// 发送到下一个模块
 			if m.nextModule != nil {
 				select {
@@ -252,6 +256,24 @@ func (m *SubdomainScanModule) ModuleRun() error {
 				}
 			}
 
+			// IP/CIDR 目标没有子域枚举可言：合成 DomainSkip 直接旁路给下游
+			// （域名验证/端口预处理原生消费）。否则枚举阶段对 IP 白烧测绘配额，
+			// 且 IP 本身永远不会作为枚举产物回流，端口阶段无输入，任务空转零结果。
+			if isIPOrCIDR(domain) {
+				ds := DomainSkip{Domain: domain, CIDR: strings.Contains(domain, "/")}
+				if ds.CIDR {
+					log.Printf("[%s] CIDR target, bypass subdomain enum: %s", m.name, domain)
+				} else {
+					ds.IP = []string{domain}
+					log.Printf("[%s] IP target, bypass subdomain enum: %s", m.name, domain)
+				}
+				select {
+				case <-m.ctx.Done():
+				case m.resultChan <- ds:
+				}
+				continue
+			}
+
 			allWg.Add(1)
 			go func(d string) {
 				domainSem <- struct{}{}
@@ -266,6 +288,15 @@ func (m *SubdomainScanModule) ModuleRun() error {
 // （ActiveScanner 每次 Run 会重置内部去重表和回调，共享实例并发 Run 会互相清掉
 // 结果），信号量只负责控制外层并发，避免目标多时 goroutine 失控。
 const domainScanConcurrency = 2
+
+// isIPOrCIDR 报告 target 是否为裸 IP 或 CIDR 网段——这两类目标没有子域枚举可言。
+func isIPOrCIDR(target string) bool {
+	if net.ParseIP(target) != nil {
+		return true
+	}
+	_, _, err := net.ParseCIDR(target)
+	return err == nil
+}
 
 // scanSubdomains 执行子域名扫描（使用综合扫描器）
 func (m *SubdomainScanModule) scanSubdomains(domain string) {
@@ -528,7 +559,13 @@ func (m *DomainVerifyModule) ModuleRun() error {
 			// 处理 SubdomainResult
 			subResult, ok := data.(SubdomainResult)
 			if !ok {
-				log.Printf("[%s] Unexpected data type: %T, value: %+v", m.name, data, data)
+				// 非 SubdomainResult 一律原样透传（如 IP/CIDR 目标在子域模块
+				// 合成的 DomainSkip）：下游端口预处理原生认识这些类型，在这里
+				// 吞掉会让目标静默丢失、端口阶段无输入。
+				select {
+				case <-m.ctx.Done():
+				case m.resultChan <- data:
+				}
 				continue
 			}
 

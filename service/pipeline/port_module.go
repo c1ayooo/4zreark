@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -276,6 +277,7 @@ func (m *PortScanModule) scanPorts(ds DomainSkip) {
 	}
 
 	if err != nil {
+		m.Logf("error", "%s 端口扫描失败：%v", ds.Domain, err)
 		log.Printf("[%s] GoGo error for %s: %v", m.name, ds.Domain, err)
 		return
 	}
@@ -283,6 +285,13 @@ func (m *PortScanModule) scanPorts(ds DomainSkip) {
 	if scanResult == nil {
 		return
 	}
+	openPorts := make([]string, 0, len(scanResult.Ports))
+	for _, p := range scanResult.Ports {
+		if p.State == "open" {
+			openPorts = append(openPorts, strconv.Itoa(p.Port))
+		}
+	}
+	m.Logf("info", "%s 端口扫描完成：发现 %d 个开放端口", ds.Domain, len(openPorts))
 
 	// 发送扫描结果
 	for _, port := range scanResult.Ports {
