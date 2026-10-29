@@ -1062,7 +1062,7 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 	// 之前只在产出结果且 resultCount%50==0 时写库，产出少的阶段进度条永远不动。
 	progressStop := make(chan struct{})
 	defer close(progressStop)
-	lastModule := ""
+	prevStatus := map[string]string{}
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
@@ -1071,15 +1071,25 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 			case <-progressStop:
 				return
 			case <-ticker.C:
-				if tracker := scanPipe.GetProgressTracker(); tracker != nil {
-					report := tracker.GetReport()
-					e.updateProgressWithDetails(task, report)
-					// 阶段切换动作日志（功能分类 = 阶段）
-					if cur := report.CurrentModule; cur != "" && cur != lastModule {
-						if lastModule != "" {
-							e.logAction(task, moduleCategory(cur), "info", "进入 "+stageLabel(cur)+" 阶段")
-						}
-						lastModule = cur
+				tracker := scanPipe.GetProgressTracker()
+				if tracker == nil {
+					continue
+				}
+				report := tracker.GetReport()
+				e.updateProgressWithDetails(task, report)
+				// 颗粒度埋点：模块启动/完成的动作日志（完成时带分子分母总结）
+				for name, mp := range report.ModuleProgresses {
+					prev, seen := prevStatus[name]
+					if seen && prev == mp.Status {
+						continue
+					}
+					prevStatus[name] = mp.Status
+					if !seen && mp.Status == "running" {
+						e.logAction(task, moduleCategory(name), "info", "进入 "+stageLabel(name)+" 阶段")
+					}
+					if mp.Status == "completed" {
+						e.logAction(task, moduleCategory(name), "success",
+							fmt.Sprintf("%s阶段完成：处理 %d 项 · 产出 %d 项", stageLabel(name), mp.ProcessedItems, mp.OutputItems))
 					}
 				}
 			}
@@ -1360,6 +1370,15 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 
 		case pipeline.VulnResult:
 			vulnCount++
+			// 漏洞发现即时入日志：按严重度定级别（严重/高危=错误，中危=警告）
+			switch strings.ToLower(r.Severity) {
+			case "critical", "high":
+				e.logAction(task, "vuln_scan", "error", fmt.Sprintf("发现%s漏洞 %s @ %s", sevCN(r.Severity), r.Name, r.Target))
+			case "medium":
+				e.logAction(task, "vuln_scan", "warn", fmt.Sprintf("发现中危漏洞 %s @ %s", r.Name, r.Target))
+			default:
+				e.logAction(task, "vuln_scan", "info", fmt.Sprintf("发现漏洞 %s @ %s", r.Name, r.Target))
+			}
 			scanResult = &models.ScanResult{
 				TaskID:      task.ID,
 				WorkspaceID: task.WorkspaceID,
@@ -1605,6 +1624,22 @@ func (e *TaskExecutor) logAction(task *models.Task, category, level, message str
 	if err := e.taskService.AddLogCategory(ctx, task.ID.Hex(), category, level, message, ""); err != nil {
 		log.Printf("[TaskExecutor] 动作日志写入失败: %v", err)
 	}
+}
+
+
+// sevCN 严重度中文（报告包里已有同款映射，executor 侧独立小写比较）。
+func sevCN(s string) string {
+	switch strings.ToLower(s) {
+	case "critical":
+		return "严重"
+	case "high":
+		return "高危"
+	case "medium":
+		return "中危"
+	case "low":
+		return "低危"
+	}
+	return s
 }
 
 // updateProgress 更新任务进度（简单版本）
