@@ -1047,12 +1047,15 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 	config.LearnedSubdomainWords = task.Config.LearnedSubdomainWords
 	config.LearnedPaths = task.Config.LearnedPaths
 
+	LogTaskAction(task.ID.Hex(), string(task.Type), "info",
+		fmt.Sprintf("开始执行：%d 个目标", len(task.Targets)))
 	scanPipe := pipeline.NewStreamingPipelineWithProgress(ctx, task, config, len(task.Targets), progressCallback)
 
 	// 进度落库与结果数解耦：每 10 秒持久化一次分子分母快照。
 	// 之前只在产出结果且 resultCount%50==0 时写库，产出少的阶段进度条永远不动。
 	progressStop := make(chan struct{})
 	defer close(progressStop)
+	lastModule := ""
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
@@ -1062,7 +1065,15 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 				return
 			case <-ticker.C:
 				if tracker := scanPipe.GetProgressTracker(); tracker != nil {
-					e.updateProgressWithDetails(task, tracker.GetReport())
+					report := tracker.GetReport()
+					e.updateProgressWithDetails(task, report)
+					// 阶段切换动作日志（功能分类 = 阶段）
+					if cur := report.CurrentModule; cur != "" && cur != lastModule {
+						if lastModule != "" {
+							LogTaskAction(task.ID.Hex(), moduleCategory(cur), "info", "进入 "+stageLabel(cur)+" 阶段")
+						}
+						lastModule = cur
+					}
 				}
 			}
 		}
@@ -1640,6 +1651,8 @@ func (e *TaskExecutor) completeTask(task *models.Task, jobID int64, resultCount 
 		"completed_at": time.Now(),
 		"result_count": resultCount,
 	})
+	LogTaskAction(task.ID.Hex(), string(task.Type), "success",
+		fmt.Sprintf("执行完成，产出 %d 条结果", resultCount))
 	log.Printf("[TaskExecutor] Task %s completed with %d results", task.ID.Hex(), resultCount)
 	e.finishJob(jobID, "")
 
@@ -1664,6 +1677,7 @@ func (e *TaskExecutor) failTask(task *models.Task, jobID int64, errMsg string) {
 		"completed_at": time.Now(),
 		"last_error":   errMsg,
 	})
+	LogTaskAction(task.ID.Hex(), string(task.Type), "error", "执行失败："+errMsg)
 	log.Printf("[TaskExecutor] Task %s failed: %s", task.ID.Hex(), errMsg)
 	e.finishJob(jobID, errMsg)
 

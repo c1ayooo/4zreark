@@ -76,7 +76,9 @@ func (m *FingerprintModule) ModuleRun() error {
 	resultWg.Add(1)
 	go func() {
 		defer resultWg.Done()
+		forwarded := 0
 		for result := range m.resultChan {
+			forwarded++
 			// 报告输出
 			m.ReportOutput(1)
 			// 发送到下一个模块
@@ -87,6 +89,13 @@ func (m *FingerprintModule) ModuleRun() error {
 				case m.nextModule.GetInput() <- result:
 				}
 			}
+		}
+		// 指纹识别完成：站点数就是下游爬虫/漏洞扫描/目录/敏感信息的分母
+		if m.progressTracker != nil && forwarded > 0 {
+			m.progressTracker.UpdateModuleTotal("Crawler", forwarded)
+			m.progressTracker.UpdateModuleTotal("VulnScan", forwarded)
+			m.progressTracker.UpdateModuleTotal("DirScan", forwarded)
+			m.progressTracker.UpdateModuleTotal("Sensitive", forwarded)
 		}
 		if m.nextModule != nil {
 			m.nextModule.CloseInput()

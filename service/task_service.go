@@ -132,6 +132,11 @@ func (s *TaskService) CreateTask(task *models.Task) error {
 	}
 
 	log.Printf("[TaskService] 任务 %s 已创建并入队", task.ID.Hex())
+	// 动作日志：任务创建（功能分类 = 任务类型）
+	if err := tasks.AddLogCategory(ctx, task.ID.Hex(), string(task.Type), "info",
+		fmt.Sprintf("任务已创建：%d 个目标", len(task.Targets)), ""); err != nil {
+		log.Printf("[TaskService] 任务日志写入失败: %v", err)
+	}
 	return nil
 }
 

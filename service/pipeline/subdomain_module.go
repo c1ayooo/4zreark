@@ -187,7 +187,9 @@ func (m *SubdomainScanModule) ModuleRun() error {
 	resultWg.Add(1)
 	go func() {
 		defer resultWg.Done()
+		forwarded := 0
 		for result := range m.resultChan {
+			forwarded++
 			// 报告输出
 			m.ReportOutput(1)
 			// 发送到下一个模块
@@ -198,6 +200,12 @@ func (m *SubdomainScanModule) ModuleRun() error {
 				case m.nextModule.GetInput() <- result:
 				}
 			}
+		}
+		// 子域枚举完成：本阶段产出的子域数就是下游端口扫描的分母
+		//（子域 1:1 流经域名验证/端口预处理进入端口扫描，端口扫描逐条消费）。
+		// 没有这个分母，端口扫描的进度分子会落在 483/0 这种缺失态。
+		if m.progressTracker != nil && forwarded > 0 {
+			m.progressTracker.UpdateModuleTotal("PortScan", forwarded)
 		}
 		// 关闭下一个模块的输入
 		if m.nextModule != nil {

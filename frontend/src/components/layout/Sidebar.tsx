@@ -103,6 +103,7 @@ const menuGroups: MenuGroup[] = [
       { path: '/tasks', icon: ListTodo, label: '任务管理', roles: OPS },
       { path: '/cruise', icon: Calendar, label: '自动巡航', roles: OPS },
       { path: '/runs', icon: Activity, label: '执行记录', roles: OPS },
+      { path: '/tasklogs', icon: ScrollText, label: '任务日志', roles: OPS },
     ],
   },
   {

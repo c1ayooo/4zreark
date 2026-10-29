@@ -38,6 +38,12 @@ type TaskRepo interface {
 	DeleteTemplate(ctx context.Context, id string) error
 
 	AddLog(ctx context.Context, taskID, level, message, detail string) error
+	// AddLogCategory 带功能分类的动作日志（任务日志页按功能筛选的数据源）。
+	AddLogCategory(ctx context.Context, taskID, category, level, message, detail string) error
+	// ListActionLogs 跨源聚合（task_logs + icp_queries + enterprise_jobs）。
+	ListActionLogs(ctx context.Context, projectID int64, category, level, q string, page, pageSize int) ([]*ActionLogRow, int64, error)
+	// PurgeTaskLogs 清理 N 天前的运行日志。
+	PurgeTaskLogs(ctx context.Context, olderThanDays int) (int64, error)
 	ListLogs(ctx context.Context, taskID string, page, pageSize int) ([]*models.TaskLog, int64, error)
 }
 
@@ -715,13 +721,115 @@ func (r *taskRepo) DeleteTemplate(ctx context.Context, id string) error {
 // --- 任务日志 ---
 
 func (r *taskRepo) AddLog(ctx context.Context, taskID, level, message, detail string) error {
-	if _, err := idFromString(taskID); err != nil {
-		return ErrNotFound
-	}
+	return r.AddLogCategory(ctx, taskID, "system", level, message, detail)
+}
+
+// AddLogCategory 带功能分类的动作日志（subdomain/port_scan/icp/enterprise/...）。
+// icp_queries / enterprise_jobs 等非任务表的动作也借道 task_logs（id 同为 char(24)）。
+func (r *taskRepo) AddLogCategory(ctx context.Context, taskID, category, level, message, detail string) error {
 	_, err := r.r.pool.Exec(ctx,
-		`insert into task_logs (task_id, level, message, detail) values ($1,$2,$3,$4)`,
-		taskID, level, message, detail)
+		`insert into task_logs (task_id, category, level, message, detail) values ($1,$2,$3,$4,$5)`,
+		taskID, category, level, message, detail)
 	return err
+}
+
+// ActionLogRow 任务日志页的统一动作日志行（聚合 task_logs / icp_queries / enterprise_jobs）。
+type ActionLogRow struct {
+	CreatedAt time.Time `json:"created_at"`
+	Category  string    `json:"category"`
+	Title     string    `json:"title"`
+	Level     string    `json:"level"`
+	Status    string    `json:"status"`
+	Detail    string    `json:"detail"`
+	Ref       string    `json:"ref"`
+}
+
+// ListActionLogs 跨源聚合的动作日志分页查询。
+// filter 字段为空/0 时忽略该条件。
+func (r *taskRepo) ListActionLogs(ctx context.Context, projectID int64, category, level, q string, page, pageSize int) ([]*ActionLogRow, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 200 {
+		pageSize = 50
+	}
+	base := `
+select u.created_at, u.category, u.title, u.level, u.status, u.detail, u.ref
+  from (
+    select l.created_at, coalesce(nullif(l.category, ''), 'system') as category,
+           t.name as title, l.level as level, ''::text as status,
+           l.message as detail, l.task_id::text as ref, t.project_id as pid
+      from task_logs l join tasks t on t.id::text = l.task_id
+    union all
+    select q.created_at, 'icp', 'ICP 查询：' || q.query,
+           case q.status when 'error' then 'error' else 'info' end, q.status,
+           '抓取 ' || q.fetched || ' 条 / 共 ' || q.total || ' 条', q.id::text, q.project_id
+      from icp_queries q
+    union all
+    select j.created_at, 'enterprise', '企业采集：' || j.keyword || '（' || j.provider || '）',
+           case j.status when 'error' then 'error' when 'running' then 'info' else 'success' end, j.status,
+           '节点 ' || j.nodes || ' · 实体 ' || j.entities || ' · 域名 ' || j.domains
+             || coalesce(' · ' || nullif(j.error, ''), ''), j.id::text, j.project_id
+      from enterprise_jobs j
+  ) u
+ where ($1::bigint is null or u.pid = $1)
+   and ($2::text is null or u.category = $2)
+   and ($3::text is null or u.level = $3)
+   and ($4::text is null or u.title ilike $4 or u.detail ilike $4)
+`
+	args := []any{}
+	if projectID > 0 {
+		args = append(args, projectID)
+	} else {
+		args = append(args, nil)
+	}
+	if category != "" {
+		args = append(args, category)
+	} else {
+		args = append(args, nil)
+	}
+	if level != "" {
+		args = append(args, level)
+	} else {
+		args = append(args, nil)
+	}
+	if q != "" {
+		args = append(args, "%"+q+"%")
+	} else {
+		args = append(args, nil)
+	}
+
+	var total int64
+	if err := r.r.pool.QueryRow(ctx, `select count(*) from (`+base+`) c`, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	args = append(args, pageSize, (page-1)*pageSize)
+	rows, err := r.r.pool.Query(ctx, base+`
+ order by u.created_at desc
+ limit $`+fmt.Sprintf("%d", len(args)-1)+` offset $`+fmt.Sprintf("%d", len(args)), args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := []*ActionLogRow{}
+	for rows.Next() {
+		row := &ActionLogRow{}
+		if err := rows.Scan(&row.CreatedAt, &row.Category, &row.Title, &row.Level, &row.Status, &row.Detail, &row.Ref); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, row)
+	}
+	return out, total, rows.Err()
+}
+
+// PurgeTaskLogs 清理 N 天前的运行日志（自动清空时段）。
+func (r *taskRepo) PurgeTaskLogs(ctx context.Context, olderThanDays int) (int64, error) {
+	tag, err := r.r.pool.Exec(ctx,
+		`delete from task_logs where created_at < now() - ($1 || ' days')::interval`, olderThanDays)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (r *taskRepo) ListLogs(ctx context.Context, taskID string, page, pageSize int) ([]*models.TaskLog, int64, error) {

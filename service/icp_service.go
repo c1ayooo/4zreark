@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"context"
 	"errors"
 	"log"
@@ -109,6 +110,11 @@ func (s *ICPService) Enqueue(ctx context.Context, projectID int64, query string,
 	q, err := r.CreateICPQuery(ctx, projectID, query, serviceType, pageSize)
 	if err != nil {
 		return nil, err
+	}
+	// 动作日志：ICP 查询入队（task_id 借用 icp_queries.id，同为 char(24)）
+	if aerr := r.Tasks().AddLogCategory(ctx, q.ID, "icp", "info",
+		"ICP 查询入队："+query, ""); aerr != nil {
+		log.Printf("[icp] 动作日志写入失败: %v", aerr)
 	}
 	s.ensureWorker()
 	select {
@@ -229,6 +235,18 @@ func (s *ICPService) runQuery(id string) {
 	}
 	if err := r.FinishICPQuery(context.Background(), id, status, errMsg); err != nil {
 		log.Printf("[icp] 任务 %s 状态落库失败: %v", id, err)
+	}
+	// 动作日志：查询完成/失败（含抓取量）
+	level, msg := "success", fmt.Sprintf("ICP 查询完成「%s」：抓取 %d 条", q.Query, fetched)
+	if status == "error" {
+		level, msg = "error", fmt.Sprintf("ICP 查询失败「%s」：%s", q.Query, errMsg)
+	} else if status == "canceled" {
+		level, msg = "info", fmt.Sprintf("ICP 查询已取消「%s」", q.Query)
+	} else if errMsg != "" {
+		level, msg = "warn", fmt.Sprintf("ICP 查询完成（截断）「%s」：%s", q.Query, errMsg)
+	}
+	if aerr := r.Tasks().AddLogCategory(context.Background(), id, "icp", level, msg, ""); aerr != nil {
+		log.Printf("[icp] 动作日志写入失败: %v", aerr)
 	}
 }
 

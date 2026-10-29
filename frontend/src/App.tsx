@@ -17,6 +17,7 @@ const DashboardPage = lazy(() => import('@/pages/dashboard/DashboardPage'))
 const TasksPage = lazy(() => import('@/pages/tasks/TasksPage'))
 const TaskDetailPage = lazy(() => import('@/pages/tasks/TaskDetailPage'))
 const TaskCreatePage = lazy(() => import('@/pages/tasks/TaskCreatePage'))
+const TaskLogsPage = lazy(() => import('@/pages/tasks/TaskLogsPage'))
 const VulnerabilitiesPage = lazy(() => import('@/pages/vulnerabilities/VulnerabilitiesPage'))
 const VulnerabilityDetailPage = lazy(() => import('@/pages/vulnerabilities/VulnerabilityDetailPage'))
 const POCsPage = lazy(() => import('@/pages/pocs/POCsPage'))
@@ -105,6 +106,7 @@ function App() {
             <Route path="/sources" element={<SourcesPage />} />
             <Route path="/dictionaries" element={<DictionariesPage />} />
             <Route path="/tasks" element={<TasksPage />} />
+            <Route path="/tasklogs" element={<TaskLogsPage />} />
             <Route path="/tasks/new" element={<TaskCreatePage />} />
             <Route path="/tasks/:id" element={<TaskDetailPage />} />
             <Route path="/cruise" element={<CruisePage />} />

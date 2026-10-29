@@ -43,7 +43,27 @@ func (r *Repo) FinishJob(ctx context.Context, id, status, errMsg string) error {
 	_, err := r.pool.Exec(ctx,
 		`update enterprise_jobs set status=$2, error=$3, finished_at=now() where id=$1`,
 		id, status, errMsg)
-	return err
+	if err != nil {
+		return err
+	}
+	// 动作日志：企业采集到终态（与扫描任务的动作日志同一出口）
+	level := "success"
+	detail := "采集完成"
+	if status == "error" {
+		level = "error"
+		detail = "采集中止：" + errMsg
+	} else if status == "canceled" {
+		level = "info"
+		detail = "用户取消"
+	}
+	if _, lerr := r.pool.Exec(ctx,
+		`insert into task_logs (task_id, category, level, message, detail)
+         select id, 'enterprise', $2, '企业采集（' || provider || '）「' || keyword || '」' || $4, ''
+           from enterprise_jobs where id = $1`,
+		id, level, status, detail); lerr != nil {
+		fmt.Printf("[enterprise] 动作日志写入失败: %v\n", lerr)
+	}
+	return nil
 }
 
 func (r *Repo) BumpJob(ctx context.Context, id string, nodes, entities, domains, digital int) error {

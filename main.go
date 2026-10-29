@@ -301,6 +301,9 @@ func main() {
 	log.Println("Starting governance cycle scheduler...")
 	cycleService := service.NewCycleService()
 	cycleService.Start()
+	// 任务日志：每小时按留存时段自动清空（时段可在任务日志页调整）
+	taskLogSvc := service.NewTaskLogService()
+	taskLogSvc.StartRetention()
 	log.Println("Governance cycle scheduler started")
 	defer cycleService.Stop()
 
