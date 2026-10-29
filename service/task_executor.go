@@ -919,7 +919,7 @@ func applyScanTypes(cfg *pipeline.PipelineConfig, scanTypes []string) {
 func pipelinePortMode(task *models.Task) (mode, portRange string) {
 	mode = strings.TrimSpace(task.Config.PortScanMode)
 	switch mode {
-	case "quick", "top1000", "full":
+	case "quick", "top1000", "top2000", "top5000", "full":
 		return mode, ""
 	case "custom":
 		if pr := strings.TrimSpace(task.Config.PortRange); pr != "" {

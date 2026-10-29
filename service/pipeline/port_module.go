@@ -232,6 +232,15 @@ func (m *PortScanModule) scanPorts(ds DomainSkip) {
 		scanResult, err = m.gogoScanner.FullScan(ctx, ds.Domain)
 	case "top1000":
 		scanResult, err = m.gogoScanner.Top1000Scan(ctx, ds.Domain)
+	case "top2000", "top5000":
+		// nmap 频率序真 Top-N 列表（config/dicts/ports/，go:embed 内置）
+		ports := topNPorts(m.scanMode)
+		if ports == "" {
+			log.Printf("[%s] 端口表 %s 缺失，回退 top1000", m.name, m.scanMode)
+			scanResult, err = m.gogoScanner.Top1000Scan(ctx, ds.Domain)
+		} else {
+			scanResult, err = m.gogoScanner.ScanPorts(ctx, ds.Domain, ports)
+		}
 	case "custom":
 		scanResult, err = m.gogoScanner.ScanPorts(ctx, ds.Domain, m.portRange)
 	default: // quick

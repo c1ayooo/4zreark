@@ -339,7 +339,7 @@ func createOnboardFollowupTasks(ctx context.Context, projectID int64, keyword st
 			name: base + "·全流水线", typ: models.TaskTypeCustom,
 			conf: models.TaskConfig{
 				ScanTypes:     []string{"subdomain", "port_scan", "fingerprint", "crawler", "dir_scan", "vuln_scan"},
-				PortScanMode:  "top1000",
+				PortScanMode:  "top2000",
 				TargetDelayMs: 200,
 				RatePerSec:    20,
 			},

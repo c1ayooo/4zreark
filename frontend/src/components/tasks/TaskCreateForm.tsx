@@ -611,9 +611,11 @@ export default function TaskCreateForm({
                 })
               }
               options={[
-                { value: 'quick', label: '快速扫描' },
-                { value: 'top1000', label: 'Top 1000' },
-                { value: 'full', label: '全端口' },
+                { value: 'quick', label: '快速扫描（常用端口）' },
+                { value: 'top1000', label: 'Top 1000（nmap 频率序）' },
+                { value: 'top2000', label: 'Top 2000（较慢）' },
+                { value: 'top5000', label: 'Top 5000（慢）' },
+                { value: 'full', label: '全端口 1-65535（很慢）' },
               ]}
             />
           </div>
