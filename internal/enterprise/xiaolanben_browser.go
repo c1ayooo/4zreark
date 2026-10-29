@@ -1,6 +1,7 @@
 package enterprise
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,16 @@ import (
 	"github.com/go-rod/rod/lib/proto"
 	"github.com/tidwall/gjson"
 )
+
+// flexString 容错字符串：JSON 值为数字/布尔/对象时取其字符串形态，
+// 上游字段类型漂移（openStatus 数字型状态码）不再打挂整个详情解析。
+type flexString string
+
+func (f *flexString) UnmarshalJSON(b []byte) error {
+	b = bytes.Trim(b, `"`)
+	*f = flexString(b)
+	return nil
+}
 
 // 小蓝本浏览器签名通道（Go 内嵌 rod，替代外部 Node/Playwright 进程）。
 //
@@ -329,30 +340,32 @@ func (p *xiaolanbenProvider) xlbDetail(ctx context.Context, extID string) (*Comp
 	if err != nil {
 		return nil, fmt.Errorf("小蓝本详情提取失败: %w", err)
 	}
+	// 容错字符串：上游字段类型漂移（openStatus 出现过数字型状态码）不能打挂整个
+	// 详情解析——数字/布尔/对象一律取其字符串形态，而非让 json.Unmarshal 整体失败。
 	var d struct {
-		Name        string   `json:"name"`
-		LegalPerson string   `json:"legalPerson"`
-		OpenStatus  string   `json:"openStatus"`
-		Phone       string   `json:"phone"`
-		Email       string   `json:"email"`
-		Websites []struct {
-			D   string `json:"d"`
-			ICP string `json:"icp"`
+		Name        flexString `json:"name"`
+		LegalPerson flexString `json:"legalPerson"`
+		OpenStatus  flexString `json:"openStatus"`
+		Phone       flexString `json:"phone"`
+		Email       flexString `json:"email"`
+		Websites    []struct {
+			D   string     `json:"d"`
+			ICP flexString `json:"icp"`
 		} `json:"websites"`
 	}
 	if err := json.Unmarshal([]byte(res.Value.String()), &d); err != nil {
 		return nil, fmt.Errorf("小蓝本详情解析失败: %w", err)
 	}
-	detail := &CompanyDetail{ExtID: extID, Name: d.Name, LegalPerson: d.LegalPerson,
-		OpenStatus: d.OpenStatus, Phone: d.Phone, Email: d.Email}
+	detail := &CompanyDetail{ExtID: extID, Name: string(d.Name), LegalPerson: string(d.LegalPerson),
+		OpenStatus: string(d.OpenStatus), Phone: string(d.Phone), Email: string(d.Email)}
 	for _, w := range d.Websites {
-		nd := normalizeDomain(w.D)
+		nd := normalizeDomain(string(w.D))
 		if nd == "" {
 			continue
 		}
 		// webSites 的 icp 是该域名在本主体名下的备案号——归属自动转种子的依据。
 		detail.Domains = append(detail.Domains, DomainHit{
-			Domain: nd, ICP: w.ICP, Site: "小蓝本官网", Evidence: "小蓝本企业详情 webSites",
+			Domain: nd, ICP: string(w.ICP), Site: "小蓝本官网", Evidence: "小蓝本企业详情 webSites",
 		})
 	}
 	return detail, nil
