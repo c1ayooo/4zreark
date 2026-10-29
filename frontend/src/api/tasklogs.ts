@@ -49,5 +49,7 @@ export const taskLogCategories: { value: string; label: string }[] = [
   { value: 'clue_hunt', label: '存量线索' },
   { value: 'icp', label: 'ICP 查询' },
   { value: 'enterprise', label: '企业采集' },
+  { value: 'custom', label: '组合扫描' },
+  { value: 'task', label: '扫描任务' },
   { value: 'system', label: '系统' },
 ]

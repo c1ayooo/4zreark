@@ -42,6 +42,8 @@ type taskStore interface {
 	AddLogCategory(ctx context.Context, taskID, category, level, message, detail string) error
 	// ClaimExecution 执行认领（跨执行器分配凭证）：false = 已被认领，本执行放弃。
 	ClaimExecution(ctx context.Context, taskID, executorID, claimNodeID string) (bool, error)
+	// AddLogsBatch 批量写运行明细日志。
+	AddLogsBatch(ctx context.Context, taskID string, rows []repo.TaskLogInsert) error
 	// ReleaseExecution 释放认领（完成/失败时）。
 	ReleaseExecution(ctx context.Context, taskID string) error
 }
@@ -1067,6 +1069,14 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 	progressStop := make(chan struct{})
 	defer close(progressStop)
 	prevStatus := map[string]string{}
+	// 运行明细缓冲：里程碑事件先进缓冲，10s ticker 批量落 task_logs
+	var logMu sync.Mutex
+	var logRows []repo.TaskLogInsert
+	pushLog := func(category, message string) {
+		logMu.Lock()
+		logRows = append(logRows, repo.TaskLogInsert{Category: category, Level: "info", Message: message})
+		logMu.Unlock()
+	}
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
@@ -1075,6 +1085,15 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 			case <-progressStop:
 				return
 			case <-ticker.C:
+				logMu.Lock()
+				pending := logRows
+				logRows = nil
+				logMu.Unlock()
+				if len(pending) > 0 {
+					if err := e.taskService.AddLogsBatch(context.Background(), task.ID.Hex(), pending); err != nil {
+						log.Printf("[TaskExecutor] 运行明细落库失败: %v", err)
+					}
+				}
 				tracker := scanPipe.GetProgressTracker()
 				if tracker == nil {
 					continue
@@ -1259,6 +1278,9 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 		switch r := result.(type) {
 		case pipeline.SubdomainResult:
 			subdomainCount++
+			if subdomainCount%25 == 0 {
+				pushLog("subdomain", fmt.Sprintf("子域名收集：累计发现 %d 个子域名", subdomainCount))
+			}
 			// 字典学习：相对根域的首标签（爆破词位置），任务内去重后计频。
 			if lbl := ExtractSubdomainLabel(r.Host, r.RootDomain); lbl != "" {
 				learningSubs[lbl] = struct{}{}
@@ -1297,6 +1319,9 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 		case pipeline.PortAlive:
 			if r.Port != "" {
 				portCount++
+				if portCount%50 == 0 {
+					pushLog("port_scan", fmt.Sprintf("端口扫描：累计发现 %d 个开放端口", portCount))
+				}
 				scanResult = &models.ScanResult{
 					TaskID:      task.ID,
 					WorkspaceID: task.WorkspaceID,
@@ -1420,6 +1445,9 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 				continue
 			}
 			urlCount++
+			if urlCount%100 == 0 {
+				pushLog("crawler", fmt.Sprintf("Web 爬虫：累计发现 %d 个 URL", urlCount))
+			}
 			// 字典学习：目录扫描/爬虫发现的路径归一后计频（去 ID 段与文件名）。
 			if p := ExtractLearnedPath(r.Output); p != "" {
 				learningPaths[p] = struct{}{}

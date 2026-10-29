@@ -49,6 +49,8 @@ type TaskRepo interface {
 	ClaimExecution(ctx context.Context, taskID, executorID, claimNodeID string) (bool, error)
 	// ReleaseExecution 释放执行认领（完成/失败/回收时）。
 	ReleaseExecution(ctx context.Context, taskID string) error
+	// AddLogsBatch 批量写运行明细日志（worker 上报 + 本地埋点）。
+	AddLogsBatch(ctx context.Context, taskID string, rows []TaskLogInsert) error
 	ListLogs(ctx context.Context, taskID string, page, pageSize int) ([]*models.TaskLog, int64, error)
 }
 
@@ -743,6 +745,32 @@ func (r *taskRepo) ReleaseExecution(ctx context.Context, taskID string) error {
 	return err
 }
 
+// TaskLogInsert 运行明细日志行。
+type TaskLogInsert struct {
+	Category string
+	Level    string
+	Message  string
+}
+
+func (r *taskRepo) AddLogsBatch(ctx context.Context, taskID string, rows []TaskLogInsert) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	tx, err := r.r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	for _, row := range rows {
+		if _, err := tx.Exec(ctx,
+			`insert into task_logs (task_id, category, level, message, detail) values ($1,$2,$3,$4,'')`,
+			taskID, row.Category, row.Level, row.Message); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
 // --- 任务日志 ---
 
 func (r *taskRepo) AddLog(ctx context.Context, taskID, level, message, detail string) error {
@@ -781,10 +809,10 @@ func (r *taskRepo) ListActionLogs(ctx context.Context, projectID int64, category
 	base := `
 select u.created_at, u.category, u.title, u.level, u.status, u.detail, u.ref
   from (
-    select l.created_at, coalesce(nullif(l.category, ''), 'system') as category,
-           t.name as title, l.level as level, ''::text as status,
-           l.message as detail, l.task_id::text as ref, t.project_id as pid
-      from task_logs l join tasks t on t.id::text = l.task_id
+    select t.created_at, t.type as category, t.name as title,
+           case t.status when 'failed' then 'error' when 'running' then 'info' else 'success' end as level,
+           t.status as status, coalesce(t.last_error, '') as detail, t.id::text as ref, t.project_id as pid
+      from tasks t
     union all
     select q.created_at, 'icp', 'ICP 查询：' || q.query,
            case q.status when 'error' then 'error' else 'info' end, q.status,

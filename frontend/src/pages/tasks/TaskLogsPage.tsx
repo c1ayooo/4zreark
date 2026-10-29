@@ -5,6 +5,7 @@ import type { TableProps } from 'antd'
 import { Eraser, ScrollText, Settings, RefreshCw } from 'lucide-react'
 
 import { taskLogApi, taskLogCategories, type ActionLogRow } from '@/api/tasklogs'
+import { taskApi } from '@/api/tasks'
 import { projectApi } from '@/api/projects'
 import { useAuthStore } from '@/store/auth'
 import { useConfirm } from '@/components/common/confirm-provider'
@@ -289,38 +290,39 @@ export default function TaskLogsPage() {
         </div>
       </Modal>
 
-      <Modal open={!!detailRow} onCancel={() => setDetailRow(null)} footer={null} title="日志详情" width={560}>
+      <Modal
+        open={!!detailRow}
+        onCancel={() => setDetailRow(null)}
+        footer={
+          <Button onClick={() => setDetailRow(null)}>关闭</Button>
+        }
+        title={
+          <span className="flex items-center gap-2">
+            <ScrollText className="h-4 w-4" />
+            任务日志详情
+            {detailRow && <Tag className={statusTagClass('outline')}>{detailRow.title}</Tag>}
+          </span>
+        }
+        width={720}
+      >
         {detailRow && (
-          <div className="space-y-2 text-sm">
-            <div className="flex items-center gap-2">
-              {taskLogCategories.find((c) => c.value === detailRow.category)?.label && (
-                <Tag className={statusTagClass('outline')}>
-                  {taskLogCategories.find((c) => c.value === detailRow.category)?.label}
-                </Tag>
-              )}
-              <Tag className={statusTagClass(detailRow.level === 'error' ? 'destructive' : detailRow.level === 'success' ? 'success' : 'outline')}>
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <Tag className={statusTagClass(
+                detailRow.level === 'error' ? 'destructive' : detailRow.level === 'success' ? 'success' : detailRow.level === 'warn' || detailRow.level === 'warning' ? 'warning' : 'outline'
+              )}>
                 {levelLabel[detailRow.level] ?? detailRow.level}
               </Tag>
-            </div>
-            <div className="rounded-lg border p-3 text-sm leading-relaxed whitespace-pre-wrap break-words">
-              {detailRow.title}
-            </div>
-            <dl className="space-y-1.5">
-              <div className="flex gap-2">
-                <dt className="w-16 shrink-0 text-muted-foreground">时间</dt>
-                <dd className="font-mono text-xs">{formatDate(detailRow.created_at)}</dd>
-              </div>
-              <div className="flex gap-2">
-                <dt className="w-16 shrink-0 text-muted-foreground">状态</dt>
-                <dd>{detailRow.status ? (jobStatusLabel[detailRow.status] ?? detailRow.status) : '—'}</dd>
-              </div>
-              {detailRow.detail && (
-                <div className="flex gap-2">
-                  <dt className="w-16 shrink-0 text-muted-foreground">详情</dt>
-                  <dd className="whitespace-pre-wrap break-words">{detailRow.detail}</dd>
-                </div>
+              {detailRow.status && (
+                <span className="text-muted-foreground text-xs">状态：{jobStatusLabel[detailRow.status] ?? detailRow.status}</span>
               )}
-            </dl>
+              <span className="text-muted-foreground text-xs">{formatDate(detailRow.created_at)}</span>
+            </div>
+            {detailRow.detail && (
+              <div className="text-muted-foreground rounded-md bg-muted/50 px-3 py-2 text-xs">{detailRow.detail}</div>
+            )}
+            {/* 运行明细（该任务的 task_logs，支持检索） */}
+            <TaskLogLines taskId={detailRow.ref} />
           </div>
         )}
       </Modal>
@@ -328,3 +330,46 @@ export default function TaskLogsPage() {
   )
 }
 
+
+// 任务运行明细：拉取该任务的 task_logs 行，支持关键词过滤（客户端检索）
+function TaskLogLines({ taskId }: { taskId: string }) {
+  const [q, setQ] = useState('')
+  const logs = useQuery({
+    queryKey: ['tasklog-lines', taskId],
+    queryFn: () => taskApi.getTaskLogs(taskId, { pageSize: 200 }),
+    staleTime: 30_000,
+  })
+  const lines = (logs.data?.data?.list ?? []).filter((l) =>
+    !q.trim() || (l.message || '').toLowerCase().includes(q.trim().toLowerCase())
+  )
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-muted-foreground text-xs">运行明细（{lines.length} 行）</span>
+        <Input
+          className="w-52"
+          size="small"
+          placeholder="检索日志…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          allowClear
+        />
+      </div>
+      <div className="max-h-72 space-y-1 overflow-auto rounded-md border p-2">
+        {logs.isLoading ? (
+          <p className="text-muted-foreground p-2 text-sm">加载中…</p>
+        ) : lines.length === 0 ? (
+          <p className="text-muted-foreground p-2 text-sm">该任务暂无运行明细</p>
+        ) : (
+          lines.map((l, i) => (
+            <div key={l.id ?? i} className="flex items-start gap-2 rounded px-1.5 py-1 text-xs hover:bg-muted/60">
+              <span className="text-muted-foreground/70 shrink-0 font-mono">{formatDate(l.timestamp)}</span>
+              <span className="shrink-0">{l.level === 'error' ? '✗' : l.level === 'warn' ? '⚠' : '·'}</span>
+              <span className="whitespace-pre-wrap break-all">{l.message}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}

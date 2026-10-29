@@ -707,6 +707,15 @@ func (s *TaskService) DeleteTaskTemplate(templateID string) error {
 	return nil
 }
 
+// AddLogsBatch 批量写运行明细日志（master 直写 / worker 经网关批量上报）。
+func (s *TaskService) AddLogsBatch(ctx context.Context, taskID string, rows []repo.TaskLogInsert) error {
+	tasks, _, err := s.stores()
+	if err != nil {
+		return err
+	}
+	return tasks.AddLogsBatch(ctx, taskID, rows)
+}
+
 // ClaimExecution 执行认领：原子抢占 executor_id，已被认领返回 false。
 func (s *TaskService) ClaimExecution(ctx context.Context, taskID, executorID, claimNodeID string) (bool, error) {
 	tasks, _, err := s.stores()

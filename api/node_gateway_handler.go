@@ -148,9 +148,39 @@ func (h *NodeGatewayHandler) AddTaskLog(c *gin.Context) {
 		Level    string `json:"level"`
 		Message  string `json:"message"`
 		Detail   string `json:"detail"`
+		Logs     []struct {
+			Category string `json:"category"`
+			Level    string `json:"level"`
+			Message  string `json:"message"`
+		} `json:"logs"`
 	}
-	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.Message) == "" {
-		utils.BadRequest(c, "category 与 message 必填")
+	if err := c.ShouldBindJSON(&body); err != nil {
+		utils.BadRequest(c, "参数错误")
+		return
+	}
+	if len(body.Logs) > 0 {
+		// 批量：worker 的运行明细日志批量上报
+		for _, l := range body.Logs {
+			if strings.TrimSpace(l.Message) == "" {
+				continue
+			}
+			cat, lv := l.Category, l.Level
+			if cat == "" {
+				cat = "system"
+			}
+			if lv == "" {
+				lv = "info"
+			}
+			if err := h.tasks.AddLogCategory(c.Request.Context(), taskID, cat, lv, l.Message, ""); err != nil {
+				utils.Error(c, utils.ErrCodeInternalError, err.Error())
+				return
+			}
+		}
+		utils.Success(c, gin.H{"ok": true, "count": len(body.Logs)})
+		return
+	}
+	if strings.TrimSpace(body.Message) == "" {
+		utils.BadRequest(c, "message 必填")
 		return
 	}
 	if body.Category == "" {

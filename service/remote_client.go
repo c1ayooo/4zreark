@@ -253,6 +253,13 @@ func (c *RemoteClient) ReleaseTask(ctx context.Context, taskID string) error {
 		map[string]any{"executor_id": ""}, nil)
 }
 
+// AddTaskLogsBatch 批量上报运行明细日志（经节点网关落 task_logs）。
+func (c *RemoteClient) AddTaskLogsBatch(ctx context.Context, taskID string, rows []map[string]any) error {
+	return c.call(ctx, http.MethodPost,
+		fmt.Sprintf("/api/node/tasks/%s/logs", taskID),
+		map[string]any{"logs": rows}, nil)
+}
+
 // AddTaskLogCategory 把动作日志上报给平台（worker 侧无库，经网关落 task_logs）。
 func (c *RemoteClient) AddTaskLogCategory(ctx context.Context, taskID, category, level, message string) error {
 	return c.call(ctx, http.MethodPost,
@@ -331,6 +338,17 @@ func (s *remoteTaskStore) UpdateTask(taskID string, updates map[string]interface
 
 func (s *remoteTaskStore) AddLogCategory(ctx context.Context, taskID, category, level, message, detail string) error {
 	return s.client.AddTaskLogCategory(ctx, taskID, category, level, message)
+}
+
+func (s *remoteTaskStore) AddLogsBatch(ctx context.Context, taskID string, rows []repo.TaskLogInsert) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	mapped := make([]map[string]any, 0, len(rows))
+	for _, r := range rows {
+		mapped = append(mapped, map[string]any{"category": r.Category, "level": r.Level, "message": r.Message})
+	}
+	return s.client.AddTaskLogsBatch(ctx, taskID, mapped)
 }
 
 func (s *remoteTaskStore) ClaimExecution(ctx context.Context, taskID, executorID, claimNodeID string) (bool, error) {
