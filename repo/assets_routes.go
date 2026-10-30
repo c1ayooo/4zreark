@@ -66,21 +66,30 @@ func isJunkRouteStatus(code int) bool {
 
 // SiteIDByHostWithStatus 按 host 找站点并带回当前 http_status，
 // 供爬虫入库前做死站守卫（404/410 站点的爬取结果整体是垃圾）。
-func (a *AssetRepo) SiteIDByHostWithStatus(ctx context.Context, host string) (int64, int64, int, error) {
+// projectID > 0 时限定在该项目内找——同一 host（如 127.0.0.1）会同时
+// 存在于多个项目，全局取 id 最小的会把路由错挂到别的项目。
+func (a *AssetRepo) SiteIDByHostWithStatus(ctx context.Context, host string, projectID int64) (int64, int64, int, error) {
 	if a == nil || a.r == nil {
 		return 0, 0, 0, errUninitialized()
 	}
-	var siteID, projectID, status int64
-	err := a.r.pool.QueryRow(ctx,
-		`SELECT id, project_id, http_status FROM sites WHERE host = $1 ORDER BY id LIMIT 1`, host).
-		Scan(&siteID, &projectID, &status)
+	var siteID, foundProject, status int64
+	var err error
+	if projectID > 0 {
+		err = a.r.pool.QueryRow(ctx,
+			`SELECT id, project_id, http_status FROM sites WHERE host = $1 AND project_id = $2 ORDER BY id LIMIT 1`, host, projectID).
+			Scan(&siteID, &foundProject, &status)
+	} else {
+		err = a.r.pool.QueryRow(ctx,
+			`SELECT id, project_id, http_status FROM sites WHERE host = $1 ORDER BY id LIMIT 1`, host).
+			Scan(&siteID, &foundProject, &status)
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, 0, 0, ErrNotFound
 	}
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	return siteID, projectID, int(status), nil
+	return siteID, foundProject, int(status), nil
 }
 
 // SiteHTTPStatus 查站点当前 http_status（巡检慢爬守卫用）。

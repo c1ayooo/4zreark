@@ -53,7 +53,7 @@ func TestSaveCrawledRoutes(t *testing.T) {
 		// 匹配不到站点：跳过
 		{URL: "http://no-such-site.invalid/foo", Method: "GET"},
 	}
-	sites, saved, err := svc.SaveCrawledRoutes("test", urls)
+	sites, saved, err := svc.SaveCrawledRoutes("test", urls, projectID)
 	if err != nil {
 		t.Fatalf("保存路由失败: %v", err)
 	}

@@ -344,6 +344,12 @@ func (h *NodeGatewayHandler) PostAssets(c *gin.Context) {
 	defer cancel()
 	assetSvc := service.NewAssetService()
 	if task.ProjectID > 0 && len(body.Records) > 0 {
+		// 归因兜底：旧版 worker 不带 task_id，以网关路径参数为准回填。
+		for i := range body.Records {
+			if body.Records[i].TaskID == "" {
+				body.Records[i].TaskID = taskID
+			}
+		}
 		const chunk = 5000
 		for start := 0; start < len(body.Records); start += chunk {
 			end := start + chunk
@@ -357,7 +363,7 @@ func (h *NodeGatewayHandler) PostAssets(c *gin.Context) {
 		}
 	}
 	if len(body.Routes) > 0 {
-		if _, _, err := assetSvc.SaveCrawledRoutes("pipeline", body.Routes); err != nil {
+		if _, _, err := assetSvc.SaveCrawledRoutes("pipeline", body.Routes, task.ProjectID); err != nil {
 			utils.Error(c, utils.ErrCodeInternalError, "路由写入失败: "+err.Error())
 			return
 		}

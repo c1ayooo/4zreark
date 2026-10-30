@@ -101,7 +101,7 @@ func (localAssetStore) SaveRoutes(ctx context.Context, task *models.Task, routes
 	if len(routes) == 0 {
 		return nil
 	}
-	sites, saved, err := NewAssetService().SaveCrawledRoutes("pipeline", routes)
+	sites, saved, err := NewAssetService().SaveCrawledRoutes("pipeline", routes, task.ProjectID)
 	if err != nil {
 		return err
 	}
@@ -1081,6 +1081,19 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 	config.ModuleLogSink = func(module, level, message string) {
 		pushLog(moduleCategory(module), level, message)
 	}
+	// 冲刷缓冲中的运行明细。除 10s ticker 外，任务收尾（完成/取消）也必须
+	// 调一次：秒级任务的缓冲日志否则永远等不到 ticker，直接丢失。
+	flushLogs := func() {
+		logMu.Lock()
+		pending := logRows
+		logRows = nil
+		logMu.Unlock()
+		if len(pending) > 0 {
+			if err := e.taskService.AddLogsBatch(context.Background(), task.ID.Hex(), pending); err != nil {
+				log.Printf("[TaskExecutor] 运行明细落库失败: %v", err)
+			}
+		}
+	}
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
@@ -1089,15 +1102,7 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 			case <-progressStop:
 				return
 			case <-ticker.C:
-				logMu.Lock()
-				pending := logRows
-				logRows = nil
-				logMu.Unlock()
-				if len(pending) > 0 {
-					if err := e.taskService.AddLogsBatch(context.Background(), task.ID.Hex(), pending); err != nil {
-						log.Printf("[TaskExecutor] 运行明细落库失败: %v", err)
-					}
-				}
+				flushLogs()
 				tracker := scanPipe.GetProgressTracker()
 				if tracker == nil {
 					continue
@@ -1204,6 +1209,12 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 			return
 		}
 		if len(assetRecords) > 0 {
+			// 资产归因到任务：local/remote 两条入库路都消费这个字段。
+			for i := range assetRecords {
+				if assetRecords[i].TaskID == "" {
+					assetRecords[i].TaskID = taskID
+				}
+			}
 			if err := e.assets.Ingest(ctx, task, assetRecords); err != nil {
 				log.Printf("[TaskExecutor] 扫描结果增量并入资产失败: %v", err)
 			} else {
@@ -1270,6 +1281,7 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 			flushResults(true)
 			flushAssets(true)
 			flushLearning(true)
+			flushLogs()
 			e.finishJob(jobID, "")
 			return
 		default:
@@ -1610,6 +1622,7 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 	flushAssets(true)
 	flushResults(true)
 	flushLearning(true)
+	flushLogs()
 
 	// 批量更新子域名的 CDN 信息
 	if len(cdnInfo) > 0 {
@@ -1647,6 +1660,7 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 			"discovered_assets": subdomainCount + portCount + urlCount,
 			"discovered_ports":  portCount,
 			"discovered_vulns":  vulnCount,
+			"scanned_targets":   len(task.Targets),
 		})
 	}
 	log.Printf("[TaskExecutor] Task %s completed: subdomains=%d, ports=%d, vulns=%d, urls=%d, takeovers=%d",

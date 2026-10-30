@@ -116,8 +116,15 @@ func (m *WihProbeModule) run() error {
 
 	// 链式接入：链上每个模块负责拉起自己的下游。本模块的 nextModule
 	// 不参与数据转发（数据走显式 out），仅用于启动下游 ModuleRun。
+	// 退出前必须等下游跑完：下游（收集器）还挂着本模块关掉的输入缓冲
+	// 在排空转发，不等就返回会让整条链提前收尾、resultChan 被提前关闭，
+	// 尾部结果 send on closed channel 直接崩掉 worker。
+	nextDone := make(chan struct{})
+	var nextStarted bool
 	if m.nextModule != nil {
+		nextStarted = true
 		go func() {
+			defer close(nextDone)
 			if err := m.nextModule.ModuleRun(); err != nil {
 				log.Printf("[%s] Next module error: %v", m.name, err)
 			}
@@ -143,6 +150,9 @@ func (m *WihProbeModule) run() error {
 		<-fwdDone
 		if m.out != nil {
 			close(m.out)
+		}
+		if nextStarted {
+			<-nextDone
 		}
 	}()
 

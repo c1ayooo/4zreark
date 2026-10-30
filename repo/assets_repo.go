@@ -118,6 +118,8 @@ type RawRecord struct {
 	IconContentType string         `json:"icon_content_type,omitempty"`
 	IconData        []byte         `json:"-"`
 	Evidence        map[string]any `json:"evidence,omitempty"`
+	// TaskID 记录发现该资产的任务，空则由入库方（执行器/网关）回填。
+	TaskID string `json:"task_id,omitempty"`
 }
 
 // ImportResult 汇总一次导入。
@@ -500,19 +502,20 @@ func (a *AssetRepo) ImportRecords(ctx context.Context, projectID int64, source s
 		var inserted bool
 		err = tx.QueryRow(ctx, `
 			INSERT INTO raw_records (project_id, source, host, port, protocol, value, status_code,
-				title, ip, server, evidence, dedup_key, observed_at)
+				title, ip, server, evidence, dedup_key, observed_at, task_id)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,nullif($8,''),nullif($9,'')::inet,
-			        $10,$11,$12,now())
+			        $10,$11,$12,now(),nullif($13,''))
 			ON CONFLICT (dedup_key) DO UPDATE SET
 				status_code = EXCLUDED.status_code,
 				title = coalesce(EXCLUDED.title, raw_records.title),
 				ip = coalesce(EXCLUDED.ip, raw_records.ip),
 				server = CASE WHEN EXCLUDED.server <> '' THEN EXCLUDED.server ELSE raw_records.server END,
 				evidence = EXCLUDED.evidence,
+				task_id = coalesce(nullif(EXCLUDED.task_id,''), raw_records.task_id),
 				observed_at = now()
 			RETURNING id, (xmax = 0)`,
 			projectID, source, host, port, proto, value, rec.StatusCode, rec.Title, rec.IP,
-			rec.Server, toJSONB(rec.Evidence), dedup).Scan(&recordID, &inserted)
+			rec.Server, toJSONB(rec.Evidence), dedup, rec.TaskID).Scan(&recordID, &inserted)
 		if err != nil {
 			return nil, fmt.Errorf("写入原始记录失败: %w", err)
 		}

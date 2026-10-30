@@ -376,7 +376,9 @@ type CrawledEndpoint struct {
 
 // SaveCrawledRoutes 把爬虫结果按 host 归到站点，写入 site_routes。
 // 匹配不到站点的 URL 直接跳过——路由必须挂在资产上，不凭空建站点。
-func (s *AssetService) SaveCrawledRoutes(source string, urls []CrawledEndpoint) (int, int, error) {
+// projectID > 0 时站点查找限定在该项目：同一 host（如 127.0.0.1）会同时
+// 存在于多个项目，全局找会把路由错挂到别的项目（实测踩过）。
+func (s *AssetService) SaveCrawledRoutes(source string, urls []CrawledEndpoint, projectID int64) (int, int, error) {
 	a, err := s.repo()
 	if err != nil {
 		return 0, 0, err
@@ -427,7 +429,7 @@ func (s *AssetService) SaveCrawledRoutes(source string, urls []CrawledEndpoint) 
 	for _, g := range byHost {
 		// 死站守卫：http_status 实测 404/410 的站点，爬虫产物整体是垃圾，
 		// 一条都不入库也不反向删它的历史路由（站点可能只是暂时下线）。
-		siteID, projectID, siteStatus, err := a.SiteIDByHostWithStatus(ctx, g.host)
+		siteID, foundProject, siteStatus, err := a.SiteIDByHostWithStatus(ctx, g.host, projectID)
 		if err != nil {
 			continue // 没有对应站点：跳过
 		}
@@ -436,9 +438,9 @@ func (s *AssetService) SaveCrawledRoutes(source string, urls []CrawledEndpoint) 
 			continue
 		}
 		if authPortalHosts[g.host] {
-			authByProject[projectID] = append(authByProject[projectID], g.host)
+			authByProject[foundProject] = append(authByProject[foundProject], g.host)
 		}
-		n, err := a.UpsertSiteRoutes(ctx, siteID, projectID, source, g.routes)
+		n, err := a.UpsertSiteRoutes(ctx, siteID, foundProject, source, g.routes)
 		if err != nil {
 			return sites, routes, err
 		}

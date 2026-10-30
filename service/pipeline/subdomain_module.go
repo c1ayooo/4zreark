@@ -24,6 +24,9 @@ type SubdomainScanModule struct {
 	enableHTTPProbe bool // 是否进行 HTTP 探测
 	dnsResolvers    []string
 	scope           *scope.Scope
+	// expectedTotal 任务目标总数：每个注入目标恰被本模块处理一次
+	//（枚举或旁路），拿它当进度分母，避免流式软进度在任务页显示 total=0。
+	expectedTotal int
 }
 
 // SetScope 设置任务授权边界。
@@ -170,7 +173,7 @@ func (m *SubdomainScanModule) ModuleRun() error {
 	var nextModuleRun sync.WaitGroup
 
 	// 报告模块开始
-	m.ReportModuleStart(0)
+	m.ReportModuleStart(m.expectedTotal)
 	defer m.ReportModuleComplete()
 
 	// 启动下一个模块
@@ -274,6 +277,20 @@ func (m *SubdomainScanModule) ModuleRun() error {
 				continue
 			}
 
+			// 非域名目标（公司名、备注文本等）同样没有子域枚举可言：枚举阶段
+			// 必然「主域无效」零产出，还会顺流污染下游。合成 Skip 的 DomainSkip
+			// 让整条链跳过它，并在任务日志里写明原因，不再静默空转。
+			if !IsPlausibleDomainTarget(domain) {
+				log.Printf("[%s] target is not a plausible domain, skip all stages: %q", m.name, domain)
+				m.Logf("warn", "目标 %q 不是有效的域名/IP/网段/URL，已跳过（公司类型目标请走项目种子+企业采集）", domain)
+				ds := DomainSkip{Domain: domain, Skip: true}
+				select {
+				case <-m.ctx.Done():
+				case m.resultChan <- ds:
+				}
+				continue
+			}
+
 			allWg.Add(1)
 			go func(d string) {
 				domainSem <- struct{}{}
@@ -296,6 +313,65 @@ func isIPOrCIDR(target string) bool {
 	}
 	_, _, err := net.ParseCIDR(target)
 	return err == nil
+}
+
+// isPlausibleDomainTarget 报告 target 是否可能是可扫描目标（域名/IP/网段/URL）。
+// 只挡「绝无可能」的输入——含空白、非 ASCII（中文公司名、备注）或主机名非法
+// 字符——避免把公司名当域名白烧一轮枚举；宽松形态（单标签、通配符、带端口
+// URL）一律放行，交给各模块自身的校验。
+// IsPlausibleDomainTarget 报告 target 是否可能是可扫描目标（域名/IP/网段/URL），
+// 供任务创建校验与子域模块旁路共用，避免两处规则漂移。
+func IsPlausibleDomainTarget(target string) bool {
+	t := strings.TrimSpace(target)
+	if t == "" {
+		return false
+	}
+	// URL 形态：去掉 scheme 与 path 后按主机名校验
+	if i := strings.Index(t, "://"); i >= 0 {
+		t = t[i+3:]
+		if j := strings.IndexAny(t, "/?#"); j >= 0 {
+			t = t[:j]
+		}
+		// 剥掉 userinfo
+		if j := strings.LastIndex(t, "@"); j >= 0 {
+			t = t[j+1:]
+		}
+	}
+	// IPv6 裸地址 / 带端口 IPv6（[::1] 或 [::1]:8080）：取中括号内主机
+	if strings.HasPrefix(t, "[") {
+		end := strings.Index(t, "]")
+		if end < 0 {
+			return false
+		}
+		return net.ParseIP(t[1:end]) != nil
+	}
+	// 剥掉主机名后的端口（仅当主机部分含点，避免误伤裸 IPv6）
+	if j := strings.LastIndex(t, ":"); j >= 0 && strings.Contains(t[:j], ".") {
+		t = t[:j]
+	}
+	// 裸 IPv4/IPv6 与 CIDR 网段都是合法目标
+	if net.ParseIP(t) != nil {
+		return true
+	}
+	if _, _, err := net.ParseCIDR(t); err == nil {
+		return true
+	}
+	if t == "*" || strings.HasPrefix(t, "*.") {
+		t = t[1:]
+		if t == "" {
+			return false
+		}
+	}
+	for _, r := range t {
+		if r == '.' || r == '-' {
+			continue
+		}
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // scanSubdomains 执行子域名扫描（使用综合扫描器）

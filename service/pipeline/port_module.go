@@ -246,6 +246,15 @@ func (m *PortScanModule) scanPorts(ds DomainSkip) {
 		ips = resolveHostIPs(ctx, ds.Domain)
 	}
 
+	// 主机名解析不出 IP 就不必进 gogo 了：gogo 对无法解析的目标直接
+	// 「all targets format error」退出，只会留下解析噪音与伪 80% 警告。
+	// CIDR/裸 IP 目标不走此过滤（它们不需要解析）。
+	if len(ips) == 0 && !ds.CIDR && net.ParseIP(ds.Domain) == nil {
+		m.Logf("warn", "%s DNS 解析失败，跳过端口扫描", ds.Domain)
+		log.Printf("[%s] Skip port scan for %s: no DNS record", m.name, ds.Domain)
+		return
+	}
+
 	if !m.gogoScanner.IsAvailable() {
 		m.scanPortsFallback(ctx, ds)
 		return

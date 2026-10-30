@@ -188,7 +188,8 @@ func NewStreamingPipeline(ctx context.Context, task *models.Task, config *Pipeli
 func NewStreamingPipelineWithProgress(ctx context.Context, task *models.Task, config *PipelineConfig, totalTargets int, callback ProgressCallback) *StreamingPipeline {
 	p := NewStreamingPipeline(ctx, task, config)
 	p.progressTracker = NewProgressTracker(totalTargets, callback)
-	p.wireModuleLogSink()
+	// 注意：wireModuleLogSink 不能在这里调——模块链要到 Start() 里的
+	// buildModuleChain 才实例化，构造期全是 nil。已移到 buildModuleChain 之后。
 
 	// 根据配置设置启用的模块权重
 	enabledModules := p.getEnabledModules()
@@ -316,6 +317,11 @@ func (p *StreamingPipeline) Start(targets []string) error {
 		return fmt.Errorf("failed to build module chain: %v", err)
 	}
 
+	// 运行明细出口必须等模块链构建完成再接：模块在 buildModuleChain 里
+	// 才实例化，构造期调用 wireModuleLogSink 全部落在 nil 上，一条都接不到
+	//（task_logs 里模块明细恒缺就是这个原因）。
+	p.wireModuleLogSink()
+
 	// 获取入口模块
 	entryModule := p.getEntryModule()
 	if entryModule == nil {
@@ -330,9 +336,17 @@ func (p *StreamingPipeline) Start(targets []string) error {
 	p.started = true
 	p.mu.Unlock()
 
-	// 启动流水线处理
+	// 子域模块的进度分母：目标总数在注入前已知，模块启动即持有，
+	// 避免 total=0 的流式软进度误导任务页。
+	if p.subdomainModule != nil {
+		p.subdomainModule.expectedTotal = len(targets)
+	}
+
+	// 启动流水线处理。
+	// resultChan 由 ResultCollectorModule 退出时关闭（全链唯一的发送方），
+	// 不在这里关：链上模块的收尾顺序若有一点缝隙（如下游模块未等收拢），
+	// 收集器带着尾部缓冲转发时就会 send on closed channel 直接崩掉进程。
 	go func() {
-		defer close(p.resultChan)
 		defer func() {
 			p.mu.Lock()
 			p.running = false
@@ -576,6 +590,9 @@ func NewResultCollectorModule(ctx context.Context, outputChan chan interface{}) 
 
 // ModuleRun 运行模块
 func (m *ResultCollectorModule) ModuleRun() error {
+	// 收集器是 resultChan 的唯一发送方，由它在退出（输入关且排空 / ctx 取消）
+	// 时关闭——消费方 range 到关才退出，且任何时刻都不会撞上已关通道。
+	defer close(m.outputChan)
 	for {
 		select {
 		case <-m.ctx.Done():

@@ -208,6 +208,9 @@ func (c TaskConfig) WantsURLs(taskType TaskType) bool {
 	switch taskType {
 	case TaskTypeCrawler, TaskTypeDirScan, TaskTypeFull:
 		return true
+	// asset_discovery 执行器分支固定开爬虫：跑了爬虫却不收 URL，等于白爬。
+	case TaskTypeAssetDiscovery:
+		return true
 	}
 	return false
 }
@@ -224,6 +227,9 @@ func (c TaskConfig) WantsFingerprints(taskType TaskType) bool {
 	switch taskType {
 	case TaskTypeFingerprint, TaskTypeServiceID, TaskTypeServiceDetect,
 		TaskTypeCrawler, TaskTypeDirScan, TaskTypeFull:
+		return true
+	// asset_discovery 执行器分支固定开指纹（含图标跟随）：同样不该扫了不收。
+	case TaskTypeAssetDiscovery:
 		return true
 	}
 	return false

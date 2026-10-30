@@ -10,6 +10,7 @@ import (
 
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/repo"
+	"github.com/c1ayooo/4zreark/service/pipeline"
 
 	"github.com/c1ayooo/4zreark/oid"
 )
@@ -50,6 +51,26 @@ func jobPayload(taskType models.TaskType) map[string]any {
 	return map[string]any{"type": string(taskType)}
 }
 
+// validateScanTargets 拦下「绝无可能被扫描」的目标（公司名、备注文本等）：
+// 这类目标此前会静默走完流水线并零产出，用户还以为扫过了。形状校验与
+// 流水线侧的 IsPlausibleDomainTarget 同源，这里是创建时的第一道闸。
+func validateScanTargets(targets []string) error {
+	if len(targets) == 0 {
+		return errors.New("至少需要一个扫描目标")
+	}
+	bad := make([]string, 0, 2)
+	for _, t := range targets {
+		if !pipeline.IsPlausibleDomainTarget(t) {
+			bad = append(bad, t)
+		}
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("目标不是有效的域名/IP/网段/URL：%s（公司类型目标请添加到项目种子走企业采集）",
+			strings.Join(bad, "、"))
+	}
+	return nil
+}
+
 // CreateTask creates a new task.
 //
 // 归属规则：一个任务必须属于且只属于一个项目；项目可以有多个任务。
@@ -70,6 +91,9 @@ func (s *TaskService) CreateTask(task *models.Task) error {
 		if _, err := repo.NewAssetRepo().GetProject(ctx, task.ProjectID); err != nil {
 			return errors.New("归属项目不存在")
 		}
+	}
+	if err := validateScanTargets(task.Targets); err != nil {
+		return err
 	}
 
 	// 字典必须在创建时物化：worker 节点不连数据库，只消费随任务下发的词表。
@@ -427,11 +451,14 @@ func (s *TaskService) RetryTask(taskID string) error {
 		return errors.New("只能重试失败或已取消的任务")
 	}
 
-	// 保留已有的扫描进度，从断点继续
+	// 保留已有的扫描进度，从断点继续；进度快照必须清零重计——否则重试
+	// 后任务页一直显示上一轮的模块进度（分子分母都是旧的），误导排查。
 	if err := s.UpdateTask(taskID, map[string]interface{}{
-		"status":      models.TaskStatusPending,
-		"retry_count": task.RetryCount + 1,
-		"last_error":  "",
+		"status":           models.TaskStatusPending,
+		"retry_count":      task.RetryCount + 1,
+		"last_error":       "",
+		"progress":         0,
+		"progress_details": map[string]interface{}{},
 	}); err != nil {
 		return err
 	}
