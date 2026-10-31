@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button, Card, Input, Tag } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
-import { toolRuntimeApi, type ToolRuntimeStatus } from '@/api/tools'
+import { toolRuntimeApi, type BrowserRuntimeStatus, type ToolRuntimeStatus } from '@/api/tools'
 import { Loader2, RefreshCw, RotateCcw, Download, Gauge } from 'lucide-react'
 
 const statusBadge = (st: ToolRuntimeStatus['status']) => {
@@ -16,6 +16,55 @@ const statusBadge = (st: ToolRuntimeStatus['status']) => {
     default:
       return <Tag>未安装</Tag>
   }
+}
+
+// BrowserRow 自带浏览器状态行：与工具行同款视觉，更新走 /tools/browser/update
+//（系统来源不显示更新按钮——随系统更新，平台不越权替换）。
+function BrowserRow({ browser }: { browser: BrowserRuntimeStatus }) {
+  const { toast } = useToast()
+  const queryClient = useQueryClient()
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ['tool-runtime'] })
+
+  const update = useMutation({
+    mutationFn: () => toolRuntimeApi.updateBrowser(),
+    onSuccess: () => {
+      toast({ title: '自带浏览器已更新' })
+      refresh()
+    },
+    onError: (e: Error) => toast({ title: '浏览器更新失败', description: e.message, variant: 'destructive' }),
+  })
+
+  const info = browser.installed
+    ? [
+        browser.version,
+        browser.source === 'bundled'
+          ? `自带下载（revision ${browser.revision ?? '—'}${browser.expected_revision ? `，期望 ${browser.expected_revision}` : ''}）`
+          : '系统安装',
+        browser.path,
+      ].filter(Boolean).join(' · ')
+    : (browser.note || '未安装：首次使用时自动下载')
+
+  return (
+    <div className="rounded-md border p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium">browser</span>
+        {!browser.installed && <Tag>未安装</Tag>}
+        {browser.installed && browser.update_available && (
+          <Tag className="border-transparent bg-amber-600 text-white">有新版本</Tag>
+        )}
+        <span className="flex-1" />
+        {browser.source !== 'system' && (
+          <Button size="small" loading={update.isPending} onClick={() => update.mutate()}>
+            {browser.installed ? '检查并更新' : '立即安装'}
+          </Button>
+        )}
+      </div>
+      <div className="mt-1 text-xs text-muted-foreground break-all">{info}</div>
+      {browser.installed && browser.note && (
+        <div className="mt-1 text-xs text-amber-600">{browser.note}</div>
+      )}
+    </div>
+  )
 }
 
 function ToolRow({ tool }: { tool: ToolRuntimeStatus }) {
@@ -218,6 +267,7 @@ export function ToolRuntimePanel() {
               nuclei：{overview.data.nuclei.BinaryVersion || '未安装'} · 自动更新 {overview.data.nuclei.AutoUpdate ? '开' : '关'}（详见漏洞模板页）
             </p>
           ) : null}
+          {overview.data?.browser && <BrowserRow browser={overview.data.browser} />}
         </div>
       </Card>
 
