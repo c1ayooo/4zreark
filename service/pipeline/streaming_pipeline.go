@@ -79,6 +79,14 @@ type PipelineConfig struct {
 	// 默认值刻意保守，宁可慢，也不要因为高频请求把出口 IP 打进黑名单。
 	RatePerSec    int `json:"rate_per_sec"`    // 每秒请求上限；0=用默认 20
 	TargetDelayMs int `json:"target_delay_ms"` // 单目标之间的间隔毫秒；0=用默认 200
+
+	// FixedModuleConcurrency 任务配置的「并发」（models.TaskConfig.Threads）
+	// 直接映射到这里：>0 时覆盖各模块并发的速率推导值（用户显式设置优先），
+	// 0 走 moduleConcurrency 的 rate/divisor 推导。仅约束模块内工作协程数，
+	// 不触碰两层防护性外层并行度（端口主机间 hostSem、子域域名级并发——
+	// 它们防的是多目标速率乘法放大，与「干活的线程数」不是一个量纲）；
+	// rate 令牌桶仍照常限 QPS，并发槽拉大不会放大对目标的实际请求速率。
+	FixedModuleConcurrency int `json:"fixed_module_concurrency,omitempty"`
 }
 
 // rate 返回生效的每秒请求上限。
@@ -102,7 +110,12 @@ func (c *PipelineConfig) targetDelay() time.Duration {
 }
 
 // moduleConcurrency 按速率推导模块并发：每秒 N 个请求，并发不超过 N/divisor，最小 1。
+// 任务配置了「并发」（FixedModuleConcurrency）时直接覆盖推导值——用户在
+// 页面显式设置的线程数优先，不随除数缩放。
 func (c *PipelineConfig) moduleConcurrency(divisor int) int {
+	if c != nil && c.FixedModuleConcurrency > 0 {
+		return c.FixedModuleConcurrency
+	}
 	if divisor <= 0 {
 		divisor = 4
 	}
@@ -467,7 +480,8 @@ func (p *StreamingPipeline) buildModuleChain() error {
 
 	// 漏洞扫描模块
 	if p.config.VulnScan {
-		p.vulnScanModule = NewVulnScanModule(p.ctx, lastModule, 4)
+		// 并发走 moduleConcurrency 统一口径（任务「并发」配置可覆盖），此前硬编码 4。
+		p.vulnScanModule = NewVulnScanModule(p.ctx, lastModule, p.config.moduleConcurrency(4))
 		p.vulnScanModule.SetInput(make(chan interface{}, 500))
 		p.vulnScanModule.SetProgressTracker(p.progressTracker)
 		lastModule = p.vulnScanModule

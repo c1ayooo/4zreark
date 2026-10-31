@@ -953,6 +953,12 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 	if task.Config.TargetDelayMs > 0 {
 		config.TargetDelayMs = task.Config.TargetDelayMs
 	}
+	// 任务级「并发」（创建页的并发输入框）：>0 时覆盖各模块并发的速率推导
+	// 值——用户显式设置的线程数优先于 rate/divisor 自动推导；rate 令牌桶
+	// 仍照常限 QPS，并发槽拉大不会放大对目标的实际请求速率。
+	if task.Config.Threads > 0 {
+		config.FixedModuleConcurrency = task.Config.Threads
+	}
 
 	// 模块组合：任务配置里显式勾选 scan_types 时以其为准，
 	// 让「信息收集（不含漏洞）」「全量扫描」这类模板能自由组合模块，
@@ -977,8 +983,13 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 		}
 	}
 
-	log.Printf("[TaskExecutor] Starting StreamingPipeline for task %s, type: %s, rate=%d/s delay=%dms",
-		taskID, task.Type, config.Rate(), config.TargetDelayMs)
+	if config.FixedModuleConcurrency > 0 {
+		log.Printf("[TaskExecutor] Starting StreamingPipeline for task %s, type: %s, rate=%d/s delay=%dms concurrency=%d (task threads)",
+			taskID, task.Type, config.Rate(), config.TargetDelayMs, config.FixedModuleConcurrency)
+	} else {
+		log.Printf("[TaskExecutor] Starting StreamingPipeline for task %s, type: %s, rate=%d/s delay=%dms",
+			taskID, task.Type, config.Rate(), config.TargetDelayMs)
+	}
 
 	// 任务级字典：master 派单前已把条目物化进 config；节点侧直接用，
 	// 只有 master 本地执行（没物化）时才回落到数据库读取。

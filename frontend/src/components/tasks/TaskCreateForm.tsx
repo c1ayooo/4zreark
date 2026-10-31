@@ -29,7 +29,7 @@ const PAGE_DEFAULT_CONFIG: TaskConfig = {
   scanTypes: ['subdomain', 'port_scan', 'fingerprint'],
   port_scan_mode: 'quick',
   timeout: 30,
-  concurrent: 10,
+  concurrent: 0,
 }
 
 // 对话框入口（原 TaskCreateDialog）默认配置：单模块 + 端口范围 + 扫描节奏
@@ -38,7 +38,7 @@ const DIALOG_DEFAULT_CONFIG: TaskConfig = {
   port_scan_mode: 'quick',
   portRange: '1-65535',
   timeout: 30,
-  concurrent: 10,
+  concurrent: 0,
   rate_per_sec: 20,
   target_delay_ms: 200,
 }
@@ -633,14 +633,15 @@ export default function TaskCreateForm({
             />
           </div>
           <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">并发数</label>
+            <label className="text-xs text-muted-foreground" title="各扫描模块（指纹/爬虫/目录/敏感信息/JS审计/端口/漏洞）的同时工作协程数；子域按域名、端口按主机的外层并行度有独立防护上限。留空按扫描节奏自动推导。">模块并发</label>
             <Input
               type="number"
-              value={formData.config.concurrent || 10}
+              placeholder="按扫描节奏推导"
+              value={formData.config.concurrent || ''}
               onChange={(e) =>
                 setFormData({
                   ...formData,
-                  config: { ...formData.config, concurrent: Number(e.target.value) },
+                  config: { ...formData.config, concurrent: e.target.value === '' ? 0 : Number(e.target.value) },
                 })
               }
             />
