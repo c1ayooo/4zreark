@@ -670,6 +670,7 @@ export default function ProjectDetailPage() {
             menu={{ items: [
               { key: 'report', icon: <FileText className="h-4 w-4" />, label: '信息收集报告', onClick: () => setReportOpen(true) },
               { key: 'topology', icon: <Radio className="h-4 w-4" />, label: '资产星图', onClick: () => navigate(topologyPath) },
+              { key: 'vulns', icon: <FileText className="h-4 w-4" />, label: '查看漏洞', onClick: () => navigate(`/vulnerabilities?project_id=${project.id}`) },
               { key: 'icon', icon: <ImagePlus className="h-4 w-4" />, label: '上传图标', onClick: () => iconInputRef.current?.click() },
               ...(project.icon_sha256 ? [{
                 key: 'icon-remove',

@@ -196,6 +196,7 @@ export const vulnApi = {
     type?: string
     assetId?: string
     taskId?: string
+    projectId?: number
   }): Promise<PaginatedResponse<Vulnerability>> => {
     const backendParams = {
       page: params?.page,
@@ -205,6 +206,7 @@ export const vulnApi = {
       type: params?.type,
       asset_id: params?.assetId,
       task_id: params?.taskId,
+      project_id: params?.projectId,
     }
     const response: BackendPaginatedResponse<Record<string, unknown>> = await api.get('/vulnerabilities', { params: backendParams })
     return {

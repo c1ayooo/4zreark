@@ -200,7 +200,7 @@ func (s *MCPService) listVulnerabilities(ctx context.Context, key *repo.APIKey, 
 		args.PageSize = 100
 	}
 	items, total, err := s.vulns.ListVulnerabilities(args.WorkspaceID, args.Severity, args.Status,
-		args.Keyword, args.Page, args.PageSize)
+		args.Keyword, 0, args.Page, args.PageSize)
 	if err != nil {
 		return toolError("读取漏洞失败: " + err.Error())
 	}

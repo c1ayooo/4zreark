@@ -33,6 +33,7 @@ func (h *VulnHandler) ListVulnerabilities(c *gin.Context) {
 	severity := c.Query("severity")
 	status := c.Query("status")
 	keyword := c.Query("keyword")
+	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
 
 	if page < 1 {
 		page = 1
@@ -41,7 +42,7 @@ func (h *VulnHandler) ListVulnerabilities(c *gin.Context) {
 		pageSize = 10
 	}
 
-	vulns, total, err := h.vulnService.ListVulnerabilities(workspaceID, severity, status, keyword, page, pageSize)
+	vulns, total, err := h.vulnService.ListVulnerabilities(workspaceID, severity, status, keyword, projectID, page, pageSize)
 	if err != nil {
 		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
 		return

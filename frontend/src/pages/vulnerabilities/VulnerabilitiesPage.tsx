@@ -239,6 +239,7 @@ export default function VulnerabilitiesPage() {
   useEffect(() => { setPage(1) }, [debouncedSearch])
   // 仪表盘下钻入口：/vulnerabilities?severity=high 直接落到对应过滤视图
   const [searchParams] = useSearchParams()
+  const projectId = Number(searchParams.get('project_id')) || undefined
   const [severityFilter, setSeverityFilter] = useState<string>(() => searchParams.get('severity') || 'all')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [page, setPage] = useState(1)
@@ -253,7 +254,7 @@ export default function VulnerabilitiesPage() {
   const reportTemplates: ReportProfile[] = reportTemplatesQuery.data ?? []
 
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ['vulnerabilities', page, debouncedSearch, severityFilter, statusFilter],
+    queryKey: ['vulnerabilities', page, debouncedSearch, severityFilter, statusFilter, projectId],
     // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
     placeholderData: keepPreviousData,
     queryFn: () =>
@@ -263,6 +264,7 @@ export default function VulnerabilitiesPage() {
         search: debouncedSearch,
         severity: severityFilter === 'all' ? undefined : severityFilter,
         status: statusFilter === 'all' ? undefined : statusFilter,
+        projectId,
       }),
   })
 

@@ -112,7 +112,7 @@ func (s *VulnService) GetVulnByID(vulnID string) (*models.Vulnerability, error) 
 }
 
 // ListVulnerabilities 分页查询漏洞
-func (s *VulnService) ListVulnerabilities(workspaceID, severity, status, keyword string, page, pageSize int) ([]*models.Vulnerability, int64, error) {
+func (s *VulnService) ListVulnerabilities(workspaceID, severity, status, keyword string, projectID int64, page, pageSize int) ([]*models.Vulnerability, int64, error) {
 	store, err := s.store()
 	if err != nil {
 		return nil, 0, err
@@ -125,6 +125,7 @@ func (s *VulnService) ListVulnerabilities(workspaceID, severity, status, keyword
 		Severity:    severity,
 		Status:      status,
 		Keyword:     keyword,
+		ProjectID:   projectID,
 		Page:        page,
 		PageSize:    pageSize,
 	})

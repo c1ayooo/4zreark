@@ -21,8 +21,12 @@ type VulnFilter struct {
 	Status      string
 	Keyword     string
 	TaskID      string
-	Page        int
-	PageSize    int
+	// ProjectID 按归属项目过滤（经 task 关联）。0 = 不过滤。
+	// 项目页「查看漏洞」入口依赖它：漏洞表没有 project_id 列，
+	// 用 task 关联避免维护冗余列与双写。
+	ProjectID int64
+	Page      int
+	PageSize  int
 }
 
 // VulnTrendRow 是趋势聚合的一行：某天某等级的数量。
@@ -242,12 +246,15 @@ func (r *vulnRepo) GetByID(ctx context.Context, id string) (*models.Vulnerabilit
 	return scanVuln(r.r.pool.QueryRow(ctx, `select `+vulnColumns+` from vulnerabilities where id = $1`, id))
 }
 
-// vulnWhere 参数位置固定，避免关键字与分页参数串号。
+// vulnWhere 参数位置固定（$1..$6 条件 + $7 项目过滤），避免关键字与
+// 分页参数串号；分页在 List 里用 $8/$9。
+// $7 项目过滤经 task 关联（漏洞表无 project_id 列，task_id 已在流转时写入）。
 const vulnWhere = `where ($1 = '' or workspace_id = $1)
                     and ($2 = '' or severity = $2)
                     and ($3 = '' or status = $3)
                     and ($4 = '' or task_id = $4)
-                    and ($5 = '' or name ilike $6 or target ilike $6 or description ilike $6)`
+                    and ($5 = '' or name ilike $6 or target ilike $6 or description ilike $6)
+                    and ($7::bigint = 0 or task_id in (select id from tasks where project_id = $7::bigint))`
 
 // 等级按严重度排序，不按字典序：字典序会把 info 排到 medium 前面。
 const vulnOrder = ` order by case severity
@@ -258,16 +265,18 @@ const vulnOrder = ` order by case severity
 func (r *vulnRepo) List(ctx context.Context, f VulnFilter) ([]*models.Vulnerability, int64, error) {
 	page, pageSize := vulnPage(f.Page, f.PageSize)
 	keyword := strings.TrimSpace(f.Keyword)
-	args := []any{f.WorkspaceID, f.Severity, f.Status, f.TaskID, keyword, likePattern(keyword)}
+	// 参数序号按 $1..$9 排序提供（$7=项目过滤，$8/$9=分页——vulnWhere 尾部
+	// 的 $7 与分页参数错开，避免与 limit/offset 串号）。
+	args := []any{f.WorkspaceID, f.Severity, f.Status, f.TaskID, keyword, likePattern(keyword), f.ProjectID, pageSize, (page - 1) * pageSize}
 
 	var total int64
-	if err := r.r.pool.QueryRow(ctx, `select count(*) from vulnerabilities `+vulnWhere, args...).Scan(&total); err != nil {
+	if err := r.r.pool.QueryRow(ctx, `select count(*) from vulnerabilities `+vulnWhere, args[:7]...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
 	rows, err := r.r.pool.Query(ctx,
-		`select `+vulnColumns+` from vulnerabilities `+vulnWhere+vulnOrder+` limit $7 offset $8`,
-		append(args, pageSize, (page-1)*pageSize)...)
+		`select `+vulnColumns+` from vulnerabilities `+vulnWhere+vulnOrder+` limit $8 offset $9`,
+		args...)
 	if err != nil {
 		return nil, 0, err
 	}
