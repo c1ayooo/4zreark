@@ -29,6 +29,10 @@ func (h *ToolRuntimeHandler) List(c *gin.Context) {
 // @Router /api/tools/:name/check [post]
 func (h *ToolRuntimeHandler) Check(c *gin.Context) {
 	name := strings.TrimSpace(c.Param("name"))
+	if name == "browser" {
+		utils.BadRequest(c, "browser 非 GitHub release 工具：更新检测已内置于 browser 条目（update_available），无需上游查询")
+		return
+	}
 	st, err := h.svc.Check(c.Request.Context(), name)
 	if err != nil {
 		utils.BadRequest(c, err.Error())
@@ -45,6 +49,16 @@ func (h *ToolRuntimeHandler) Update(c *gin.Context) {
 		Force bool `json:"force"`
 	}
 	_ = c.ShouldBindJSON(&req)
+	if name == "browser" {
+		// 自带浏览器：重新自举到当前平台期望的 revision（已是最新的话快速返回）
+		st, err := h.svc.UpdateBrowser(c.Request.Context())
+		if err != nil {
+			utils.InternalError(c, "更新 browser 失败: "+err.Error())
+			return
+		}
+		utils.SuccessWithMessage(c, "浏览器已更新", st)
+		return
+	}
 	st, err := h.svc.Update(c.Request.Context(), name, req.Force)
 	if err != nil {
 		utils.InternalError(c, "更新 "+name+" 失败: "+err.Error())

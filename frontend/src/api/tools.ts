@@ -238,9 +238,24 @@ export interface ToolRuntimeStatus {
   update_available: boolean
 }
 
+export interface BrowserRuntimeStatus {
+  name: 'browser'
+  description: string
+  installed: boolean
+  path: string
+  version?: string
+  source?: 'bundled' | 'system'
+  revision?: number
+  expected_revision?: number
+  size_bytes?: number
+  update_available: boolean
+  note?: string
+}
+
 export interface ToolsRuntimeOverview {
   tools: ToolRuntimeStatus[]
   nuclei?: NucleiRuntimeStatus | null
+  browser?: BrowserRuntimeStatus | null
 }
 
 export interface ToolUpdateRecord {
@@ -267,6 +282,10 @@ export const toolRuntimeApi = {
   },
   async check(name: string): Promise<ToolRuntimeStatus> {
     const raw = (await api.post(`/tools/${name}/check`, {}, { timeout: 60000 })) as unknown as ApiResponse<ToolRuntimeStatus>
+    return raw.data
+  },
+  async updateBrowser(): Promise<BrowserRuntimeStatus> {
+    const raw = (await api.post('/tools/browser/update', {}, { timeout: 660000 })) as unknown as ApiResponse<BrowserRuntimeStatus>
     return raw.data
   },
   async update(name: string, force = false): Promise<ToolRuntimeStatus> {

@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -167,4 +168,84 @@ func MissingError(purpose string) error {
 		"处理方式任选其一：① 修复网络/代理后重试（平台会自动下载自带浏览器）；"+
 		"② 安装 Chrome/Chromium（apt install chromium-browser 或官网安装包）；"+
 		"③ 已装有但路径特殊时设置环境变量 ZRE_CHROME 指向可执行文件后重启", purpose)
+}
+
+// ---------- 工具运行时面板集成：状态视图与更新 ----------
+
+// launcher 包的 RevisionDefault 在编译期固定（随 rod 依赖升级而变），
+// 这里取不到常量就动态构造一个 NewBrowser 读它。
+func currentRevision() int {
+	return launcher.NewBrowser().Revision
+}
+
+// Status 返回浏览器运行时状态（工具运行时面板的 browser 条目）。
+// installed/path 取自统一检测；revision 仅对 rod 托管下载的产物有意义
+//（系统安装的浏览器版本随系统，无 rod revision 口径）。
+// update_available：rod 托管产物 revision 落后于当前平台期望（rod 依赖
+// 升级会带新 revision），提示面板触发更新。
+func Status() map[string]any {
+	path := FindChrome()
+	out := map[string]any{
+		"name":             "browser",
+		"description":      "Chromium（报告渲染/SPA 爬虫/扫码登录/小蓝本签名通道共用）",
+		"installed":        path != "",
+		"path":             path,
+		"update_available": false,
+	}
+	if path == "" {
+		out["revision"] = currentRevision()
+		out["note"] = "未安装：首次使用时将自动下载自带浏览器"
+		return out
+	}
+
+	// --version 输出作展示版本（系统安装与 rod 产物都适用）
+	if v, err := exec.Command(path, "--version").Output(); err == nil {
+		out["version"] = strings.TrimSpace(string(v))
+	}
+	if st, err := os.Stat(path); err == nil {
+		out["size_bytes"] = st.Size()
+	}
+
+	// 来源与 revision：rod 托管目录下的产物解析目录名 chromium-<rev>
+	want := currentRevision()
+	out["expected_revision"] = want
+	if dir := filepath.Base(filepath.Dir(path)); strings.HasPrefix(dir, "chromium-") {
+		out["source"] = "bundled"
+		if rev, perr := strconv.Atoi(strings.TrimPrefix(dir, "chromium-")); perr == nil {
+			out["revision"] = rev
+			if rev < want {
+				out["update_available"] = true
+				out["note"] = "自带浏览器 revision 落后于当前平台期望，可在面板触发更新"
+			}
+		}
+	} else {
+		out["source"] = "system"
+		out["note"] = "系统安装的浏览器，随系统更新；ZRE_CHROME 可固定指定"
+	}
+	return out
+}
+
+// Update 重新自举自带浏览器：下载当前平台期望的 revision（已存在时
+// 快速返回），探活通过后返回新状态。系统安装的浏览器不走此通道。
+func Update(ctx context.Context) (map[string]any, error) {
+	if path := FindChrome(); path != "" {
+		if dir := filepath.Base(filepath.Dir(path)); !strings.HasPrefix(dir, "chromium-") {
+			return Status(), nil // 系统安装：无更新通道
+		}
+	}
+	done := make(chan struct{})
+	go func() {
+		<-done
+	}()
+	bin, ok := ensureDownloaded("")
+	if !ok {
+		return nil, fmt.Errorf("自带浏览器下载失败（需可达下载源或配置 HTTPS_PROXY）")
+	}
+	if !ProbeChrome(bin) {
+		return nil, fmt.Errorf("下载产物探活失败: %s", bin)
+	}
+	// 进程缓存已在首次 FindChrome 时填充；下载出更新 revision 后覆盖，
+	// 后续调用方拿到新产物。
+	foundPath = bin
+	return Status(), nil
 }

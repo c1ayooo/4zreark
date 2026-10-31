@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/browser"
 	"github.com/c1ayooo/4zreark/internal/toolruntime"
 	"github.com/c1ayooo/4zreark/repo"
 )
@@ -83,24 +84,38 @@ func (s *ToolRuntimeService) Stop() {
 	s.stopOnce.Do(func() { close(s.stopCh) })
 }
 
-// Status 全部受管工具状态 + nuclei 运行时摘要。
+// Status 全部受管工具状态 + nuclei 运行时摘要 + 自带浏览器状态。
 func (s *ToolRuntimeService) Status(ctx context.Context) map[string]any {
 	tools := s.mgr.Status(ctx)
 	out := map[string]any{"tools": tools}
 	if st, err := GetNucleiRuntimeService().Status(ctx); err == nil {
 		out["nuclei"] = st
 	}
+	out["browser"] = browser.Status()
 	return out
 }
 
-// Check 查询单个工具的上游最新版本。
+// Check 查询单个工具的上游最新版本。browser 非 GitHub release 工具：
+// revision 期望值随平台版本（rod 依赖）走，状态里的 update_available 即
+// 检测结果，无需上游查询。
 func (s *ToolRuntimeService) Check(ctx context.Context, name string) (*toolruntime.ToolStatus, error) {
+	if name == "browser" {
+		return nil, errors.New("browser 非 GitHub release 工具：更新检测已内置于 browser 条目（update_available），无需上游查询")
+	}
 	return s.mgr.Check(ctx, name)
 }
 
-// Update 安装/更新单个工具。
+// Update 安装/更新单个工具。（browser 的更新走 UpdateBrowser，返回类型不同）
 func (s *ToolRuntimeService) Update(ctx context.Context, name string, force bool) (*toolruntime.ToolStatus, error) {
 	return s.mgr.Update(ctx, name, force)
+}
+
+// BrowserStatus 自带浏览器状态（工具运行时面板 browser 条目）。
+func (s *ToolRuntimeService) BrowserStatus() map[string]any { return browser.Status() }
+
+// UpdateBrowser 自带浏览器重新自举：下载当前平台期望的 revision 并探活。
+func (s *ToolRuntimeService) UpdateBrowser(ctx context.Context) (map[string]any, error) {
+	return browser.Update(ctx)
 }
 
 // Rollback 回滚单个工具。

@@ -9,6 +9,7 @@ import {
   type ToolRuntimeStatus,
   type ToolUpdateRecord,
   type ToolsRuntimeOverview,
+  type BrowserRuntimeStatus,
 } from '@/api/tools'
 
 // 更新策略面板：gogo/spray/katana/rem 托管工具 + nuclei 运行时的
@@ -37,6 +38,8 @@ export default function ToolUpdatePanel() {
   const { toast } = useToast()
   const [overview, setOverview] = useState<ToolsRuntimeOverview | null>(null)
   const [nuclei, setNuclei] = useState<NucleiRuntimeStatus | null>(null)
+  const [browser, setBrowser] = useState<BrowserRuntimeStatus | null>(null)
+  const [browserBusy, setBrowserBusy] = useState(false)
   const [loading, setLoading] = useState(false)
 
   // 每个工具一份未保存的策略草稿，行内直接改、点保存才提交
@@ -66,6 +69,7 @@ export default function ToolUpdatePanel() {
     setLoading(true)
     try {
       const [data, nuc] = await Promise.all([toolRuntimeApi.list(), toolsApi.nucleiRuntimeStatus().catch(() => null)])
+      setBrowser(data.browser || null)
       applyOverview(data)
       setNuclei(nuc)
     } catch (e) {
@@ -99,6 +103,19 @@ export default function ToolUpdatePanel() {
       toast({ title: (e as Error)?.message || '保存失败', variant: 'destructive' })
     } finally {
       setSaving('')
+    }
+  }
+
+  const updateBrowser = async () => {
+    setBrowserBusy(true)
+    try {
+      const st = await toolRuntimeApi.updateBrowser()
+      setBrowser(st)
+      toast({ title: '自带浏览器已更新' })
+    } catch (e) {
+      toast({ title: (e as Error)?.message || '浏览器更新失败', variant: 'destructive' })
+    } finally {
+      setBrowserBusy(false)
     }
   }
 
@@ -320,6 +337,30 @@ export default function ToolUpdatePanel() {
           </div>
         ) : (
           <p className="text-xs text-muted-foreground">nuclei 运行时状态不可用。</p>
+        )}
+      </Card>
+
+      <Card title="自带浏览器（Chromium）">
+        {browser ? (
+          <div className="space-y-2 text-sm">
+            <div className="flex flex-wrap items-center gap-3">
+              {browser.update_available && <Tag color="orange">可更新</Tag>}
+              {browser.source !== 'system' && (
+                <Button size="small" loading={browserBusy} onClick={updateBrowser}>
+                  {browser.installed ? '检查并更新' : '立即安装'}
+                </Button>
+              )}
+              <span className="text-xs text-muted-foreground">{browser.description}</span>
+            </div>
+            <div className="text-xs text-muted-foreground break-all">
+              {browser.installed
+                ? [browser.version, browser.source === 'bundled' ? `自带下载（revision ${browser.revision ?? '—'}${browser.expected_revision ? `，期望 ${browser.expected_revision}` : ''}）` : '系统安装', browser.path].filter(Boolean).join(' · ')
+                : (browser.note || '未安装：首次使用时自动下载')}
+            </div>
+            {browser.note && browser.installed && <div className="text-xs text-amber-600">{browser.note}</div>}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">浏览器状态不可用。</p>
         )}
       </Card>
 
