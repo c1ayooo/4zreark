@@ -2,13 +2,17 @@
 // 扫码登录、小蓝本签名通道共用的唯一检测入口）。
 //
 // 检测顺序：环境变量（ZRE_CHROME > ZRE_XLB_CHROME）> 标准安装位 > PATH
-// 常见命令名 > rod 自带下载缓存 > playwright 缓存。每个候选逐一 --version
+// 常见命令名 > 项目统一 bin 根（data/bin/browser，ZRE_BIN_DIR 可覆盖）
+// > rod 历史 HOME 缓存 > playwright 缓存。每个候选逐一 --version
 // 实跑探活——文件存在不代表能用（Ubuntu 的 chromium-browser 可能是指向
 // snap 的坏 stub，启动时才报错），探活阶段直接淘汰。
 //
 // 结果进程级缓存：探测要 spawn 进程，且浏览器安装状态在进程生命周期内
 // 不会变化；安装浏览器后需重启进程生效。
 //
+// 目录管理：自带浏览器落在项目统一可执行资产根 data/bin/browser/
+//（ZRE_BIN_DIR 覆盖根）；扫描工具 data/tools/（ZRE_TOOLS_DIR）与 nuclei
+// data/nuclei/（ZRE_NUCLEI_DIR）沿用既有根，需要归拢时设对应环境变量。
 // 部署建议：Dockerfile/安装脚本执行 `apt-get install -y chromium` 即可被
 // 探测到；路径特殊的环境用 ZRE_CHROME 指定可执行文件。
 package browser
@@ -67,7 +71,12 @@ func Candidates() []string {
 	}
 	home, err := os.UserHomeDir()
 	if err == nil {
-		// rod 按需下载的浏览器（首次启动/工具运行时自动落在这里），
+		// 项目统一 bin 根的自带浏览器（优先于 HOME 各缓存）
+		if m, _ := filepath.Glob(filepath.Join(BinRoot(), "browser", "chromium-*", "chrome")); len(m) > 0 {
+			sort.Sort(sort.Reverse(sort.StringSlice(m)))
+			out = append(out, m...)
+		}
+		// rod 按需下载的浏览器（历史落点：HOME 缓存，兼容未迁移的部署），
 		// 新版本目录在前
 		if m, _ := filepath.Glob(filepath.Join(home, ".cache", "rod", "browser", "*", "chrome")); len(m) > 0 {
 			sort.Sort(sort.Reverse(sort.StringSlice(m)))
@@ -134,14 +143,39 @@ func detect() string {
 // DownloadTimeout 自动下载浏览器整体超时（~150MB，弱网容忍）。
 const DownloadTimeout = 10 * time.Minute
 
-// ensureDownloaded 下载 rod 托管的 Chromium 到标准缓存目录
-//（~/.cache/rod/browser/chromium-<rev>/chrome），成功返回可执行路径。
+// binRootEnv 项目统一可执行资产根（data/bin）：浏览器等运行时自举资产
+// 都落在这里，随项目数据目录走，不再散落在用户 HOME 缓存。
+// 扫描工具（data/tools，ZRE_TOOLS_DIR）与 nuclei（data/nuclei，
+// ZRE_NUCLEI_DIR）沿用各自既有根——已在项目内且有部署数据，不强制迁移，
+// 需要归拢时设对应环境变量即可（如 ZRE_TOOLS_DIR=data/bin/tools）。
+const binRootEnv = "ZRE_BIN_DIR"
+
+// BinRoot 返回统一可执行资产根（不保证已创建）。
+func BinRoot() string {
+	if p := strings.TrimSpace(os.Getenv(binRootEnv)); p != "" {
+		return p
+	}
+	return filepath.Join("data", "bin")
+}
+
+// DownloadDir 自带浏览器的下载根（<bin>/browser/chromium-<rev>/chrome）。
+func DownloadDir() string {
+	return filepath.Join(BinRoot(), "browser")
+}
+
+// ensureDownloaded 下载 rod 托管的 Chromium 到项目统一 bin 根
+//（data/bin/browser/chromium-<rev>/chrome），成功返回可执行路径。
 // rootDir 非空时覆盖下载目录（测试隔离用）。
 // 下载源三选一竞速（Google/NPM/Playwright），尊重 HTTPS_PROXY 环境变量。
 func ensureDownloaded(rootDir string) (string, bool) {
 	b := launcher.NewBrowser()
+	b.RootDir = DownloadDir()
 	if rootDir != "" {
 		b.RootDir = rootDir
+	}
+	if err := os.MkdirAll(b.RootDir, 0o750); err != nil {
+		log.Printf("[browser] 创建下载目录失败: %v", err)
+		return "", false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), DownloadTimeout)
 	defer cancel()
