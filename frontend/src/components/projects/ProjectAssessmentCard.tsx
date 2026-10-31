@@ -11,6 +11,7 @@ import {
   type CollectionAssessment,
 } from '@/api/assessment'
 import { useConfirm } from '@/components/common/confirm-provider'
+import { useNavigate } from 'react-router-dom'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
 
@@ -31,8 +32,12 @@ function riskAction(risk: string): RiskAction | null {
   return null
 }
 
-const statTag = (label: string, value: number, danger?: boolean) => (
-  <span className="text-sm">
+const statTag = (label: string, value: number, danger?: boolean, onClick?: () => void) => (
+  <span
+    className={'text-sm' + (onClick ? ' cursor-pointer hover:text-foreground transition-colors' : '')}
+    onClick={onClick}
+    title={onClick ? '点击查看' : undefined}
+  >
     <span className="text-muted-foreground">{label} </span>
     <span className={danger && value > 0 ? 'font-medium text-red-500' : 'font-medium'}>{value}</span>
   </span>
@@ -43,6 +48,17 @@ export default function ProjectAssessmentCard({ projectId }: { projectId: number
   const confirm = useConfirm()
   const queryClient = useQueryClient()
   const [drillFilter, setDrillFilter] = useState<AssessmentSiteFilter | null>(null)
+  const navigate = useNavigate()
+  // 「风险 N」数字点击：打开第一条可下钻风险的站点表格。
+  const openFirstRiskDrill = () => {
+    for (const risk of latest.risks) {
+      const act = riskAction(risk)
+      if (act && act.filter) {
+        setDrillFilter(act.filter)
+        return
+      }
+    }
+  }
 
   const assessment = useQuery({
     queryKey: ['project-assessment', projectId],
@@ -135,11 +151,12 @@ export default function ProjectAssessmentCard({ projectId }: { projectId: number
 
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-4 py-2">
         {statTag('主体', latest.entities)}
-        {statTag('数字资产', latest.digital_assets)}
+        {statTag('数字资产', latest.digital_assets, false,
+          latest.digital_assets > 0 ? () => navigate('/digital-assets') : undefined)}
         {statTag('域名候选', latest.domain_candidates)}
-        {statTag('种子', latest.seeds)}
-        {statTag('站点', latest.sites)}
-        {statTag('风险', latest.risks.length, true)}
+        {statTag('种子', latest.seeds, false, () => navigate(`/seeds?project_id=${projectId}`))}
+        {statTag('站点', latest.sites, false, () => navigate(`/assets?project_id=${projectId}`))}
+        {statTag('风险', latest.risks.length, true, latest.risks.length > 0 ? () => openFirstRiskDrill() : undefined)}
         <span className="text-xs text-muted-foreground">{latest.summary.split('；风险')[0]}</span>
       </div>
 
@@ -149,7 +166,15 @@ export default function ProjectAssessmentCard({ projectId }: { projectId: number
             const act = riskAction(risk)
             return (
               <div key={i} className="flex items-center justify-between gap-2 text-sm">
-                <span className="text-red-500">• {risk}</span>
+                <span
+                  className={'text-red-500' + (act && act.filter ? ' cursor-pointer hover:underline' : '')}
+                  title={act && act.filter ? '点击下钻站点' : undefined}
+                  onClick={() => {
+                    if (act && act.filter) setDrillFilter(act.filter)
+                  }}
+                >
+                  • {risk}
+                </span>
                 {act && (
                   <Button
                     size="small"

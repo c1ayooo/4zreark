@@ -116,11 +116,19 @@ select count(*) from seeds where project_id = $1 and enabled`, projectID).Scan(&
 	}
 	if err := r.Pool().QueryRow(ctx, `
 select count(*),
-       count(*) filter (where port not in (80, 443)),
        count(*) filter (where protocol = 'http'),
        count(*) filter (where cert_not_after is not null and cert_not_after < now() + interval '30 days')
   from sites where project_id = $1`,
-		projectID).Scan(&a.Sites, &a.SitesOddPort, &a.SitesPlainHTTP, &a.SitesCertExpiring); err != nil {
+		projectID).Scan(&a.Sites, &a.SitesPlainHTTP, &a.SitesCertExpiring); err != nil {
+		return nil, err
+	}
+	// 非常规端口按端点口径：端口暴露发生在 site_endpoints（host 行会被
+	// 443 归并吸收，sites.port 数不到 8010 这类管理端口——实测踩过）。
+	if err := r.Pool().QueryRow(ctx, `
+select count(distinct se.site_id)
+  from site_endpoints se join sites s on s.id = se.site_id
+ where s.project_id = $1 and se.port not in (80, 443)`,
+		projectID).Scan(&a.SitesOddPort); err != nil {
 		return nil, err
 	}
 	if err := r.Pool().QueryRow(ctx, `

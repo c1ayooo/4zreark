@@ -62,6 +62,38 @@ func (h *AssessmentHandler) ListAssessmentSites(c *gin.Context) {
 		utils.Error(c, utils.ErrCodeDatabaseError, "数据层未初始化")
 		return
 	}
+	// odd_port 按端点口径下钻（与评估统计同源）；其余 filter 仍按 sites 行。
+	if filter == "odd_port" {
+		rows, qerr := r.Pool().Query(c.Request.Context(), `
+select s.id, s.host, se.port, se.scheme, coalesce(se.status_code, 0), coalesce(s.title, '')
+  from site_endpoints se join sites s on s.id = se.site_id
+ where s.project_id = $1 and se.port not in (80, 443)
+ order by s.host, se.port limit 200`, projectID)
+		if qerr != nil {
+			utils.Error(c, utils.ErrCodeDatabaseError, qerr.Error())
+			return
+		}
+		defer rows.Close()
+		type epRow struct {
+			ID     int64  `json:"id"`
+			Host   string `json:"host"`
+			Port   int    `json:"port"`
+			Protocol string `json:"protocol"`
+			Status int    `json:"status_code"`
+			Title  string `json:"title"`
+		}
+		out := make([]epRow, 0, 16)
+		for rows.Next() {
+			var r0 epRow
+			if err := rows.Scan(&r0.ID, &r0.Host, &r0.Port, &r0.Protocol, &r0.Status, &r0.Title); err != nil {
+				utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+				return
+			}
+			out = append(out, r0)
+		}
+		utils.Success(c, out)
+		return
+	}
 	rows, err := r.Pool().Query(c.Request.Context(), `
 select id, host, port, protocol, coalesce(http_status, 0), coalesce(title, '')
   from sites where project_id = $1 and `+cond+` order by host limit 200`, projectID)
