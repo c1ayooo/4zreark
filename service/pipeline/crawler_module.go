@@ -411,6 +411,10 @@ type DirScanModule struct {
 	resultChan   chan interface{}
 	concurrency  int
 	wordlist     []string
+	// soft404Skipped 按 origin 缓存「统一响应页」前置探测结论：一致的
+	// 站点整站跳过路径扫描（扫前判定，不浪费整轮爆破与事后过滤）。
+	soft404Mu      sync.Mutex
+	soft404Skipped map[string]bool
 	// learnedPaths 是字典自学习晋升的热词；执行时写成附加词表文件，
 	// 连同基础词表（或 spray 默认字典）一起传给 spray，绝不替代原词表。
 	learnedPaths []string
@@ -491,6 +495,34 @@ func (m *DirScanModule) allowsURL(raw string) bool {
 }
 
 // NewDirScanModule 创建目录扫描模块
+// skipUniformOrigin 扫描前判定：origin 对任意路径返回一致响应时整站跳过
+// （多个页面响应一致 → 不再开始扫）。结果按 origin 缓存。
+func (m *DirScanModule) skipUniformOrigin(ctx context.Context, rawURL string) bool {
+	u, err := neturl.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	origin := u.Scheme + "://" + u.Host
+	m.soft404Mu.Lock()
+	if m.soft404Skipped == nil {
+		m.soft404Skipped = map[string]bool{}
+	}
+	skip, cached := m.soft404Skipped[origin]
+	m.soft404Mu.Unlock()
+	if cached {
+		return skip
+	}
+	skip = webscan.UniformSoft404(ctx, origin, nil)
+	m.soft404Mu.Lock()
+	m.soft404Skipped[origin] = skip
+	m.soft404Mu.Unlock()
+	if skip {
+		m.Logf("warn", "%s 多个探测路径响应一致（统一错误页/全站同页），跳过路径扫描", origin)
+		log.Printf("[%s] Skip dir scan for %s: uniform responses on probe paths", m.name, origin)
+	}
+	return skip
+}
+
 func NewDirScanModule(ctx context.Context, nextModule ModuleRunner, concurrency int, wordlist []string) *DirScanModule {
 	if concurrency <= 0 {
 		concurrency = 20
@@ -647,7 +679,26 @@ processBatch:
 		return nil
 	}
 
-	// 批量扫描
+	// 批量扫描：先按 origin 做统一响应页前置判定，一致的整站剔除
+	filtered := urlsToScan[:0]
+	seenOrigin := map[string]bool{}
+	for _, u := range urlsToScan {
+		if m.skipUniformOrigin(m.ctx, u) {
+			continue
+		}
+		filtered = append(filtered, u)
+	}
+	urlsToScan = filtered
+	if len(urlsToScan) == 0 {
+		log.Printf("[%s] All origins uniform-response, dir scan skipped", m.name)
+		if m.nextModule != nil {
+			m.nextModule.CloseInput()
+		}
+		nextModuleRun.Wait()
+		return nil
+	}
+	_ = seenOrigin
+
 	log.Printf("[%s] Starting batch directory scan for %d URLs with Spray", m.name, len(urlsToScan))
 
 	ctx, cancel := context.WithTimeout(m.ctx, 60*time.Minute)
@@ -799,6 +850,12 @@ func (m *DirScanModule) scanWithSpray(asset AssetHttp) {
 		return
 	}
 	target := asset.URL
+
+	// 扫前判定：origin 对任意路径返回一致响应（统一错误页/全站同页）
+	// 时整站跳过——结果反正会被软 404 过滤剔光，省下整轮爆破。
+	if m.skipUniformOrigin(m.ctx, target) {
+		return
+	}
 
 	log.Printf("[%s] Scanning with Spray: %s", m.name, target)
 

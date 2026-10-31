@@ -218,3 +218,12 @@ func firstNonEmptyString(values ...string) string {
 	}
 	return ""
 }
+
+// UniformSoft404 报告 origin 是否对任意路径都返回一致响应（统一错误页/
+// 全站 200 同页/WAF 挑战页）。复用软 404 基线探测：2 个以上随机路径的
+// 状态/标题/正文长度一致即判定为真。
+// 目录扫描开始前调用：为真时整站跳过——继续爆破只会得到一屏相同的假命中
+// （事后过滤也能剔，但省下的是整轮扫描的时间与流量）。
+func UniformSoft404(ctx context.Context, origin string, client *http.Client) bool {
+	return buildSoft404Signature(ctx, origin, client) != nil
+}
