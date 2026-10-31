@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -312,6 +313,13 @@ func (h *NodeGatewayHandler) PostResults(c *gin.Context) {
 	if err != nil {
 		utils.Error(c, utils.ErrCodeInternalError, "结果写入失败: "+err.Error())
 		return
+	}
+	// 漏洞命中同步进 vulnerabilities 复核队列（漏洞页数据源），
+	// 否则节点扫描的发现只在 scan_results 里、前端不可见。
+	if n, ierr := service.IngestVulnerabilitiesFromResults(task, results); ierr != nil {
+		log.Printf("[gateway] 漏洞流转部分失败 task=%s: %v", taskID, ierr)
+	} else if n > 0 {
+		log.Printf("[gateway] 漏洞流转 task=%s: %d 条入复核队列", taskID, n)
 	}
 	utils.Success(c, gin.H{"saved": inserted + updated, "inserted": inserted, "updated": updated})
 }
