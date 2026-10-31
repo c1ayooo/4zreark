@@ -214,6 +214,11 @@ func (q *qccProvider) Branches(ctx context.Context, extID string, page, size int
 	return []CompanyRef{}, false, nil
 }
 
+// SupportsTreeExpansion false：Branches/Investments 均为占位空实现，BFS
+// 穿透只会得到根节点零产出。收集器据此拒绝任务并指引改用已接入的数据源，
+// 而不是空转一轮后静默标 done。
+func (q *qccProvider) SupportsTreeExpansion() bool { return false }
+
 // Investments 对外投资同样在独立 tab，暂未接入。
 func (q *qccProvider) Investments(ctx context.Context, extID string, page, size int) ([]CompanyRef, bool, error) {
 	return []CompanyRef{}, false, nil

@@ -152,6 +152,9 @@ func (c *Collector) run(ctx context.Context, provider Provider, job Job, root Co
 	if _, err := c.walk(ctx, provider, job, root, sink); err != nil {
 		if ctx.Err() != nil {
 			status, msg = "canceled", "用户取消"
+		} else if NodeCapReached(err) {
+			// 部分成功：配额用完但产出已全部入库，终态 done 带续穿提示。
+			status, msg = "done", nodeCapMessage(job.MaxNodes)
 		} else {
 			status, msg = "error", err.Error()
 		}
@@ -173,7 +176,25 @@ func (c *Collector) run(ctx context.Context, provider Provider, job Job, root Co
 }
 
 // walk 从根企业开始逐层展开：detail → 域名入候选 → （可选）数字资产入候选池 → 子公司(分支/投资)入队。
+// errNodeCapReached 是「节点配额用完」的哨兵：这属于部分成功而非失败——
+// 已产出的实体/域名全部入库，任务终态应为 done（带提示），标 error 会误导
+// 用户以为整轮白跑。
+var errNodeCapReached = fmt.Errorf("node cap reached")
+
+// NodeCapReached 报告 err 是否为节点配额用完（供调用方决定终态语义）。
+func NodeCapReached(err error) bool { return err == errNodeCapReached }
+
+// nodeCapMessage 生成带配额数值的用户提示。
+func nodeCapMessage(maxNodes int) string {
+	return fmt.Sprintf("已达到节点上限 %d，子公司树未穿完；可调大 max_nodes 后续穿（本轮已产出的实体/域名均已入库）", maxNodes)
+}
+
 func (c *Collector) walk(ctx context.Context, provider Provider, job Job, root CompanyRef, sink DigitalAssetsProvider) ([]string, error) {
+	// 树展开能力闸门：Branches/Investments 为占位空实现的数据源（如 qcc），
+	// 穿透只会得到根节点零产出还标 done——直接拒绝并指引替代源。
+	if tp, ok := provider.(TreeExpansionProvider); ok && !tp.SupportsTreeExpansion() {
+		return nil, fmt.Errorf("数据源 %s 未接入分支/投资列表，无法展开子公司树；请改用小蓝本（xiaolanben）/天眼查（tyc）/爱企查（aqc）等已接入数据源", provider.Name())
+	}
 	type item struct {
 		ref        CompanyRef
 		depth      int
@@ -191,7 +212,7 @@ func (c *Collector) walk(ctx context.Context, provider Provider, job Job, root C
 			return targets, err
 		}
 		if nodes >= job.MaxNodes {
-			return targets, fmt.Errorf("达到节点上限 %d，任务中止（可调大 max_nodes 后重试）", job.MaxNodes)
+			return targets, errNodeCapReached
 		}
 		cur := queue[0]
 		queue = queue[1:]

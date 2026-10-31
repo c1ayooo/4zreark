@@ -58,3 +58,11 @@ type GroupCompaniesProvider interface {
 	// GroupCompanies 集团成员列表，返回下一页是否存在。
 	GroupCompanies(ctx context.Context, extID string, page, size int) ([]CompanyRef, bool, error)
 }
+
+// TreeExpansionProvider 可选能力声明：数据源是否真正接入了分支/投资列表
+// （BFS 穿透的展开依据）。qcc 等上游列表页未接入的源返回 false——收集器
+// 见到 false 直接拒绝启动穿透任务并给出替代源指引，不再静默空转后标 done。
+// 未实现此接口的数据源视为支持（历史行为兼容）。
+type TreeExpansionProvider interface {
+	SupportsTreeExpansion() bool
+}
