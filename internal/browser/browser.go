@@ -11,7 +11,7 @@
 // 不会变化；安装浏览器后需重启进程生效。
 //
 // 目录管理：自带浏览器落在项目统一可执行资产根 data/bin/browser/
-//（ZRE_BIN_DIR 覆盖根）；扫描工具 data/tools/（ZRE_TOOLS_DIR）与 nuclei
+// （ZRE_BIN_DIR 覆盖根）；扫描工具 data/tools/（ZRE_TOOLS_DIR）与 nuclei
 // data/nuclei/（ZRE_NUCLEI_DIR）沿用既有根，需要归拢时设对应环境变量。
 // 部署建议：Dockerfile/安装脚本执行 `apt-get install -y chromium` 即可被
 // 探测到；路径特殊的环境用 ZRE_CHROME 指定可执行文件。
@@ -154,7 +154,7 @@ func DownloadDir() string {
 }
 
 // ensureDownloaded 下载 rod 托管的 Chromium 到项目统一 bin 根
-//（data/bin/browser/chromium-<rev>/chrome），成功返回可执行路径。
+// （data/bin/browser/chromium-<rev>/chrome），成功返回可执行路径。
 // rootDir 非空时覆盖下载目录（测试隔离用）。
 // 下载源三选一竞速（Google/NPM/Playwright），尊重 HTTPS_PROXY 环境变量。
 func ensureDownloaded(rootDir string) (string, bool) {
@@ -204,7 +204,7 @@ func currentRevision() int {
 
 // Status 返回浏览器运行时状态（工具运行时面板的 browser 条目）。
 // installed/path 取自统一检测；revision 仅对 rod 托管下载的产物有意义
-//（系统安装的浏览器版本随系统，无 rod revision 口径）。
+// （系统安装的浏览器版本随系统，无 rod revision 口径）。
 // update_available：rod 托管产物 revision 落后于当前平台期望（rod 依赖
 // 升级会带新 revision），提示面板触发更新。
 func Status() map[string]any {

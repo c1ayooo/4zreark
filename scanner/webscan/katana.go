@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/datadir"
 	"github.com/c1ayooo/4zreark/internal/toolruntime"
 	"github.com/c1ayooo/4zreark/internal/useragent"
 	"github.com/c1ayooo/4zreark/scanner/core"
@@ -107,7 +108,7 @@ func NewKatanaScanner() *KatanaScanner {
 		Concurrency:      10,  // 并发数
 		Timeout:          30,  // 每个请求超时（秒）
 		RateLimit:        150, // 速率限制
-		TempDir:          os.TempDir(),
+		TempDir:          datadir.TmpDir(),
 		ExecutionTimeout: 10, // 执行超时（分钟）
 	}
 }

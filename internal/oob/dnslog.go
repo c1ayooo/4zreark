@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/datadir"
 	"io"
 	"net/http"
 	"net/url"
@@ -21,7 +22,7 @@ import (
 const DnslogDefaultBase = "http://dnslog.cn"
 
 func dnslogCookieFile() string {
-	return filepath.Join(os.TempDir(), "4zrec_dnslog_cookie.txt")
+	return filepath.Join(datadir.TmpDir(), "dnslog-cookie.txt")
 }
 
 // DnslogGetDomain 拿临时域名;会话 cookie 持久化(记录查询必须带同 cookie)。

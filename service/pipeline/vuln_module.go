@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/datadir"
 	"log"
 	"os"
 	"path/filepath"
@@ -415,7 +416,7 @@ func (m *VulnScanModule) selectTemplates(techs []string) []templateEntry {
 }
 
 func (m *VulnScanModule) materialize(selected []templateEntry) (string, error) {
-	dir, err := os.MkdirTemp("", "zre-nuclei-*")
+	dir, err := os.MkdirTemp(datadir.TmpDir(), "zre-nuclei-*")
 	if err != nil {
 		return "", err
 	}

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/datadir"
 	"io"
 	"os"
 	"os/exec"
@@ -546,7 +547,7 @@ func Create(ctx context.Context, opts CreateOptions) (*CreateResult, error) {
 		now = opts.Now()
 	}
 
-	tmpDir, err := os.MkdirTemp("", "zre-backup-")
+	tmpDir, err := os.MkdirTemp(datadir.TmpDir(), "zre-backup-")
 	if err != nil {
 		return nil, fmt.Errorf("创建临时目录失败: %w", err)
 	}
@@ -719,7 +720,7 @@ func Restore(ctx context.Context, opts RestoreOptions) (*RestoreResult, error) {
 
 	// 4. 解包 .zrebackup 到临时目录
 	fmt.Fprintln(warn, "[2/5] 解包备份 ...")
-	tmpDir, err := os.MkdirTemp("", "zre-restore-")
+	tmpDir, err := os.MkdirTemp(datadir.TmpDir(), "zre-restore-")
 	if err != nil {
 		return nil, fmt.Errorf("创建临时目录失败: %w", err)
 	}

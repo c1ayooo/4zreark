@@ -1,13 +1,14 @@
 package pipeline
 
 import (
-	"github.com/c1ayooo/4zreark/internal/safehttp"
-	"github.com/c1ayooo/4zreark/internal/sourcemap"
 	"context"
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/datadir"
+	"github.com/c1ayooo/4zreark/internal/safehttp"
+	"github.com/c1ayooo/4zreark/internal/sourcemap"
 	"io"
 	"log"
 	"net/http"
@@ -106,7 +107,7 @@ func (m *JSAuditModule) ModuleRun() error {
 		return m.RunPassThrough()
 	}
 
-	workDir, err := os.MkdirTemp("", "js-audit-*")
+	workDir, err := os.MkdirTemp(datadir.TmpDir(), "js-audit-*")
 	if err != nil {
 		log.Printf("[%s] 创建临时目录失败: %v，透传", m.name, err)
 		return m.RunPassThrough()
@@ -280,9 +281,9 @@ func (m *JSAuditModule) forward(v interface{}) {
 // map 里可能有上百个 source（node_modules 全量），全部落盘会把 nuclei
 // 审计拖慢且磁盘翻倍；源码密钥集中在业务代码，优先级按 map 顺序即可。
 const (
-	sourcemapMaxRestoredPerMap  = 50
-	sourcemapMaxRestoredTotal   = 1000
-	sourcemapMaxSourcePathLogs  = 10
+	sourcemapMaxRestoredPerMap = 50
+	sourcemapMaxRestoredTotal  = 1000
+	sourcemapMaxSourcePathLogs = 10
 )
 
 // restoreSourceMap 尝试还原 JS 产物对应的 source map 原始源码并落盘进

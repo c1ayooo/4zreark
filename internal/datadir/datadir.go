@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 const binRootEnv = "ZRE_BIN_DIR"
@@ -82,6 +83,44 @@ func adopt(legacy, dst string) string {
 		return legacy
 	}
 	return dst
+}
+
+// tmpOnce / tmpDirVal 缓存临时目录（含一次性残留清理）。
+var (
+	tmpOnce   sync.Once
+	tmpDirVal string
+	tmpMaxAge = 48 * time.Hour
+)
+
+// TmpDir 返回平台统一临时目录（data/tmp，ZRE_TMPDIR 覆盖）：所有
+// MkdirTemp/临时文件（nuclei 物化、JS 审计、备份、katana/spray 输出、
+// tunnel 记录、OOB cookie）都约束在这里，不再散落系统 /tmp 或工作目录根。
+// 首次调用时清理 48 小时前的残留。
+func TmpDir() string {
+	tmpOnce.Do(func() {
+		tmpDirVal = filepath.Join(BinRoot(), "..", "tmp")
+		if p := trim(os.Getenv("ZRE_TMPDIR")); p != "" {
+			tmpDirVal = p
+		}
+		if err := os.MkdirAll(tmpDirVal, 0o750); err != nil {
+			log.Printf("[datadir] 创建临时目录失败（%v），回退系统 /tmp", err)
+			tmpDirVal = os.TempDir()
+			return
+		}
+		cutoff := time.Now().Add(-tmpMaxAge)
+		entries, err := os.ReadDir(tmpDirVal)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			fi, err := e.Info()
+			if err != nil || fi.ModTime().After(cutoff) {
+				continue
+			}
+			_ = os.RemoveAll(filepath.Join(tmpDirVal, e.Name()))
+		}
+	})
+	return tmpDirVal
 }
 
 func trim(s string) string {

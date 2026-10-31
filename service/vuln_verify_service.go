@@ -1,6 +1,7 @@
 package service
 
 import (
+	"github.com/c1ayooo/4zreark/internal/datadir"
 	"context"
 	"encoding/json"
 	"regexp"
@@ -48,7 +49,9 @@ func (s *VulnVerifyService) init() {
 	if r == nil {
 		return
 	}
-	cacheDir := filepath.Join("data", "nuclei", "poc-cache")
+	// 跟随 nuclei 运行时根（data/bin/nuclei/poc-cache），不再写死旧位置
+	// data/nuclei/poc-cache——那会让已收编的 bin 树旁边重新长出散目录。
+	cacheDir := filepath.Join(datadir.BinRoot(), "nuclei", "poc-cache")
 	_ = os.MkdirAll(cacheDir, 0o750)
 
 	runtime := GetNucleiRuntimeService()

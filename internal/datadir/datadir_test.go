@@ -2,8 +2,8 @@ package datadir
 
 import (
 	"os"
-	"sync"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -93,7 +93,6 @@ func TestAdoptKeepsLegacyWhenBothExist(t *testing.T) {
 		t.Fatal("bin 内数据不应被覆盖")
 	}
 }
-
 
 func mustRead(t *testing.T, p string) []byte {
 	t.Helper()

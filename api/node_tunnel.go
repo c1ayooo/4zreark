@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/datadir"
 	"log"
 	"net"
 	"os"
@@ -50,7 +51,7 @@ func tunnelDir() string {
 	if cfg := config.Loaded(); cfg != nil && strings.TrimSpace(cfg.Node.TunnelDir) != "" {
 		return cfg.Node.TunnelDir
 	}
-	return filepath.Join(os.TempDir(), "4zreark-tunnels")
+	return filepath.Join(datadir.TmpDir(), "tunnels")
 }
 
 func tunnelFilePath(nodeID string) (string, error) {

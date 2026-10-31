@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/datadir"
 	"net"
 	"net/url"
 	"os"
@@ -293,7 +294,7 @@ func (s *ScanService) NucleiScan(ctx context.Context, targets []string, severity
 			severities = append(severities, s)
 		}
 	}
-	dir, err := os.MkdirTemp("", "zre-nuclei-*")
+	dir, err := os.MkdirTemp(datadir.TmpDir(), "zre-nuclei-*")
 	if err != nil {
 		return nil, fmt.Errorf("创建模板目录失败: %w", err)
 	}

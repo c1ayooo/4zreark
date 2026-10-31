@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"github.com/c1ayooo/4zreark/internal/datadir"
 	"net/http"
 	"os"
 	"strconv"
@@ -192,7 +193,7 @@ func (h *NucleiHandler) ScanTarget(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 	defer cancel()
 
-	dir, err := os.MkdirTemp("", "zre-nuclei-*")
+	dir, err := os.MkdirTemp(datadir.TmpDir(), "zre-nuclei-*")
 	if err != nil {
 		utils.InternalError(c, "创建模板目录失败: "+err.Error())
 		return

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/datadir"
 	"github.com/c1ayooo/4zreark/internal/toolruntime"
 	"github.com/c1ayooo/4zreark/scanner/core"
 )
@@ -94,7 +95,7 @@ func NewSprayScanner() *SprayScanner {
 		Concurrency:       50,  // 并发数
 		Timeout:           10,  // 每个请求超时（秒）
 		RateLimit:         100, // 速率限制（req/s）。默认非零：0=不限速，50 并发字典爆破最容易打挂目标；流水线会按任务节奏收紧
-		TempDir:           os.TempDir(),
+		TempDir:           datadir.TmpDir(),
 		ExecutionTimeout:  30,   // 执行超时（分钟）
 		Depth:             0,    // 递归深度，0 表示不递归
 		EnableFingerprint: true, // 启用指纹识别
