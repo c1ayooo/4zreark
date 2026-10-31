@@ -1,6 +1,7 @@
 package toolruntime
 
 import (
+	"github.com/c1ayooo/4zreark/internal/datadir"
 	"archive/tar"
 	"archive/zip"
 	"bytes"
@@ -107,13 +108,14 @@ var (
 	defaultMgr  *Manager
 )
 
-// Default 进程级单例：root 取 ZRE_TOOLS_DIR 或 data/tools，无 Store。
+// Default 进程级单例：root 取 ZRE_TOOLS_DIR，否则收编历史目录 data/tools
+// 到统一 bin 根（data/bin/tools，internal/datadir），无 Store。
 // master 的服务层负责在启动时把 repo 仓储注入（SetStore）。
 func Default() *Manager {
 	defaultOnce.Do(func() {
 		root := strings.TrimSpace(os.Getenv(rootDirEnv))
 		if root == "" {
-			root = filepath.Join("data", "tools")
+			root = datadir.Adopt(filepath.Join("data", "tools"), "tools")
 		}
 		defaultMgr = New(root, nil)
 	})

@@ -30,6 +30,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/datadir"
 	"github.com/go-rod/rod/lib/launcher"
 )
 
@@ -143,20 +144,9 @@ func detect() string {
 // DownloadTimeout 自动下载浏览器整体超时（~150MB，弱网容忍）。
 const DownloadTimeout = 10 * time.Minute
 
-// binRootEnv 项目统一可执行资产根（data/bin）：浏览器等运行时自举资产
-// 都落在这里，随项目数据目录走，不再散落在用户 HOME 缓存。
-// 扫描工具（data/tools，ZRE_TOOLS_DIR）与 nuclei（data/nuclei，
-// ZRE_NUCLEI_DIR）沿用各自既有根——已在项目内且有部署数据，不强制迁移，
-// 需要归拢时设对应环境变量即可（如 ZRE_TOOLS_DIR=data/bin/tools）。
-const binRootEnv = "ZRE_BIN_DIR"
-
-// BinRoot 返回统一可执行资产根（不保证已创建）。
-func BinRoot() string {
-	if p := strings.TrimSpace(os.Getenv(binRootEnv)); p != "" {
-		return p
-	}
-	return filepath.Join("data", "bin")
-}
+// BinRoot 返回统一可执行资产根（data/bin，ZRE_BIN_DIR 覆盖）。
+// 目录约定与历史目录收编统一在 internal/datadir，此处委托。
+func BinRoot() string { return datadir.BinRoot() }
 
 // DownloadDir 自带浏览器的下载根（<bin>/browser/chromium-<rev>/chrome）。
 func DownloadDir() string {

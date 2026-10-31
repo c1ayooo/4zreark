@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/datadir"
 	"github.com/c1ayooo/4zreark/internal/nucleiruntime"
 )
 
@@ -33,7 +34,9 @@ func GetNucleiRuntimeService() *NucleiRuntimeService {
 	nucleiRuntimeOnce.Do(func() {
 		root := os.Getenv("ZRE_NUCLEI_DIR")
 		if strings.TrimSpace(root) == "" {
-			root = filepath.Join("data", "nuclei")
+			// 收编历史目录 data/nuclei 到统一 bin 根（data/bin/nuclei）；
+			// 容器等不可 rename 的环境自动沿用旧路径。
+			root = datadir.Adopt(filepath.Join("data", "nuclei"), "nuclei")
 		}
 		_ = os.MkdirAll(root, 0o750)
 		settings := newFileSettings(filepath.Join(root, "settings.json"))

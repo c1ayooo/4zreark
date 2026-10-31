@@ -566,7 +566,10 @@ func (m *Manager) updateTemplates(ctx context.Context, binary, templatesDir stri
 	defer cancel()
 	// 不带 -duc：该标志会连显式 -update-templates 的版本检查一起跳过，
 	// 导致命令退出码 0 但什么都没下载。
-	out, err := m.runCommand(ctx, binary, "-update-templates", "-ud", templatesDir)
+	// -ud 的目录参数同样要绝对化：cmd.Dir 绝对化后，相对参数会基于它
+	// 双重拼接，模板被下到 <root>/data/nuclei/templates 而面板读的是
+	// <root>/templates——表现为「更新成功但模板数 0」。
+	out, err := m.runCommand(ctx, binary, "-update-templates", "-ud", m.absPath(templatesDir))
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, tail(out))
 	}
