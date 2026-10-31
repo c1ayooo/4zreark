@@ -63,9 +63,28 @@ func TestCandidatesLegacyEnvCompat(t *testing.T) {
 // 缺失提示：含三条可操作路径（安装 / 环境变量 / 替代方式）。
 func TestMissingErrorActionable(t *testing.T) {
 	msg := MissingError("测试用途").Error()
-	for _, want := range []string{"测试用途", "ZRE_CHROME", "apt install", "替代"} {
+	for _, want := range []string{"测试用途", "ZRE_CHROME", "apt install", "自动下载"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("缺失提示应含 %q: %s", want, msg)
 		}
+	}
+}
+
+// 自带浏览器完整链路：隔离目录真实下载 → BinPath 落位 → --version 探活。
+// 这是「项目自带浏览器」的承诺验证：宿主机没装任何浏览器也能自举。
+// 真实下载 ~150MB，需要可达下载源（尊重 HTTPS_PROXY），short 模式跳过。
+func TestEnsureDownloadedBootstrapsBundledBrowser(t *testing.T) {
+	if testing.Short() {
+		t.Skip("short 模式跳过真实下载")
+	}
+	if testing.Short() == false && os.Getenv("BROWSER_DL_TEST") == "" {
+		t.Skip("设置 BROWSER_DL_TEST=1 才跑真实下载（~150MB）")
+	}
+	bin, ok := ensureDownloaded(t.TempDir())
+	if !ok {
+		t.Fatal("自动下载失败")
+	}
+	if !ProbeChrome(bin) {
+		t.Fatalf("下载产物探活失败: %s", bin)
 	}
 }

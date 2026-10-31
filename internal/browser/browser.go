@@ -24,6 +24,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/go-rod/rod/lib/launcher"
 )
 
 // ProbeTimeout 单个候选 --version 探活的超时。
@@ -86,35 +88,83 @@ func ProbeChrome(bin string) bool {
 	return cmd.Run() == nil
 }
 
-// FindChrome 返回本机可用的浏览器二进制；找不到返回 ""（探测失败原因
-// 留档日志）。结果进程级缓存。
+// FindChrome 返回本机可用的浏览器二进制；找不到时自动下载 rod 托管的
+// Chromium（项目自带浏览器，不要求宿主机预装），下载产物与系统安装同等
+// 参与 --version 探活。全失败返回 ""（原因留档日志）。结果进程级缓存。
 func FindChrome() string {
 	once.Do(func() {
-		for _, p := range Candidates() {
-			if p == "" {
-				continue
+		foundPath = detect()
+		if foundPath == "" {
+			// 自带浏览器兜底：项目不依赖宿主机预装。下载 ~150MB，
+			// 三源竞速（Google/NPM/Playwright），尊重 HTTPS_PROXY。
+			if bin, ok := ensureDownloaded(""); ok {
+				if ProbeChrome(bin) {
+					foundPath = bin
+					log.Printf("[browser] 已自动下载项目自带浏览器: %s", bin)
+					return
+				}
+				log.Printf("[browser] 自带浏览器下载完成但探活失败: %s", bin)
 			}
-			if _, err := os.Stat(p); err != nil {
-				misses = append(misses, p+": 不存在")
-				continue
-			}
-			if !ProbeChrome(p) {
-				misses = append(misses, p+": 无法执行（snap stub 或依赖缺失）")
-				continue
-			}
-			foundPath = p
-			return
+			log.Printf("[browser] 未检测到可用浏览器（含自动下载），候选探测记录: %s", strings.Join(misses, "; "))
 		}
-		log.Printf("[browser] 未检测到可用浏览器，候选探测记录: %s", strings.Join(misses, "; "))
 	})
 	return foundPath
 }
 
-// MissingError 找不到浏览器时的用户提示：给出可操作的安装/指定途径。
-// purpose 描述调用方业务（如「报告 PDF 渲染」「扫码登录」）。
+// detect 按候选枚举 + --version 探活寻找系统已有浏览器。
+func detect() string {
+	for _, p := range Candidates() {
+		if p == "" {
+			continue
+		}
+		if _, err := os.Stat(p); err != nil {
+			misses = append(misses, p+": 不存在")
+			continue
+		}
+		if !ProbeChrome(p) {
+			misses = append(misses, p+": 无法执行（snap stub 或依赖缺失）")
+			continue
+		}
+		return p
+	}
+	return ""
+}
+
+// DownloadTimeout 自动下载浏览器整体超时（~150MB，弱网容忍）。
+const DownloadTimeout = 10 * time.Minute
+
+// ensureDownloaded 下载 rod 托管的 Chromium 到标准缓存目录
+//（~/.cache/rod/browser/chromium-<rev>/chrome），成功返回可执行路径。
+// rootDir 非空时覆盖下载目录（测试隔离用）。
+// 下载源三选一竞速（Google/NPM/Playwright），尊重 HTTPS_PROXY 环境变量。
+func ensureDownloaded(rootDir string) (string, bool) {
+	b := launcher.NewBrowser()
+	if rootDir != "" {
+		b.RootDir = rootDir
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), DownloadTimeout)
+	defer cancel()
+	b.Context = ctx
+	// 下载进度走标准日志（rod 默认打到 stdout，会混进业务输出）
+	b.Logger = log.New(os.Stderr, "[browser-download] ", log.LstdFlags)
+	if err := b.Download(); err != nil {
+		log.Printf("[browser] 自动下载失败（网络需可达 playwright.azureedge.net/npm/Google 源，或配置 HTTPS_PROXY）: %v", err)
+		return "", false
+	}
+	bin := b.BinPath()
+	if _, err := os.Stat(bin); err != nil {
+		log.Printf("[browser] 下载完成但可执行文件缺失: %s", bin)
+		return "", false
+	}
+	return bin, true
+}
+
+// MissingError 找不到浏览器时的用户提示（自动下载也失败后的兜底）：
+// 给出可操作的安装/指定途径。purpose 描述调用方业务（如「报告 PDF 渲染」
+// 「扫码登录」）。
 func MissingError(purpose string) error {
-	return fmt.Errorf("%s需要本机 Chrome/Chromium，但自动检测未找到可用浏览器。"+
-		"处理方式任选其一：① 安装 Chrome/Chromium（apt install chromium-browser 或官网安装包）；"+
-		"② 已装有但路径特殊时设置环境变量 ZRE_CHROME 指向可执行文件后重启；"+
-		"③ 不依赖浏览器的替代路径（视功能而定：报告回退 HTML、扫码登录改粘贴 Cookie、企业穿透改用 HTTP 直连数据源）", purpose)
+	return fmt.Errorf("%s需要本机 Chrome/Chromium：自动检测未找到，且自带浏览器自动下载失败（需可达 playwright.azureedge.net 等下载源，代理环境请配置 HTTPS_PROXY）。"+
+		"处理方式任选其一：① 修复网络/代理后重试（平台会自动下载自带浏览器）；"+
+		"② 安装 Chrome/Chromium（apt install chromium-browser 或官网安装包）；"+
+		"③ 已装有但路径特殊时设置环境变量 ZRE_CHROME 指向可执行文件后重启", purpose)
 }
