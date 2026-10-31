@@ -597,9 +597,14 @@ func (a *AssetRepo) ImportRecords(ctx context.Context, projectID int64, source s
 
 		// 指纹/图标随扫描结果自动落到站点画像：技术栈进 sites.tech，
 		// 图标字节按 sha256 去重进 asset_icons，站点只存引用。
+		// tech 是合并不是覆盖：这列同时承载探活复核写的规则名词汇
+		//（fingerprint_rules），整组覆盖会把另一引擎的结论冲掉。
 		if len(rec.Tech) > 0 {
 			if _, err := tx.Exec(ctx,
-				`UPDATE sites SET tech = $2, tech_status = 'done' WHERE id = $1`,
+				`UPDATE sites SET tech = (
+					select coalesce(jsonb_agg(distinct e order by e), '[]'::jsonb)
+					from jsonb_array_elements_text(sites.tech || $2::jsonb) e
+				), tech_status = 'done' WHERE id = $1`,
 				siteID, anyToJSONB(rec.Tech)); err != nil {
 				return nil, fmt.Errorf("回写站点技术栈失败: %w", err)
 			}

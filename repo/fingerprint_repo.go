@@ -366,18 +366,30 @@ func (r *fingerprintRepo) ListHits(ctx context.Context, siteID int64) ([]*FpHit,
 	return out, rows.Err()
 }
 
+// UpdateSiteProfile 回写站点的标题 / Server / 技术栈（探测时顺手更新）。
+// tech 语义是合并不是覆盖：这列同时承载流水线扫描写的 scanner 词汇
+//（Linkfinder 等，与 fingerprint_rules 零重合），整组覆盖会把另一引擎的
+// 结论冲掉；零命中探测（tech 为空）更不能把既有技术栈抹成 []——
+// 118 站仅 7 站技术栈可见的主因。代价是 tech 只增不减，过期词条随
+// 站点生命周期清理（统一词汇的深度方案见派单 20261031 工单 02）。
 func (r *fingerprintRepo) UpdateSiteProfile(ctx context.Context, siteID int64, title, server string, tech []string) error {
+	if len(tech) == 0 {
+		if title == "" {
+			return nil
+		}
+		_, err := r.r.pool.Exec(ctx, `
+			update sites set title = $2 where id = $1`, siteID, title)
+		return err
+	}
 	techJSON, err := json.Marshal(tech)
 	if err != nil {
 		return err
 	}
-	if tech == nil {
-		techJSON = []byte("[]")
-	}
 	_, err = r.r.pool.Exec(ctx, `
 		update sites
 		   set title = case when $2 <> '' then $2 else title end,
-		       tech = $3::jsonb
+		       tech = (select coalesce(jsonb_agg(distinct e order by e), '[]'::jsonb)
+		                 from jsonb_array_elements_text(sites.tech || $3::jsonb) e)
 		 where id = $1`, siteID, title, techJSON)
 	return err
 }
