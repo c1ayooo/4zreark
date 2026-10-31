@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	neturl "net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -244,6 +245,35 @@ func (m *PortScanModule) scanPorts(ds DomainSkip) {
 	ips := ds.IP
 	if len(ips) == 0 && ds.Domain != "" && !strings.Contains(ds.Domain, "://") {
 		ips = resolveHostIPs(ctx, ds.Domain)
+	}
+
+	// URL 形态目标自带端口语义：gogo 不认 URL（会当主机名扫出假端口），
+	// 直接按 scheme/port 合成端口结果，旁路 gogo。
+	if u, err := neturl.Parse(ds.Domain); err == nil && u.Host != "" && strings.Contains(ds.Domain, "://") {
+		port := u.Port()
+		if port == "" {
+			if u.Scheme == "https" {
+				port = "443"
+			} else {
+				port = "80"
+			}
+		}
+		host := u.Hostname()
+		if len(ips) == 0 {
+			ips = resolveHostIPs(ctx, host)
+		}
+		ip := ""
+		if len(ips) > 0 {
+			ip = ips[0]
+		}
+		m.Logf("info", "%s 端口来自 URL（%s），跳过扫描", host, port)
+		log.Printf("[%s] URL target %s: emitting port %s without scan", m.name, host, port)
+		select {
+		case <-m.ctx.Done():
+			return
+		case m.resultChan <- PortAlive{Host: host, IP: ip, Port: port, Service: u.Scheme}:
+		}
+		return
 	}
 
 	// 主机名解析不出 IP 就不必进 gogo 了：gogo 对无法解析的目标直接

@@ -2,8 +2,10 @@ package pipeline
 
 import (
 	"github.com/c1ayooo/4zreark/internal/safehttp"
+	"github.com/c1ayooo/4zreark/internal/sourcemap"
 	"context"
 	"crypto/sha1"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -43,8 +45,11 @@ type JSAuditModule struct {
 	scope        *scope.Scope
 
 	mu       sync.Mutex
-	files    map[string]string // 本地文件名 -> 源 URL
+	files    map[string]string // 本地文件名 -> 源 URL（还原源文件带 [source: 路径] 后缀）
 	failures int
+	// restoredTotal 全局还原源文件计数（跨任务内所有 map），配合
+	// sourcemapMaxRestoredTotal 防大站把磁盘与审计时间拖爆。
+	restoredTotal int
 }
 
 // NewJSAuditModule 创建 JS 产物审计模块。
@@ -185,6 +190,12 @@ func (m *JSAuditModule) ModuleRun() error {
 				m.mu.Lock()
 				m.files[name] = u
 				m.mu.Unlock()
+				// restoreSourceMap 内部自己持 m.mu——绝不能在持锁状态下调用
+				//（Mutex 不可重入，否则 fetch goroutine 死锁、任务永久卡 running）。
+				restored := m.restoreSourceMap(workDir, u, filepath.Join(workDir, name))
+				if restored > 0 {
+					m.Logf("info", "%s source map 还原 %d 个源文件进审计", u, restored)
+				}
 			}(rawURL)
 		}
 	}
@@ -263,6 +274,160 @@ func (m *JSAuditModule) forward(v interface{}) {
 	case <-m.ctx.Done():
 	case m.nextModule.GetInput() <- v:
 	}
+}
+
+// sourcemap 还原的限额：单个 map 的还原源文件数、全局还原文件总数。
+// map 里可能有上百个 source（node_modules 全量），全部落盘会把 nuclei
+// 审计拖慢且磁盘翻倍；源码密钥集中在业务代码，优先级按 map 顺序即可。
+const (
+	sourcemapMaxRestoredPerMap  = 50
+	sourcemapMaxRestoredTotal   = 1000
+	sourcemapMaxSourcePathLogs  = 10
+)
+
+// restoreSourceMap 尝试还原 JS 产物对应的 source map 原始源码并落盘进
+// workDir，与 JS 一起被 nuclei 审计。返回还原的源文件数。
+// 两条发现路径：JS 尾部 sourceMappingURL 注释（含 data URI 内联）；
+// 注释缺席时探测同路径 .map（部分构建产物不写注释但 map 一起部署了）。
+func (m *JSAuditModule) restoreSourceMap(workDir, jsURL, localPath string) int {
+	data, err := os.ReadFile(localPath)
+	if err != nil || len(data) == 0 {
+		return 0
+	}
+
+	ref := sourcemap.ExtractSourceMappingURL(string(data))
+	mapData := m.fetchInlineOrRemoteMap(jsURL, ref)
+	if mapData == nil {
+		mapData = m.probeAdjacentMap(jsURL)
+	}
+	if mapData == nil {
+		return 0
+	}
+
+	sm, err := sourcemap.Parse(mapData)
+	if err != nil {
+		log.Printf("[%s] %s source map 解析失败: %v", m.name, jsURL, err)
+		return 0
+	}
+
+	restored := sm.Restore()
+	if len(restored) == 0 {
+		// 无 sourcesContent：sources 路径清单本身是目录结构泄露。
+		paths := sm.SourcePaths()
+		if len(paths) > 0 {
+			preview := paths
+			if len(preview) > sourcemapMaxSourcePathLogs {
+				preview = preview[:sourcemapMaxSourcePathLogs]
+			}
+			log.Printf("[%s] %s source map 无源码内容，但泄露 %d 个源路径: %s...",
+				m.name, jsURL, len(paths), strings.Join(preview, ", "))
+		}
+		return 0
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.restoredTotal >= sourcemapMaxRestoredTotal {
+		return 0
+	}
+
+	h := sha1.Sum([]byte(jsURL))
+	prefix := hex.EncodeToString(h[:8])
+	count := 0
+	for _, r := range restored {
+		if count >= sourcemapMaxRestoredPerMap || m.restoredTotal >= sourcemapMaxRestoredTotal {
+			break
+		}
+		if len(r.Content) > jsAuditMaxFileBytes {
+			continue
+		}
+		name := prefix + "-map-" + r.Name
+		if _, dup := m.files[name]; dup {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(workDir, name), []byte(r.Content), 0o600); err != nil {
+			continue
+		}
+		// 命中线索带源路径：JS URL + 还原文件在源码树里的位置。
+		m.files[name] = jsURL + " [source: " + r.Path + "]"
+		count++
+		m.restoredTotal++
+	}
+	return count
+}
+
+// fetchInlineOrRemoteMap 处理 sourceMappingURL 引用：data URI 直接解码，
+// 远程引用按相对 URL 解析、scope 校验后下载。ref 为空返回 nil。
+func (m *JSAuditModule) fetchInlineOrRemoteMap(jsURL, ref string) []byte {
+	if ref == "" {
+		return nil
+	}
+	if sourcemap.IsDataURI(ref) {
+		idx := strings.Index(ref, "base64,")
+		if idx < 0 {
+			// URL-encoded 形态
+			if payload := strings.TrimPrefix(ref, "data:application/json,"); payload != ref {
+				if dec, err := neturl.QueryUnescape(payload); err == nil {
+					return []byte(dec)
+				}
+			}
+			return nil
+		}
+		dec, err := base64.StdEncoding.DecodeString(ref[idx+len("base64,"):])
+		if err != nil {
+			return nil
+		}
+		return dec
+	}
+	base, err := neturl.Parse(jsURL)
+	if err != nil {
+		return nil
+	}
+	refURL, err := base.Parse(ref)
+	if err != nil {
+		return nil
+	}
+	if !m.allowsURL(refURL.String()) {
+		return nil
+	}
+	return m.fetchBytes(refURL.String())
+}
+
+// probeAdjacentMap 探测与 JS 同路径的 .map 文件（app.js → app.js.map）。
+// 404/403 等一切失败静默：探测本就是尽力而为。
+func (m *JSAuditModule) probeAdjacentMap(jsURL string) []byte {
+	if !strings.HasSuffix(strings.ToLower(neturl.PathEscape(jsURL)), ".js") &&
+		!strings.HasSuffix(strings.ToLower(jsURL), ".js") {
+		return nil
+	}
+	candidate := jsURL + ".map"
+	if !m.allowsURL(candidate) {
+		return nil
+	}
+	return m.fetchBytes(candidate)
+}
+
+// fetchBytes 下载 URL 内容，受单文件体积上限约束；非 2xx/HTML 一律 nil。
+func (m *JSAuditModule) fetchBytes(rawURL string) []byte {
+	req, err := http.NewRequestWithContext(m.ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("User-Agent", useragent.Pick())
+	req.Header.Set("Accept", "*/*")
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, jsAuditMaxFileBytes+1))
+	if err != nil || len(data) > jsAuditMaxFileBytes || len(data) == 0 || looksLikeHTML(data) {
+		return nil
+	}
+	return data
 }
 
 // fetch 下载单个 JS 产物并落盘，返回本地文件名。

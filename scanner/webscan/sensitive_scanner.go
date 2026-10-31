@@ -69,6 +69,16 @@ func loadSensitivePatternsFromConfig() map[string]*SensitivePattern {
 	// Add minimal defaults if no config
 	if len(patterns) == 0 {
 		patterns = getDefaultSensitivePatterns()
+		for name, p := range haeSensitivePatterns() {
+			if _, dup := patterns[name]; !dup {
+				regex, err := regexp.Compile(p.Pattern)
+				if err != nil {
+					continue
+				}
+				p.Regex = regex
+				patterns[name] = p
+			}
+		}
 	}
 
 	return patterns

@@ -2,6 +2,8 @@ package webscan
 
 import (
 	"testing"
+
+	"github.com/c1ayooo/4zreark/config"
 )
 
 // 内置缺省规则：全部可编译、正例命中、负例不误报。
@@ -62,5 +64,51 @@ func TestGetDefaultSensitivePatterns(t *testing.T) {
 		if got := p.Regex.MatchString(c.sample); got != c.wantHit {
 			t.Errorf("%s 匹配 %q = %v, want %v", c.rule, c.sample, got, c.wantHit)
 		}
+	}
+}
+
+// HaE 补充集（Apache-2.0，overspace-labs/HaE）：合并进缺省集、全部可编译、
+// 正负例锁住——中文 PII/内网拓扑是这批规则的增量价值，规则失效等于盲区回归。
+func TestHaeSensitivePatternsMerged(t *testing.T) {
+	patterns := loadSensitivePatternsFromConfig()
+	for _, name := range []string{"hae_mobile_cn", "hae_internal_ip", "hae_jdbc_connection",
+		"hae_auth_header", "hae_sensitive_field", "hae_mobile_field"} {
+		if _, ok := patterns[name]; !ok {
+			t.Fatalf("HaE 规则 %s 未合并进缺省集", name)
+		}
+		if patterns[name].Regex == nil {
+			t.Fatalf("HaE 规则 %s 未编译", name)
+		}
+	}
+
+	cases := []struct {
+		rule    string
+		sample  string
+		wantHit bool
+	}{
+		{"hae_mobile_cn", " 联系人 13812345678 请致电 ", true},
+		{"hae_mobile_cn", "订单号 12345678901 无手机号", false},
+		{"hae_internal_ip", "backend at 10.20.30.40", true},
+		{"hae_internal_ip", "server 192.168.1.100", true},
+		{"hae_internal_ip", "public 8.8.8.8", false},
+		{"hae_jdbc_connection", "url: jdbc:mysql://rm-xx.mysql.rds.aliyuncs.com:3306/order", true},
+		{"hae_auth_header", "Authorization: bearer eyJhbGciOiJIUzI1NiJ9.xxx.yyy", true},
+		{"hae_auth_header", "Bearer token格式但小写混入大写", false},
+		{"hae_sensitive_field", `"access_token":"ya29.a0AfH6SMx"`, true},
+		{"hae_mobile_field", `{"mobile":"13812345678"}`, true},
+	}
+	for _, c := range cases {
+		p, ok := patterns[c.rule]
+		if !ok {
+			t.Fatalf("缺规则 %s", c.rule)
+		}
+		if got := p.Regex.MatchString(c.sample); got != c.wantHit {
+			t.Errorf("%s 匹配 %q = %v, want %v", c.rule, c.sample, got, c.wantHit)
+		}
+	}
+
+	// config 显式注入时以配置为准，HaE 集不混入（沿用全量覆盖语义）
+	if cfg := config.GetVulnConfig(); cfg != nil && len(cfg.SensitivePatterns) > 0 {
+		t.Skip("本进程 config 注入了 sensitive_patterns，跳过覆盖语义断言")
 	}
 }
