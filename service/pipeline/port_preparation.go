@@ -17,6 +17,11 @@ type PortScanPreparationModule struct {
 	BaseModule
 	cdnDetector *subdomain.CDNDetector
 	resultChan  chan interface{}
+	seenMu      sync.Mutex
+	// seen 记录已放行过 DomainSkip 的目标：同一域名会以多种形态到达
+	// （DomainVerify 对每个子域先发 SubdomainResult 再发 DomainResolve），
+	// 端口扫描一次即终态，重复放行等于对外双倍扫描流量。
+	seen map[string]bool
 }
 
 // NewPortScanPreparationModule 创建端口扫描预处理模块
@@ -29,8 +34,28 @@ func NewPortScanPreparationModule(ctx context.Context, nextModule ModuleRunner) 
 		},
 		cdnDetector: subdomain.NewCDNDetector(),
 		resultChan:  make(chan interface{}, 1000),
+		seen:        map[string]bool{},
 	}
 	return m
+}
+
+// emitSkipOnce 每个目标只放行第一份 DomainSkip，后续形态一律丢弃。
+func (m *PortScanPreparationModule) emitSkipOnce(ds DomainSkip) {
+	m.seenMu.Lock()
+	if m.seen[ds.Domain] {
+		m.seenMu.Unlock()
+		return
+	}
+	m.seen[ds.Domain] = true
+	m.seenMu.Unlock()
+
+	if ds.Skip {
+		log.Printf("[%s] Skip port scan for %s (%s)", m.name, ds.Domain, ds.CDN)
+	}
+	select {
+	case <-m.ctx.Done():
+	case m.resultChan <- ds:
+	}
 }
 
 // ModuleRun 运行模块
@@ -91,25 +116,16 @@ func (m *PortScanPreparationModule) ModuleRun() error {
 				return nil
 			}
 
-			// 子域扫描结果：原样下沉（结果收集器要子域记录），同时转成端口扫描输入。
-			// HTTP 探测阶段已经判过 CDN，这里直接用，不再重复探测。
+			// 子域记录只原样下沉（结果收集器要子域明细），不再就地转端口
+			// 扫描输入：DomainVerify 对同一子域随后必发 DomainResolve，那是
+			// 带新鲜 DNS/CDN 结论的规范端口触发形态。此前两路各转一份
+			// DomainSkip，同一域名被扫两次，且两路 CDN 结论可能相反
+			//（httpx 判「Unknown CDN」时该域名甚至整段漏扫）。
 			if sr, ok := data.(SubdomainResult); ok {
-				m.resultChan <- sr
-
-				domainSkip := DomainSkip{
-					Domain: sr.Host,
-					IP:     sr.IPs,
-					Skip:   sr.CDN,
-					IsCDN:  sr.CDN,
-					CDN:    sr.CDNName,
-				}
-				if domainSkip.Skip {
-					log.Printf("[%s] CDN target, skip port scan: %s (%s)", m.name, sr.Host, sr.CDNName)
-				}
 				select {
 				case <-m.ctx.Done():
 					return nil
-				case m.resultChan <- domainSkip:
+				case m.resultChan <- sr:
 				}
 				continue
 			}
@@ -128,11 +144,7 @@ func (m *PortScanPreparationModule) ModuleRun() error {
 			case DomainSkip:
 				if len(v.IP) > 0 || v.Skip || v.CIDR || v.Domain == "" {
 					// 上游已带 IP / 已判定跳过 / CIDR 交给端口模块自理
-					select {
-					case <-m.ctx.Done():
-						return nil
-					case m.resultChan <- v:
-					}
+					m.emitSkipOnce(v)
 					continue
 				}
 				allWg.Add(1)
@@ -168,7 +180,8 @@ func (m *PortScanPreparationModule) ModuleRun() error {
 				select {
 				case <-m.ctx.Done():
 					return
-				case m.resultChan <- domainSkip:
+				default:
+					m.emitSkipOnce(domainSkip)
 				}
 			}(domainResolve)
 		}
@@ -199,10 +212,7 @@ func (m *PortScanPreparationModule) emitResolvedSkip(target string, ips []string
 		}
 	}
 
-	select {
-	case <-m.ctx.Done():
-	case m.resultChan <- domainSkip:
-	}
+	m.emitSkipOnce(domainSkip)
 }
 
 // resolveHostIPs 解析 host；失败返回 nil，端口扫描照常进行（与旧行为一致）。

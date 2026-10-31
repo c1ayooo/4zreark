@@ -475,12 +475,21 @@ func (s *EnterpriseService) Job(ctx context.Context, id string) (enterprise.Job,
 	return r.GetEnterpriseJob(ctx, id)
 }
 
+// CancelJob 取消采集任务。任务不在采集器运行表（典型：进程重启遗留的
+// 悬挂行）时回落到库层强制收尾，给界面一个可用的清理通道。
 func (s *EnterpriseService) CancelJob(id string) (bool, error) {
 	collector, err := s.collector()
 	if err != nil {
 		return false, err
 	}
-	return collector.Cancel(id), nil
+	if collector.Cancel(id) {
+		return true, nil
+	}
+	r := repo.Default()
+	if r == nil {
+		return false, errors.New("数据层未初始化")
+	}
+	return r.FinishJobIfRunning(context.Background(), id, "canceled", "任务不在运行表，强制取消（进程重启遗留）")
 }
 
 func (s *EnterpriseService) Candidates(ctx context.Context, projectID int64, status string, limit int) ([]enterprise.CandidateAsset, error) {

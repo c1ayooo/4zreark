@@ -343,6 +343,16 @@ func main() {
 		defer toolRuntimeService.Stop()
 		log.Println("Tool runtime service started (gogo/spray/katana/rem)")
 
+		// 企业采集遗留任务回收：采集器运行态在内存，控制面重启后 running
+		// 行无人执行也无人收尾，不回收就永久悬挂（Cancel 只查内存表）。
+		if r := repo.Default(); r != nil {
+			if n, err := r.ReapOrphanEnterpriseJobs(context.Background()); err != nil {
+				log.Printf("Warning: 企业采集遗留任务回收失败: %v", err)
+			} else if n > 0 {
+				log.Printf("已回收 %d 个进程重启遗留的企业采集任务", n)
+			}
+		}
+
 		// 资产巡航 v2：被动发现（新内容候选）+ 站点内容慢速巡检（hash 判变→慢爬）
 		discoveryService := service.GetDiscoveryService()
 		discoveryService.Start()

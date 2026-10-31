@@ -66,6 +66,33 @@ func (r *Repo) FinishJob(ctx context.Context, id, status, errMsg string) error {
 	return nil
 }
 
+// FinishJobIfRunning 只在任务仍处 running 时写终态，返回是否写入。
+// 供取消不在运行表中的遗留任务使用：不覆盖已完成任务的终态。
+func (r *Repo) FinishJobIfRunning(ctx context.Context, id, status, errMsg string) (bool, error) {
+	tag, err := r.pool.Exec(ctx,
+		`update enterprise_jobs set status=$2, error=$3, finished_at=now()
+		  where id=$1 and status='running'`,
+		id, status, errMsg)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// ReapOrphanEnterpriseJobs 回收无执行者的 running 任务。采集器运行态在
+// 进程内存（collector.running），控制面重启后这些行永远等不到 FinishJob，
+// 不回收就永久悬挂在列表里（Cancel 也只查内存表，删不掉）。
+func (r *Repo) ReapOrphanEnterpriseJobs(ctx context.Context) (int64, error) {
+	tag, err := r.pool.Exec(ctx,
+		`update enterprise_jobs set status='error',
+		        error='进程重启：采集中断，已自动回收', finished_at=now()
+		  where status='running'`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 func (r *Repo) BumpJob(ctx context.Context, id string, nodes, entities, domains, digital int) error {
 	_, err := r.pool.Exec(ctx, `
 update enterprise_jobs

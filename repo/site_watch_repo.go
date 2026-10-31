@@ -37,6 +37,9 @@ join lateral (
 ) e on true
 where s.state = 'reachable' and not s.watch_excluded and not s.ignored
   and not exists (select 1 from projects p where p.id = s.project_id and p.collection_paused)
+  -- 本地回环夹具不进全局巡检队列：自签 TLS 每轮到点必报错刷屏，还占满批次
+  and s.host not in ('localhost', '::1', '[::1]')
+  and s.host !~ '^127\.'
   and (s.content_checked_at is null or s.content_checked_at < now() - make_interval(hours => $1))`
 
 // SelectWatchSites 选出待巡检站点：reachable、有 HTTP(S) 入口、未豁免、
