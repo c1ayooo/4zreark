@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button, Card, Input, Tag } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
-import { toolRuntimeApi, type BrowserRuntimeStatus, type ToolRuntimeStatus } from '@/api/tools'
+import { toolRuntimeApi, toolsApi, type ToolRuntimeStatus } from '@/api/tools'
+import RuntimeToolRow from '@/components/tools/RuntimeToolRow'
 import { Loader2, RefreshCw, RotateCcw, Download, Gauge } from 'lucide-react'
 
 const statusBadge = (st: ToolRuntimeStatus['status']) => {
@@ -16,55 +17,6 @@ const statusBadge = (st: ToolRuntimeStatus['status']) => {
     default:
       return <Tag>未安装</Tag>
   }
-}
-
-// BrowserRow 自带浏览器状态行：与工具行同款视觉，更新走 /tools/browser/update
-//（系统来源不显示更新按钮——随系统更新，平台不越权替换）。
-function BrowserRow({ browser }: { browser: BrowserRuntimeStatus }) {
-  const { toast } = useToast()
-  const queryClient = useQueryClient()
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ['tool-runtime'] })
-
-  const update = useMutation({
-    mutationFn: () => toolRuntimeApi.updateBrowser(),
-    onSuccess: () => {
-      toast({ title: '自带浏览器已更新' })
-      refresh()
-    },
-    onError: (e: Error) => toast({ title: '浏览器更新失败', description: e.message, variant: 'destructive' }),
-  })
-
-  const info = browser.installed
-    ? [
-        browser.version,
-        browser.source === 'bundled'
-          ? `自带下载（revision ${browser.revision ?? '—'}${browser.expected_revision ? `，期望 ${browser.expected_revision}` : ''}）`
-          : '系统安装',
-        browser.path,
-      ].filter(Boolean).join(' · ')
-    : (browser.note || '未安装：首次使用时自动下载')
-
-  return (
-    <div className="rounded-md border p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-medium">browser</span>
-        {!browser.installed && <Tag>未安装</Tag>}
-        {browser.installed && browser.update_available && (
-          <Tag className="border-transparent bg-amber-600 text-white">有新版本</Tag>
-        )}
-        <span className="flex-1" />
-        {browser.source !== 'system' && (
-          <Button size="small" loading={update.isPending} onClick={() => update.mutate()}>
-            {browser.installed ? '检查并更新' : '立即安装'}
-          </Button>
-        )}
-      </div>
-      <div className="mt-1 text-xs text-muted-foreground break-all">{info}</div>
-      {browser.installed && browser.note && (
-        <div className="mt-1 text-xs text-amber-600">{browser.note}</div>
-      )}
-    </div>
-  )
 }
 
 function ToolRow({ tool }: { tool: ToolRuntimeStatus }) {
@@ -236,9 +188,38 @@ function EngineUsageCard() {
 }
 
 export function ToolRuntimePanel() {
+  const { toast } = useToast()
+  const queryClient = useQueryClient()
+  const refreshOverview = () => queryClient.invalidateQueries({ queryKey: ['tool-runtime'] })
   const overview = useQuery({
     queryKey: ['tool-runtime'],
     queryFn: () => toolRuntimeApi.list(),
+  })
+  const nucleiUpd = useMutation({
+    mutationFn: () => toolsApi.nucleiRuntimeUpdate({}),
+    onSuccess: () => {
+      toast({ title: 'nuclei 已更新' })
+      refreshOverview()
+    },
+    onError: (e: Error) => toast({ title: 'nuclei 更新失败', description: e.message, variant: 'destructive' }),
+  })
+  const nucleiRaw: any = overview.data?.nuclei || {}
+  const nucleiSt = {
+    ...nucleiRaw,
+    ...(nucleiRaw.binary_exists !== undefined ? {
+      BinaryExists: nucleiRaw.binary_exists,
+      BinaryVersion: nucleiRaw.binary_version,
+      AutoUpdate: nucleiRaw.auto_update,
+      TemplateCount: nucleiRaw.template_count,
+    } : {}),
+  }
+  const browserUpd = useMutation({
+    mutationFn: () => toolRuntimeApi.updateBrowser(),
+    onSuccess: () => {
+      toast({ title: '自带浏览器已更新' })
+      refreshOverview()
+    },
+    onError: (e: Error) => toast({ title: '浏览器更新失败', description: e.message, variant: 'destructive' }),
   })
 
   return (
@@ -262,12 +243,29 @@ export function ToolRuntimePanel() {
             </p>
           )}
           {overview.data?.tools?.map((t) => <ToolRow key={t.name} tool={t} />)}
-          {overview.data?.nuclei ? (
-            <p className="text-xs text-muted-foreground">
-              nuclei：{overview.data.nuclei.BinaryVersion || '未安装'} · 自动更新 {overview.data.nuclei.AutoUpdate ? '开' : '关'}（详见漏洞模板页）
-            </p>
-          ) : null}
-          {overview.data?.browser && <BrowserRow browser={overview.data.browser} />}
+          <RuntimeToolRow
+            name="nuclei"
+            description="独立运行时自更新（二进制 + 官方模板，详见漏洞模板页）"
+            installed={!!nucleiSt.binary_exists || !!nucleiSt.BinaryExists}
+            version={nucleiSt.BinaryVersion || (nucleiSt as any).binary_version}
+            detail={`自动更新 ${(nucleiSt.AutoUpdate ?? (nucleiSt as any).auto_update) ? '开' : '关'} · 模板 ${(nucleiSt.TemplateCount ?? (nucleiSt as any).template_count) ?? 0} 个`}
+            updateLabel="更新"
+            updateBusy={nucleiUpd.isPending}
+            onUpdate={() => nucleiUpd.mutate()}
+          />
+          {overview.data?.browser && (
+            <RuntimeToolRow
+              name="browser"
+              description="Chromium（报告渲染 / SPA 爬虫 / 扫码登录 / 小蓝本签名通道）"
+              installed={overview.data.browser.installed}
+              version={overview.data.browser.version}
+              detail={`${overview.data.browser.source === 'system' ? '系统安装' : '自带下载'}${overview.data.browser.revision ? ` · revision ${overview.data.browser.revision}` : ''} · ${overview.data.browser.path}`}
+              updateAvailable={overview.data.browser.update_available}
+              updateBusy={browserUpd.isPending}
+              onUpdate={() => browserUpd.mutate()}
+              note={overview.data.browser.note}
+            />
+          )}
         </div>
       </Card>
 

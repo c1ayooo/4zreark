@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMutation } from '@tanstack/react-query'
 import { Alert, Button, Card, Input, InputNumber, Modal, Space, Switch, Table, Tag, Tooltip } from 'antd'
 import { History, RefreshCw, Save } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
@@ -11,6 +12,7 @@ import {
   type ToolsRuntimeOverview,
   type BrowserRuntimeStatus,
 } from '@/api/tools'
+import RuntimeToolRow from '@/components/tools/RuntimeToolRow'
 
 // 更新策略面板：gogo/spray/katana/rem 托管工具 + nuclei 运行时的
 // 自动更新开关 / 检查间隔 / 版本锁定，以及检查/更新/回滚/历史操作。
@@ -106,6 +108,15 @@ export default function ToolUpdatePanel() {
     }
   }
 
+  const nucleiUpd = useMutation({
+    mutationFn: () => toolsApi.nucleiRuntimeUpdate({}),
+    onSuccess: () => {
+      toast({ title: 'nuclei 已更新' })
+      load()
+    },
+    onError: (e: Error) => toast({ title: 'nuclei 更新失败', description: e.message, variant: 'destructive' }),
+  })
+
   const updateBrowser = async () => {
     setBrowserBusy(true)
     try {
@@ -159,15 +170,6 @@ export default function ToolUpdatePanel() {
     }
   }
 
-  const saveNuclei = async (patch: { auto_update?: boolean; interval_hours?: number }) => {
-    try {
-      const st = await toolsApi.nucleiRuntimeSettings(patch)
-      setNuclei(st)
-      toast({ title: 'nuclei 更新策略已保存' })
-    } catch (e) {
-      toast({ title: (e as Error)?.message || '保存失败', variant: 'destructive' })
-    }
-  }
 
   const columns = useMemo(() => [
     {
@@ -304,65 +306,29 @@ export default function ToolUpdatePanel() {
         </p>
       </Card>
 
-      <Card title="nuclei 更新策略">
-        {nuclei ? (
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center gap-6 text-sm">
-              <Space size={6}>
-                <Switch
-                  size="small"
-                  checked={nuclei.AutoUpdate}
-                  onChange={(v) => saveNuclei({ auto_update: v })}
-                />
-                <span>自动更新（二进制 + 官方模板，失败不阻断扫描）</span>
-              </Space>
-              <Space size={4}>
-                <span className="text-xs text-muted-foreground">间隔</span>
-                <InputNumber
-                  size="small"
-                  min={1}
-                  max={720}
-                  value={nuclei.UpdateIntervalHours}
-                  onChange={(v) => saveNuclei({ interval_hours: Number(v) || 24 })}
-                  addonAfter="h"
-                  style={{ width: 96 }}
-                />
-              </Space>
-            </div>
-            <div className="text-xs text-muted-foreground">
-              二进制 {nuclei.BinaryExists ? nuclei.BinaryVersion || '已安装' : '缺失'} · 官方模板{' '}
-              {nuclei.TemplateCount} 个 · 自定义模板 {nuclei.CustomTemplateCount} 个 · 引导版本 {nuclei.VersionSetting}
-            </div>
-            {nuclei.Warnings?.map((w, i) => <div key={i} className="text-xs text-amber-600">{w}</div>)}
-          </div>
-        ) : (
-          <p className="text-xs text-muted-foreground">nuclei 运行时状态不可用。</p>
-        )}
-      </Card>
+      <RuntimeToolRow
+        name="nuclei"
+        description="独立运行时自更新（二进制 + 官方模板）"
+        installed={!!nuclei?.BinaryExists || !!(nuclei as any)?.binary_exists}
+        version={nuclei?.BinaryVersion || (nuclei as any)?.binary_version}
+        detail={`自动更新 ${(nuclei?.AutoUpdate ?? (nuclei as any)?.auto_update) ? '开' : '关'} · 模板 ${(nuclei?.TemplateCount ?? (nuclei as any)?.template_count) ?? 0} 个 · 自定义 ${(nuclei?.CustomTemplateCount ?? (nuclei as any)?.custom_template_count) ?? 0} 个`}
+        updateBusy={nucleiUpd.isPending}
+        updateLabel="更新"
+        onUpdate={() => nucleiUpd.mutate()}
+        note={nuclei?.Warnings?.join('；')}
+      />
 
-      <Card title="自带浏览器（Chromium）">
-        {browser ? (
-          <div className="space-y-2 text-sm">
-            <div className="flex flex-wrap items-center gap-3">
-              {browser.update_available && <Tag color="orange">可更新</Tag>}
-              {browser.source !== 'system' && (
-                <Button size="small" loading={browserBusy} onClick={updateBrowser}>
-                  {browser.installed ? '检查并更新' : '立即安装'}
-                </Button>
-              )}
-              <span className="text-xs text-muted-foreground">{browser.description}</span>
-            </div>
-            <div className="text-xs text-muted-foreground break-all">
-              {browser.installed
-                ? [browser.version, browser.source === 'bundled' ? `自带下载（revision ${browser.revision ?? '—'}${browser.expected_revision ? `，期望 ${browser.expected_revision}` : ''}）` : '系统安装', browser.path].filter(Boolean).join(' · ')
-                : (browser.note || '未安装：首次使用时自动下载')}
-            </div>
-            {browser.note && browser.installed && <div className="text-xs text-amber-600">{browser.note}</div>}
-          </div>
-        ) : (
-          <p className="text-xs text-muted-foreground">浏览器状态不可用。</p>
-        )}
-      </Card>
+      <RuntimeToolRow
+        name="browser"
+        description="Chromium（报告渲染 / SPA 爬虫 / 扫码登录 / 小蓝本签名通道）"
+        installed={!!browser?.installed}
+        version={browser?.version}
+        detail={`${browser?.source === 'system' ? '系统安装' : '自带下载'}${browser?.revision ? ` · revision ${browser.revision}` : ''} · ${browser?.path || ''}`}
+        updateAvailable={browser?.update_available}
+        updateBusy={browserBusy}
+        onUpdate={updateBrowser}
+        note={browser?.note}
+      />
 
       <Modal
         title={`${historyTool} 更新历史`}
