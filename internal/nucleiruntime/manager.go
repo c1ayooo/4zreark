@@ -706,9 +706,22 @@ func isProxyEnv(e string) bool {
 	return false
 }
 
+// absPath 把 root 相对路径（data/nuclei/...）转绝对：exec 的相对 binary
+// 会基于 cmd.Dir 解析，Dir 与 binary 同时相对时会拼出双重相对路径
+//（data/nuclei/data/nuclei/bin/nuclei）→ 恒 ENOENT，模板下载/更新从未成功过。
+func (m *Manager) absPath(p string) string {
+	if filepath.IsAbs(p) {
+		return p
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
+}
+
 func (m *Manager) runCommand(ctx context.Context, binary string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, binary, args...)
-	cmd.Dir = m.root
+	cmd := exec.CommandContext(ctx, m.absPath(binary), args...)
+	cmd.Dir = m.absPath(m.root)
 	cmd.Env = m.env()
 	out, err := cmd.CombinedOutput()
 	if len(out) > commandOutputLimit {

@@ -149,8 +149,8 @@ func (m *Manager) Run(ctx context.Context, opts RunOptions) (*RunResult, error) 
 
 	args := m.buildArgs(opts, targetName, resultName, templatePaths)
 	start := time.Now()
-	cmd := exec.CommandContext(runCtx, binary, args...)
-	cmd.Dir = m.root
+	cmd := exec.CommandContext(runCtx, m.absPath(binary), args...)
+	cmd.Dir = m.absPath(m.root)
 	cmd.Env = m.env()
 	var out tailBuffer
 	cmd.Stdout = &out
