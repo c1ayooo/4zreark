@@ -196,9 +196,6 @@ func (m *SubdomainScanModule) ModuleRun() error {
 			forwarded++
 			// 报告输出
 			m.ReportOutput(1)
-			if forwarded%25 == 0 {
-				m.Logf("info", "子域名收集：累计发现 %d 个子域名", forwarded)
-			}
 			// 发送到下一个模块
 			if m.nextModule != nil {
 				select {
