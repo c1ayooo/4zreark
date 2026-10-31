@@ -6,14 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/browser"
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/proto"
@@ -60,95 +57,17 @@ func lockXlbOp() func() {
 }
 
 // osStat 供测试替换。
-var osStat = os.Stat
-
-// queryBlocked 无 Chrome 环境时的兜底：给出可操作的安装/指定途径，
-// 不让用户对着 rod 的 launcher 原始报错猜。
+// queryBlocked 无 Chrome 环境时的兜底：检测细节与安装/指定途径见
+// internal/browser（全平台统一检测入口），这里只补小蓝本自身的业务说明。
 func (p *xiaolanbenProvider) queryBlocked(kind string) error {
-	return fmt.Errorf("小蓝本%s接口受上游 h_sign 动态签名保护，必须经由本机 Chrome/Chromium 提供浏览器签名通道，但自动检测未找到可用浏览器。"+
-		"处理方式任选其一：① 安装 Chrome/Chromium（apt install chromium-browser 或官网 deb 包）；"+
-		"② 已装有但路径特殊时设置环境变量 ZRE_XLB_CHROME 指向可执行文件后重启；"+
-		"③ 改用天眼查（tyc）/爱企查（aqc）等 HTTP 直连数据源完成企业关系收集", kind)
+	return fmt.Errorf("小蓝本%s接口受上游 h_sign 动态签名保护，必须经由本机 Chrome/Chromium 提供浏览器签名通道。%w",
+		kind, browser.MissingError("小蓝本企业穿透"))
 }
 
-// xlbChromeProbeTimeout 单个候选 --version 探活的超时。
-// 文件存在不代表能用（Ubuntu 的 chromium-browser 可能是指向 snap 的坏
-// stub，运行才报错），必须实跑一次验证。
-const xlbChromeProbeTimeout = 5 * time.Second
-
-var (
-	xlbChromeOnce   sync.Once
-	xlbChromePath   string
-	xlbChromeMisses []string // 探测失败的原因清单（诊断用）
-)
-
-// xlbChromeCandidates 按优先级枚举候选浏览器路径：
-// 环境变量 > 标准安装位 > PATH 查找 > rod 自带下载缓存 > playwright 缓存。
-func xlbChromeCandidates() []string {
-	var out []string
-	if p := strings.TrimSpace(os.Getenv("ZRE_XLB_CHROME")); p != "" {
-		out = append(out, p)
-	}
-	out = append(out,
-		"/usr/bin/google-chrome", "/usr/bin/google-chrome-stable",
-		"/usr/bin/chromium", "/usr/bin/chromium-browser",
-		"/opt/google/chrome/chrome",
-	)
-	// PATH 上的常见命令名（涵盖自定义安装与 snap 桌面环境）
-	for _, name := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge"} {
-		if p, err := exec.LookPath(name); err == nil {
-			out = append(out, p)
-		}
-	}
-	home, err := os.UserHomeDir()
-	if err == nil {
-		// rod 按需下载的浏览器（工具运行时/首次启动会自动落在这里）
-		if m, _ := filepath.Glob(filepath.Join(home, ".cache", "rod", "browser", "*", "chrome")); len(m) > 0 {
-			// 新版本号在前
-			sort.Sort(sort.Reverse(sort.StringSlice(m)))
-			out = append(out, m...)
-		}
-		// playwright 缓存
-		if m, _ := filepath.Glob(filepath.Join(home, ".cache", "ms-playwright", "*", "chrome-linux*", "chrome")); len(m) > 0 {
-			out = append(out, m...)
-		}
-	}
-	return out
-}
-
-// probeChrome 验证候选真的能执行：--version 5 秒内返回即通过，
-// snap 坏 stub / 权限问题在这里被跳过而不是等到 rod 启动时炸。
-func probeChrome(path string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), xlbChromeProbeTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, path, "--version")
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	if err := cmd.Run(); err != nil {
-		return false
-	}
-	return ctx.Err() == nil
-}
-
-// xlbChromeBin 自动检测本机可用浏览器。结果进程级缓存——探测要 spawn
-// 进程，且浏览器安装状态在进程生命周期内不会变化。
+// xlbChromeBin 统一走 internal/browser 的全平台检测入口
+//（环境变量/标准位/PATH/rod 与 playwright 缓存 + --version 探活 + 进程缓存）。
 func (p *xiaolanbenProvider) xlbChromeBin() string {
-	xlbChromeOnce.Do(func() {
-		for _, c := range xlbChromeCandidates() {
-			if _, err := osStat(c); err != nil {
-				xlbChromeMisses = append(xlbChromeMisses, c+": 不存在")
-				continue
-			}
-			if !probeChrome(c) {
-				xlbChromeMisses = append(xlbChromeMisses, c+": 无法执行（snap stub 或依赖缺失）")
-				continue
-			}
-			xlbChromePath = c
-			return
-		}
-		log.Printf("[xlb] 未检测到可用浏览器，候选探测记录: %s", strings.Join(xlbChromeMisses, "; "))
-	})
-	return xlbChromePath
+	return browser.FindChrome()
 }
 
 // xlbSignPage 返回已登录的 sou 查询页（进程级缓存复用）。

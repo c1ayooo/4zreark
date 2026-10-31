@@ -93,7 +93,7 @@ func (m *QRSessionManager) Begin(provider, proxyURL string) (*QRBeginResult, err
 	}
 	bin := browser.FindChrome()
 	if bin == "" {
-		return nil, fmt.Errorf("未找到 chrome/chromium，扫码登录不可用；可改用手动粘贴 Cookie")
+		return nil, browser.MissingError("扫码登录")
 	}
 
 	m.mu.Lock()

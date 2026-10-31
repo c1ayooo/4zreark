@@ -6,12 +6,12 @@ import (
 	"log"
 	neturl "net/url"
 	"os"
-	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/browser"
 	"github.com/c1ayooo/4zreark/internal/httpprobe"
 	"github.com/c1ayooo/4zreark/scanner/scope"
 	"github.com/c1ayooo/4zreark/scanner/webscan"
@@ -263,17 +263,16 @@ var (
 	headlessBrowserOK   bool
 )
 
-// headlessBrowserAvailable 环境里是否找得到系统 Chrome/Chromium。
+// headlessBrowserAvailable 环境里是否找得到可用 Chrome/Chromium。
 // katana -headless 没有浏览器就直接失败（比普通爬取更糟），没有就降级普通爬取。
+// 统一走 internal/browser 检测入口（--version 探活淘汰 snap 坏 stub，
+// 覆盖 rod/playwright 缓存与 ZRE_CHROME 环境变量，结果进程级缓存）。
 func headlessBrowserAvailable() bool {
 	headlessBrowserOnce.Do(func() {
-		for _, bin := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {
-			if _, err := exec.LookPath(bin); err == nil {
-				headlessBrowserOK = true
-				return
-			}
+		headlessBrowserOK = browser.FindChrome() != ""
+		if !headlessBrowserOK {
+			log.Printf("[Crawler] 未检测到系统 Chrome/Chromium，SPA 分流降级为普通爬取")
 		}
-		log.Printf("[Crawler] 未检测到系统 Chrome/Chromium，SPA 分流降级为普通爬取")
 	})
 	return headlessBrowserOK
 }
