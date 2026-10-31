@@ -77,8 +77,8 @@ type PipelineConfig struct {
 
 	// 节奏控制：除漏洞扫描外，所有会主动发请求的模块都受这两个参数约束。
 	// 默认值刻意保守，宁可慢，也不要因为高频请求把出口 IP 打进黑名单。
-	RatePerSec    int `json:"rate_per_sec"`    // 每秒请求上限；0=用默认 20
-	TargetDelayMs int `json:"target_delay_ms"` // 单目标之间的间隔毫秒；0=用默认 200
+	RatePerSec    int `json:"rate_per_sec"`    // 每秒请求上限；0=用默认 10
+	TargetDelayMs int `json:"target_delay_ms"` // 单目标之间的间隔毫秒；0=用默认 300
 
 	// FixedModuleConcurrency 任务配置的「并发」（models.TaskConfig.Threads）
 	// 直接映射到这里：>0 时覆盖各模块并发的速率推导值（用户显式设置优先），
@@ -89,12 +89,13 @@ type PipelineConfig struct {
 	FixedModuleConcurrency int `json:"fixed_module_concurrency,omitempty"`
 }
 
-// rate 返回生效的每秒请求上限。
+// rate 返回生效的每秒请求上限。默认 10：目标面大的项目（集团子公司批量
+// 展开）下 20/s 的默认值偏激进，容易被 WAF 计入限流；要快在任务里显式调。
 func (c *PipelineConfig) rate() int {
 	if c != nil && c.RatePerSec > 0 {
 		return c.RatePerSec
 	}
-	return 20
+	return 10
 }
 
 // Rate 是对外暴露的生效速率，用于日志与任务详情展示。
@@ -142,8 +143,8 @@ func DefaultPipelineConfig() *PipelineConfig {
 		WebCrawler:             false,
 		DirScan:                false,
 		SensitiveScan:          false,
-		RatePerSec:             20,
-		TargetDelayMs:          200,
+		RatePerSec:             10,
+		TargetDelayMs:          300,
 	}
 }
 

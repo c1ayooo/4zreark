@@ -30,6 +30,8 @@ const PAGE_DEFAULT_CONFIG: TaskConfig = {
   port_scan_mode: 'quick',
   timeout: 30,
   concurrent: 0,
+  rate_per_sec: 10,
+  target_delay_ms: 300,
 }
 
 // 对话框入口（原 TaskCreateDialog）默认配置：单模块 + 端口范围 + 扫描节奏
@@ -39,8 +41,8 @@ const DIALOG_DEFAULT_CONFIG: TaskConfig = {
   portRange: '1-65535',
   timeout: 30,
   concurrent: 0,
-  rate_per_sec: 20,
-  target_delay_ms: 200,
+  rate_per_sec: 10,
+  target_delay_ms: 300,
 }
 
 // 检测目标类型
@@ -476,15 +478,15 @@ export default function TaskCreateForm({
           <label className="text-sm font-medium">扫描节奏</label>
           <div className="flex gap-1">
             {[
-              { label: '保守', rate: 5, delay: 1000 },
-              { label: '标准', rate: 20, delay: 200 },
-              { label: '快速', rate: 50, delay: 50 },
+              { label: '保守', rate: 3, delay: 1500 },
+              { label: '标准', rate: 10, delay: 300 },
+              { label: '快速', rate: 30, delay: 100 },
             ].map((preset) => (
               <Button
                 key={preset.label}
                 size="small"
                 type={
-                  (formData.config.rate_per_sec ?? 20) === preset.rate ? 'primary' : 'default'
+                  (formData.config.rate_per_sec ?? 10) === preset.rate ? 'primary' : 'default'
                 }
                 className="h-7 px-2.5 text-xs"
                 onClick={() =>
@@ -510,7 +512,7 @@ export default function TaskCreateForm({
               type="number"
               min={1}
               max={200}
-              value={formData.config.rate_per_sec ?? 20}
+              value={formData.config.rate_per_sec ?? 10}
               onChange={(e) =>
                 setFormData({
                   ...formData,
@@ -529,7 +531,7 @@ export default function TaskCreateForm({
               min={0}
               max={5000}
               step={50}
-              value={formData.config.target_delay_ms ?? 200}
+              value={formData.config.target_delay_ms ?? 300}
               onChange={(e) =>
                 setFormData({
                   ...formData,

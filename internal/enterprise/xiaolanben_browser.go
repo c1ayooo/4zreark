@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -399,6 +400,22 @@ func (p *xiaolanbenProvider) xlbCompanyList(ctx context.Context, extID, listKey 
 	}
 	if err := json.Unmarshal([]byte(res.Value.String()), &items); err != nil {
 		return nil, false, err
+	}
+	// 诊断观测：列表空往往是上游页面结构/懒加载变化，留一行现场
+	//（companyDetail 的键与形态）比静默空返回可查得多。
+	if len(items) == 0 {
+		if shape, kerr := page.Eval(`() => {
+			const s = window.__INITIAL_STATE__ || {};
+			const cd = s.companyDetail || {};
+			const out = {};
+			for (const k of Object.keys(cd)) {
+				const v = cd[k];
+				out[k] = Array.isArray(v) ? ('array:' + v.length) : typeof v;
+			}
+			return JSON.stringify(out);
+		}`); kerr == nil {
+			log.Printf("[xlb] 列表空 %s/%s，companyDetail 形态: %s", extID, listKey, shape.Value.String())
+		}
 	}
 	start := (pageNum - 1) * size
 	out := []CompanyRef{}

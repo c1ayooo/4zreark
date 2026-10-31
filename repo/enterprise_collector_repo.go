@@ -58,9 +58,9 @@ func (r *Repo) FinishJob(ctx context.Context, id, status, errMsg string) error {
 	}
 	if _, lerr := r.pool.Exec(ctx,
 		`insert into task_logs (task_id, category, level, message, detail)
-         select id, 'enterprise', $2, '企业采集（' || provider || '）「' || keyword || '」' || $4, ''
+         select id, 'enterprise', $2, '企业采集（' || provider || '）「' || keyword || '」' || $3, ''
            from enterprise_jobs where id = $1`,
-		id, level, status, detail); lerr != nil {
+		id, level, detail); lerr != nil {
 		fmt.Printf("[enterprise] 动作日志写入失败: %v\n", lerr)
 	}
 	return nil

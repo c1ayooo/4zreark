@@ -6,12 +6,12 @@ import "testing"
 // 时作为固定覆盖值——用户显式设的并发优先于自动推导，rate 限速仍作为
 // 安全网兜底（并发槽再多，令牌桶照样限 QPS）。
 func TestModuleConcurrencyOverride(t *testing.T) {
-	c := &PipelineConfig{} // rate 未设 → 默认 20
-	if got := c.moduleConcurrency(4); got != 5 {
-		t.Fatalf("默认推导 = %d, want 5 (20/4)", got)
+	c := &PipelineConfig{} // rate 未设 → 默认 10
+	if got := c.moduleConcurrency(4); got != 2 {
+		t.Fatalf("默认推导 = %d, want 2 (10/4)", got)
 	}
-	if got := c.moduleConcurrency(8); got != 2 {
-		t.Fatalf("默认推导 = %d, want 2 (20/8)", got)
+	if got := c.moduleConcurrency(8); got != 1 {
+		t.Fatalf("默认推导 = %d, want 1 (10/8 下取整，最小 1)", got)
 	}
 
 	c.FixedModuleConcurrency = 30
@@ -23,8 +23,8 @@ func TestModuleConcurrencyOverride(t *testing.T) {
 
 	// threads 小于 1 视为未设置，回落推导
 	lo := &PipelineConfig{FixedModuleConcurrency: -5}
-	if got := lo.moduleConcurrency(4); got != 5 {
-		t.Fatalf("非法覆盖应被忽略 = %d, want 5", got)
+	if got := lo.moduleConcurrency(4); got != 2 {
+		t.Fatalf("非法覆盖应被忽略 = %d, want 2", got)
 	}
 
 	// 高 rate 下的推导基线不受覆盖字段影响
