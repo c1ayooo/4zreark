@@ -298,20 +298,23 @@ func runSelfUpdate(targetVersion string) {
 	// 第二路走环境代理（ProxyFromEnvironment，服务进程继承 https_proxy）。
 	var downloaded int64
 	downloadErr := error(nil)
+	resumed := false
 	for _, mode := range []struct {
 		label    string
 		useProxy bool
 	}{
 		{"环境代理", true},
 		{"直连", false},
+		{"环境代理", true},
 	} {
-		downloaded = 0
-		downloadErr = downloadReleaseAsset(ctx, tarURL, tmpTar, mode.useProxy, &downloaded, tarSize, targetVersion)
+		var wasResumed bool
+		downloadErr = downloadReleaseAsset(ctx, tarURL, tmpTar, mode.useProxy, &downloaded, tarSize, targetVersion, &wasResumed)
+		resumed = resumed || wasResumed
 		if downloadErr == nil {
 			break
 		}
 		log.Printf("[self-update] %s下载失败（已取 %d 字节）: %v，切换下一路", mode.label, downloaded, downloadErr)
-		setUpdateState(UpdateDownloading, 0, 0, tarSize, targetVersion, "")
+		setUpdateState(UpdateDownloading, float64(downloaded)/float64(tarSize)*100, downloaded, tarSize, targetVersion, "")
 	}
 	if downloadErr != nil {
 		setUpdateState(UpdateError, 0, 0, 0, targetVersion, "两路下载均失败（直连+环境代理）: "+downloadErr.Error())
@@ -420,8 +423,9 @@ func shortHash(s string) string {
 	return s
 }
 
-// downloadReleaseAsset 单路下载（带 30 秒无进展看门狗），写 dest 并实时回报进度。
-func downloadReleaseAsset(ctx context.Context, url, dest string, useEnvProxy bool, downloaded *int64, total int64, targetVersion string) error {
+// downloadReleaseAsset 单路下载（带 30 秒无进展看门狗 + 断点续传），写 dest 并实时回报进度。
+// resumed=true 表示从 dest 已有字节处续传（Range 请求）。
+func downloadReleaseAsset(ctx context.Context, url, dest string, useEnvProxy bool, downloaded *int64, total int64, targetVersion string, resumed *bool) error {
 	transport := &http.Transport{Proxy: nil}
 	if useEnvProxy {
 		transport = &http.Transport{Proxy: http.ProxyFromEnvironment}
@@ -431,18 +435,35 @@ func downloadReleaseAsset(ctx context.Context, url, dest string, useEnvProxy boo
 	if err != nil {
 		return err
 	}
+	// 断点续传：目标文件已有部分字节则从断点继续（Range 不支持时服务端返回 200 全量，同样兼容）
+	if fi, serr := os.Stat(dest); serr == nil && fi.Size() > 0 && fi.Size() < total {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", fi.Size()))
+		*downloaded = fi.Size()
+		*resumed = true
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	// 服务端不支持 Range（200 全量）：回退重写
+	if *resumed && resp.StatusCode == http.StatusOK {
+		*resumed = false
+		*downloaded = 0
+	}
+	if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	if total <= 0 && resp.ContentLength > 0 {
 		total = resp.ContentLength
 	}
-	f, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	flag := os.O_WRONLY
+	if *resumed {
+		flag |= os.O_APPEND
+	} else {
+		flag |= os.O_TRUNC
+	}
+	f, err := os.OpenFile(dest, flag, 0o600)
 	if err != nil {
 		return err
 	}
