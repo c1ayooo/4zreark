@@ -16,6 +16,26 @@ func NewToolkitHandler() *ToolkitHandler {
 	return &ToolkitHandler{svc: service.NewToolkitService()}
 }
 
+// OOBBaseGet 全局 DNSLog 服务地址（空 = 默认 dnslog.cn）
+// @Router /api/tools/oob/base [get]
+func (h *ToolkitHandler) OOBBaseGet(c *gin.Context) {
+	utils.Success(c, gin.H{"base": h.svc.OOBBase(c.Request.Context())})
+}
+
+// OOBBaseSet 保存全局 DNSLog 服务地址（空串恢复默认）
+// @Router /api/tools/oob/base [put]
+func (h *ToolkitHandler) OOBBaseSet(c *gin.Context) {
+	var req struct {
+		Base string `json:"base"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	if err := h.svc.SetOOBBase(c.Request.Context(), req.Base); err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "OOB 服务地址已保存", gin.H{"base": h.svc.OOBBase(c.Request.Context())})
+}
+
 // OOBDomain 申请带外验证域名
 // @Router /api/tools/oob/domain [post]
 func (h *ToolkitHandler) OOBDomain(c *gin.Context) {

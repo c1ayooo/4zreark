@@ -358,6 +358,8 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 			toolkitHandler := api.NewToolkitHandler()
 			toolkitGroup := protected.Group("/tools", middleware.AdminMiddleware())
 			{
+				toolkitGroup.GET("/oob/base", toolkitHandler.OOBBaseGet)
+				toolkitGroup.PUT("/oob/base", toolkitHandler.OOBBaseSet)
 				toolkitGroup.POST("/oob/domain", toolkitHandler.OOBDomain)
 				toolkitGroup.POST("/oob/records", toolkitHandler.OOBRecords)
 				toolkitGroup.POST("/creds/cloud", toolkitHandler.VerifyCloudCredential)

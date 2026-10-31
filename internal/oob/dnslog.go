@@ -25,7 +25,17 @@ func dnslogCookieFile() string {
 }
 
 // DnslogGetDomain 拿临时域名;会话 cookie 持久化(记录查询必须带同 cookie)。
+// DNS 超时等瞬时故障自动重试一次（dnslog.cn 免费服务抽风是常态）。
 func DnslogGetDomain(ctx context.Context, base string) (string, error) {
+	domain, err := dnslogGetDomainOnce(ctx, base)
+	if err != nil && ctx.Err() == nil {
+		time.Sleep(time.Second)
+		return dnslogGetDomainOnce(ctx, base)
+	}
+	return domain, err
+}
+
+func dnslogGetDomainOnce(ctx context.Context, base string) (string, error) {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
 	if base == "" {
 		base = DnslogDefaultBase
@@ -33,7 +43,7 @@ func DnslogGetDomain(ctx context.Context, base string) (string, error) {
 	client := &http.Client{Timeout: 12 * time.Second}
 	resp, err := client.Get(base + "/getdomain.php")
 	if err != nil {
-		return "", fmt.Errorf("请求失败: %v(dnslog.cn 不稳定时稍后重试或换自建服务)", err)
+		return "", fmt.Errorf("请求失败: %v(dnslog.cn 不稳定时稍后重试；或在设置里配自建服务地址)", err)
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	resp.Body.Close()
@@ -56,8 +66,17 @@ func DnslogGetDomain(ctx context.Context, base string) (string, error) {
 }
 
 // DnslogGetRecords 查记录;waitSec>0 时先等待(给目标触发 DNS 查询的时间)。
-// 返回原始记录行(JSON 数组或行文本均按 4zreco 解析口径拆条)。
+// 返回原始记录行(JSON 数组或行文本均按 4zreco 解析口径拆条)。瞬时故障重试一次。
 func DnslogGetRecords(ctx context.Context, base, domain string, waitSec int) ([]string, error) {
+	records, err := dnslogGetRecordsOnce(ctx, base, domain, waitSec)
+	if err != nil && ctx.Err() == nil {
+		time.Sleep(time.Second)
+		return dnslogGetRecordsOnce(ctx, base, domain, 0) // 重试不重复等待
+	}
+	return records, err
+}
+
+func dnslogGetRecordsOnce(ctx context.Context, base, domain string, waitSec int) ([]string, error) {
 	domain = strings.TrimSpace(domain)
 	if domain == "" {
 		return nil, fmt.Errorf("get_records 需要 domain(get_domain 拿到的临时域名)")

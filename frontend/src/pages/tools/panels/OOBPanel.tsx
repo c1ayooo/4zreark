@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button, Card, Input } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
 import { toolsApi } from '@/api/tools'
@@ -9,6 +9,20 @@ export default function OOBPanel() {
   const [domain, setDomain] = useState('')
   const [records, setRecords] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
+
+  // 全局默认服务地址：进面板回填（一处配置全局生效，不用每次手填）
+  useEffect(() => {
+    toolsApi.oobBase().then(setBase).catch(() => {})
+  }, [])
+
+  const saveDefault = async () => {
+    try {
+      const saved = await toolsApi.saveOobBase(base.trim())
+      toast({ title: saved ? '已保存为全局默认' : '已恢复默认 dnslog.cn' })
+    } catch (e) {
+      toast({ title: (e as Error)?.message || '保存失败', variant: 'destructive' })
+    }
+  }
 
   const getDomain = async () => {
     setBusy(true)
@@ -38,7 +52,15 @@ export default function OOBPanel() {
   return (
     <Card title="DNSLog 带外验证">
       <div className="space-y-3">
-        <Input placeholder="dnslog 服务地址（留空用 dnslog.cn，可填自建）" value={base} onChange={(e) => setBase(e.target.value)} />
+        <div className="flex flex-wrap gap-2">
+          <Input
+            className="min-w-0 flex-1"
+            placeholder="dnslog 服务地址（留空用 dnslog.cn，可填自建）"
+            value={base}
+            onChange={(e) => setBase(e.target.value)}
+          />
+          <Button onClick={saveDefault}>存为默认</Button>
+        </div>
         <div className="flex flex-wrap gap-2">
           <Button type="primary" onClick={getDomain} loading={busy}>申请域名</Button>
           <Button onClick={query} disabled={!domain || busy}>查询记录</Button>

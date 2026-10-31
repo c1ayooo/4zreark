@@ -131,6 +131,14 @@ export interface ComponentCVE {
 }
 
 export const toolsApi = {
+  async oobBase(): Promise<string> {
+    const raw = (await api.get('/tools/oob/base')) as unknown as ApiResponse<{ base: string }>
+    return raw.data?.base || ''
+  },
+  async saveOobBase(base: string): Promise<string> {
+    const raw = (await api.put('/tools/oob/base', { base })) as unknown as ApiResponse<{ base: string }>
+    return raw.data?.base || ''
+  },
   oobDomain: async (base = ''): Promise<string> => {
     const raw = (await api.post('/tools/oob/domain', { base })) as unknown as ApiResponse<{ domain: string }>
     return raw.data.domain

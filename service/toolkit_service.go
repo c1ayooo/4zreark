@@ -20,6 +20,7 @@ import (
 	"github.com/c1ayooo/4zreark/internal/oob"
 	"github.com/c1ayooo/4zreark/internal/recon/webrecon"
 	"github.com/c1ayooo/4zreark/internal/verifyrunner"
+	"github.com/c1ayooo/4zreark/repo"
 )
 
 // ToolkitService 是手工验证工具的后端：OOB、凭据只读验证、HTTP 差分、JS 侦察。
@@ -30,9 +31,51 @@ func NewToolkitService() *ToolkitService { return &ToolkitService{} }
 
 // --- OOB ---
 
+// settingsOOBKey 全局 DNSLog 服务地址（app_settings），空 = 默认 dnslog.cn。
+// 自建 dnslog 协议兼容服务（内网 dnslog、自建 Lucking/dnslog 等）在这里
+// 一处配置全局生效，前端每次请求不用再手填。
+const settingsOOBKey = "oob.base"
+
+// oobBase 全局服务地址；请求显式传的 base 优先，未传时回落全局配置。
+func oobBase(ctx context.Context, explicit string) string {
+	if strings.TrimSpace(explicit) != "" {
+		return explicit
+	}
+	if r := repo.Default(); r != nil {
+		var base string
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		if ok, err := r.Settings().Get(ctx, settingsOOBKey, &base); err == nil && ok {
+			return strings.TrimSpace(base)
+		}
+	}
+	return ""
+}
+
+// OOBBase 读全局 DNSLog 服务地址（空 = 默认 dnslog.cn）。
+func (s *ToolkitService) OOBBase(ctx context.Context) string { return oobBase(ctx, "") }
+
+// SetOOBBase 保存全局 DNSLog 服务地址（空串恢复默认 dnslog.cn）。
+func (s *ToolkitService) SetOOBBase(ctx context.Context, base string) error {
+	r := repo.Default()
+	if r == nil {
+		return errors.New("数据层未初始化")
+	}
+	base = strings.TrimSpace(base)
+	if base != "" && !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+		return errors.New("服务地址需以 http:// 或 https:// 开头")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if base == "" {
+		return r.Settings().Delete(ctx, settingsOOBKey)
+	}
+	return r.Settings().Set(ctx, settingsOOBKey, base)
+}
+
 // OOBDomain 申请一个带外验证域名。
 func (s *ToolkitService) OOBDomain(ctx context.Context, base string) (string, error) {
-	domain, err := oob.DnslogGetDomain(ctx, base)
+	domain, err := oob.DnslogGetDomain(ctx, oobBase(ctx, base))
 	if err != nil {
 		return "", err
 	}
@@ -50,7 +93,7 @@ func (s *ToolkitService) OOBRecords(ctx context.Context, base, domain string, wa
 	if waitSeconds > 60 {
 		waitSeconds = 60
 	}
-	return oob.DnslogGetRecords(ctx, base, domain, waitSeconds)
+	return oob.DnslogGetRecords(ctx, oobBase(ctx, base), domain, waitSeconds)
 }
 
 // --- 凭据只读验证 ---
