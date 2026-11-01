@@ -263,6 +263,12 @@ var techNoise = map[string]bool{
 	"电话号": true, "管理后台登录": true, "腾讯问卷泄漏": true,
 	"exposure-secretkey": true, "phpsessid": true, "nginx-default-test-page": true,
 	// 语言 / 通用服务器不是「产品」：按它们选模板等于回到全量扫描
+	// 登录页/表单形态词：识别出「这是个登录页」不等于识别出产品——
+	// 按它们选模板等于回到全量扫描（蜗牛实测 619/800 模板命中）。
+	"auth": true, "login": true, "loginin": true, "password": true,
+	"passwd": true, "input": true, "credential": true, "credentials": true,
+	"fields": true, "field": true, "exposure": true, "secretkey": true,
+	"secret": true, "signup": true, "signin": true, "register": true,
 	"php": true, "nginx": true, "apache": true, "tengine": true, "iis": true,
 	"java": true, "python": true, "node": true, "nodejs": true, "ruby": true,
 	"perl": true, "asp": true, "aspnet": true, "jsp": true, "html": true,
@@ -398,6 +404,14 @@ func (m *VulnScanModule) selectTemplates(techs []string) []templateEntry {
 			if m.severityOK(t) && m.tagOK(t) && matchesTech(t, tokens) {
 				matched = append(matched, t)
 			}
+		}
+		// 兜底防线：命中数超过全库一半说明 token 里混进了页面形态词
+		//（匹配已退化为"换借口全量扫"）——丢弃本轮匹配，回退 verified
+		// 精选集。正常产品指纹（EwoMail/Citrix-Netscaler）只会命中个位数。
+		if len(matched) > len(inv)/2 {
+			log.Printf("[%s] 指纹 %v 命中 %d/%d 模板（超过半库，判定为无效匹配），回退 verified 集合",
+				m.name, tokens, len(matched), len(inv))
+			matched = nil
 		}
 		if len(matched) > 0 {
 			log.Printf("[%s] 指纹命中: %v -> %d 个模板", m.name, tokens, len(matched))

@@ -116,7 +116,7 @@ type RawRecord struct {
 	IconSHA256      string         `json:"icon_sha256,omitempty"`
 	IconMMH3        int64          `json:"icon_mmh3,omitempty"`
 	IconContentType string         `json:"icon_content_type,omitempty"`
-	IconData        []byte         `json:"-"`
+	IconData        []byte         `json:"icon_data,omitempty"`
 	Evidence        map[string]any `json:"evidence,omitempty"`
 	// TaskID 记录发现该资产的任务，空则由入库方（执行器/网关）回填。
 	TaskID string `json:"task_id,omitempty"`
@@ -502,9 +502,10 @@ func (a *AssetRepo) ImportRecords(ctx context.Context, projectID int64, source s
 		var inserted bool
 		err = tx.QueryRow(ctx, `
 			INSERT INTO raw_records (project_id, source, host, port, protocol, value, status_code,
-				title, ip, server, evidence, dedup_key, observed_at, task_id)
+				title, ip, server, evidence, dedup_key, observed_at, task_id, tech, icon_sha256)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,nullif($8,''),nullif($9,'')::inet,
-			        $10,$11,$12,now(),nullif($13,''))
+			        $10,$11,$12,now(),nullif($13,''),
+			        $14::jsonb, nullif($15,''))
 			ON CONFLICT (dedup_key) DO UPDATE SET
 				status_code = EXCLUDED.status_code,
 				title = coalesce(EXCLUDED.title, raw_records.title),
@@ -512,10 +513,14 @@ func (a *AssetRepo) ImportRecords(ctx context.Context, projectID int64, source s
 				server = CASE WHEN EXCLUDED.server <> '' THEN EXCLUDED.server ELSE raw_records.server END,
 				evidence = EXCLUDED.evidence,
 				task_id = coalesce(nullif(EXCLUDED.task_id,''), raw_records.task_id),
+				tech = CASE WHEN $14::jsonb IS NOT NULL AND jsonb_typeof($14::jsonb) = 'array' AND jsonb_array_length($14::jsonb) > 0
+				            THEN $14::jsonb ELSE raw_records.tech END,
+				icon_sha256 = coalesce(nullif(EXCLUDED.icon_sha256,''), raw_records.icon_sha256),
 				observed_at = now()
 			RETURNING id, (xmax = 0)`,
 			projectID, source, host, port, proto, value, rec.StatusCode, rec.Title, rec.IP,
-			rec.Server, toJSONB(rec.Evidence), dedup, rec.TaskID).Scan(&recordID, &inserted)
+			rec.Server, toJSONB(rec.Evidence), dedup, rec.TaskID,
+			jsonOrNil(rec.Tech), rec.IconSHA256).Scan(&recordID, &inserted)
 		if err != nil {
 			return nil, fmt.Errorf("写入原始记录失败: %w", err)
 		}
@@ -603,9 +608,12 @@ func (a *AssetRepo) ImportRecords(ctx context.Context, projectID int64, source s
 			if _, err := tx.Exec(ctx,
 				`UPDATE sites SET tech = (
 					select coalesce(jsonb_agg(distinct e order by e), '[]'::jsonb)
-					from jsonb_array_elements_text(sites.tech || $2::jsonb) e
+					from jsonb_array_elements_text(
+						case when jsonb_typeof(sites.tech) = 'array' then sites.tech else '[]'::jsonb end
+						|| $2::jsonb
+					) e
 				), tech_status = 'done' WHERE id = $1`,
-				siteID, anyToJSONB(rec.Tech)); err != nil {
+				siteID, jsonOrNil(rec.Tech)); err != nil {
 				return nil, fmt.Errorf("回写站点技术栈失败: %w", err)
 			}
 		}
@@ -974,6 +982,18 @@ func stringSliceJSONB(v []string) []byte {
 	}
 	return anyToJSONB(v)
 }
+
+// jsonOrNil 序列化为 JSONB 参数。raw_records.tech 列 NOT NULL：nil/空
+// 统一映射为空数组 '[]'（语义即「无技术栈」）；且 json.Marshal(nil) 产出
+// "null" 字符串会转成 jsonb null 标量，jsonb_array_length 对标量直接报错。
+func jsonOrNil(v any) any {
+	b, err := json.Marshal(v)
+	if err != nil || string(b) == "null" {
+		return []byte("[]")
+	}
+	return b
+}
+
 
 func anyToJSONB(v any) []byte {
 	b, err := json.Marshal(v)
