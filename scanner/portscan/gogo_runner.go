@@ -338,6 +338,7 @@ func (g *GoGoScanner) convertResult(gogoResult *GoGoResult) *core.PortResult {
 		Service:     service,
 		Version:     version,
 		Banner:      banner,
+		IP:          gogoResult.IP,
 		Fingerprint: fingerprints,
 	}
 }

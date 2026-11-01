@@ -13,6 +13,9 @@ type PortResult struct {
 	Version     string   `json:"version,omitempty"`
 	Banner      string   `json:"banner,omitempty"`
 	Fingerprint []string `json:"fingerprint,omitempty"`
+	// IP 是该端口所属的真实主机地址：CIDR 网段扫描时 gogo 逐主机产出，
+	// 下游（指纹/资产归属）靠它把端口挂到正确的主机上。
+	IP string `json:"ip,omitempty"`
 }
 
 // ScanResult represents the complete scan result for a target

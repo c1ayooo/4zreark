@@ -191,7 +191,16 @@ func (m *PortScanPreparationModule) ModuleRun() error {
 // emitResolvedSkip 解析目标并做 CDN 判定，产出带 IP 的 DomainSkip。
 // Domain 保留原文（gogo 兼容 host:port / URL 形态）；解析用剥掉
 // scheme/端口/路径后的 host。
+// CIDR 目标（192.168.0.0/24 形态）：必须设置 CIDR 标志——端口模块的
+// DNS 前置过滤靠它豁免（CIDR 不是主机名，解析必失败会被误当死域名
+// 跳过，整个网段任务空转）；CDN 检测对 CIDR 无意义，直接跳过。
 func (m *PortScanPreparationModule) emitResolvedSkip(target string, ips []string) {
+	if _, _, cidrErr := net.ParseCIDR(target); cidrErr == nil {
+		log.Printf("[%s] CIDR target, pass through to port scan: %s", m.name, target)
+		m.emitSkipOnce(DomainSkip{Domain: target, CIDR: true})
+		return
+	}
+
 	host := target
 	if u, err := neturl.Parse(target); err == nil && u.Host != "" {
 		host = u.Hostname()

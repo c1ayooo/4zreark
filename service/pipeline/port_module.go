@@ -235,7 +235,7 @@ func (m *PortScanModule) ModuleRun() error {
 
 // scanPorts 执行端口扫描
 func (m *PortScanModule) scanPorts(ds DomainSkip) {
-	log.Printf("[%s] Starting port scan for %s (mode: %s)", m.name, ds.Domain, m.scanMode)
+	log.Printf("[%s] Starting port scan for %s (mode: %s) [debug: CIDR=%v IP=%v Skip=%v]", m.name, ds.Domain, m.scanMode, ds.CIDR, ds.IP, ds.Skip)
 
 	ctx, cancel := context.WithTimeout(m.ctx, 10*time.Minute)
 	defer cancel()
@@ -290,10 +290,16 @@ func (m *PortScanModule) scanPorts(ds DomainSkip) {
 		return
 	}
 
-	var scanResult *core.ScanResult
-	var err error
+	// CIDR 网段目标放宽 gogo 并发：网段内大部分 IP 不在线，每个探测都要
+	// 等满 socket 超时，低并发会把 /24 拖到几十分钟（实测 -t5 卡 39 分钟）。
+	// applyThreadCap 的大端口集封顶仍生效，防止单任务打满出口。
+	if ds.CIDR {
+		m.gogoScanner.SetThreads(50)
+	}
 	m.applyThreadCap()
 
+	var scanResult *core.ScanResult
+	var err error
 	// 根据扫描模式选择扫描方式
 	switch m.scanMode {
 	case "full":
@@ -342,15 +348,23 @@ func (m *PortScanModule) scanPorts(ds DomainSkip) {
 		if len(ips) > 0 {
 			ip = ips[0]
 		}
+		host := ds.Domain
+		// CIDR 网段：gogo 产出的是每台在线主机的真实 IP——host/ip 都用
+		// 真实 IP（每台主机独立产出），否则指纹拿到 CIDR 串拼不出可探测
+		// URL，网段内的真实主机全部丢失。
+		if ds.CIDR && port.IP != "" {
+			host = port.IP
+			ip = port.IP
+		}
 
 		result := PortAlive{
-			Host:    ds.Domain,
+			Host:    host,
 			IP:      ip,
 			Port:    intToString(port.Port),
 			Service: port.Service,
 		}
 
-		log.Printf("[%s] Found open port: %s:%d (%s)", m.name, ds.Domain, port.Port, port.Service)
+		log.Printf("[%s] Found open port: %s:%d (%s)", m.name, host, port.Port, port.Service)
 
 		select {
 		case <-m.ctx.Done():
