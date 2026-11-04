@@ -17,6 +17,10 @@ import (
 // G5 验收：事件（first_seen / attribute_change / reappear 的基础写入）
 // 与关系图谱（边 + 证据 + 保留策略）打真实 PG，缺密码时跳过。
 func TestG5RelationsAndEvents(t *testing.T) {
+	// httptest 跑在 127.0.0.1，探测的 SSRF 防护默认禁 loopback，这里打开测试接缝
+	service.ProbeAllowLoopback = true
+	t.Cleanup(func() { service.ProbeAllowLoopback = false })
+
 	r := openTestRepo(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

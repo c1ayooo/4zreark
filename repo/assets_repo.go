@@ -9,6 +9,7 @@ import (
 	"log"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"time"
 
@@ -140,6 +141,14 @@ type ImportResult struct {
 	// UnmatchedRules 是命中名在 fingerprint_rules 里查不到的次数（累积）。
 	// 说明规则库缺该名称，属于「识别到了但记不成事实」，需要补规则而不是重扫。
 	UnmatchedRules int `json:"unmatched_rules"`
+	// FingerprintWriteErrors 是指纹命中写入失败被降级的次数：指纹是附属信息、
+	// 资产是主产物，写入失败不回滚资产主干，但次数要在汇总里可见，静默丢数据
+	// 之前已经吃过亏（见 pending-fixes P1-4）。
+	FingerprintWriteErrors int `json:"fingerprint_write_errors"`
+	// SkippedRuleNames 是命中名在规则库查不到的明细（对应 UnmatchedRules 计数），
+	// 截断到前 50 个：这是给人看的「该补哪些规则」清单，不是全量审计，
+	// 大批量导入时全量列出会撑爆日志和响应体。
+	SkippedRuleNames []string `json:"skipped_rule_names,omitempty"`
 }
 
 // AssetRepo 是资产治理域的唯一数据入口。
@@ -610,7 +619,16 @@ func (a *AssetRepo) ImportRecords(ctx context.Context, projectID int64, source s
 			log.Printf("[assets] 录入诊断 host=%s tech=%v fp=%v hit=%v", host, rec.Tech, rec.Fingerprints, hitNames)
 		}
 		if len(hitNames) > 0 {
-			tag, err := tx.Exec(ctx, `
+			// 资产是主产物、指纹是附属：这条 INSERT 失败降级为计数 + 日志，不再
+			// return err 回滚整批资产。但 PG 事务里语句一旦失败事务就进入 aborted
+			// 状态、后续语句全会报错，所以先用 SAVEPOINT 圈住这一条语句——失败时
+			// 回滚到保存点恢复事务，再继续后面的入口/技术栈等资产写入。
+			// 保存点固定同名（fp_hits），成功、失败两条路都会 release，
+			// 不会逐条记录嵌套堆叠。
+			if _, err := tx.Exec(ctx, "savepoint fp_hits"); err != nil {
+				return nil, fmt.Errorf("创建指纹保存点失败: %w", err)
+			}
+			tag, fpErr := tx.Exec(ctx, `
 				INSERT INTO fingerprint_hits (site_id, rule_id, observed_at, record_id, evidence)
 				SELECT $1, fr.id, now(), $2,
 				       jsonb_build_object('host', $3::text, 'port', $4::int, 'source', $5::text)
@@ -621,19 +639,49 @@ func (a *AssetRepo) ImportRecords(ctx context.Context, projectID int64, source s
 					record_id = EXCLUDED.record_id,
 					evidence = fingerprint_hits.evidence || EXCLUDED.evidence`,
 				siteID, recordID, host, port, source, hitNames)
-			if err != nil {
-				return nil, fmt.Errorf("写入指纹命中失败: %w", err)
-			}
-			// RowsAffected 是本次真正落库的「站点×规则」行数，直接计入导入汇总。
-			// 未匹配数为 0 却 RowsAffected 也为 0 的那种情况不存在，反之亦然，
-			// 两者相加就能和 hitNames 的规模对上，异常时一眼可查。
-			n := int(tag.RowsAffected())
-			res.FingerprintHits += n
-			if n < len(hitNames) {
-				res.UnmatchedRules += len(hitNames) - n
-				// 只有首批记明细：大批量导入时刷屏没有意义，汇总行已经带总数。
-				if res.Records+res.DupRecords <= 3 {
-					log.Printf("[assets] 指纹命中未匹配到规则: host=%s names=%v（规则库未收录该名称）", host, hitNames)
+			if fpErr != nil {
+				// 先 rollback 解除 aborted 状态，再 release 把保存点清掉，
+				// 下一条记录才能用同名保存点重新起圈。
+				if _, rbErr := tx.Exec(ctx, "rollback to savepoint fp_hits"); rbErr != nil {
+					return nil, fmt.Errorf("回滚指纹保存点失败: %w", rbErr)
+				}
+				if _, relErr := tx.Exec(ctx, "release savepoint fp_hits"); relErr != nil {
+					return nil, fmt.Errorf("释放指纹保存点失败: %w", relErr)
+				}
+				res.FingerprintWriteErrors++
+				log.Printf("[assets] 指纹命中写入失败已降级: host=%s err=%v", host, fpErr)
+			} else {
+				if _, err := tx.Exec(ctx, "release savepoint fp_hits"); err != nil {
+					return nil, fmt.Errorf("释放指纹保存点失败: %w", err)
+				}
+				// RowsAffected 是本次真正落库的「站点×规则」行数，直接计入导入汇总。
+				// 未匹配数为 0 却 RowsAffected 也为 0 的那种情况不存在，反之亦然，
+				// 两者相加就能和 hitNames 的规模对上，异常时一眼可查。
+				n := int(tag.RowsAffected())
+				res.FingerprintHits += n
+				if n < len(hitNames) {
+					res.UnmatchedRules += len(hitNames) - n
+					// 只有首批记明细：大批量导入时刷屏没有意义，汇总行已经带总数。
+					if res.Records+res.DupRecords <= 3 {
+						log.Printf("[assets] 指纹命中未匹配到规则: host=%s names=%v（规则库未收录该名称）", host, hitNames)
+					}
+					// 计数只有总数，调用方没法据此补规则；这里查出具体是哪些名字
+					// 没被收录，去重后截断进 SkippedRuleNames。只在有缺口时多跑
+					// 一条查询，正常导入零开销。
+					missing, qErr := missingRuleNames(ctx, tx, hitNames)
+					if qErr != nil {
+						return nil, fmt.Errorf("查询未收录规则名失败: %w", qErr)
+					}
+					for _, name := range missing {
+						if len(res.SkippedRuleNames) >= 50 {
+							break
+						}
+						// 跨记录去重：同一批导入里同名会反复出现，明细列一次就够。
+						if slices.Contains(res.SkippedRuleNames, name) {
+							continue
+						}
+						res.SkippedRuleNames = append(res.SkippedRuleNames, name)
+					}
 				}
 			}
 		}
@@ -738,6 +786,31 @@ func (a *AssetRepo) ImportRecords(ctx context.Context, projectID int64, source s
 		return nil, err
 	}
 	return res, nil
+}
+
+// missingRuleNames 找出 hitNames 里规则库没有收录的名字，按入参首次出现的顺序去重。
+// 只在指纹 INSERT 的 RowsAffected 出现缺口时调用（见 ImportRecords），正常导入零开销。
+func missingRuleNames(ctx context.Context, tx pgx.Tx, hitNames []string) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT name FROM unnest($1::text[]) AS t(name)
+		 WHERE NOT EXISTS (SELECT 1 FROM fingerprint_rules fr WHERE fr.name = t.name)`, hitNames)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	seen := make(map[string]bool, len(hitNames))
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	return out, rows.Err()
 }
 
 // VerifySite 记录一次可达性判定，并按退避阶梯推进下一次检查时间。

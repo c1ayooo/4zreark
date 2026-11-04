@@ -1,7 +1,9 @@
 package test
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"testing"
 	"time"
 
@@ -14,6 +16,11 @@ import (
 // 里可能存着用户扫码/账号会话）——repo 层用合成名 "zz-test-src"，service 层
 // 用 registry 内但未配置的 "kuaicha"，t.Cleanup 只删自己创建的行。
 func TestDatasourceSessions(t *testing.T) {
+	// M13 后凭据落库必须加密，upsert 在无 ZRE_SECRET_KEY 时会被拒。本测试的
+	// 跳过门（用户配置过 kuaicha 才跳过）在门控环境里不生效——kuaicha 未配置、
+	// 环境也没导出密钥，测试得自备一把一次性密钥才能跑起来（与 g4_sources 同款做法）；
+	// 测试行结束即删，不会污染用户真实会话。
+	t.Setenv("ZRE_SECRET_KEY", hex.EncodeToString(bytes.Repeat([]byte{6}, 32)))
 	r := openTestRepo(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

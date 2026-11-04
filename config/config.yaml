@@ -20,9 +20,10 @@ auth:
   allow_public_registration: false
 
 jwt:
-  # 生产必须换掉：控制面启动时检测到默认值会拒绝运行（除非 ZRE_ALLOW_DEFAULT_SECRET=1）。
-  # 推荐用环境变量 ZRE_JWT_SECRET 覆盖（openssl rand -hex 32），密钥不进 git。
-  secret: "4zreark-secret-key-change-in-production"
+  # 留空：随仓库分发的可用密钥等于人人可签出 admin JWT，守卫会拒绝启动控制面。
+  # 部署必须设置，或显式 ZRE_ALLOW_DEFAULT_SECRET=1 放行；推荐环境变量
+  # ZRE_JWT_SECRET（如 openssl rand -hex 32 的输出），密钥不进 git。
+  secret: ""
   expire: 7200  # 2 hours in seconds
   issuer: "4zreark"
 

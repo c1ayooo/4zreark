@@ -45,7 +45,8 @@ func TestSeedCatalogCapabilitiesAndDomainCounts(t *testing.T) {
 
 	svc := service.NewSeedCatalogService()
 	caps := svc.Capabilities()
-	if len(caps.Kinds) != 6 || caps.MaxExpandTargets != 5000 || caps.PreviewSample != 200 {
+	// 7 种 = domain/cidr/dict/company/cert/repo/app，cert（证书组织）上线后加一。
+	if len(caps.Kinds) != 7 || caps.MaxExpandTargets != 5000 || caps.PreviewSample != 200 {
 		t.Fatalf("能力声明不符: %+v", caps)
 	}
 	byKind := map[string]service.SeedKindCapability{}

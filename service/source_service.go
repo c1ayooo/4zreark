@@ -147,6 +147,19 @@ func (s *SourceService) Delete(ctx context.Context, id int64) error {
 	return r.Delete(ctx, id)
 }
 
+// SourceTestHTTPClient 是连接测试用的 HTTP 客户端接缝。导出仅供本地集成测试
+// 替换（httptest 跑在 127.0.0.1 且用自签证书，ModeStrict 出站档会拦掉），
+// 生产代码不要给它赋值。
+var SourceTestHTTPClient = func() *http.Client {
+	// 审计 M6+M3：不跟随重定向（Authorization 不得被 30x 带走），
+	// 且走凭据出站档位（ModeStrict：私网/loopback/云元数据全禁）。
+	client := safehttp.Client(safehttp.ModeStrict, 8*time.Second)
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return client
+}()
+
 // Test 发最小请求验证连通性。没有 endpoint 时只校验凭据是否已配置。
 func (s *SourceService) Test(ctx context.Context, id int64) (*SourceTestResult, error) {
 	r, err := s.repo()
@@ -176,11 +189,21 @@ func (s *SourceService) Test(ctx context.Context, id int64) (*SourceTestResult, 
 		return res, nil
 	}
 
-	// 审计 M6：凭据测试的 endpoint 必须落在 GitHub 主机白名单内——
-	// 已存 token 只发给官方/显式批准的企业版主机，不跟随重定向。
-	if err := CheckSourceEndpointHost(endpoint); err != nil {
-		_ = r.RecordTest(ctx, id, false, err.Error())
-		return nil, err
+	// 审计 M6 的威胁模型是「GitHub token 不得被带去别的主机」，白名单只对
+	// github 类型生效；custom 等其他类型的 endpoint 是管理员自己配对的，
+	// 套 GitHub 白名单会让自定义源永远无法做连接测试。
+	if src.Kind == "github" {
+		if err := CheckSourceEndpointHost(endpoint); err != nil {
+			_ = r.RecordTest(ctx, id, false, err.Error())
+			return nil, err
+		}
+	} else {
+		// 其余类型只要求是可解析的绝对 http(s) URL。
+		if u, perr := url.Parse(endpoint); perr != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			err := errors.New("endpoint 必须是完整的 http(s) URL")
+			_ = r.RecordTest(ctx, id, false, err.Error())
+			return nil, err
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -196,13 +219,7 @@ func (s *SourceService) Test(ctx context.Context, id int64) (*SourceTestResult, 
 			}
 		}
 	}
-	// 审计 M6+M3：不跟随重定向（Authorization 不得被 30x 带走），
-	// 且走凭据出站档位（ModeStrict：私网/loopback/云元数据全禁）。
-	client := safehttp.Client(safehttp.ModeStrict, 8*time.Second)
-	client.CheckRedirect = func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
-	}
-	resp, err := client.Do(req)
+	resp, err := SourceTestHTTPClient.Do(req)
 	res.ElapsedMS = time.Since(start).Milliseconds()
 	if err != nil {
 		_ = r.RecordTest(ctx, id, false, err.Error())

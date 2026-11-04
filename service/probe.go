@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/c1ayooo/4zreark/internal/useragent"
@@ -81,6 +82,11 @@ var resolveIPAddr = func(ctx context.Context, host string) ([]net.IPAddr, error)
 // 命中说明本地 DNS 被代理接管，连不上不能算资产失联。
 var fakeIPNet = &net.IPNet{IP: net.IPv4(198, 18, 0, 0), Mask: net.CIDRMask(15, 32)}
 
+// ProbeAllowLoopback 仅本地集成测试置位：httptest 跑在 127.0.0.1，
+// 探测默认按 ModeScan 禁 loopback（SSRF 防护），测试需经此接缝放行本机回环；
+// 生产代码不要改，默认 false 时校验行为与原先完全一致。
+var ProbeAllowLoopback = false
+
 // probeClient 复用连接、不校验证书（扫描器惯例）、最多 5 跳重定向。
 var probeClient = &http.Client{
 	Timeout: probeTimeout,
@@ -96,7 +102,17 @@ var probeClient = &http.Client{
 		DialContext: (&net.Dialer{
 			Timeout: 5 * time.Second,
 			// KeepAlive 经 safehttp 控制版本保留
-			Control: safehttp.NewDialer(safehttp.ModeScan, 5*time.Second).Control,
+			Control: func(network, address string, c syscall.RawConn) error {
+				// 集成测试接缝：置位后仅放行 loopback 地址，其余仍走原校验
+				if ProbeAllowLoopback {
+					if host, _, err := net.SplitHostPort(address); err == nil {
+						if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+							return nil
+						}
+					}
+				}
+				return safehttp.NewDialer(safehttp.ModeScan, 5*time.Second).Control(network, address, c)
+			},
 		}).DialContext,
 	},
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {

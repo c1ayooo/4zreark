@@ -78,7 +78,7 @@ func (localAssetStore) Ingest(ctx context.Context, task *models.Task, records []
 	}
 	assetSvc := NewAssetService()
 	const importChunk = 5000
-	var totalRecords, newSites, newEndpoints, fpSites, fpRules, fpMissed int
+	var totalRecords, newSites, newEndpoints, fpSites, fpRules, fpMissed, fpWriteErrs int
 	for start := 0; start < len(records); start += importChunk {
 		end := start + importChunk
 		if end > len(records) {
@@ -87,13 +87,19 @@ func (localAssetStore) Ingest(ctx context.Context, task *models.Task, records []
 		batch := records[start:end]
 		res, err := assetSvc.Ingest(ctx, task.ProjectID, "scan", batch)
 		if err != nil {
-			return err
+			// 分块逐块提交：本块失败时前面的块已经落库，最终状态是「一半成功」。
+			// 任务仍按失败处理（语义不变），但错误要带出失败前已提交多少，
+			// 否则排查时对不上账：库里为什么只有一半数据、丢了多少。
+			chunk := start/importChunk + 1
+			return fmt.Errorf("导入第 %d 块失败（前 %d 块已提交，含 %d 条记录）: %w",
+				chunk, chunk-1, totalRecords, err)
 		}
 		totalRecords += res.Records
 		newSites += res.NewSites
 		newEndpoints += res.NewEndpoints
 		fpRules += res.FingerprintHits
 		fpMissed += res.UnmatchedRules
+		fpWriteErrs += res.FingerprintWriteErrors
 		for i := range batch {
 			if len(batch[i].Fingerprints) > 0 || len(batch[i].Tech) > 0 {
 				fpSites++
@@ -102,8 +108,9 @@ func (localAssetStore) Ingest(ctx context.Context, task *models.Task, records []
 	}
 	// 命中数进任务摘要：技术栈写着 Nginx、命中表却一行没有，这类"看着成功其实
 	// 没落库"的问题只有把数字打进任务日志才可能被发现。
-	log.Printf("[TaskExecutor] 扫描结果并入资产: 记录 %d，新站点 %d，新入口 %d，指纹命中 %d 行（覆盖 %d 条记录，未收录规则名 %d 个；project=%d）",
-		totalRecords, newSites, newEndpoints, fpRules, fpSites, fpMissed, task.ProjectID)
+	// 指纹写入失败是降级后的次数：资产保住了、指纹丢了，同样要可核对。
+	log.Printf("[TaskExecutor] 扫描结果并入资产: 记录 %d，新站点 %d，新入口 %d，指纹命中 %d 行（覆盖 %d 条记录，未收录规则名 %d 个，指纹写入失败 %d；project=%d）",
+		totalRecords, newSites, newEndpoints, fpRules, fpSites, fpMissed, fpWriteErrs, task.ProjectID)
 	return nil
 }
 

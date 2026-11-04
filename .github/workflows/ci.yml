@@ -47,3 +47,9 @@ jobs:
       - name: go test
         # -count=1 关掉测试缓存：命中缓存会让「上次通过」掩盖本次改动引入的回归。
         run: go test ./... -count=1
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+        continue-on-error: true   # 文档定的策略（pending-fixes.md P2-2）：先观察一段时间，有已知漏洞时看输出再处理

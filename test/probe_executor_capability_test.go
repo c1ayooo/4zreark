@@ -17,6 +17,10 @@ import (
 // P2：capability.probe=false 的执行单元只登记、不发请求；
 // 同批次其他目标照常探测，批次在全部目标落终态后结案。
 func TestProbeExecutorHonorsCapability(t *testing.T) {
+	// httptest 跑在 127.0.0.1，探测的 SSRF 防护默认禁 loopback，这里打开测试接缝
+	service.ProbeAllowLoopback = true
+	t.Cleanup(func() { service.ProbeAllowLoopback = false })
+
 	r := openTestRepo(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

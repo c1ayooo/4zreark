@@ -143,10 +143,35 @@ func TestVulnReviewWorkflow(t *testing.T) {
 	}
 }
 
-// 复核分布统计。
+// 复核分布统计：自造一条已复核漏洞再断言，不依赖全局残留数据
+// （历史测试清理只删 vuln_reviews 行，vulnerabilities.review_count 会残留）。
 func TestVulnReviewStats(t *testing.T) {
-	_ = openTestRepo(t)
+	r := openTestRepo(t)
+
+	name := "统计测试漏洞-" + time.Now().Format("150405.000000")
+	vuln := &models.Vulnerability{
+		WorkspaceID: oid.NewObjectID(),
+		Name:        name,
+		Severity:    models.VulnSeverityHigh,
+		Type:        "rce",
+		Target:      "http://review-test.example.com/stats",
+		Scanner:     "test",
+	}
 	vulnSvc := service.NewVulnService()
+	if err := vulnSvc.CreateVulnerability(vuln); err != nil {
+		t.Fatalf("创建漏洞失败: %v", err)
+	}
+	t.Cleanup(func() {
+		bg := context.Background()
+		_, _ = r.Pool().Exec(bg, `DELETE FROM vuln_reviews WHERE vuln_id = $1`, vuln.ID.Hex())
+		_, _ = r.Pool().Exec(bg, `DELETE FROM vulnerabilities WHERE id = $1`, vuln.ID.Hex())
+	})
+
+	if _, _, err := vulnSvc.BatchReview(
+		[]string{vuln.ID.Hex()}, models.VulnStatusConfirmed, "统计用复核", "alice"); err != nil {
+		t.Fatalf("批量复核失败: %v", err)
+	}
+
 	stats, err := vulnSvc.ReviewStats("")
 	if err != nil {
 		t.Fatalf("统计复核分布失败: %v", err)
@@ -154,7 +179,10 @@ func TestVulnReviewStats(t *testing.T) {
 	if stats.ByStatus == nil {
 		t.Fatal("ByStatus 不应为空")
 	}
-	if _, ok := stats.ByStatus[models.VulnStatusConfirmed]; !ok && stats.Reviewed > 0 {
-		t.Error("存在已复核漏洞时应有 confirmed 计数")
+	if stats.ByStatus[models.VulnStatusConfirmed] < 1 {
+		t.Errorf("confirmed 计数应 >= 1，实际 %d", stats.ByStatus[models.VulnStatusConfirmed])
+	}
+	if stats.Reviewed < 1 {
+		t.Errorf("Reviewed 应 >= 1，实际 %d", stats.Reviewed)
 	}
 }

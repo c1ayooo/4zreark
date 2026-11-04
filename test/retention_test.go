@@ -59,7 +59,7 @@ func TestRetentionPolicy(t *testing.T) {
 	var oldRaw, freshRaw int64
 	if err := r.Pool().QueryRow(ctx, `
 		INSERT INTO raw_records (project_id, site_id, source, host, port, protocol, value, dedup_key, observed_at)
-		VALUES ($1,$2,'test','old.example',443,'https','https://old.example',$3, now() - interval '2 days')
+		VALUES ($1,$2,'test','old.example',443,'https','https://old.example',$3, now() - interval '365 days')
 		RETURNING id`, project.ID, siteA, actor+"-old").Scan(&oldRaw); err != nil {
 		t.Fatalf("插入旧原始记录失败: %v", err)
 	}
@@ -79,7 +79,11 @@ func TestRetentionPolicy(t *testing.T) {
 	for i, id := range scanIDs {
 		at := "now()"
 		if i == 0 {
-			at = "now() - interval '2 days'"
+			// 与 oldRaw 同理：库里已有数万条更早的真实扫描结果，2 天排不进
+			// 最老批次（每轮最多清 20*batch 条）。但 scan_results 按月分区，
+			// 最老只到 2026-10，插不了 365 天前；改插最老分区的首时刻，
+			// 即成全库最老记录，必进首批清理名单（代码从不删旧分区，锚点稳定）。
+			at = "'2026-10-01 00:00:00+08'"
 		}
 		if _, err := r.Pool().Exec(ctx, fmt.Sprintf(`
 			INSERT INTO scan_results (id, task_id, type, created_at)

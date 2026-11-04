@@ -7,7 +7,9 @@
 > 每一项都写了**判定标准**——不是「改完代码就算完」，而是写下能证明它真的修好了的证据。
 > 没有判定标准的条目不允许进入本清单。
 >
-> 最后一次核对：2026-11-04，基线 `go build ./...` + `go vet ./...` + `go test ./... -count=1` 全绿。
+> 最后一次核对：2026-11-04（收尾轮）。本轮是文档与遗留测试收尾，本地只跑了
+> `go build ./...`（通过）；`go vet` 与全量 `go test ./... -count=1` 的全绿结论
+> 交由测试门控执行后回填，此处不再预先声称。
 
 ---
 
@@ -18,9 +20,9 @@
 | P1-1 | `executeStreamingPipeline` 752 行单函数 | P1 | 可维护性，改动易引入回归 | 中 |
 | P1-2 | `setupRouter` 764 行单函数 | P1 | 可维护性，路由命名冲突 | 中 |
 | P1-3 | `repo` / `api` 层测试覆盖严重不足 | P1 | 改动无安全网 | 大 |
-| P1-4 | `ImportRecords` 部分失败语义不清 | P1 | 数据完整性 | 小 |
+| P1-4 | `ImportRecords` 部分失败语义不清（**已完成**，残留见第 2 节） | P1 | 数据完整性 | 小 |
 | P2-1 | banner-only 规则命中率未量化 | P2 | 指纹召回率不可知 | 中 |
-| P2-2 | 依赖漏洞扫描未纳入 CI | P2 | 供应链风险 | 小 |
+| P2-2 | 依赖漏洞扫描未纳入 CI（**已完成**） | P2 | 供应链风险 | 小 |
 | P2-3 | 错误吞掉（`_ =`）需逐条判定 | P2 | 静默失败 | 小 |
 | P2-4 | 大型数据字面量内嵌源码 | P2 | 编译体积、可读性 | 小 |
 
@@ -31,6 +33,32 @@
 
 **当前没有 P0。** 已知的两项安全缺陷（H-1 `100.64.0.0/10` 未封禁、H-2 `role` 无白名单）
 已在上一轮修复；默认 JWT 密钥守卫经复核**也已完整实现**，详见第 4 节。
+
+### 遗留测试失败修复记录（2026-11-04）
+
+本轮把测试门控暴露的遗留失败逐个修掉。这类「测试坏了」不进总览表——多数是
+测试环境接缝缺失或断言过时，不是产品缺陷；但每条都先查根因再改，防止
+「让测试闭嘴」掩盖真问题：
+
+- **3 个探活集成测试被 loopback 禁令拦住**：httptest 跑在 127.0.0.1，而探测按
+  SSRF 防护默认禁回环（`safehttp.ModeScan` 出站档）。修法：`service/probe.go` 加
+  `ProbeAllowLoopback` 测试接缝——置位后仅放行回环地址，其余仍走原校验，
+  `g5` / `auto_verify` / `probe_executor_capability` 三个测试显式置位。
+- **G4 连接测试把 GitHub 主机白名单套在所有源类型上**：白名单的威胁模型是
+  「GitHub token 不得被带去别的主机」，custom 类型是管理员自己配对的 endpoint，
+  套白名单后永远无法做连接测试。修法：白名单仅对 `github` kind 生效，其余类型
+  只校验 http(s) URL 格式；出站客户端抽成 `SourceTestHTTPClient` 接缝供测试注入
+  （ModeStrict 会拦 127.0.0.1，httptest 直连需要普通客户端）。
+- **会话凭据解密失败打死整个清单页**：`ZRE_SECRET_KEY` 轮换后存量密文永远解不开，
+  `Get/List` 整体报错。修法：`repo/datasource_session_repo.go` 读路径降级——
+  解密失败字段置空、`Status` 标 `decrypt_error`，用户重新保存即修复。
+- **三个测试断言与现状脱节**：`retention` 插「2 天前」排不进最老清理批次
+  （库里真实数据更老，且 `scan_results` 按月分区插不了 365 天前），改插最老分区
+  首时刻；`seed_catalog` 硬编码 6 种 kind 而 cert 上线后实际是 7 种；
+  `vuln_review` 统计依赖全局残留数据，改为自造漏洞复核后再断言。
+- **`monitoring_plans` 唯一约束撞裸 INSERT**：`UNIQUE(seed_id)` 落地后，种子已有
+  计划再重建报 23505。修法：`CreatePlan` 改按 seed_id upsert（重复创建按更新
+  处理），已在上一提交（`22b8198`）修复，本轮无新改动。
 
 ---
 
@@ -235,6 +263,13 @@ SQL 里 `not (rule_id = any(NULL))` 求值为 NULL，一行不删，不报错，
 
 ### P1-4 `ImportRecords` 部分失败语义不清
 
+> ✅ **已完成（2026-11-04）**：指纹命中写入失败经 SAVEPOINT 降级为
+> `FingerprintWriteErrors` 计数，不再回滚资产主干；未收录规则名明细进
+> `SkippedRuleNames`（截前 50 个）。判定标准第 1 条由
+> `test/import_semantics_test.go` 锁定；第 2 条（指纹写入真抛错）降级路径已实现
+> 但测试刻意未构造（需侵入式手段，见该测试文件头注释），由代码评审兜底；
+> 第 3 条分块 `CommittedChunks` **未做**，「一半成功」的补偿语义仍欠。
+
 **位置**：`repo/assets_repo.go:ImportRecords`（271 行）
 
 **现状**
@@ -310,6 +345,10 @@ Tomcat / IIS / OpenResty / Caddy），对比修复前后的：
 ---
 
 ### P2-2 依赖漏洞扫描未纳入 CI
+
+> ✅ **已完成（2026-11-04）**：`.github/workflows/ci.yml` 已追加 `govulncheck`
+> 步骤，按预定策略 `continue-on-error: true` 先观察。判定标准「CI 日志可见
+> govulncheck 输出」待该步骤随下次推送首次运行后核对日志即满足，本地无法验证。
 
 **现状**
 
@@ -443,12 +482,16 @@ $ grep -rn "JWTSecretIsDefault" --include=*.go .
 
 三行命中 = 1 处注释 + 1 处定义 + **1 处调用**，守卫已接线。
 
-仍然值得做、但不算缺陷的两件事：
+仍然值得做、但不算缺陷的两件事——**均已做完（2026-11-04）**：
 
-1. `config/config.yaml` 里 `jwt.secret` 仍写着默认值。守卫会拦住误用，但分发出去的
-   模板自带可用密钥终究不理想，可改为空串 + 注释指向 `ZRE_JWT_SECRET`。
-2. 补一条单测，覆盖「默认值应拒绝 / 自定义值应放行 / 开关应放行」三种输入
-   （`config` 包的检测函数目前无测试）。
+1. `config/config.yaml` 的 `jwt.secret` 已改为**空串**，注释指向 `ZRE_JWT_SECRET`。
+   分发出去的模板不再自带可用密钥。部署要求随之变硬：控制面启动必须配置随机
+   密钥（环境变量 `ZRE_JWT_SECRET` 或配置文件 `jwt.secret`，如 `openssl rand -hex 32`
+   的输出），否则守卫拒绝启动；确要带默认值运行须显式 `ZRE_ALLOW_DEFAULT_SECRET=1`。
+2. `config/config_test.go` 已补 `TestJWTSecretIsDefault`，覆盖三种输入：
+   仓库默认串判「默认」、自定义随机串放行、空串与默认串同等拦截。原计划的
+   「开关应放行」是 `main.go` 里读 `ZRE_ALLOW_DEFAULT_SECRET` 的环境变量分支，
+   不属于 `config` 包检测函数，单测不覆盖。
 
 ---
 
@@ -482,15 +525,16 @@ ZRE_PG_PASSWORD=<pass> go test ./test/ -run TestPruneHitsScope -count=1 -v
 
 | 顺序 | 项 | 理由 |
 |------|----|------|
-| 1 | P1-4 导入语义 | 改动最小，直接减少「数据莫名丢失」类故障 |
-| 2 | P2-2 漏洞扫描 | 一行 CI 配置，纯增量，不阻塞任何人 |
+| 1 | P1-4 导入语义（**已完成**） | 改动最小，直接减少「数据莫名丢失」类故障 |
+| 2 | P2-2 漏洞扫描（**已完成**） | 一行 CI 配置，纯增量，不阻塞任何人 |
 | 3 | P1-3 测试补齐 | 为后面两项铺路，必须在前 |
 | 4 | P1-2 router 拆分 | 有路由快照保护，风险可控 |
 | 5 | P1-1 pipeline 拆分 | 需先补契约快照，工作量最大 |
 | 6 | P2-1 / P2-3 / P2-4 | 有余力再做 |
 
-> 原计划里的「JWT 守卫」已从排期移除——复核确认早已实现（见 4.1）。
-> 唯一残留的小事是给 `config.JWTSecretIsDefault` 补单测，可并入第 1 项一起做。
+> 原计划里的「JWT 守卫」已从排期移除——复核确认早已实现（见 4.1），
+> `config.JWTSecretIsDefault` 的单测也已补上，无残留。
+> 第 1、2 项已完成；P1-4 里分块 `CommittedChunks` 的一角仍欠，见第 2 节状态注。
 
 ---
 

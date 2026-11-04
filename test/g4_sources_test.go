@@ -3,6 +3,7 @@ package test
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/hex"
 	"fmt"
 	"net/http"
@@ -21,6 +22,11 @@ func TestG4SourcesCredential(t *testing.T) {
 	defer cancel()
 
 	t.Setenv("ZRE_SECRET_KEY", hex.EncodeToString(bytes.Repeat([]byte{7}, 32)))
+	// Test() 默认走 safehttp（ModeStrict 禁 loopback），httptest 在 127.0.0.1 会被拦；
+	// custom 类型只查 URL 格式，换成普通 client 直连，用完恢复。
+	prevClient := service.SourceTestHTTPClient
+	service.SourceTestHTTPClient = &http.Client{Timeout: 8 * time.Second}
+	t.Cleanup(func() { service.SourceTestHTTPClient = prevClient })
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -138,12 +144,24 @@ func TestGitHubSourceTestSendsToken(t *testing.T) {
 	defer cancel()
 
 	t.Setenv("ZRE_SECRET_KEY", hex.EncodeToString(bytes.Repeat([]byte{9}, 32)))
+	// github 类型走真白名单路径（要求 https）：把 127.0.0.1 显式放进白名单，
+	// 再用 TLS 版 httptest + 自签证书客户端直连，用完恢复。
+	t.Setenv("ZRE_GITHUB_EXTRA_HOSTS", "127.0.0.1")
 	var seen string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		seen = req.Header.Get("Authorization")
 		_, _ = w.Write([]byte(`{"resources":{}}`))
 	}))
 	defer srv.Close()
+	prevClient := service.SourceTestHTTPClient
+	service.SourceTestHTTPClient = &http.Client{
+		Timeout:   8 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	t.Cleanup(func() { service.SourceTestHTTPClient = prevClient })
 
 	svc := service.NewSourceService()
 	src, err := svc.Create(ctx, service.SourceInput{

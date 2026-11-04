@@ -19,7 +19,7 @@ type DatasourceSession struct {
 	Cookie      string     `json:"cookie"`
 	Username    string     `json:"username"`
 	Password    string     `json:"password"`
-	Status      string     `json:"status"` // unconfigured / active / expired
+	Status      string     `json:"status"` // unconfigured / active / expired / decrypt_error
 	LastLoginAt *time.Time `json:"last_login_at"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
@@ -122,13 +122,16 @@ func scanDatasourceSession(rs rowScanner) (*DatasourceSession, error) {
 		return nil, err
 	}
 	// 审计 M13：读路径双读——enc:v1: 前缀解密，存量明文原样返回（迁移共存期）。
+	// 解密失败读路径降级：ZRE_SECRET_KEY 轮换过，存量凭据永远解不开，
+	// 一行坏数据不该打死整个清单页（Get/List 整体报错）——字段置空、
+	// Status 标 decrypt_error，让用户看到标记后重新保存即修复。
 	if dec, derr := secretbox.DecryptText(s.Cookie); derr != nil {
-		return nil, fmt.Errorf("解密会话 Cookie 失败: %w", derr)
+		s.Cookie, s.Status = "", "decrypt_error"
 	} else {
 		s.Cookie = dec
 	}
 	if dec, derr := secretbox.DecryptText(s.Password); derr != nil {
-		return nil, fmt.Errorf("解密会话口令失败: %w", derr)
+		s.Password, s.Status = "", "decrypt_error"
 	} else {
 		s.Password = dec
 	}
