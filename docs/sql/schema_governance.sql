@@ -11,6 +11,20 @@
 -- 命名：脚本按内容命名，不使用数字前缀；表名不带序号；月分区名保留 YYYY_MM。
 -- 主键：新增表 bigserial；跨域引用只允许 project_id bigint / site_id bigint / workspace_id char(24) / task_id char(24)。
 -- 一致性：整段一个事务，任一语句失败全体回滚。
+--
+-- 注意：本文件第 22 行起要对 projects 做 ALTER，而 projects 由
+-- migration_assets_p0.sql 创建。按文件名字母序批量执行时 migration_* 排在
+-- schema_* 之后，会先跑到本文件而失败，整段事务回滚 —— 建库脚本请统一用
+-- docs/sql/apply_all.sh，它按依赖顺序执行。下面的守卫把这种误用变成一句
+-- 可执行的提示，而不是 "relation projects does not exist" 加 20 张表静默丢失。
+
+DO $$
+BEGIN
+    IF to_regclass('projects') IS NULL THEN
+        RAISE EXCEPTION 'schema_governance.sql 依赖 projects 表：请先执行 schema_init.sql 与 migration_assets_p0.sql，或直接运行 docs/sql/apply_all.sh';
+    END IF;
+END
+$$;
 
 BEGIN;
 

@@ -46,6 +46,7 @@ func (h *NotifyHandler) GetConfigs(c *gin.Context) {
 		configs[i].FeishuSecret = maskSecret(configs[i].FeishuSecret)
 		configs[i].FeishuAppSecret = maskSecret(configs[i].FeishuAppSecret)
 		configs[i].SMTPPassword = maskSecret(configs[i].SMTPPassword)
+		configs[i].TelegramBotToken = maskSecret(configs[i].TelegramBotToken)
 	}
 
 	c.JSON(http.StatusOK, utils.Response{
@@ -355,6 +356,15 @@ func (h *NotifyHandler) GetSupportedTypes(c *gin.Context) {
 				{"key": "webhook_headers", "label": "自定义 Headers (JSON)", "type": "textarea", "required": "false"},
 			},
 		},
+		{
+			"type":        "telegram",
+			"name":        "Telegram",
+			"description": "通过 Telegram Bot 发送通知（BotFather 签发 token，chat_id 指向群或个人）",
+			"fields": []map[string]string{
+				{"key": "telegram_bot_token", "label": "Bot Token", "type": "password", "required": "true"},
+				{"key": "telegram_chat_id", "label": "Chat ID", "type": "text", "required": "true"},
+			},
+		},
 	}
 
 	c.JSON(http.StatusOK, utils.Response{
@@ -397,6 +407,10 @@ func validateNotifyConfig(config notify.NotifyConfig) error {
 	case notify.NotifyTypeWebhook:
 		if config.WebhookURL == "" {
 			return fmt.Errorf("自定义 Webhook 需要 URL")
+		}
+	case notify.NotifyTypeTelegram:
+		if config.TelegramBotToken == "" || config.TelegramChatID == "" {
+			return fmt.Errorf("Telegram 渠道需要 Bot Token 与 Chat ID")
 		}
 	}
 	return nil

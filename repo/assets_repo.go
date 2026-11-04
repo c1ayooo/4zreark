@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"fmt"
 	"net"
 	"strings"
@@ -97,15 +98,19 @@ type Endpoint struct {
 // Tech/Server/Icon 是扫描阶段顺手拿到的富化字段：指纹写 sites.tech，
 // 图标按 sha256 去重进 asset_icons，站点只存引用。
 type RawRecord struct {
-	Source          string         `json:"source"`
-	Host            string         `json:"host"`
-	Port            int            `json:"port"`
-	Protocol        string         `json:"protocol"`
-	Value           string         `json:"value"`
-	StatusCode      int            `json:"status_code"`
-	Title           string         `json:"title"`
-	IP              string         `json:"ip"`
-	Tech            []string       `json:"tech,omitempty"`
+	Source     string   `json:"source"`
+	Host       string   `json:"host"`
+	Port       int      `json:"port"`
+	Protocol   string   `json:"protocol"`
+	Value      string   `json:"value"`
+	StatusCode int      `json:"status_code"`
+	Title      string   `json:"title"`
+	IP         string   `json:"ip"`
+	Tech       []string `json:"tech,omitempty"`
+	// Fingerprints 是本次命中的指纹规则名（与 fingerprint_rules.name 对应）。
+	// 单独字段而不是塞进 Tech：Tech 是技术栈画像，Fingerprints 是「站点×规则」
+	// 事实行，要落到 fingerprint_hits 供按指纹筛选/统计。
+	Fingerprints    []string       `json:"fingerprints,omitempty"`
 	Server          string         `json:"server,omitempty"`
 	BodyHash        string         `json:"body_hash,omitempty"`
 	CertOrg         string         `json:"cert_org,omitempty"`
@@ -128,6 +133,13 @@ type ImportResult struct {
 	NewSites     int `json:"new_sites"`
 	DupRecords   int `json:"dup_records"`
 	NewEndpoints int `json:"new_endpoints"`
+	// FingerprintHits 是本次写入/刷新的「站点×规则」命中行数。
+	// 导出成计数而不是只写日志：命中表长期为 0 的那类问题，只有在每次导入
+	// 都带数字时才会在任务日志里暴露出来。
+	FingerprintHits int `json:"fingerprint_hits"`
+	// UnmatchedRules 是命中名在 fingerprint_rules 里查不到的次数（累积）。
+	// 说明规则库缺该名称，属于「识别到了但记不成事实」，需要补规则而不是重扫。
+	UnmatchedRules int `json:"unmatched_rules"`
 }
 
 // AssetRepo 是资产治理域的唯一数据入口。
@@ -581,6 +593,51 @@ func (a *AssetRepo) ImportRecords(ctx context.Context, projectID int64, source s
 			res.NewSites++
 		}
 
+		// 指纹命中：把「站点 × 规则」落成事实行。此前 fingerprint_hits 只有读方
+		// （资产表指纹数、看板 24h 命中数、按指纹筛资产），没有任何写方，导致三处
+		// 数据恒为 0 —— 识别结果只在 sites.tech 里以名字形式存在，无法按规则统计。
+		// 规则名 → rule_id 走 name 精确匹配（fingerprint_rules.name 现有唯一约束），
+		// 库里没有的规则名直接跳过：宁可少记，也不要为命中结果伪造规则 ID。
+		//
+		// 兜底：子域/探活分支产的记录只填 Tech、不填 Fingerprints，而两者在 DSL
+		// 通道里同源（同一个 match.Technology）。没有规则名时用技术栈名去映射，
+		// 否则同一批资产会因为走了哪条采集分支而时有时无地缺少命中行。
+		hitNames := rec.Fingerprints
+		if len(hitNames) == 0 {
+			hitNames = rec.Tech
+		}
+		if res.Records+res.DupRecords <= 3 {
+			log.Printf("[assets] 录入诊断 host=%s tech=%v fp=%v hit=%v", host, rec.Tech, rec.Fingerprints, hitNames)
+		}
+		if len(hitNames) > 0 {
+			tag, err := tx.Exec(ctx, `
+				INSERT INTO fingerprint_hits (site_id, rule_id, observed_at, record_id, evidence)
+				SELECT $1, fr.id, now(), $2,
+				       jsonb_build_object('host', $3::text, 'port', $4::int, 'source', $5::text)
+				  FROM fingerprint_rules fr
+				 WHERE fr.name = ANY($6::text[])
+				ON CONFLICT (site_id, rule_id) DO UPDATE SET
+					observed_at = now(),
+					record_id = EXCLUDED.record_id,
+					evidence = fingerprint_hits.evidence || EXCLUDED.evidence`,
+				siteID, recordID, host, port, source, hitNames)
+			if err != nil {
+				return nil, fmt.Errorf("写入指纹命中失败: %w", err)
+			}
+			// RowsAffected 是本次真正落库的「站点×规则」行数，直接计入导入汇总。
+			// 未匹配数为 0 却 RowsAffected 也为 0 的那种情况不存在，反之亦然，
+			// 两者相加就能和 hitNames 的规模对上，异常时一眼可查。
+			n := int(tag.RowsAffected())
+			res.FingerprintHits += n
+			if n < len(hitNames) {
+				res.UnmatchedRules += len(hitNames) - n
+				// 只有首批记明细：大批量导入时刷屏没有意义，汇总行已经带总数。
+				if res.Records+res.DupRecords <= 3 {
+					log.Printf("[assets] 指纹命中未匹配到规则: host=%s names=%v（规则库未收录该名称）", host, hitNames)
+				}
+			}
+		}
+
 		// 入口：站点按 host 归并，端口视图落在这里。
 		// 同 host 的 http:80 与 http:8080 靠 (site_id, scheme, port) 区分，不会互相覆盖。
 		var epInserted bool
@@ -669,6 +726,13 @@ func (a *AssetRepo) ImportRecords(ctx context.Context, projectID int64, source s
 				return nil, fmt.Errorf("写入属性变化事件失败: %w", err)
 			}
 		}
+	}
+	// 每批一行汇总：把「命中到底写进去没有」从悬案变成可核对的事实。
+	// 之前命中表恒为 0 的问题之所以拖了很久，就是因为单条诊断日志只在前 3 条
+	// 记录上打印，批次规模一上来就再也不出声了。
+	if res.FingerprintHits > 0 || res.UnmatchedRules > 0 {
+		log.Printf("[assets] 指纹命中入库: 命中 %d 行，未收录规则名 %d 个（source=%s project=%d）",
+			res.FingerprintHits, res.UnmatchedRules, source, projectID)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
@@ -993,7 +1057,6 @@ func jsonOrNil(v any) any {
 	}
 	return b
 }
-
 
 func anyToJSONB(v any) []byte {
 	b, err := json.Marshal(v)

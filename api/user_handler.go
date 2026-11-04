@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"strconv"
 
+	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/service"
 	"github.com/c1ayooo/4zreark/utils"
 
@@ -103,6 +105,10 @@ func (h *UserHandler) CreateUser(c *gin.Context) {
 
 	// Update role if specified
 	if req.Role != "" && req.Role != "user" {
+		if err := checkRoleAssignment(c, req.Role); err != nil {
+			utils.Forbidden(c, err.Error())
+			return
+		}
 		h.userService.UpdateUser(user.ID.Hex(), map[string]interface{}{"role": req.Role})
 	}
 
@@ -112,6 +118,43 @@ func (h *UserHandler) CreateUser(c *gin.Context) {
 		"email":    user.Email,
 	})
 }
+
+// checkRoleAssignment 校验「谁能把别人改成什么角色」（审计 H-2）。
+//
+// 此前 role 直接落库、无白名单，而 RequirePermission 对 role=="admin" 硬放行：
+// 任何拿到 user:manage 的非管理员角色，只要把自己改成 admin 就完成提权。
+// 两道闸：① 只有 admin 能改角色；② 目标角色必须在 roles 表里存在。
+func checkRoleAssignment(c *gin.Context, role string) error {
+	if role == "" {
+		return nil
+	}
+	cur, _ := c.Get("role")
+	curRole, _ := cur.(string)
+	if curRole != "admin" {
+		return errRoleForbidden
+	}
+	r := repo.Default()
+	if r == nil {
+		return errRoleForbidden
+	}
+	ok, err := r.Roles().Exists(context.Background(), role)
+	if err != nil {
+		return errRoleForbidden
+	}
+	if !ok {
+		return errRoleUnknown
+	}
+	return nil
+}
+
+var (
+	errRoleForbidden = &roleError{"只有管理员可以修改用户角色"}
+	errRoleUnknown   = &roleError{"角色不存在"}
+)
+
+type roleError struct{ msg string }
+
+func (e *roleError) Error() string { return e.msg }
 
 // UpdateUser updates a user
 // PUT /api/users/:id
@@ -138,6 +181,10 @@ func (h *UserHandler) UpdateUser(c *gin.Context) {
 		updates["phone"] = req.Phone
 	}
 	if req.Role != "" {
+		if err := checkRoleAssignment(c, req.Role); err != nil {
+			utils.Forbidden(c, err.Error())
+			return
+		}
 		updates["role"] = req.Role
 	}
 	if req.Status != nil {

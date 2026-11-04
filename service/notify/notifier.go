@@ -28,6 +28,7 @@ const (
 	NotifyTypeWechat   NotifyType = "wechat"
 	NotifyTypeEmail    NotifyType = "email"
 	NotifyTypeWebhook  NotifyType = "webhook"
+	NotifyTypeTelegram NotifyType = "telegram"
 )
 
 // NotifyLevel 通知级别
@@ -74,6 +75,10 @@ type NotifyConfig struct {
 
 	// WeChat Work
 	WechatWebhook string `json:"wechat_webhook,omitempty"`
+
+	// Telegram：BotFather 签发的 bot token + chat_id（群或个人）。
+	TelegramBotToken string `json:"telegram_bot_token,omitempty"`
+	TelegramChatID   string `json:"telegram_chat_id,omitempty"`
 
 	// Email
 	SMTPHost     string   `json:"smtp_host,omitempty"`
@@ -578,5 +583,60 @@ func (n *WebhookNotifier) Send(ctx context.Context, msg *NotifyMessage) error {
 		return fmt.Errorf("webhook error: status=%d, body=%s", resp.StatusCode, string(respBody))
 	}
 
+	return nil
+}
+
+// TelegramNotifier Telegram Bot 通知：sendMessage API，纯文本推送
+//（不声明 parse_mode，内容里的 markdown 片段按字面展示，避免转义陷阱）。
+type TelegramNotifier struct {
+	botToken string
+	chatID   string
+	// apiBase 供测试注入 httptest 地址；生产固定官方 API。
+	apiBase string
+	client  *http.Client
+}
+
+// NewTelegramNotifier 创建 Telegram 通知器
+func NewTelegramNotifier(botToken, chatID string) *TelegramNotifier {
+	return &TelegramNotifier{
+		botToken: botToken,
+		chatID:   chatID,
+		apiBase:  "https://api.telegram.org",
+		client:   outbound.HTTPClient("notify", 10*time.Second),
+	}
+}
+
+func (n *TelegramNotifier) Type() NotifyType {
+	return NotifyTypeTelegram
+}
+
+func (n *TelegramNotifier) Send(ctx context.Context, msg *NotifyMessage) error {
+	if n.botToken == "" || n.chatID == "" {
+		return fmt.Errorf("telegram 渠道需要 bot token 与 chat_id")
+	}
+	text := fmt.Sprintf("[%s] %s\n来源: %s\n\n%s", msg.Level, msg.Title, msg.Source, msg.Content)
+	payload := map[string]string{
+		"chat_id": n.chatID,
+		"text":    text,
+	}
+
+	body, _ := json.Marshal(payload)
+	url := fmt.Sprintf("%s/bot%s/sendMessage", strings.TrimRight(n.apiBase, "/"), n.botToken)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := n.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		return fmt.Errorf("telegram error: status=%d, body=%s", resp.StatusCode, string(respBody))
+	}
 	return nil
 }

@@ -485,6 +485,13 @@ func (s *FingerprintScanner) detectFingerprintsWithDSL(result *FingerprintResult
 
 		dslMatches := s.DSLEngine.AnalyzeResponse(dslResp)
 		for _, match := range dslMatches {
+			// sensitive.yaml 的命中是「页面里出现了类似泄露的文本」，不是技术栈。
+			// 以前直接并进 Technologies，导致 Linkfinder、系统绝对路径泄漏、
+			// 内网IP 这类词条出现在 sites.tech 里，污染技术栈统计与筛选。
+			// 真正的泄露面由 webscan 的敏感信息通道负责，这里直接丢弃。
+			if match.Source == "sensitive" {
+				continue
+			}
 			if !matched[match.Technology] {
 				matched[match.Technology] = true
 				result.Fingerprints = append(result.Fingerprints, Fingerprint{

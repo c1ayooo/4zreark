@@ -372,6 +372,10 @@ func (m *NotifyManager) createNotifier(config NotifyConfig) Notifier {
 		if config.WebhookURL != "" {
 			return NewWebhookNotifier(config.WebhookURL, config.WebhookMethod, config.WebhookHeaders)
 		}
+	case NotifyTypeTelegram:
+		if config.TelegramBotToken != "" && config.TelegramChatID != "" {
+			return NewTelegramNotifier(config.TelegramBotToken, config.TelegramChatID)
+		}
 	}
 	return nil
 }

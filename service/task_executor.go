@@ -78,22 +78,32 @@ func (localAssetStore) Ingest(ctx context.Context, task *models.Task, records []
 	}
 	assetSvc := NewAssetService()
 	const importChunk = 5000
-	var totalRecords, newSites, newEndpoints int
+	var totalRecords, newSites, newEndpoints, fpSites, fpRules, fpMissed int
 	for start := 0; start < len(records); start += importChunk {
 		end := start + importChunk
 		if end > len(records) {
 			end = len(records)
 		}
-		res, err := assetSvc.Ingest(ctx, task.ProjectID, "scan", records[start:end])
+		batch := records[start:end]
+		res, err := assetSvc.Ingest(ctx, task.ProjectID, "scan", batch)
 		if err != nil {
 			return err
 		}
 		totalRecords += res.Records
 		newSites += res.NewSites
 		newEndpoints += res.NewEndpoints
+		fpRules += res.FingerprintHits
+		fpMissed += res.UnmatchedRules
+		for i := range batch {
+			if len(batch[i].Fingerprints) > 0 || len(batch[i].Tech) > 0 {
+				fpSites++
+			}
+		}
 	}
-	log.Printf("[TaskExecutor] 扫描结果并入资产: 记录 %d，新站点 %d，新入口 %d（project=%d）",
-		totalRecords, newSites, newEndpoints, task.ProjectID)
+	// 命中数进任务摘要：技术栈写着 Nginx、命中表却一行没有，这类"看着成功其实
+	// 没落库"的问题只有把数字打进任务日志才可能被发现。
+	log.Printf("[TaskExecutor] 扫描结果并入资产: 记录 %d，新站点 %d，新入口 %d，指纹命中 %d 行（覆盖 %d 条记录，未收录规则名 %d 个；project=%d）",
+		totalRecords, newSites, newEndpoints, fpRules, fpSites, fpMissed, task.ProjectID)
 	return nil
 }
 
@@ -1228,6 +1238,9 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 			}
 			if err := e.assets.Ingest(ctx, task, assetRecords); err != nil {
 				log.Printf("[TaskExecutor] 扫描结果增量并入资产失败: %v", err)
+				// 入库失败此前只有一行 stderr：任务照旧标 completed，用户在界面上
+				// 只看到"执行完成，产出 0 条结果"，根因无处可查。这里显式记进任务日志。
+				e.logAction(task, "ingest", "error", "扫描结果并入资产失败："+err.Error())
 			} else {
 				assetRecords = assetRecords[:0]
 			}
@@ -1383,6 +1396,7 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 				rec.APIHosts = r.APIHosts
 				if ingestFingerprints {
 					rec.Tech = r.Technologies
+					rec.Fingerprints = r.Fingerprints
 				} else {
 					rec.Tech = nil
 				}

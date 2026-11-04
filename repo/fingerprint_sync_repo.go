@@ -3,9 +3,11 @@ package repo
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/c1ayooo/4zreark/oid"
+	"github.com/jackc/pgx/v5"
 )
 
 // FpSyncRule 一条待导入的表达式规则。
@@ -75,10 +77,8 @@ ON CONFLICT (name) DO UPDATE
 		}
 	}
 
-	if _, err := tx.Exec(ctx,
-		`DELETE FROM fingerprint_rules WHERE source = $1 AND name <> ALL($2::text[])`,
-		source, names); err != nil {
-		return 0, fmt.Errorf("清理失效规则: %w", err)
+	if _, err := r.pruneStaleRules(ctx, tx, source, names); err != nil {
+		return 0, err
 	}
 
 	if _, err := tx.Exec(ctx, `
@@ -98,6 +98,60 @@ ON CONFLICT (name) DO UPDATE
 		return 0, err
 	}
 	return imported, nil
+}
+
+// pruneStaleRules 清理本轮已不在上游集合内的同源规则。
+//
+// 两件事必须在这里做，否则「命中表莫名其妙变少」会再次成为无据可查的悬案：
+//  1. 删除规则会通过 fingerprint_hits.rule_id 的外键 ON DELETE CASCADE 连带
+//     删掉这些规则的历史命中行——这是静默的，任何日志里都不会出现；
+//  2. 上游拉取被截断（代理超时、CDN 返回半截 JSON）时，规则集合会「合法地」
+//     少掉一大片，按差集删下去等于把规则库和命中历史一起推平。所以集合大幅
+//     收缩时只告警不删除，宁可留几条过时规则，也不要丢掉已经验证过的历史。
+func (r *fingerprintSyncRepo) pruneStaleRules(ctx context.Context, tx pgx.Tx, source string, names []string) (int64, error) {
+	var existing int
+	if err := tx.QueryRow(ctx,
+		`SELECT count(*) FROM fingerprint_rules WHERE source = $1`, source).Scan(&existing); err != nil {
+		return 0, fmt.Errorf("统计同源规则: %w", err)
+	}
+	if existing == 0 {
+		return 0, nil
+	}
+	// 20% 收缩阈值：正常的上游迭代是几十条级的增删，成片消失多半是抓取不完整。
+	if shouldSkipPrune(existing, len(names)) {
+		log.Printf("[FpSync] 规则集合异常收缩，跳过失效清理: source=%s 库内 %d 条，本轮 %d 条（可能上游抓取不完整；如需强制清理请先核对来源）",
+			source, existing, len(names))
+		return 0, nil
+	}
+
+	// 先数出将被级联删除的命中行，让「删规则」这件事的副作用可审计。
+	var cascaded int64
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*) FROM fingerprint_hits fh
+		  JOIN fingerprint_rules fr ON fr.id = fh.rule_id
+		 WHERE fr.source = $1 AND fr.name <> ALL($2::text[])`,
+		source, names).Scan(&cascaded); err != nil {
+		return 0, fmt.Errorf("统计失效规则命中: %w", err)
+	}
+	tag, err := tx.Exec(ctx,
+		`DELETE FROM fingerprint_rules WHERE source = $1 AND name <> ALL($2::text[])`,
+		source, names)
+	if err != nil {
+		return 0, fmt.Errorf("清理失效规则: %w", err)
+	}
+	if n := tag.RowsAffected(); n > 0 || cascaded > 0 {
+		log.Printf("[FpSync] 清理失效规则: source=%s 删除规则 %d 条，连带删除历史命中 %d 行", source, n, cascaded)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// shouldSkipPrune 判断本轮规则集合是否「收缩得不正常」，不该按差集删除。
+// 抽成纯函数是为了能单测：这个阈值的判断错了会静默毁掉规则库和命中历史。
+func shouldSkipPrune(existing, incoming int) bool {
+	if existing < 50 {
+		return false // 小集合（自定义规则）波动正常，按差集清理即可
+	}
+	return incoming*5 < existing*4
 }
 
 func (r *fingerprintSyncRepo) CountBySource(ctx context.Context) (map[string]int, error) {

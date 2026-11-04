@@ -261,6 +261,8 @@ func probeOne(ctx context.Context, client *http.Client, url string) (Observation
 		}
 	}
 	obs.HeaderText = hb.String()
+	// HTTP 的 banner = 状态行 + 响应头，否则 banner-only 规则永远不会命中。
+	obs.Banner = HTTPBanner(resp.Status, obs.HeaderText)
 	if m := titleRE.FindStringSubmatch(body); len(m) == 2 {
 		obs.Title = strings.TrimSpace(m[1])
 	}

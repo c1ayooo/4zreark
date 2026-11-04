@@ -43,11 +43,14 @@ func TestMCPInitializeNegotiatesProtocol(t *testing.T) {
 
 func TestMCPToolsListIsWellFormed(t *testing.T) {
 	s := NewMCPService()
+	// tools/list 现在按 key 权限过滤：只读 key 只能看到自己有权调用的工具，
+	// 数量断言改在「全权限 key」上对齐注册表；过滤语义见 TestMCPToolsListFilteredByScopes。
+	fullKey := &repo.APIKey{ID: 1, Scopes: AllScopes()}
 	resp, err := s.Handle(context.Background(), &RPCRequest{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"abc"`),
 		Method:  "tools/list",
-	}, &repo.APIKey{ID: 1, Scopes: []string{ScopeAssetsRead}})
+	}, fullKey)
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -59,6 +62,22 @@ func TestMCPToolsListIsWellFormed(t *testing.T) {
 	}
 	if len(tools) < 60 {
 		t.Fatalf("工具数量 = %d，扩展后应覆盖 60+", len(tools))
+	}
+
+	// 只读 key 的 tools/list 是全量集合的真子集，且只含授权工具。
+	roResp, _ := s.Handle(context.Background(), &RPCRequest{
+		JSONRPC: "2.0", ID: json.RawMessage(`"ro"`), Method: "tools/list",
+	}, &repo.APIKey{ID: 2, Scopes: []string{ScopeAssetsRead}})
+	roTools, _ := roResp.Result.(map[string]any)["tools"].([]mcpTool)
+	if len(roTools) == 0 || len(roTools) >= len(reg) {
+		t.Fatalf("只读 key 应看到非空真子集，实际 %d/%d", len(roTools), len(reg))
+	}
+	for _, tool := range roTools {
+		for _, h := range reg {
+			if h.Tool.Name == tool.Name && !keyAllowsTool(&repo.APIKey{ID: 2, Scopes: []string{ScopeAssetsRead}}, h) {
+				t.Fatalf("只读 key 不应看到工具 %s", tool.Name)
+			}
+		}
 	}
 
 	names := make(map[string]bool, len(reg))

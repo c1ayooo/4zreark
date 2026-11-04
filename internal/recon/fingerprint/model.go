@@ -108,6 +108,30 @@ func (o Observation) getValue(field string) (string, bool) {
 	}
 }
 
+// maxBannerLen 限制 banner 文本长度：规则匹配是子串/正则扫描，头部再多也没有
+// 额外价值，反而让 8110 条规则每次命中都多扫几十 KB。
+const maxBannerLen = 8 << 10
+
+// HTTPBanner 拼出 HTTP 观测的 banner 文本（状态行 + 响应头）。
+//
+// 规则集里有 1393 条（17.8%）表达式只带 banner 条件，而两条 HTTP 观测路径
+// 此前都不填 Observation.Banner，这批规则在网页链路上永远命中不到——规则在，
+// 却等于没有。HTTP 的 banner 本身就是「状态行 + 头」，按同一口径喂进去即可
+// 复用它们；SSH-2.0 这类非 HTTP 专有串不会出现在这里，不会造成跨协议误报。
+func HTTPBanner(statusText, headerText string) string {
+	var b strings.Builder
+	if s := strings.TrimSpace(statusText); s != "" {
+		b.WriteString(s)
+		b.WriteString("\r\n")
+	}
+	b.WriteString(headerText)
+	out := b.String()
+	if len(out) > maxBannerLen {
+		out = out[:maxBannerLen]
+	}
+	return out
+}
+
 // Match 单条命中结果。
 type Match struct {
 	Product     string  `json:"product"`

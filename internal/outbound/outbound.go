@@ -285,12 +285,35 @@ func (r *Resolver) ProxyFuncFor(ctx context.Context, module string) func(*http.R
 
 // HTTPClient 按模块代理构造带超时的客户端，供按请求新建客户端的出网点使用。
 // 安全审计 M3：直连时挂连接级校验（Dialer.Control），每个实际连接（含重定向
-// 每一跳）在 connect 前被校验——DNS rebinding 窗口不复存在。经代理出站时
-// 目标校验由代理出口策略承接（Control 看到的是代理地址）。
+// 每一跳）在 connect 前被校验——DNS rebinding 窗口不复存在。
+//
+// 代理两种来源都要照顾：模块自定义代理，以及「跟随全局/未配置」时退化成
+// http.ProxyFromEnvironment 的环境代理。后者在请求期才决定是否走代理，不能靠
+// resolve() 的 proxy==nil 判断直连——此前的写法会同时挂上 Control，结果代理
+// 地址（本机 127.0.0.1:xxxx 或内网出口）被当成 SSRF 目标拒绝，配了代理后
+// 所有出网请求 100% 失败。现在统一用代理感知 Dialer，目标校验前置到 Proxy 函数。
 func (r *Resolver) HTTPClient(ctx context.Context, module string, timeout time.Duration) *http.Client {
-	tr := &http.Transport{Proxy: r.ProxyFuncFor(ctx, module)}
-	if _, proxy, err := r.resolve(ctx, module); err == nil && proxy == nil {
-		tr.DialContext = safehttp.NewDialer(safeModeFor(module), timeout).DialContext
+	mode := safeModeFor(module)
+	proxyFn := r.ProxyFuncFor(ctx, module)
+	tr := &http.Transport{}
+	if proxyFn != nil {
+		tr.Proxy = func(req *http.Request) (*url.URL, error) {
+			u, err := proxyFn(req)
+			if err != nil {
+				return nil, err
+			}
+			// 无论最终走代理还是直连，都先校验目标主机：走代理时 Control 只看得到
+			// 代理地址，这一步是唯一的目标闸口。
+			if herr := safehttp.CheckHost(mode, req.URL.Hostname()); herr != nil {
+				return nil, herr
+			}
+			return u, nil
+		}
+	}
+	if mode == safehttp.ModePermissive {
+		tr.DialContext = safehttp.NewDialer(mode, timeout).DialContext
+	} else {
+		tr.DialContext = safehttp.NewProxyAwareDialer(mode, timeout).DialContext
 	}
 	c := &http.Client{Transport: tr}
 	if timeout > 0 {

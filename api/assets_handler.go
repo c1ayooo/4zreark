@@ -370,8 +370,16 @@ func (h *AssetHandler) ImportAssets(c *gin.Context) {
 }
 
 func importMessage(res *repo.ImportResult) string {
-	return "导入 " + strconv.Itoa(res.Records) + " 条，新增站点 " + strconv.Itoa(res.NewSites) +
+	msg := "导入 " + strconv.Itoa(res.Records) + " 条，新增站点 " + strconv.Itoa(res.NewSites) +
 		" 个、入口 " + strconv.Itoa(res.NewEndpoints) + " 个，重复 " + strconv.Itoa(res.DupRecords) + " 条"
+	// 命中数写进返回文案：指纹识别到了却没落库，用户此前只能在库里翻表才能发现。
+	if res.FingerprintHits > 0 {
+		msg += "，指纹命中 " + strconv.Itoa(res.FingerprintHits) + " 条"
+	}
+	if res.UnmatchedRules > 0 {
+		msg += "，" + strconv.Itoa(res.UnmatchedRules) + " 个指纹名未收录规则库"
+	}
+	return msg
 }
 
 // PreviewImport 两段式导入第一步：只校验/去重/抽样，不写库。

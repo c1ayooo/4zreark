@@ -33,6 +33,7 @@ func (s *StringList) UnmarshalYAML(value *yaml.Node) error {
 type FingerprintRule struct {
 	ID        string     `yaml:"-"`         // Rule ID (from map key)
 	Name      string     `yaml:"-"`         // Rule name (same as ID)
+	Source    string     `yaml:"-"`         // 规则来源：fingerprint / sensitive（后者是泄露特征，不是技术栈）
 	DSL       StringList `yaml:"dsl"`       // DSL expressions for matching
 	Condition string     `yaml:"condition"` // "and" or "or", default is "or"
 	Category  string     `yaml:"category"`  // Technology category
@@ -53,6 +54,10 @@ type FingerprintMatch struct {
 	Tags       []string  `json:"tags,omitempty"`
 	Confidence int       `json:"confidence"`
 	Method     string    `json:"method"` // passive, active, icon
+	// Source 区分「技术栈」与「泄露特征」：sensitive.yaml 里的条目是内容泄露
+	// 特征（邮箱、私钥、内网 IP、Linkfinder 这类提取器），命中了不等于站点
+	// 用了该技术，不能写进 sites.tech。
+	Source string `json:"source,omitempty"`
 }
 
 // HTTPResponse represents an HTTP response for fingerprint analysis

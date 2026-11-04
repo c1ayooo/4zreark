@@ -6,6 +6,7 @@ require (
 	github.com/PuerkitoBio/goquery v1.11.0
 	github.com/dop251/goja v0.0.0-20261020093122-b80de0ee7a14
 	github.com/dop251/goja_nodejs v0.0.0-20260918173711-b481721df8a2
+	github.com/fumiama/go-docx v0.0.0-20250506085032-0c30fd09304b
 	github.com/gin-gonic/gin v1.9.1
 	github.com/go-rod/rod v0.116.2
 	github.com/golang-jwt/jwt/v5 v5.2.2
@@ -41,7 +42,6 @@ require (
 	github.com/chenzhuoyu/base64x v0.0.0-20221115062448-fe3a3abad311 // indirect
 	github.com/dlclark/regexp2/v2 v2.8.1 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
-	github.com/fumiama/go-docx v0.0.0-20250506085032-0c30fd09304b // indirect
 	github.com/fumiama/imgsz v0.0.2 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.2 // indirect
 	github.com/gin-contrib/sse v0.1.0 // indirect

@@ -329,6 +329,30 @@ func main() {
 	defer retentionService.Stop()
 	log.Println("Data retention scheduler started")
 
+	// 内置指纹种子落库：只补 source='seed'，不动 dddd 与上游同源规则。
+	// 启动流程不能调 SyncEmbedded（会覆盖上游 dddd），但种子也因此长期没进库，
+	// 命中结果映射不到 rule_id。这里单独补一次，幂等（按 name/rule_hash upsert）。
+	if r := repo.Default(); r != nil {
+		seedCtx, cancelSeed := context.WithTimeout(context.Background(), 90*time.Second)
+		if st, err := service.NewFingerprintSyncService().SyncSeedRules(seedCtx); err != nil {
+			log.Printf("Warning: 内置指纹种子落库失败: %v", err)
+		} else if st.Rules > 0 {
+			log.Printf("内置指纹种子已落库: 规则 %d 条，写入 %d 条，同名合并 %d，跳过 %d",
+				st.Rules, st.Imported, st.Merged, st.Skipped)
+		}
+		cancelSeed()
+	}
+
+	// 技术栈画像清洗：历史上敏感特征名（Linkfinder 等）被当成技术栈写入，
+	// tech 只增不减，不清就永远留在画像里。扫描侧已禁止写入，这里清存量。
+	if r := repo.Default(); r != nil {
+		cleanCtx, cancelClean := context.WithTimeout(context.Background(), 60*time.Second)
+		if _, err := service.CleanupNonTechLabels(cleanCtx); err != nil {
+			log.Printf("Warning: 技术栈画像清洗失败: %v", err)
+		}
+		cancelClean()
+	}
+
 	// Start fingerprint upstream sync（wappalyzergo / webanalyze / dddd，24h）
 	log.Println("Starting fingerprint upstream sync...")
 	fpUpstreamService := service.NewFingerprintUpstreamService()

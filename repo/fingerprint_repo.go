@@ -96,8 +96,10 @@ type FingerprintRepo interface {
 
 	// SaveHits 覆盖写：命中集合以本次匹配结果为准。
 	SaveHits(ctx context.Context, siteID int64, ruleIDs []string, recordID *int64, evidence map[string]any) error
-	// PruneHits 删除本次没再命中的规则，避免指纹变了以后命中表老化。
-	PruneHits(ctx context.Context, siteID int64, keep []string) (int64, error)
+	// PruneHits 删除「本次评估过、但这次没再命中」的规则，避免指纹变了以后命中表老化。
+	// universe 是本轮实际参与判定的规则全集：清理必须限定在它里面，否则会把
+	// 另一条写入路径（扫描器引擎按名称写的命中）的记录一起删掉。
+	PruneHits(ctx context.Context, siteID int64, keep, universe []string) (int64, error)
 	ListHits(ctx context.Context, siteID int64) ([]*FpHit, error)
 
 	// UpdateSiteProfile 回写站点的标题 / Server / 技术栈（探测时顺手更新）。
@@ -304,10 +306,21 @@ func (r *fingerprintRepo) DeleteRule(ctx context.Context, name string) error {
 	return nil
 }
 
+// HitSourceProbe 标记「由探测侧 DSL 匹配器写入」的命中行。
+// 命中表有两个写入方：扫描器引擎（按规则名写，evidence.source = 采集来源）和
+// 探测复核（按规则 ID 写）。两套匹配器的规则宇宙不同，谁能断言「这条指纹没了」
+// 只能是它自己写过的那部分，否则两边会互相抹掉对方的结论。
+const HitSourceProbe = "dsl_probe"
+
 func (r *fingerprintRepo) SaveHits(ctx context.Context, siteID int64, ruleIDs []string, recordID *int64, evidence map[string]any) error {
 	if len(ruleIDs) == 0 {
 		return nil
 	}
+	if evidence == nil {
+		evidence = map[string]any{}
+	}
+	// 打上本写入方的标记，PruneHits 据此划清清理边界。
+	evidence["source"] = HitSourceProbe
 	ev, err := jsonb(evidence)
 	if err != nil {
 		return err
@@ -323,11 +336,34 @@ func (r *fingerprintRepo) SaveHits(ctx context.Context, siteID int64, ruleIDs []
 	return err
 }
 
-func (r *fingerprintRepo) PruneHits(ctx context.Context, siteID int64, keep []string) (int64, error) {
+// PruneHits 清理「本轮评估过、但没命中」的规则。
+//
+// 三重边界，少一个就会误删别人的结论：
+//   - rule_id 属于 universe（本轮真正参与判定的规则集合）；
+//   - rule_id 不在 keep（本轮命中的集合）里；
+//   - 该行是本探测路径写的（evidence.source = dsl_probe）。
+//
+// 前两版只做第二条件，等价于「删掉这个站点除本次命中以外的所有命中行」。
+// 而扫描器引擎是按规则名写命中的，它的结论探测侧不一定复现得出来，于是探活
+// 复核一跑就把扫描阶段写进去的命中整片抹掉，表现为「任务日志说命中 N 行，
+// 库里却是 0 行」，而且没有任何报错。universe 为空（规则库没加载出来）时一条都不删。
+func (r *fingerprintRepo) PruneHits(ctx context.Context, siteID int64, keep, universe []string) (int64, error) {
+	if len(universe) == 0 {
+		return 0, nil
+	}
+	// nil 切片会被 pgx 编成 SQL NULL，`not (rule_id = any(NULL))` 求值为 NULL，
+	// 整条 DELETE 变成 0 行——「本轮一条都没命中」时该清的反而不清。
+	// 这里统一成空数组，语义即「keep 为空 = 本轮没有任何命中」。
+	if keep == nil {
+		keep = []string{}
+	}
 	tag, err := r.r.pool.Exec(ctx,
 		`delete from fingerprint_hits
-		  where site_id = $1 and ($2::char(24)[] is null or rule_id <> all($2::char(24)[]))`,
-		siteID, keep)
+		  where site_id = $1
+		    and rule_id = any($3::char(24)[])
+		    and not (rule_id = any($2::char(24)[]))
+		    and coalesce(evidence->>'source', '') = $4`,
+		siteID, keep, universe, HitSourceProbe)
 	if err != nil {
 		return 0, err
 	}

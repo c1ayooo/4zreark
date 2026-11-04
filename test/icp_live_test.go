@@ -35,7 +35,7 @@ func TestICPOfficialQueryLive(t *testing.T) {
 	svc.SetPagePacing(0) // 页间不额外等待；请求级 5s 限速仍生效
 
 	start := time.Now()
-	q, err := svc.Enqueue(ctx, projectID, "深圳市腾讯计算机系统有限公司", 1, 5)
+	q, err := svc.Enqueue(ctx, projectID, "深圳市腾讯计算机系统有限公司", 1, 5, false, 0)
 	if err != nil {
 		t.Fatalf("入队失败: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestICPOfficialQueryLive(t *testing.T) {
 	}
 
 	// 排队中取消：不产生上游请求。
-	q2, err := svc.Enqueue(ctx, projectID, "深圳市腾讯计算机系统有限公司", 1, 5)
+	q2, err := svc.Enqueue(ctx, projectID, "深圳市腾讯计算机系统有限公司", 1, 5, false, 0)
 	if err != nil {
 		t.Fatalf("第二次入队失败: %v", err)
 	}

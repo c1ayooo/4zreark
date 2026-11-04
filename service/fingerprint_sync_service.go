@@ -72,6 +72,40 @@ func (s *FingerprintSyncService) SyncEmbedded(ctx context.Context) ([]FpSyncStat
 	return out, nil
 }
 
+// SyncSeedRules 只把内置种子（source='seed'）落库，不碰 dddd 与上游来源。
+//
+// 为什么单独开一个入口：启动流程刻意不调用 SyncEmbedded，因为那会用二进制内的
+// dddd 快照覆盖已从上游更新过的同源规则（见 FingerprintUpstreamService.Start
+// 的注释）。代价是种子组一起被跳过——fingerprint_rules 里只有 dddd 与
+// wappalyzergo，种子 279 条一条都没进库。规则在内存里照样参与匹配，但命中结果
+// 写 fingerprint_hits 时按 name 映射不到 rule_id，只能被丢弃；治理页也看不到、
+// 改不了这些规则。
+//
+// repo.ImportUpstream 的 upsert 带 `WHERE source = EXCLUDED.source` 守卫，
+// 同名规则若已被上游占用不会被覆盖，因此这里按 name 冲突自然退让是安全的。
+func (s *FingerprintSyncService) SyncSeedRules(ctx context.Context) (FpSyncStats, error) {
+	r := repo.Default()
+	if r == nil {
+		return FpSyncStats{}, errors.New("数据层未初始化")
+	}
+	for _, g := range groupEmbeddedRules(reconfp.DefaultRuleSet()) {
+		if g.source != "seed" {
+			continue
+		}
+		imported, err := r.FingerprintSync().ImportUpstream(
+			ctx, g.source, g.upstreamURL, g.contentHash, g.rules, g.skipped)
+		if err != nil {
+			return FpSyncStats{Source: g.source, Rules: len(g.rules)}, err
+		}
+		NewFingerprintService().Invalidate()
+		return FpSyncStats{
+			Source: g.source, Rules: len(g.rules), Imported: imported,
+			Skipped: g.skipped, Merged: g.merged,
+		}, nil
+	}
+	return FpSyncStats{Source: "seed"}, nil
+}
+
 // groupEmbeddedRules 按来源分组并按 name 合并表达式。
 // 同名的多条规则合并成一条 OR 表达式，避免 fingerprint_rules.name 唯一约束
 // 让后面的规则被静默丢弃。

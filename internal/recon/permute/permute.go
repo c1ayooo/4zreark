@@ -27,6 +27,19 @@ var commonWords = []string{
 var digits = []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "01", "02", "03"}
 var years = []string{"2019", "2020", "2021", "2022", "2023", "2024", "2025", "2026"}
 
+// swapPairs 是语义对仗定向替换表：只替换已知子域中真实出现的词。
+// 两侧词全部取自 commonWords，不引入新词表；替换对象是真实观测到的子域
+// 而非词表组合，命中真实环境的概率远高于纯组合派生，因此排在组合阶段
+// 之前消费预算。产出规模天然有界：已知子域数 × token 数 × 组数。
+var swapPairs = [][2]string{
+	{"dev", "prod"}, {"dev", "test"}, {"test", "prod"}, {"test", "api"},
+	{"uat", "prod"}, {"uat", "test"}, {"sit", "uat"}, {"stage", "prod"},
+	{"staging", "prod"}, {"pre", "prod"}, {"preprod", "prod"}, {"demo", "prod"},
+	{"beta", "prod"}, {"beta", "alpha"}, {"internal", "intranet"},
+	{"api", "gateway"}, {"ci", "cd"}, {"git", "gitlab"}, {"mail", "smtp"},
+	{"img", "static"}, {"app", "mobile"}, {"open", "api"},
+}
+
 // Generate 从已知子域派生候选。knownSubs 应为完整主机名（含 base 域）；
 // base 为枚举主域。maxCandidates<=0 时按 20000 兜底。返回去重后的完整候选名
 // （不含已知子域本身；单字符 token 派生直接丢弃——泛解析噪声，见 srcradar §八-1）。
@@ -74,6 +87,37 @@ func Generate(knownSubs []string, base string, maxCandidates int) []string {
 		candidates[name] = true
 		return true
 	}
+
+	// 阶段 1：语义对仗定向替换（价值密度最高，优先消费预算）。
+	// api.dev.example.com → api.prod.example.com；只动真实观测到的子域。
+	for _, sub := range knownSubs {
+		tokens := extractTokens(strings.ToLower(strings.TrimSuffix(strings.TrimSpace(sub), ".")), base)
+		if len(tokens) == 0 {
+			continue
+		}
+		for ti, tok := range tokens {
+			for _, pair := range swapPairs {
+				alt := ""
+				switch tok {
+				case pair[0]:
+					alt = pair[1]
+				case pair[1]:
+					alt = pair[0]
+				}
+				if alt == "" {
+					continue
+				}
+				swapped := make([]string, len(tokens))
+				copy(swapped, tokens)
+				swapped[ti] = alt
+				if !add(strings.Join(swapped, ".") + "." + base) {
+					break
+				}
+			}
+		}
+	}
+
+	// 阶段 2：常见词组合派生。
 	outer := true
 	for _, w := range wordList {
 		if !outer {

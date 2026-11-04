@@ -11,11 +11,19 @@ import (
 type RoleRepo interface {
 	Permissions(ctx context.Context, role string) ([]string, error)
 	HasPermission(ctx context.Context, role, code string) (bool, error)
+	// Exists 判断角色是否已定义（user 写角色前的白名单校验，审计 H-2）。
+	Exists(ctx context.Context, role string) (bool, error)
 }
 
 type roleRepo struct{ r *Repo }
 
 func (r *Repo) Roles() RoleRepo { return &roleRepo{r: r} }
+
+func (r *roleRepo) Exists(ctx context.Context, role string) (bool, error) {
+	var ok bool
+	err := r.r.pool.QueryRow(ctx, `select exists(select 1 from roles where name=$1)`, role).Scan(&ok)
+	return ok, err
+}
 
 func (r *roleRepo) Permissions(ctx context.Context, role string) ([]string, error) {
 	var perms []string

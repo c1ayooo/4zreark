@@ -406,11 +406,11 @@ func (u *Updater) runSource(ctx context.Context, src upstreamSource, token strin
 	meta, _, _ := u.store.GetSourceMeta(ctx, src.Name)
 	client := u.httpClient()
 
-	var lastErr error
+	var errs []string
 	for _, candidate := range src.Candidates {
 		data, err := fetchUpstream(ctx, candidate, token, client)
 		if err != nil {
-			lastErr = fmt.Errorf("%s: %w", shortURL(candidate), err)
+			errs = append(errs, fmt.Sprintf("%s: %v", shortURL(candidate), err))
 			continue
 		}
 		sum := sha256.Sum256(data)
@@ -443,11 +443,21 @@ func (u *Updater) runSource(ctx context.Context, src upstreamSource, token strin
 		return so
 	}
 	// 上游全部不可达(离线常态):有快照的来源兜底导入,保证开箱即用。
-	if lastErr != nil && len(src.Snapshot) > 0 {
-		return u.importSnapshot(ctx, src)
+	// 所有候选的失败原因一起返回：候选顺序是 raw→raw→jsdelivr，只保留最后一个
+	// 会让日志把首个候选的 DNS 问题误报成 CDN 故障。
+	cause := ""
+	if len(errs) > 0 {
+		cause = "上游全部候选不可达: " + strings.Join(errs, " | ")
 	}
-	if lastErr != nil {
-		so.Error = lastErr.Error()
+	if cause != "" && len(src.Snapshot) > 0 {
+		fb := u.importSnapshot(ctx, src)
+		if fb.Error == "" {
+			fb.Error = cause + "；已用内置快照兜底"
+		}
+		return fb
+	}
+	if cause != "" {
+		so.Error = cause
 	}
 	return so
 }

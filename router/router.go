@@ -99,6 +99,15 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				apiKeyGroup.DELETE("/:id", middleware.AdminMiddleware(), apiKeyHandler.DeleteAPIKey)
 			}
 
+			// MCP 治理面（仅管理员）：工具总闸 + 速率配额
+			mcpGov := api.NewMCPGovernanceHandler()
+			mcpGovGroup := protected.Group("/mcp-governance")
+			{
+				mcpGovGroup.GET("", middleware.AdminMiddleware(), mcpGov.Overview)
+				mcpGovGroup.PUT("/tools/:name", middleware.AdminMiddleware(), mcpGov.SetToolEnabled)
+				mcpGovGroup.PUT("/rate-limit", middleware.AdminMiddleware(), mcpGov.UpdateRateLimit)
+			}
+
 			// Asset governance routes（ScopesHub 复刻 P0）
 			assetHandler := api.NewAssetHandler()
 			verificationHandler := api.NewVerificationHandler()
@@ -642,6 +651,9 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 			protected.GET("/icp/queries", middleware.RequirePermission("digital:read"), icpHandler.List)
 			protected.GET("/icp/queries/:id", middleware.RequirePermission("digital:read"), icpHandler.Get)
 			protected.POST("/icp/queries/:id/cancel", middleware.RequirePermission("run:execute"), icpHandler.Cancel)
+			// 备案结果回灌种子：把 icp_filings 里的域名变成 domain 种子 + 监控计划，
+			// 补上「查完就停」的断点。写种子，因此用 seed:write。
+			protected.POST("/icp/queries/:id/promote", middleware.RequirePermission("seed:write"), icpHandler.Promote)
 
 			// 通知管理
 			notifyHandler := api.NewNotifyHandler()

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/c1ayooo/4zreark/config"
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/repo"
 )
@@ -118,11 +119,127 @@ func (s *MCPService) toolRegistry() []mcpToolHandler {
 	return out
 }
 
-func (s *MCPService) toolList() []mcpTool {
+// mcpGovernance 是治理面（工具总闸 + 速率配额）的数据入口；
+// 返回 nil 表示治理面不可用（无 DB 的单测/降级路径），语义为放行。
+var mcpGovernance = func() repo.MCPGovernanceRepo {
+	r := repo.Default()
+	if r == nil {
+		return nil
+	}
+	return r.MCPGovernance()
+}
+
+// MCPDefaultRateLimit 与 config.MCPConfig.RateLimitPerMin 的兜底值保持一致。
+const MCPDefaultRateLimit = 60
+
+// keyAllowsTool 是 key 的 scope 校验：Scopes 全满足 + AnyScopes 至少满足一个。
+func keyAllowsTool(key *repo.APIKey, h mcpToolHandler) bool {
+	if key == nil {
+		return true // 防御路径：无 key 上下文时不过滤（tools/call 会另行拒绝）
+	}
+	for _, scope := range h.Scopes {
+		if !hasScope(key, scope) {
+			return false
+		}
+	}
+	if len(h.AnyScopes) > 0 {
+		allowed := false
+		for _, scope := range h.AnyScopes {
+			if hasScope(key, scope) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return false
+		}
+	}
+	return true
+}
+
+// toolVisibleTo 综合总闸与 key 权限判断工具是否应出现在 tools/list。
+// 治理面不可用时只按权限过滤。
+func (s *MCPService) toolVisibleTo(ctx context.Context, key *repo.APIKey, h mcpToolHandler) bool {
+	if !keyAllowsTool(key, h) {
+		return false
+	}
+	g := mcpGovernance()
+	if g == nil {
+		return true
+	}
+	enabled, err := g.ToolEnabled(ctx, h.Tool.Name)
+	if err != nil || enabled {
+		return true // 查询失败放行，不因治理面故障放大成工具不可用
+	}
+	return false
+}
+
+// ErrMCPToolDisabled 表示工具被管理员总闸停用（与 key 权限无关）。
+var ErrMCPToolDisabled = errors.New("该工具已被管理员停用")
+
+// ErrMCPRateLimited 表示该 key 触发分钟级速率配额。
+type ErrMCPRateLimited struct {
+	RetryAfterSeconds int
+}
+
+func (e *ErrMCPRateLimited) Error() string {
+	return fmt.Sprintf("调用过于频繁，请 %d 秒后重试", e.RetryAfterSeconds)
+}
+
+// ConsumeCallQuota 对一次 tools/call 扣减分钟级配额。返回 nil 表示放行；
+// 返回 *ErrMCPRateLimited 表示超限（调用方转 HTTP 429 + Retry-After）。
+// 上限读治理设置（app_settings），管理员调整立即生效；
+// 治理面不可用或查询失败时放行：鉴权已保证 DB 可用，配额只是运营护栏，
+// 不应把瞬时故障放大成 MCP 整体不可用。
+func (s *MCPService) ConsumeCallQuota(ctx context.Context, key *repo.APIKey) error {
+	if key == nil {
+		return nil
+	}
+	limitPerMin := MCPDefaultRateLimit
+	if cfg := config.Loaded(); cfg != nil && cfg.MCP.RateLimitPerMin > 0 {
+		limitPerMin = cfg.MCP.RateLimitPerMin
+	}
+	if gs, err := NewMCPGovernanceService().LoadSettings(ctx); err == nil && gs.RateLimitPerMin > 0 {
+		limitPerMin = gs.RateLimitPerMin
+	}
+	g := mcpGovernance()
+	if g == nil {
+		return nil
+	}
+	count, err := g.ConsumeQuota(ctx, key.ID)
+	if err != nil {
+		return nil
+	}
+	if count > int64(limitPerMin) {
+		bucketEnd := (time.Now().Unix()/60 + 1) * 60
+		return &ErrMCPRateLimited{RetryAfterSeconds: int(bucketEnd - time.Now().Unix())}
+	}
+	return nil
+}
+
+// MCPToolMeta 是治理面需要的工具元数据（不含实现）。
+type MCPToolMeta struct {
+	Name        string   `json:"name"`
+	Title       string   `json:"title,omitempty"`
+	Description string   `json:"description"`
+	Scopes      []string `json:"scopes"`
+	AnyScopes   []string `json:"any_scopes,omitempty"`
+	Write       bool     `json:"write"`
+}
+
+// ToolMetas 返回注册表全部工具的元数据，治理页与 scope 校验共用。
+func (s *MCPService) ToolMetas() []MCPToolMeta {
 	reg := s.toolRegistry()
-	out := make([]mcpTool, 0, len(reg))
+	out := make([]MCPToolMeta, 0, len(reg))
 	for _, h := range reg {
-		out = append(out, h.Tool)
+		out = append(out, MCPToolMeta{
+			Name:        h.Tool.Name,
+			Title:       h.Tool.Title,
+			Description: h.Tool.Description,
+			Scopes:      h.Scopes,
+			AnyScopes:   h.AnyScopes,
+			Write:       h.Tool.Annotations["readOnlyHint"] != true,
+		})
 	}
 	return out
 }
@@ -146,13 +263,26 @@ func (s *MCPService) Handle(ctx context.Context, req *RPCRequest, key *repo.APIK
 	case "ping":
 		resp.Result = map[string]any{}
 	case "tools/list":
-		resp.Result = map[string]any{"tools": s.toolList()}
+		resp.Result = map[string]any{"tools": s.visibleTools(ctx, key)}
 	case "tools/call":
 		resp.Result = s.callTool(ctx, key, req.Params)
 	default:
 		return rpcError(req, -32601, "未知方法: "+req.Method), nil
 	}
 	return resp, nil
+}
+
+// visibleTools 是按 key 过滤后的 tools/list：无权工具与被总闸停用的工具
+// 都不出现，Agent 端只见可用面，提示词空间也随之收敛。
+func (s *MCPService) visibleTools(ctx context.Context, key *repo.APIKey) []mcpTool {
+	reg := s.toolRegistry()
+	out := make([]mcpTool, 0, len(reg))
+	for _, h := range reg {
+		if s.toolVisibleTo(ctx, key, h) {
+			out = append(out, h.Tool)
+		}
+	}
+	return out
 }
 
 func rpcError(req *RPCRequest, code int, msg string) *RPCResponse {
@@ -211,6 +341,11 @@ func (s *MCPService) callTool(ctx context.Context, key *repo.APIKey, params json
 	for _, h := range s.toolRegistry() {
 		if h.Tool.Name != call.Name {
 			continue
+		}
+		if g := mcpGovernance(); g != nil {
+			if enabled, err := g.ToolEnabled(ctx, h.Tool.Name); err == nil && !enabled {
+				return toolError(ErrMCPToolDisabled.Error())
+			}
 		}
 		for _, scope := range h.Scopes {
 			if !hasScope(key, scope) {

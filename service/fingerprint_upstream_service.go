@@ -186,11 +186,14 @@ func (s *FingerprintUpstreamService) runSource(ctx context.Context, syncRepo rep
 		client = outbound.HTTPClient("fingerprint_sync", fpUpstreamTimeout)
 	}
 
-	var lastErr error
+	// 每个候选的失败都要留下来：只保留最后一个候选的错误时，raw.githubusercontent
+	// 解析失败会被 jsdelivr 的报错覆盖，日志看起来像「jsdelivr 挂了」，实际根因在
+	// 第一个候选。上游多候选是常态，聚合才能定位。
+	var errs []string
 	for _, rawURL := range src.URLs {
 		data, err := fetchFpUpstream(ctx, client, rawURL, token)
 		if err != nil {
-			lastErr = fmt.Errorf("%s: %w", shortFpURL(rawURL), err)
+			errs = append(errs, fmt.Sprintf("%s: %v", shortFpURL(rawURL), err))
 			continue
 		}
 		sum := sha256.Sum256(data)
@@ -230,11 +233,21 @@ func (s *FingerprintUpstreamService) runSource(ctx context.Context, syncRepo rep
 	}
 
 	// 上游全部不可达：有内置快照的来源兜底，其余保留旧规则。
-	if len(src.Snapshot) > 0 {
-		return s.importSnapshot(ctx, syncRepo, src, meta)
+	// 兜底不是「成功」——把每个候选的失败原因带回去，否则日志里只看到
+	// reason=snapshot/imported，像是上游同步正常，实际一条都没拉到。
+	cause := ""
+	if len(errs) > 0 {
+		cause = "上游全部候选不可达: " + strings.Join(errs, " | ")
 	}
-	if lastErr != nil {
-		out.Error = lastErr.Error()
+	if len(src.Snapshot) > 0 {
+		fb := s.importSnapshot(ctx, syncRepo, src, meta)
+		if cause != "" && fb.Error == "" {
+			fb.Error = cause + "；已用内置快照兜底"
+		}
+		return fb
+	}
+	if cause != "" {
+		out.Error = cause
 	}
 	return out
 }

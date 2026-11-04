@@ -1,0 +1,49 @@
+# CI：每个 PR / 主分支提交跑编译、静态检查与全量测试。
+#
+# 为什么单独加这条流水线：此前仓库只有 release.yml，唯一的质量门禁是
+# `go build`。后果是 schema 漂移（sites 缺 5 列、site_endpoints 结构过期）
+# 一路带到运行时——服务启动正常、端口正常、任务显示 completed，但扫描结果
+# 一条都写不进去，只能靠人工连库对比列名才发现。216 个测试文件当时形同虚设。
+#
+# 只跑后端：前端构建已在 release 流水线与本地 npm run build 覆盖，且前端
+# 构建耗时远高于后端测试，放在每次提交里收益不成比例。
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+    paths-ignore: ["**/*.md", "docs/**"]
+  pull_request:
+    branches: ["main", "master"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: build / vet / test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go build
+        run: go build ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        # -count=1 关掉测试缓存：命中缓存会让「上次通过」掩盖本次改动引入的回归。
+        run: go test ./... -count=1

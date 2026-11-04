@@ -87,16 +87,15 @@ func (s *FingerprintService) LoadRules(ctx context.Context) ([]*repo.FpRule, err
 }
 
 // Match 对快照跑一遍规则，返回命中的规则 ID 与技术栈名。
-func (s *FingerprintService) Match(ctx context.Context, snap ResponseSnapshot) ([]string, []string, error) {
+// Match 用规则库里的 DSL 规则判定一次响应快照。
+// 返回值：命中的规则 ID、命中的规则名（去重）、本轮参与判定的规则 ID 全集。
+// universe 是 PruneHits 的作用域：只有本轮真正评估过的规则才允许被判定为「已消失」。
+func (s *FingerprintService) Match(ctx context.Context, snap ResponseSnapshot) (ids []string, tech []string, universe []string, err error) {
 	rules, err := s.LoadRules(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	var (
-		ids  []string
-		tech []string
-		seen = map[string]bool{}
-	)
+	seen := map[string]bool{}
 	for _, rule := range rules {
 		tree := rule.Condition
 		if tree == nil || rule.DSLVersion < 2 {
@@ -105,6 +104,7 @@ func (s *FingerprintService) Match(ctx context.Context, snap ResponseSnapshot) (
 		if tree == nil {
 			continue
 		}
+		universe = append(universe, rule.ID)
 		if evalCondition(tree, snap) {
 			ids = append(ids, rule.ID)
 			if rule.Name != "" && !seen[rule.Name] {
@@ -113,7 +113,7 @@ func (s *FingerprintService) Match(ctx context.Context, snap ResponseSnapshot) (
 			}
 		}
 	}
-	return ids, tech, nil
+	return ids, tech, universe, nil
 }
 
 // ApplyToSite 匹配并把结果写回：命中表、站点技术栈、标题。
@@ -121,7 +121,7 @@ func (s *FingerprintService) Match(ctx context.Context, snap ResponseSnapshot) (
 // 集合有增减时写一条 fingerprint_change 事件（变更时间线此前「只增不减」：
 // 指纹消失完全不可见）。事件写入是尽力而为，失败不影响匹配主流程。
 func (s *FingerprintService) ApplyToSite(ctx context.Context, siteID int64, snap ResponseSnapshot, recordID *int64) ([]string, []string, error) {
-	ids, tech, err := s.Match(ctx, snap)
+	ids, tech, universe, err := s.Match(ctx, snap)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -142,8 +142,11 @@ func (s *FingerprintService) ApplyToSite(ctx context.Context, siteID int64, snap
 	}); err != nil {
 		return nil, nil, err
 	}
-	if _, err := fp.PruneHits(ctx, siteID, ids); err != nil {
+	if pruned, err := fp.PruneHits(ctx, siteID, ids, universe); err != nil {
 		return nil, nil, err
+	} else if pruned > 0 {
+		log.Printf("[Fingerprint] 站点 %d 清理已消失的命中 %d 行（本轮评估规则 %d 条，命中 %d 条）",
+			siteID, pruned, len(universe), len(ids))
 	}
 	if err := fp.UpdateSiteProfile(ctx, siteID, snap.Title, snap.Server, tech); err != nil {
 		return nil, nil, err

@@ -423,14 +423,23 @@ type EnterpriseDiscoverInput struct {
 
 // Discover 启动后台 BFS 采集：分支/投资逐层展开，域名进入候选资产。
 // 采集只写 enterprise_entities / enterprise_candidates，不创建站点、不触发扫描。
+//
+// ext_id 与 name 至少给一个：
+//   - 只给 ext_id：直接采集（上游内部 ID 由调用方事先拿到）；
+//   - 只给公司名：这里先用 provider.Search 反查 ext_id，再采集。
+//     此前要求 ext_id 必填，用户"给了公司名却被告知 ext_id 必填"，
+//     实际上 Search 本来就是 Provider 的稳定入口，多一次调用即可补上。
 func (s *EnterpriseService) Discover(ctx context.Context, in EnterpriseDiscoverInput) (enterprise.Job, error) {
 	if in.ProjectID <= 0 {
 		return enterprise.Job{}, errors.New("project_id 必填")
 	}
 	extID := strings.TrimSpace(in.ExtID)
 	name := strings.TrimSpace(in.Name)
-	if extID == "" || len(extID) > 64 || len(name) > 200 {
-		return enterprise.Job{}, errors.New("ext_id 必填且不超过 64 字节，企业名不超过 200 字")
+	if extID == "" && name == "" {
+		return enterprise.Job{}, errors.New("ext_id 与 name 至少填一个（只给公司名时系统会自动反查 ext_id）")
+	}
+	if len(extID) > 64 || len(name) > 200 {
+		return enterprise.Job{}, errors.New("ext_id 不超过 64 字节，企业名不超过 200 字")
 	}
 	provider, err := EnterpriseCollectInput{
 		ProjectID: in.ProjectID, Provider: in.Provider, Keyword: name,
@@ -438,6 +447,16 @@ func (s *EnterpriseService) Discover(ctx context.Context, in EnterpriseDiscoverI
 	}.buildProvider()
 	if err != nil {
 		return enterprise.Job{}, err
+	}
+	if extID == "" {
+		resolvedID, resolvedName, rerr := resolveExtIDByName(ctx, provider, name)
+		if rerr != nil {
+			return enterprise.Job{}, rerr
+		}
+		extID = resolvedID
+		if name == "" {
+			name = resolvedName
+		}
 	}
 	collector, err := s.collector()
 	if err != nil {
@@ -457,6 +476,42 @@ func (s *EnterpriseService) Discover(ctx context.Context, in EnterpriseDiscoverI
 		return collector.StartWithDigitalSink(ctx, provider, job, root, dp)
 	}
 	return collector.Start(ctx, provider, job, root)
+}
+
+// resolveExtIDByName 用公司名反查上游内部 ID。
+// 命中同名优先（"小米科技有限责任公司" 常常还带出分公司/关联公司），
+// 没有同名时退回第一条，并在错误信息里提示可以直接传 ext_id 跳过这一步。
+func resolveExtIDByName(ctx context.Context, provider enterprise.Provider, name string) (string, string, error) {
+	refs, err := provider.Search(ctx, name, 10)
+	if err != nil {
+		if enterprise.IsSessionMissing(err) {
+			return "", "", fmt.Errorf("%s 未配置会话，无法按公司名搜索：%w；也可以在请求里直接传 ext_id", provider.Name(), err)
+		}
+		return "", "", fmt.Errorf("按公司名搜索失败（%s）：%w", provider.Name(), err)
+	}
+	if len(refs) == 0 {
+		return "", "", fmt.Errorf("%s 没有搜到「%s」，请检查企业名称或改用 ext_id", provider.Name(), name)
+	}
+	want := normalizeOrgName(name)
+	for _, ref := range refs {
+		if normalizeOrgName(ref.Name) == want && strings.TrimSpace(ref.ExtID) != "" {
+			return strings.TrimSpace(ref.ExtID), ref.Name, nil
+		}
+	}
+	for _, ref := range refs {
+		if strings.TrimSpace(ref.ExtID) != "" {
+			return strings.TrimSpace(ref.ExtID), ref.Name, nil
+		}
+	}
+	return "", "", fmt.Errorf("%s 搜到 %d 条结果但没有可用的 ext_id", provider.Name(), len(refs))
+}
+
+// normalizeOrgName 去掉全角/半角括号与空白，便于做「同名」比较。
+// 上游企业名常写成「小米科技有限责任公司」与「小米科技有限责任公司(有限合伙)」，
+// 直接字符串相等会漏掉真正想要的那条，所以只做轻量归一，不做模糊匹配。
+func normalizeOrgName(s string) string {
+	r := strings.NewReplacer("（", "(", "）", ")", " ", "", "\u3000", "")
+	return strings.ToLower(strings.TrimSpace(r.Replace(s)))
 }
 
 func (s *EnterpriseService) Jobs(ctx context.Context, projectID int64, limit int) ([]enterprise.Job, error) {

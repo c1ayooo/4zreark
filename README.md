@@ -207,22 +207,21 @@ createdb -O zre zreark
 psql -d zreark -c 'CREATE SCHEMA IF NOT EXISTS zre AUTHORIZATION zre;'
 ```
 
-执行基础 DDL 和治理迁移：
+执行建库脚本（推荐一次性跑完，脚本内部按依赖排序并重试）：
 
 ```bash
-export PGPASSWORD='你的数据库密码'
-
-psql -h 127.0.0.1 -U zre -d zreark -v ON_ERROR_STOP=1 \
-  -f docs/sql/schema_init.sql
-
-psql -h 127.0.0.1 -U zre -d zreark -v ON_ERROR_STOP=1 \
-  -f docs/sql/migration_assets_p0.sql
-
-psql -h 127.0.0.1 -U zre -d zreark -v ON_ERROR_STOP=1 \
-  -f docs/sql/schema_governance.sql
+PGURL='postgres://zre:你的密码@127.0.0.1:5432/zreark?sslmode=disable' \
+  bash docs/sql/apply_all.sh
 ```
 
-其余 `docs/sql/migration_*.sql` 是增量迁移，按文件名日期顺序应用即可；后端启动会做表、迁移账本和分区自检，缺表会以退出码 2 失败。
+`apply_all.sh` 显式按 **核心表 → 增量迁移 → 回填** 三段执行，无 `BEGIN` 的脚本自动
+包在单事务里，因前置对象缺失而失败的脚本延后重试一轮。
+
+> 不要再用「按文件名顺序逐个 psql」的做法：`schema_governance.sql` 里有对
+> `projects` 的 `ALTER`，字母序会排在 `schema_init.sql` 之前执行并整段回滚，
+> 结果是缺 20+ 张表而服务仍能起。
+
+后端启动会做表、迁移账本和分区自检，核心业务表缺失时以退出码 2 失败并列出缺失清单。
 
 ### 3. 构建后端
 
@@ -364,6 +363,10 @@ npm run build
 设计与交接类文档**不进仓库**（含运营现场信息）：`docs/*.md` 已在 `.gitignore` 中排除，仅本地保留。仓库内只保留：
 
 - [SQL 迁移目录](docs/sql)：建库与增量迁移脚本
+- [公司名 → 资产全链路](docs/backend/guide/company-to-assets.md)：输入公司名，自动拿到备案域名、站点、技术栈与接口，含每个环节的断点与排查清单
+- [审计修复记录](docs/backend/guide/audit-fixes.md)：链路断点、安全项的修法与验证证据，以及仍待处理的问题
+- [待修清单](docs/backend/guide/pending-fixes.md)：按 P0/P1/P2 排列的未修项，每项含判定标准与建议排期
+- [数据库设计](docs/backend/guide/database.md)：PostgreSQL 表结构与资产域写入路径
 - MCP 接入、toolruntime 方案等文档如有需要随发行说明单独提供
 
 ---

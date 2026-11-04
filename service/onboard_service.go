@@ -12,6 +12,7 @@ import (
 	"github.com/c1ayooo/4zreark/internal/enterprise"
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/repo"
+	"github.com/c1ayooo/4zreark/service/pipeline"
 )
 
 // 一键侦察编排 v2：一个输入（公司名称或域名）→ 多平台并行采集 → 归一去重 → 自动建任务。
@@ -313,8 +314,15 @@ func createOnboardFollowupTasks(ctx context.Context, projectID int64, keyword st
 	}
 	targets := make([]string, 0, len(seeds))
 	seen := map[string]bool{}
+	dropped := 0
 	for _, sd := range seeds {
 		if sd.Kind != "domain" || !sd.Enabled || seen[sd.Value] {
+			continue
+		}
+		// 种子可能来自备案快照等外部来源，含中文域名/备注文本等无法扫描的值。
+		// 这里逐个过滤：一个坏目标不能让整批任务创建失败（CreateTask 是整单校验）。
+		if !pipeline.IsPlausibleDomainTarget(sd.Value) {
+			dropped++
 			continue
 		}
 		seen[sd.Value] = true
@@ -322,6 +330,9 @@ func createOnboardFollowupTasks(ctx context.Context, projectID int64, keyword st
 		if len(targets) >= onboardTargetCap {
 			break
 		}
+	}
+	if dropped > 0 {
+		log.Printf("[onboard] 项目 %d 跳过 %d 个无法扫描的 domain 种子", projectID, dropped)
 	}
 	if len(targets) == 0 {
 		log.Printf("[onboard] 项目 %d 没有可用 domain 种子，跳过后续任务创建", projectID)

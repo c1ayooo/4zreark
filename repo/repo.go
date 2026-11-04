@@ -25,9 +25,21 @@ var ErrDuplicate = errors.New("duplicate record")
 var cst = time.FixedZone("CST", 8*3600)
 
 // requiredTables 是启动自检要求必须存在的表。
+//
+// 这份清单的取舍：宁可启动时报错，也不要带着半残的库跑起来。此前只校验 8 张
+// 基础表，而 schema_governance.sql 一旦回滚（它依赖 migration_assets_p0.sql 先
+// 建 projects），seeds / runs / monitoring_plans 等 20 多张表全部缺失，服务却能
+// 正常启动、端口正常监听，直到用户点「建项目」才报 relation "seeds" does not
+// exist —— 这种"启动成功但功能静默失效"是最难排查的故障形态，所以在自检里拦掉。
 var requiredTables = []string{
+	// 基础域（schema_init.sql）
 	"users", "tasks", "task_jobs", "scan_results",
 	"vulnerabilities", "result_dedup", "token_blacklist", "schema_migrations",
+	// 资产域（migration_assets_p0.sql + schema_governance.sql）
+	"projects", "sites", "raw_records", "asset_events",
+	"seeds", "monitoring_plans", "runs", "run_targets", "site_endpoints",
+	// ICP 与指纹域（migration_icp_queries.sql / schema_fingerprint.sql）
+	"icp_queries", "icp_filings", "fingerprint_rules",
 }
 
 var defaultRepo *Repo
@@ -124,7 +136,7 @@ func (r *Repo) SelfCheck(ctx context.Context) error {
 	}
 	for _, t := range requiredTables {
 		if !found[t] {
-			return fmt.Errorf("缺少必需的表: %s", t)
+			return fmt.Errorf("缺少必需的表: %s（按 docs/sql/apply_all.sh 依次执行建库脚本；不要直接 for f in *.sql，migration_* 与 schema_* 有依赖顺序）", t)
 		}
 	}
 

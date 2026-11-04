@@ -54,6 +54,8 @@ type SubdomainFinding struct {
 type IPFinding struct {
 	IP        string        `json:"ip"`
 	OpenPorts []PortService `json:"open_ports,omitempty"`
+	// HoneypotSuspect 为 true 表示该 IP 开放端口数异常，已按蜜罐护栏截断到 Web 口。
+	HoneypotSuspect bool `json:"honeypot_suspect,omitempty"`
 }
 
 // HTTPServiceFinding is one live HTTP(S) service produced by stage 4.
@@ -118,6 +120,8 @@ type Stats struct {
 	OpenPorts        int            `json:"open_ports"`
 	HTTPProbed       int            `json:"http_probed"`
 	HTTPAlive        int            `json:"http_alive"`
+	// HoneypotSuspects 触发蜜罐护栏的 IP 数：端口被截断到 Web 口，待人工复核。
+	HoneypotSuspects int            `json:"honeypot_suspects"`
 	Levels           map[string]int `json:"levels"`
 	Errors           []string       `json:"errors,omitempty"`
 }

@@ -277,11 +277,17 @@ func Run(ctx context.Context, opts Options, progress Progress) (*Result, error) 
 			byIP[r.IP] = append(byIP[r.IP], r)
 		}
 		for ip, rs := range byIP {
-			open := make([]PortService, 0, len(rs))
-			for _, r := range rs {
+			guarded, suspect := honeypotGuard(rs)
+			if suspect {
+				stats.HoneypotSuspects++
+				// 截断后的结果替换进 byIP，蜜罐 IP 不再喂给 svcid / HTTP 阶段。
+				byIP[ip] = guarded
+			}
+			open := make([]PortService, 0, len(guarded))
+			for _, r := range guarded {
 				open = append(open, PortService{Port: r.Port, Service: r.Service})
 			}
-			saveIP(IPFinding{IP: ip, OpenPorts: open})
+			saveIP(IPFinding{IP: ip, OpenPorts: open, HoneypotSuspect: suspect})
 		}
 		for ip, rs := range byIP {
 			ports := make([]int, 0, len(rs))

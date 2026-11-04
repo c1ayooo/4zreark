@@ -3,7 +3,8 @@
 -- 会被 23514 拒绝。此处放宽约束对齐代码层白名单。
 BEGIN;
 
-ALTER TABLE seeds DROP CONSTRAINT seeds_kind_chk;
+-- IF EXISTS：手工建过 seeds 表（约束名不同）或先跑过本脚本的库都能重跑
+ALTER TABLE seeds DROP CONSTRAINT IF EXISTS seeds_kind_chk;
 
 ALTER TABLE seeds ADD CONSTRAINT seeds_kind_chk
     CHECK (kind IN ('domain','cidr','company','repo','app','dict','cert'));

@@ -95,7 +95,11 @@ func (s *ICPService) repo() (*repo.Repo, error) {
 }
 
 // Enqueue 创建查询任务并入队；队列满时立即返回错误，不阻塞。
-func (s *ICPService) Enqueue(ctx context.Context, projectID int64, query string, serviceType, pageSize int) (*repo.ICPQuery, error) {
+//
+// autoPromote 为 true 时，查询完成后自动把备案域名转成 domain 种子并建计划
+// （intervalHours 小时一轮，0 表示只建种子不建计划），打通
+// 「公司名 → 备案域名 → 种子 → 批次 → 探活」这条链路。
+func (s *ICPService) Enqueue(ctx context.Context, projectID int64, query string, serviceType, pageSize int, autoPromote bool, intervalHours int) (*repo.ICPQuery, error) {
 	query = strings.TrimSpace(query)
 	if query == "" || len([]rune(query)) > 100 {
 		return nil, errors.New("查询关键词必填且不超过 100 字")
@@ -107,7 +111,7 @@ func (s *ICPService) Enqueue(ctx context.Context, projectID int64, query string,
 	if err != nil {
 		return nil, err
 	}
-	q, err := r.CreateICPQuery(ctx, projectID, query, serviceType, pageSize)
+	q, err := r.CreateICPQuery(ctx, projectID, query, serviceType, pageSize, autoPromote, intervalHours)
 	if err != nil {
 		return nil, err
 	}
@@ -248,6 +252,72 @@ func (s *ICPService) runQuery(id string) {
 	if aerr := r.Tasks().AddLogCategory(context.Background(), id, "icp", level, msg, ""); aerr != nil {
 		log.Printf("[icp] 动作日志写入失败: %v", aerr)
 	}
+
+	// 自动回灌：查询成功且有数据时，把备案域名转成 domain 种子。
+	// 失败只记日志不影响查询状态 —— 用户仍可在界面上手动触发一次 promote。
+	if q.AutoPromote && status == "done" && fetched > 0 {
+		res, perr := r.PromoteICPFilings(context.Background(), id, q.ProjectID, q.PromoteIntervalHours)
+		if perr != nil {
+			log.Printf("[icp] 查询 %s 自动转种子失败: %v", id, perr)
+			_ = r.Tasks().AddLogCategory(context.Background(), id, "icp", "warn",
+				"ICP 结果自动转种子失败："+perr.Error(), "")
+		} else {
+			log.Printf("[icp] 查询 %s 自动转种子: 域名 %d / 新增种子 %d / 已存在 %d / 新建计划 %d / 跳过 %d",
+				id, res.Domains, res.Created, res.Existing, res.Planned, res.Skipped)
+			_ = r.Tasks().AddLogCategory(context.Background(), id, "icp", "success",
+				fmt.Sprintf("ICP 结果已转种子：域名 %d，新增 %d，已存在 %d，计划 %d（周期 %dh）",
+					res.Domains, res.Created, res.Existing, res.Planned, q.PromoteIntervalHours), "")
+			if res.Created > 0 {
+				s.startFollowupScan(q.ProjectID, q.Query)
+			}
+		}
+	}
+}
+
+// startFollowupScan 给新增的 domain 种子创建后续扫描任务。
+//
+// 探活只做可达性复核，不会产出站点/指纹；站点与技术栈必须由扫描流水线写。
+// 此前 cycle → run → probe 之后就断了，种子再多也到不了"技术栈"这一步。
+// 这里复用一键侦察的 follow-up 任务生成器（custom 全流水线 + 服务识别 +
+// 暴露面 + 存量线索），与 onboard 走同一条路径，不另起一套任务编排。
+func (s *ICPService) startFollowupScan(projectID int64, keyword string) {
+	n, errs := createOnboardFollowupTasks(context.Background(), projectID, keyword)
+	if n > 0 {
+		log.Printf("[icp] 已为项目 %d 的新种子创建 %d 个扫描任务（%s）", projectID, n, keyword)
+	}
+	for _, e := range errs {
+		log.Printf("[icp] 后续扫描任务创建失败: %v", e)
+	}
+}
+
+// PromoteToSeeds 手动把一次已完成的 ICP 查询结果回灌成 domain 种子。
+// intervalHours <= 0 时沿用入队时记录的周期（默认 24 小时）。
+func (s *ICPService) PromoteToSeeds(ctx context.Context, id string, intervalHours int) (*repo.ICPPromoteResult, error) {
+	r, err := s.repo()
+	if err != nil {
+		return nil, err
+	}
+	q, err := r.GetICPQuery(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if q.Status != "done" {
+		return nil, fmt.Errorf("查询状态为 %s，只有已完成的查询可以转种子", q.Status)
+	}
+	if intervalHours <= 0 {
+		intervalHours = q.PromoteIntervalHours
+	}
+	res, err := r.PromoteICPFilings(ctx, id, q.ProjectID, intervalHours)
+	if err != nil {
+		return nil, err
+	}
+	_ = r.Tasks().AddLogCategory(ctx, id, "icp", "success",
+		fmt.Sprintf("手动转种子：域名 %d，新增 %d，已存在 %d，计划 %d（周期 %dh）",
+			res.Domains, res.Created, res.Existing, res.Planned, intervalHours), "")
+	if res.Created > 0 {
+		s.startFollowupScan(q.ProjectID, q.Query)
+	}
+	return res, nil
 }
 
 func icpSleep(ctx context.Context, d time.Duration) bool {

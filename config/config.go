@@ -22,6 +22,13 @@ type Config struct {
 	Alert      AlertConfig      `mapstructure:"alert"`
 	ThirdParty ThirdPartyConfig `mapstructure:"thirdparty"`
 	AutoVerify AutoVerifyConfig `mapstructure:"auto_verify"`
+	MCP        MCPConfig        `mapstructure:"mcp"`
+}
+
+// MCPConfig 是 MCP 接入的治理参数。RateLimitPerMin 只约束 tools/call，
+// initialize / tools/list / ping 不扣；<=0 时回落默认值 60。
+type MCPConfig struct {
+	RateLimitPerMin int `mapstructure:"rate_limit_per_min"`
 }
 
 // AuthConfig 认证边界。公开注册默认关闭（安全审计 H1）：空注册码一律拒绝，

@@ -54,6 +54,7 @@ type compiledRule struct {
 	dsl       []string
 	exprs     []reconfp.Expr
 	builtin   bool
+	source    string // fingerprint / sensitive
 }
 
 // NewDSLEngine 创建新的 DSL 引擎（空规则表；内置规则用 LoadBuiltinRules 显式加载）。
@@ -312,6 +313,7 @@ func (e *DSLEngine) LoadRulesFromBytes(data []byte, filePath string) error {
 		}
 		rule.ID = name
 		rule.Name = name
+		rule.Source = ruleSourceFromPath(filePath)
 		if rule.Condition == "" {
 			rule.Condition = "or"
 		}
@@ -504,6 +506,7 @@ func matchRule(resp *HTTPResponse, obs reconfp.Observation, rule *compiledRule) 
 		Tags:       rule.tags,
 		Confidence: confidence,
 		Method:     method,
+		Source:     rule.source,
 	}
 }
 
@@ -553,6 +556,7 @@ func observationFromHTTP(resp *HTTPResponse) reconfp.Observation {
 		Status:      resp.StatusCode,
 		Headers:     headers,
 		HeaderText:  headerText.String(),
+		Banner:      reconfp.HTTPBanner(strconv.Itoa(resp.StatusCode), headerText.String()),
 		Cookie:      strings.Join(cookies, "; "),
 		Body:        body,
 		Title:       title,
@@ -573,6 +577,17 @@ func extractHTMLTitle(body string) string {
 	return ""
 }
 
+// ruleSourceFromPath 按文件名区分规则语义。
+// sensitive.yaml 里是内容泄露特征（邮箱、私钥、内网 IP、Linkfinder 这类提取器），
+// 命中它只能说明「页面上出现了类似泄露的文本」，不能说明站点用了某技术，
+// 所以必须和指纹规则分开，否则 sites.tech 会被灌进一堆非技术词条。
+func ruleSourceFromPath(filePath string) string {
+	if strings.Contains(strings.ToLower(filepath.Base(filePath)), "sensitive") {
+		return "sensitive"
+	}
+	return "fingerprint"
+}
+
 // compileLegacyRule 把旧 YAML 规则翻译成表达式规则。
 // 任何一行翻译失败都整条跳过：AND 规则少一行会放宽条件，宁可漏报不误报。
 func compileLegacyRule(rule *FingerprintRule) (*compiledRule, error) {
@@ -585,6 +600,7 @@ func compileLegacyRule(rule *FingerprintRule) (*compiledRule, error) {
 		condition: strings.ToLower(rule.Condition),
 		dsl:       make([]string, 0, len(rule.DSL)),
 		exprs:     make([]reconfp.Expr, 0, len(rule.DSL)),
+		source:    rule.Source,
 	}
 	if out.condition != "and" {
 		out.condition = "or"

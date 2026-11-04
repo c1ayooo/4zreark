@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/service"
@@ -75,6 +76,19 @@ func (h *MCPHandler) post(c *gin.Context) {
 	if !ok || key == nil {
 		utils.Unauthorized(c, "缺少 API key 上下文")
 		return
+	}
+
+	// 速率配额只扣 tools/call：initialize / tools/list / ping 便宜不设闸。
+	// 超限回 HTTP 429 + Retry-After（精确到分钟桶结束），客户端可据此退避。
+	if req.Method == "tools/call" {
+		if err := h.mcp.ConsumeCallQuota(c.Request.Context(), key); err != nil {
+			var rl *service.ErrMCPRateLimited
+			if errors.As(err, &rl) {
+				c.Header("Retry-After", strconv.Itoa(rl.RetryAfterSeconds))
+				c.JSON(http.StatusTooManyRequests, gin.H{"error": rl.Error()})
+				return
+			}
+		}
 	}
 
 	resp, err := h.mcp.Handle(c.Request.Context(), &req, key)

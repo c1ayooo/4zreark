@@ -28,6 +28,9 @@ func TestMCPAndAPIKeyRoutesRegistered(t *testing.T) {
 		"POST /api/api-keys",
 		"PUT /api/api-keys/:id",
 		"DELETE /api/api-keys/:id",
+		"GET /api/mcp-governance",
+		"PUT /api/mcp-governance/tools/:name",
+		"PUT /api/mcp-governance/rate-limit",
 	} {
 		if !routes[want] {
 			t.Errorf("缺少路由 %s", want)

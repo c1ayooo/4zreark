@@ -105,3 +105,7 @@ auto_verify:
   recheck_days: 7
   concurrency: 1
   rate_limit: 10
+
+# MCP 治理参数（工具总闸与配额持久化在 app_settings，此处为配置文件兜底值）
+mcp:
+  rate_limit_per_min: 60

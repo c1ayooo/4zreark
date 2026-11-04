@@ -21,18 +21,24 @@ func NewICPHandler() *ICPHandler {
 }
 
 // Enqueue POST /api/icp/queries
+//
+// auto_promote=true 时，查询完成后自动把备案域名转成 domain 种子并建计划，
+// 调用方不需要再手工导出域名再调 /seeds/batch。
 func (h *ICPHandler) Enqueue(c *gin.Context) {
 	var body struct {
 		ProjectID   int64  `json:"project_id"`
 		Query       string `json:"query"`
 		ServiceType int    `json:"service_type"`
 		PageSize    int    `json:"page_size"`
+		AutoPromote bool   `json:"auto_promote"`
+		IntervalHours int  `json:"promote_interval_hours"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		utils.BadRequest(c, "参数错误: "+err.Error())
 		return
 	}
-	q, err := h.svc.Enqueue(c.Request.Context(), body.ProjectID, body.Query, body.ServiceType, body.PageSize)
+	q, err := h.svc.Enqueue(c.Request.Context(), body.ProjectID, body.Query,
+		body.ServiceType, body.PageSize, body.AutoPromote, body.IntervalHours)
 	if err != nil {
 		if errors.Is(err, service.ErrICPQueueFull) {
 			utils.Error(c, utils.ErrCodeTooManyRequests, err.Error())
@@ -42,6 +48,32 @@ func (h *ICPHandler) Enqueue(c *gin.Context) {
 		return
 	}
 	utils.SuccessWithMessage(c, "查询已入队", q)
+}
+
+// Promote POST /api/icp/queries/:id/promote
+//
+// 把已完成的查询结果里去重后的备案域名转成 domain 种子（可选同时建计划）。
+// 幂等：重复调用只补新增的域名，已存在的种子不会重复创建。
+func (h *ICPHandler) Promote(c *gin.Context) {
+	var body struct {
+		IntervalHours int `json:"interval_hours"`
+	}
+	if c.Request.ContentLength > 0 {
+		if err := c.ShouldBindJSON(&body); err != nil {
+			utils.BadRequest(c, "参数错误: "+err.Error())
+			return
+		}
+	}
+	res, err := h.svc.PromoteToSeeds(c.Request.Context(), c.Param("id"), body.IntervalHours)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			utils.NotFound(c, "查询任务不存在")
+			return
+		}
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "备案域名已转成种子", res)
 }
 
 // List GET /api/icp/queries?project_id=&limit=
