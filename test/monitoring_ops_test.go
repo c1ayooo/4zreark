@@ -25,12 +25,18 @@ func TestMonitoringPresetsAndBulkOps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建项目失败: %v", err)
 	}
-	seed := &repo.Seed{ProjectID: project.ID, Kind: "domain", Value: "mon.example", Enabled: true}
-	if err := r.Seeds().CreateSeed(ctx, seed); err != nil {
-		t.Fatalf("创建种子失败: %v", err)
+	// monitoring_plans 是「一个种子一条计划」（UNIQUE(seed_id)），批量操作要凑
+	// 两条计划就用两个种子各建一条，而不是给同一种子建两条。
+	seedA := &repo.Seed{ProjectID: project.ID, Kind: "domain", Value: "mon-a.example", Enabled: true}
+	if err := r.Seeds().CreateSeed(ctx, seedA); err != nil {
+		t.Fatalf("创建种子 A 失败: %v", err)
 	}
-	plan1 := &repo.Plan{SeedID: seed.ID, IntervalHours: 24, Budget: map[string]any{}, Enabled: true}
-	plan2 := &repo.Plan{SeedID: seed.ID, IntervalHours: 24, Budget: map[string]any{}, Enabled: true}
+	seedB := &repo.Seed{ProjectID: project.ID, Kind: "domain", Value: "mon-b.example", Enabled: true}
+	if err := r.Seeds().CreateSeed(ctx, seedB); err != nil {
+		t.Fatalf("创建种子 B 失败: %v", err)
+	}
+	plan1 := &repo.Plan{SeedID: seedA.ID, IntervalHours: 24, Budget: map[string]any{}, Enabled: true}
+	plan2 := &repo.Plan{SeedID: seedB.ID, IntervalHours: 24, Budget: map[string]any{}, Enabled: true}
 	if err := r.Seeds().CreatePlan(ctx, plan1); err != nil {
 		t.Fatal(err)
 	}

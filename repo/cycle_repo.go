@@ -305,10 +305,22 @@ func (r *seedRepo) CreatePlan(ctx context.Context, p *Plan) error {
 	if p.ChangeCooldownMinutes <= 0 {
 		p.ChangeCooldownMinutes = 10
 	}
-	// 新计划立刻到期：第一次 tick 就会起一个 run，不用等到下一个间隔
+	// 新计划立刻到期：第一次 tick 就会起一个 run，不用等到下一个间隔。
+	// monitoring_plans 是「一个种子一条计划」（migration_monitoring_plans_fk 有
+	// UNIQUE(seed_id)），所以这里必须是 upsert：治理页对已有计划的种子重建计划、
+	// 种子重新展开、ICP 重跑回灌都会走到这里——裸 INSERT 会撞 23505，表现为
+	// 「建计划报 duplicate key」。重复创建的语义按更新处理。
 	err = r.r.pool.QueryRow(ctx,
 		`insert into monitoring_plans (seed_id, interval_hours, budget, trigger_mode, change_cooldown_minutes, enabled, next_run_at)
-		 values ($1,$2,$3,$4,$5,$6, now()) returning id, created_at`,
+		 values ($1,$2,$3,$4,$5,$6, now())
+		 on conflict (seed_id) do update set
+		     interval_hours = excluded.interval_hours,
+		     budget = excluded.budget,
+		     trigger_mode = excluded.trigger_mode,
+		     change_cooldown_minutes = excluded.change_cooldown_minutes,
+		     enabled = excluded.enabled,
+		     next_run_at = now()
+		 returning id, created_at`,
 		p.SeedID, p.IntervalHours, budget, p.TriggerMode, p.ChangeCooldownMinutes,
 		p.Enabled).Scan(&p.ID, &p.CreatedAt)
 	if err != nil {
