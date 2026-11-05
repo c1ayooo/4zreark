@@ -235,7 +235,7 @@ func (r *userRepo) List(ctx context.Context, page, pageSize int, keyword string)
 			t         int64
 		)
 		if err := rows.Scan(&hexID, &u.Username, &u.Password, &u.Email, &u.Phone, &u.Nickname,
-			&u.Avatar, &u.Role, &u.Status, &u.TokenVersion, &lastLogin, &createdAt, &updatedAt, &t); err != nil {
+			&u.Avatar, &u.Role, &u.Status, &u.MustChangePassword, &u.TokenVersion, &lastLogin, &createdAt, &updatedAt, &t); err != nil {
 			return nil, 0, err
 		}
 		oid, err := oid.ObjectIDFromHex(hexID)
