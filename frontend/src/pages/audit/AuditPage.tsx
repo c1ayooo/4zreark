@@ -5,9 +5,21 @@ import { Button, Input, Select, Table, Tag } from 'antd'
 import type { TableProps } from 'antd'
 
 import { auditApi, type OperationLog } from '@/api/audit'
+import RecordDetailDrawer from '@/components/common/RecordDetailDrawer'
 import { formatDate } from '@/lib/utils'
 
 const pageSize = 50
+
+// detail 是后端拼的字符串：能解析成对象时走 raw pretty 展示，否则当长文本全量展示
+function parseDetailObject(detail: string): Record<string, unknown> | undefined {
+  if (!detail) return undefined
+  try {
+    const parsed: unknown = JSON.parse(detail)
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : undefined
+  } catch {
+    return undefined
+  }
+}
 
 export default function AuditPage() {
   const [username, setUsername] = useState('')
@@ -21,6 +33,8 @@ export default function AuditPage() {
     status: 'all' | '1' | '0'
   }>({ username: '', action: '', module: '', status: 'all' })
   const [page, setPage] = useState(1)
+  // 行点击打开的详情抽屉：受控存当前日志，truncate 掉的 target/detail 全文在这里看
+  const [detailLog, setDetailLog] = useState<OperationLog | null>(null)
 
   const list = useQuery({
     queryKey: ['audit', applied, page],
@@ -46,6 +60,30 @@ export default function AuditPage() {
   }
 
   // /audit 无排序参数，时间列走客户端排序
+  // 行点击看详情：写法同 DiscoveryCandidatesPanel 的 onRow
+  const onRow: TableProps<OperationLog>['onRow'] = (l) => ({
+    className: 'cursor-pointer',
+    onClick: () => setDetailLog(l),
+  })
+
+  const detailRaw = detailLog ? parseDetailObject(detailLog.detail) : undefined
+  const detailFields = detailLog
+    ? [
+        { label: '时间', value: formatDate(detailLog.created_at) },
+        { label: '用户', value: detailLog.username || '' },
+        { label: '动作', value: detailLog.action || '' },
+        { label: '模块', value: detailLog.module || '' },
+        { label: '目标', value: detailLog.target || '' },
+        // detail 能解析成 JSON 对象时由 raw 区展示全文，字段区不重复
+        ...(detailLog.detail && !detailRaw
+          ? [{ label: '详情', value: detailLog.detail }]
+          : []),
+        { label: 'IP', value: detailLog.ip || '' },
+        { label: 'User-Agent', value: detailLog.user_agent || '' },
+        { label: '结果', value: detailLog.status === 1 ? '成功' : '失败' },
+      ]
+    : []
+
   const columns: TableProps<OperationLog>['columns'] = [
     {
       title: '时间',
@@ -170,6 +208,7 @@ export default function AuditPage() {
           dataSource={items}
           rowKey="id"
           loading={list.isLoading}
+          onRow={onRow}
           locale={{
             emptyText: list.isError ? (
               <div className="py-10 text-center text-destructive">
@@ -198,6 +237,14 @@ export default function AuditPage() {
           }}
         />
       </div>
+
+      <RecordDetailDrawer
+        open={detailLog !== null}
+        onClose={() => setDetailLog(null)}
+        title="审计日志详情"
+        fields={detailFields}
+        raw={detailRaw}
+      />
     </div>
   )
 }

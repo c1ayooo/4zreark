@@ -19,6 +19,7 @@ import { Button, Card, Skeleton, Tag } from 'antd'
 import { projectApi, type Project, type ProjectInput } from '@/api/projects'
 import { ProjectFormDialog } from '@/components/projects/ProjectFormDialog'
 import OnboardDialog from '@/components/projects/OnboardDialog'
+import ProjectDeleteModal from '@/pages/projects/ProjectDeleteModal'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate } from '@/lib/utils'
 
@@ -36,7 +37,7 @@ function ProjectCard({
 }: {
   project: Project
   onOpen: () => void
-  onDelete: () => void
+  onDelete: (project: Project) => void
 }) {
   return (
     <Card
@@ -124,7 +125,7 @@ function ProjectCard({
           className="h-6 px-1.5 text-xs"
           onClick={(e) => {
             e.stopPropagation()
-            onDelete()
+            onDelete(project)
           }}
         >
           <Trash2 className="h-3 w-3" />
@@ -140,6 +141,8 @@ export default function ProjectsPage() {
   const { toast } = useToast()
   const [createOpen, setCreateOpen] = useState(false)
   const [onboardOpen, setOnboardOpen] = useState(false)
+  // 本地删除确认：点卡片「删除」停在列表页弹输码框，不再跳详情页
+  const [deletingProject, setDeletingProject] = useState<Project | null>(null)
 
   const projects = useQuery({ queryKey: ['projects'], queryFn: () => projectApi.list() })
 
@@ -227,7 +230,7 @@ export default function ProjectsPage() {
               key={p.id}
               project={p}
               onOpen={() => navigate(`/projects/${p.id}`)}
-              onDelete={() => navigate(`/projects/${p.id}?delete=1`)}
+              onDelete={setDeletingProject}
             />
           ))}
         </div>
@@ -239,6 +242,11 @@ export default function ProjectsPage() {
         onSubmit={(input) => createMutation.mutateAsync(input)}
       />
       <OnboardDialog open={onboardOpen} onClose={() => setOnboardOpen(false)} />
+      <ProjectDeleteModal
+        project={deletingProject}
+        open={!!deletingProject}
+        onClose={() => setDeletingProject(null)}
+      />
     </div>
   )
 }

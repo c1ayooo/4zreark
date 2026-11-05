@@ -150,7 +150,8 @@ export function RelationDetailDrawer({
         : '详情'
 
   return (
-    <Drawer open={!!selection} onClose={onClose} width={440} title={<span className="font-mono text-sm">{title}</span>}>
+    // antd6 的 .ant-drawer-title 是 flex 项且未带 min-width:0，长 host 组合会撑破标题区
+    <Drawer open={!!selection} onClose={onClose} width={440} classNames={{ title: 'min-w-0 truncate' }} title={<span className="font-mono text-sm">{title}</span>}>
       {selection?.kind === 'node' && site && (
         <div className="space-y-4">
           <div className="space-y-1 text-sm">

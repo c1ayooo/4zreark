@@ -5,6 +5,7 @@ import { Button, Card, Input, Progress, Table, Tabs, Tag } from 'antd'
 import type { TableProps } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
 import EmptyState from '@/components/common/EmptyState'
+import RecordDetailDrawer from '@/components/common/RecordDetailDrawer'
 import { formatDate } from '@/lib/utils'
 import {
   Globe,
@@ -30,6 +31,8 @@ export default function TakeoverPage() {
   const [results, setResults] = useState<TakeoverResult[]>([])
   const [scanning, setScanning] = useState(false)
   const [progress, setProgress] = useState(0)
+  // 历史记录表与扫描结果表共用一个详情抽屉，行点击打开
+  const [detail, setDetail] = useState<TakeoverResult | null>(null)
 
   // 获取服务商列表
   const { data: providersData } = useQuery({
@@ -132,6 +135,29 @@ export default function TakeoverPage() {
         安全
       </Tag>
     )
+
+  // 行点击看详情：历史表与结果表同构（TakeoverResult），共用 onRow 与抽屉字段
+  const onRow: TableProps<TakeoverResult>['onRow'] = (record) => ({
+    className: 'cursor-pointer',
+    onClick: () => setDetail(record),
+  })
+
+  const detailFields = detail
+    ? [
+        { label: '域名', value: detail.domain },
+        { label: '状态', value: detail.vulnerable ? '可接管' : '安全' },
+        { label: '服务商', value: detail.provider || '' },
+        { label: 'CNAME', value: detail.cnames?.join('\n') || '' },
+        {
+          label: '置信度',
+          value: detail.vulnerable
+            ? (confidenceConfig[detail.confidence] || confidenceConfig.low).label
+            : '',
+        },
+        { label: '指纹', value: detail.fingerprint || '' },
+        { label: '检测时间', value: formatDate(detail.checkedAt) },
+      ]
+    : []
 
   const historyColumns: TableProps<TakeoverResult>['columns'] = [
     {
@@ -340,6 +366,7 @@ export default function TakeoverPage() {
                     columns={historyColumns}
                     dataSource={history}
                     rowKey={(_, index) => String(index)}
+                    onRow={onRow}
                     loading={historyLoading}
                     locale={{
                       emptyText: <EmptyState title="暂无历史记录" className="border-0" />,
@@ -371,6 +398,7 @@ export default function TakeoverPage() {
               columns={resultColumns}
               dataSource={results}
               rowKey={(_, index) => String(index)}
+              onRow={onRow}
               rowClassName={(result) =>
                 result.vulnerable ? 'bg-red-50 dark:bg-red-950/20' : ''
               }
@@ -379,6 +407,14 @@ export default function TakeoverPage() {
           </div>
         </Card>
       )}
+
+      <RecordDetailDrawer
+        open={detail !== null}
+        onClose={() => setDetail(null)}
+        title={detail ? `接管详情 · ${detail.domain}` : '接管详情'}
+        fields={detailFields}
+        raw={detail ?? undefined}
+      />
     </div>
   )
 }

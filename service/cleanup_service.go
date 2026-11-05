@@ -100,3 +100,13 @@ func (s *CleanupService) ProtectSite(ctx context.Context, siteID int64, days int
 	}
 	return repo.NewAssetRepo().SetProtection(ctx, siteID, time.Now().AddDate(0, 0, days))
 }
+
+// ClearProtection 解除人工删除保护期（protected_until 置空）。
+// 与 ProtectSite 相对：没有它，一旦误设 90 天保护，资产在窗口内删不掉。
+func (s *CleanupService) ClearProtection(ctx context.Context, siteID int64) error {
+	r := repo.Default()
+	if r == nil {
+		return errors.New("数据层未初始化")
+	}
+	return repo.NewAssetRepo().ClearProtection(ctx, siteID)
+}

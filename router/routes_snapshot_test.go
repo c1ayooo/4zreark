@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/c1ayooo/4zreark/config"
+
+	"github.com/gin-gonic/gin"
 )
 
 // 路由快照：拆分巨型 Register 函数时，用它做「改前/改后逐条比对」。
@@ -93,4 +95,28 @@ func diffLines(old, cur []string) string {
 		missing = append(missing[:40], "...（其余省略）")
 	}
 	return strings.Join(missing, "\n")
+}
+
+// TestAssetDeleteRoutesRegistered 断言资产删除与解除保护两条路由已注册。
+// 快照测试靠环境变量门控，常规 CI 覆盖不到；这里常开，防后续重构静默移除。
+// 模式与 router_test.go 的 TestMCPAndAPIKeyRoutesRegistered 一致。
+func TestAssetDeleteRoutesRegistered(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	// 部分 handler 构造时读取全局配置；测试不连库，只加载 YAML。
+	config.LoadConfig("../config/config.yaml")
+	r := SetupRouter()
+
+	routes := make(map[string]bool, len(r.Routes()))
+	for _, route := range r.Routes() {
+		routes[route.Method+" "+route.Path] = true
+	}
+
+	for _, want := range []string{
+		"DELETE /api/assets/:id",
+		"POST /api/assets/:id/unprotect",
+	} {
+		if !routes[want] {
+			t.Errorf("缺少路由 %s", want)
+		}
+	}
 }

@@ -8,11 +8,13 @@ import {
   EyeOff,
   Globe,
   Lock,
+  Unlock,
   MoreHorizontal,
   Radar,
   ShieldAlert,
   ShieldCheck,
   Star,
+  Trash2,
 } from 'lucide-react'
 import {
   assetApi,
@@ -42,6 +44,13 @@ const stateVariant = (state: string): BadgeVariant => {
 }
 
 export const priorityLabel = (p: string) => (p ? p.toUpperCase() : '—')
+
+// 生效中的删除保护期：未设置或已过期视为无保护（与后端口径一致，见 service/asset_service.go）。
+export const activeProtection = (s: Site): string | null => {
+  if (!s.protected_until) return null
+  const until = new Date(s.protected_until).getTime()
+  return Number.isFinite(until) && until > Date.now() ? s.protected_until : null
+}
 
 const priorityVariant = (p: string): BadgeVariant => {
   if (p === 'p0' || p === 'p1') return 'destructive'
@@ -143,6 +152,8 @@ export function buildAssetTableParts({
   probe,
   verify,
   protect,
+  unprotect,
+  onDelete,
   star,
   ignore,
   setDetailSite,
@@ -158,6 +169,8 @@ export function buildAssetTableParts({
   probe: { mutate: (site: Site) => void }
   verify: { mutate: (v: { site: Site; reachable: boolean }) => void }
   protect: { mutate: (site: Site) => void }
+  unprotect: { mutate: (site: Site) => void }
+  onDelete: (site: Site) => void
   star: { mutate: (v: { site: Site; starred: boolean }) => void }
   ignore: { mutate: (v: { site: Site; ignored: boolean }) => void }
   setDetailSite: (site: Site) => void
@@ -385,17 +398,35 @@ export function buildAssetTableParts({
                       icon: <ShieldAlert className="h-3.5 w-3.5" style={{ fontSize: 0 }} />,
                       onClick: () => verify.mutate({ site: s, reachable: false }),
                     },
+                    // 保护期双向 toggle：受保护时改发 unprotect，标签带到期日期
                     {
                       key: 'protect',
-                      label: '保护 90 天',
-                      icon: <Lock className="h-3.5 w-3.5" style={{ fontSize: 0 }} />,
-                      onClick: () => protect.mutate(s),
+                      label: activeProtection(s)
+                        ? `解除保护（至 ${s.protected_until!.slice(0, 10)}）`
+                        : '保护 90 天',
+                      icon: activeProtection(s) ? (
+                        <Unlock className="h-3.5 w-3.5" style={{ fontSize: 0 }} />
+                      ) : (
+                        <Lock className="h-3.5 w-3.5" style={{ fontSize: 0 }} />
+                      ),
+                      onClick: () =>
+                        activeProtection(s) ? unprotect.mutate(s) : protect.mutate(s),
                     },
                     {
                       key: 'ignore',
                       label: s.ignored ? '取消忽略' : '忽略（默认视图隐藏）',
                       icon: <EyeOff className="h-3.5 w-3.5" style={{ fontSize: 0 }} />,
                       onClick: () => ignore.mutate({ site: s, ignored: !s.ignored }),
+                    },
+                    {
+                      type: 'divider' as const,
+                    },
+                    {
+                      key: 'delete',
+                      label: '删除',
+                      danger: true,
+                      icon: <Trash2 className="h-3.5 w-3.5" style={{ fontSize: 0 }} />,
+                      onClick: () => onDelete(s),
                     },
                   ],
                 }}

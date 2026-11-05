@@ -10,6 +10,9 @@ import { statusTagClass } from '@/components/ui/StatusTag'
 
 const nf = new Intl.NumberFormat('zh-CN')
 
+// 下钻统一走 /assets 深链：表达式整体 encodeURIComponent，探索页从 URL 还原过滤条件。
+const drillUrl = (expr?: string) => (expr ? `/assets?q=${encodeURIComponent(expr)}` : '/assets')
+
 // shadcn Badge variant → antd Tag 主题配色（沿用原 CSS 变量，保持视觉不变）
 const badgeCls = statusTagClass
 export default function AssetOverviewPage() {
@@ -88,11 +91,11 @@ export default function AssetOverviewPage() {
   ]
 
   const cards = [
-    { icon: Layers, label: '资产总数', value: d?.assets, hint: `去重后的站点与 IP` },
-    { icon: Globe2, label: '域名', value: d?.domains, hint: '按 host 归并' },
-    { icon: Server, label: '站点', value: d?.sites, hint: `已验证 ${nf.format(d?.verified_sites ?? 0)}` },
-    { icon: Activity, label: '资产记录', value: d?.record_count, hint: '含历史与多来源' },
-    { icon: TrendingUp, label: '今日新增', value: d?.new_today, hint: '按首次发现时间' },
+    { icon: Layers, label: '资产总数', value: d?.assets, hint: `去重后的站点与 IP`, to: drillUrl() },
+    { icon: Globe2, label: '域名', value: d?.domains, hint: '按 host 归并', to: '/assets?kind=domain' },
+    { icon: Server, label: '站点', value: d?.sites, hint: `已验证 ${nf.format(d?.verified_sites ?? 0)}`, to: '/assets?kind=site' },
+    { icon: Activity, label: '资产记录', value: d?.record_count, hint: '含历史与多来源', to: '/assets?kind=record' },
+    { icon: TrendingUp, label: '今日新增', value: d?.new_today, hint: '按首次发现时间', to: drillUrl('new_within="1d"') },
   ]
 
   return (
@@ -117,16 +120,21 @@ export default function AssetOverviewPage() {
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         {cards.map((c) => (
-          <Card key={c.label} styles={{ body: { padding: '10px 12px' } }}>
-            <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
-              <c.icon className="h-3.5 w-3.5" />
-              {c.label}
-            </div>
-            <div className="mt-1 font-mono text-xl font-semibold tabular-nums">
-              {overview.isLoading ? '—' : nf.format(c.value ?? 0)}
-            </div>
-            <div className="text-muted-foreground mt-0.5 text-[11px]">{c.hint}</div>
-          </Card>
+          <Link key={c.label} to={c.to} className="block rounded-lg focus-visible:outline-none">
+            <Card
+              className="h-full cursor-pointer transition-colors hover:border-primary"
+              styles={{ body: { padding: '10px 12px' } }}
+            >
+              <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
+                <c.icon className="h-3.5 w-3.5" />
+                {c.label}
+              </div>
+              <div className="mt-1 font-mono text-xl font-semibold tabular-nums">
+                {overview.isLoading ? '—' : nf.format(c.value ?? 0)}
+              </div>
+              <div className="text-muted-foreground mt-0.5 text-[11px]">{c.hint}</div>
+            </Card>
+          </Link>
         ))}
       </div>
 
@@ -154,20 +162,39 @@ export default function AssetOverviewPage() {
             {tech.length === 0 ? (
               <p className="text-muted-foreground py-6 text-center text-sm">还没有识别出技术栈</p>
             ) : (
-              tech.map((t) => (
-                <div key={t.key} className="space-y-1">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="truncate">{t.name || t.key}</span>
-                    <span className="text-muted-foreground ml-2 font-mono tabular-nums">{t.site_count}</span>
-                  </div>
-                  <div className="bg-muted h-1.5 overflow-hidden rounded-full">
-                    <div
-                      className="bg-primary/70 h-full rounded-full"
-                      style={{ width: `${Math.max(4, ((t.site_count ?? 0) / maxTech) * 100)}%` }}
-                    />
-                  </div>
-                </div>
-              ))
+              tech.map((t) => {
+                const count = t.site_count ?? 0
+                const body = (
+                  <>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="truncate group-hover/link:text-primary">{t.name || t.key}</span>
+                      <span className="text-muted-foreground ml-2 font-mono tabular-nums">{count}</span>
+                    </div>
+                    <div className="bg-muted h-1.5 overflow-hidden rounded-full">
+                      <div
+                        className="bg-primary/70 h-full rounded-full"
+                        style={{ width: `${Math.max(4, (count / maxTech) * 100)}%` }}
+                      />
+                    </div>
+                  </>
+                )
+                if (count <= 0) {
+                  return (
+                    <div key={t.key} className="space-y-1">
+                      {body}
+                    </div>
+                  )
+                }
+                return (
+                  <Link
+                    key={t.key}
+                    to={drillUrl(`app="${t.name || t.key}"`)}
+                    className="group/link block space-y-1 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                  >
+                    {body}
+                  </Link>
+                )
+              })
             )}
           </div>
         </Card>
@@ -178,20 +205,39 @@ export default function AssetOverviewPage() {
           {sources.length === 0 ? (
             <p className="text-muted-foreground py-4 text-center text-sm sm:col-span-2">还没有采集记录</p>
           ) : (
-            sources.map((s) => (
-              <div key={s.source} className="space-y-1">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="truncate font-mono">{s.source || '—'}</span>
-                  <span className="text-muted-foreground ml-2 font-mono tabular-nums">{nf.format(s.count ?? 0)}</span>
-                </div>
-                <div className="bg-muted h-1.5 overflow-hidden rounded-full">
-                  <div
-                    className="bg-primary/50 h-full rounded-full"
-                    style={{ width: `${Math.max(4, ((s.count ?? 0) / maxSource) * 100)}%` }}
-                  />
-                </div>
-              </div>
-            ))
+            sources.map((s) => {
+              const count = s.count ?? 0
+              const body = (
+                <>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="truncate font-mono group-hover/link:text-primary">{s.source || '—'}</span>
+                    <span className="text-muted-foreground ml-2 font-mono tabular-nums">{nf.format(count)}</span>
+                  </div>
+                  <div className="bg-muted h-1.5 overflow-hidden rounded-full">
+                    <div
+                      className="bg-primary/50 h-full rounded-full"
+                      style={{ width: `${Math.max(4, (count / maxSource) * 100)}%` }}
+                    />
+                  </div>
+                </>
+              )
+              if (count <= 0) {
+                return (
+                  <div key={s.source} className="space-y-1">
+                    {body}
+                  </div>
+                )
+              }
+              return (
+                <Link
+                  key={s.source}
+                  to={drillUrl(`source="${s.source}"`)}
+                  className="group/link block space-y-1 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                >
+                  {body}
+                </Link>
+              )
+            })
           )}
         </div>
       </Card>
@@ -201,20 +247,42 @@ export default function AssetOverviewPage() {
           {(d?.recent_events || []).length === 0 ? (
             <p className="text-muted-foreground py-4 text-center text-sm">最近没有变更事件</p>
           ) : (
-            (d?.recent_events || []).slice(0, 8).map((e: any, i: number) => (
-              <div key={`${e.id ?? i}`} className="flex items-start gap-2 text-sm">
-                <span className="bg-primary/60 mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full" />
-                <span className="flex-1 truncate">
-                  {e.title || e.event_type || '变更'}
-                  {e.asset_value ? (
-                    <span className="text-muted-foreground ml-2 font-mono text-[11px]">{e.asset_value}</span>
-                  ) : null}
-                </span>
-                <span className="text-muted-foreground shrink-0 font-mono text-[11px]">
-                  {e.created_at ? new Date(e.created_at).toLocaleString() : ''}
-                </span>
-              </div>
-            ))
+            (d?.recent_events || []).slice(0, 8).map((e: any, i: number) => {
+              // 事件带 site_id 时直达资产详情页（/assets/:id）；否则退回按 host 过滤的探索视图。
+              const detailId: number | undefined = e.site_id
+              const hostUrl = e.asset_value ? drillUrl(`host="${e.asset_value}"`) : ''
+              const to = detailId ? `/assets/${detailId}` : hostUrl
+              const inner = (
+                <>
+                  <span className="bg-primary/60 mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full" />
+                  <span className="flex-1 truncate">
+                    {e.title || e.event_type || '变更'}
+                    {e.asset_value ? (
+                      <span className="text-muted-foreground ml-2 font-mono text-[11px]">{e.asset_value}</span>
+                    ) : null}
+                  </span>
+                  <span className="text-muted-foreground shrink-0 font-mono text-[11px]">
+                    {e.created_at ? new Date(e.created_at).toLocaleString() : ''}
+                  </span>
+                </>
+              )
+              if (!to) {
+                return (
+                  <div key={`${e.id ?? i}`} className="flex items-start gap-2 text-sm">
+                    {inner}
+                  </div>
+                )
+              }
+              return (
+                <Link
+                  key={`${e.id ?? i}`}
+                  to={to}
+                  className="-mx-2 flex items-start gap-2 rounded-md px-2 py-0.5 text-sm outline-none transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-primary/50"
+                >
+                  {inner}
+                </Link>
+              )
+            })
           )}
         </div>
       </Card>

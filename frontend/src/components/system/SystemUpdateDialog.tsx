@@ -136,7 +136,7 @@ function SystemUpdateDialog({ open, onClose, info, loading }: {
         if (!running) onClose()
       }}
       closable={!running}
-      maskClosable={!running}
+      mask={{ closable: !running }}
       keyboard={!running}
       width={520}
       title="系统更新"

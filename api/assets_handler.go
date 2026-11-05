@@ -240,6 +240,31 @@ func (h *AssetHandler) UpdateAssetGovernance(c *gin.Context) {
 	utils.Success(c, gin.H{"ok": true})
 }
 
+// DeleteAsset 永久删除单个资产（排除非归属资产用，不限 lost 状态）。
+// DELETE /api/assets/:id
+// 级联清单与失联删除一致；保护期内拒绝，文案带到期时间。
+func (h *AssetHandler) DeleteAsset(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		utils.BadRequest(c, "非法资产 ID")
+		return
+	}
+	actor, _ := c.Get("username")
+	name, _ := actor.(string)
+	if err := h.assets.DeleteAsset(c.Request.Context(), id, name, c.ClientIP()); err != nil {
+		switch {
+		case errors.Is(err, repo.ErrNotFound):
+			utils.NotFound(c, "资产不存在")
+		case errors.Is(err, service.ErrAssetProtected):
+			utils.Error(c, utils.ErrCodeInvalidParams, err.Error())
+		default:
+			utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		}
+		return
+	}
+	utils.SuccessWithMessage(c, "已删除", gin.H{"id": id})
+}
+
 // ListFingerprintScores 指纹评分列表：项目内资产按指纹命中算 0-100 分。
 // GET /api/assets/fingerprint-scores?project_id=1&min_score=40&max_score=100&level=high
 //

@@ -44,6 +44,8 @@ export interface Site {
   ignored: boolean
   /** 站点当前证书到期时间（指纹扫描顺带采集，未采集为空） */
   cert_not_after?: string | null
+  /** 人工删除保护期截止时间（POST /assets/:id/protect 设置，unprotect 解除）；未设置或已过期为空 */
+  protected_until?: string | null
   /** 站点的全部入口。站点按 host 归并，端口视图只能从这里读。 */
   endpoints: AssetEndpoint[]
   /** 读时按观测证据实时评分（0-100 / p0-p4），不落库 */
@@ -311,6 +313,11 @@ export const assetApi = {
   /** 人工删除保护期（这段时间内不会被自动归档） */
   protect: (id: number, days = 90) =>
     api.post<unknown, { code: number; message: string }>(`/assets/${id}/protect`, { days }),
+  /** 解除人工删除保护期（protected_until 置空，之后可删除） */
+  unprotect: (id: number) =>
+    api.post<unknown, { code: number; message: string }>(`/assets/${id}/unprotect`),
+  /** 永久删除资产（排除非归属资产）：级联验证记录/变更事件/入口/指纹命中，原始记录保留 */
+  delete: (id: number) => api.delete<unknown, { code: number; message: string }>(`/assets/${id}`),
   /** 治理操作：星标 / 标签 / 备注 / 忽略。字段可选，传了才改 */
   governance: (
     id: number,

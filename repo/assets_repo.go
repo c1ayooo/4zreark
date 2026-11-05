@@ -6,8 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"log"
 	"fmt"
+	"log"
 	"net"
 	"slices"
 	"strings"
@@ -61,6 +61,9 @@ type Site struct {
 	// CertNotAfter 是站点当前证书的到期时间（指纹扫描顺带采集），
 	// 证书到期检测循环用它发提醒；未采集过为 nil。
 	CertNotAfter *time.Time `json:"cert_not_after,omitempty"`
+	// ProtectedUntil 是人工删除保护期的截止时间（POST /assets/:id/protect 设置，
+	// /assets/:id/unprotect 解除）；未设置或已过期为 nil。
+	ProtectedUntil *time.Time `json:"protected_until,omitempty"`
 	// Endpoints 是站点的全部入口（协议 + 端口）。
 	// 站点按 host 归并，所以 http:80 / https:443 / http:8080 都挂在这一个站点下，
 	// 端口视图只能从这里读，sites.port 只是 https 优先的展示值。
@@ -163,6 +166,7 @@ const siteColumns = `s.id, s.project_id, p.code, p.name, s.host, s.port, s.proto
 	s.first_seen, s.last_seen, s.verified_at, s.next_verification_at, s.last_http_verified_at,
 	s.icp, s.icp_seen_at,
 	s.starred, coalesce(s.tags, '[]'::jsonb), coalesce(s.note, ''), s.ignored, s.cert_not_after,
+	s.protected_until,
 	coalesce((SELECT jsonb_agg(jsonb_build_object('scheme', e.scheme, 'port', e.port,
 	                                             'status_code', e.status_code) ORDER BY e.port, e.scheme)
 	            FROM site_endpoints e WHERE e.site_id = s.id), '[]'::jsonb),
@@ -180,7 +184,7 @@ func scanSite(scan func(...any) error) (*Site, error) {
 		&s.VerificationStatus, &s.VerificationReason, &s.Attempts, &s.MaxAttempts,
 		&s.FirstSeen, &s.LastSeen, &s.VerifiedAt, &s.NextVerificationAt, &s.LastHTTPVerifiedAt,
 		&s.Icp, &s.IcpSeenAt,
-		&s.Starred, &tags, &s.Note, &s.Ignored, &s.CertNotAfter, &eps,
+		&s.Starred, &tags, &s.Note, &s.Ignored, &s.CertNotAfter, &s.ProtectedUntil, &eps,
 		&s.EndpointCount, &s.RecordCount, &s.FingerprintCount, &s.LastRecordAt)
 	if err != nil {
 		return nil, err
@@ -390,6 +394,10 @@ func (a *AssetRepo) Overview(ctx context.Context) (*Overview, error) {
 			SELECT DISTINCT s.id, regexp_replace(t.key, '-product$', '', 'i') AS base
 			FROM sites s, jsonb_array_elements_text(s.tech) AS t(key)
 			JOIN fingerprint_rules r ON r.name = t.key AND r.enabled
+			-- 与站点默认视图同口径（buildAssetWhere 的 not s.ignored）：
+			-- ignored 站点在 /assets 列表默认隐藏，技术栈分布若不排除，
+			-- 点击 Top 卡片下钻 /assets?app=… 时列表 total 会比卡片数字多。
+			WHERE not s.ignored
 		) x GROUP BY base ORDER BY count(*) DESC LIMIT 8`)
 	if err == nil {
 		defer rows.Close()
@@ -443,6 +451,7 @@ func (a *AssetRepo) RecentEventsByProject(ctx context.Context, projectID int64, 
 		JOIN sites s ON s.id = e.site_id
 		JOIN projects p ON p.id = e.project_id
 		WHERE ($2 = 0 OR e.project_id = $2)
+		  AND not s.ignored -- ignored 站点的事件同默认视图一起隐藏（口径见 buildAssetWhere）
 		ORDER BY e.created_at DESC, e.id DESC LIMIT $1`, limit, projectID)
 	if err != nil {
 		return nil, err

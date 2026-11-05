@@ -261,6 +261,48 @@ func (s *AssetService) VerifySite(ctx context.Context, siteID int64, reachable b
 	return a.VerifySite(ctx, siteID, reachable, code, reason)
 }
 
+// ErrAssetProtected 标记「资产处于人工保护期内，拒绝删除」。
+// handler 用 errors.Is 把它映射成带到期时间的 4xx 文案。
+var ErrAssetProtected = errors.New("资产处于人工保护期内")
+
+// DeleteAsset 永久删除单个资产（不受 lost 状态限制，用于排除非归属资产）。
+// 级联清单与失联删除（DeleteLostSite）一致：verifications / asset_events /
+// 指纹命中 / 入口由外键级联清理，raw_records.site_id 置空保留证据链。
+// 保护期内拒绝且文案带到期时间；审计日志失败只告警不回滚（对齐 project_ops_service 的口径：
+// actor/ip 由 handler 显式传参，UserAgent 写静态标识）。
+func (s *AssetService) DeleteAsset(ctx context.Context, siteID int64, actor, ip string) error {
+	a, err := s.repo()
+	if err != nil {
+		return err
+	}
+	info, err := a.GetSiteForDelete(ctx, siteID)
+	if err != nil {
+		return err
+	}
+	if info.ProtectedUntil != nil && info.ProtectedUntil.After(time.Now()) {
+		return fmt.Errorf("%w：该资产保护期至 %s，请先解除保护",
+			ErrAssetProtected, info.ProtectedUntil.Format("2006-01-02 15:04:05"))
+	}
+	if err := a.DeleteSite(ctx, siteID); err != nil {
+		return err
+	}
+	if actor == "" {
+		actor = "system"
+	}
+	if err := repo.Default().LogOperation(ctx, repo.OperationLogInput{
+		Username:  actor,
+		Action:    "asset_delete",
+		Module:    "asset_governance",
+		Target:    info.Host,
+		Detail:    fmt.Sprintf("永久删除资产 %s（site_id=%d）", info.Host, info.ID),
+		IP:        ip,
+		UserAgent: "governance/asset-delete",
+	}); err != nil {
+		log.Printf("[Asset] 站点 %d 已删除，但审计日志写入失败: %v", siteID, err)
+	}
+	return nil
+}
+
 func (s *AssetService) RecentEvents(ctx context.Context, limit int) ([]map[string]any, error) {
 	return s.RecentEventsByProject(ctx, 0, limit)
 }

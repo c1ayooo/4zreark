@@ -2,8 +2,11 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 func errUninitialized() error { return fmt.Errorf("资产仓储未初始化") }
@@ -122,6 +125,69 @@ func (a *AssetRepo) SetProtection(ctx context.Context, siteID int64, until time.
 	}
 	tag, err := a.r.pool.Exec(ctx,
 		`UPDATE sites SET protected_until = $2 WHERE id = $1`, siteID, timeToPG(until))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ClearProtection 解除人工删除保护期：protected_until 置空（列可空，见 schema_governance.sql）。
+// 与 SetProtection 相对；不触碰 ProtectSite 的 days<=0 强制 90 天语义。
+func (a *AssetRepo) ClearProtection(ctx context.Context, siteID int64) error {
+	if a == nil || a.r == nil {
+		return errUninitialized()
+	}
+	tag, err := a.r.pool.Exec(ctx,
+		`UPDATE sites SET protected_until = NULL WHERE id = $1`, siteID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SiteForDelete 是删除前要读的站点信息：host 用于审计，protected_until 用于保护期校验。
+type SiteForDelete struct {
+	ID             int64
+	ProjectID      int64
+	Host           string
+	ProtectedUntil *time.Time
+}
+
+// GetSiteForDelete 读取单个站点的删除前信息，不存在时返回 ErrNotFound。
+func (a *AssetRepo) GetSiteForDelete(ctx context.Context, siteID int64) (*SiteForDelete, error) {
+	if a == nil || a.r == nil {
+		return nil, errUninitialized()
+	}
+	var s SiteForDelete
+	err := a.r.pool.QueryRow(ctx,
+		`SELECT id, project_id, host, protected_until FROM sites WHERE id = $1`, siteID).
+		Scan(&s.ID, &s.ProjectID, &s.Host, &s.ProtectedUntil)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// DeleteSite 物理删除一个站点，不要求 lost 状态（与 DeleteLostSite 的唯一差别）。
+// 级联清单与 DeleteLostSite 相同，全部由外键兜底：
+// verifications / asset_events / 指纹命中 / 入口（site_endpoints、site_routes）级联删除，
+// raw_records.site_id 置空保留证据链。
+// 注意：DeleteLostSite（verification_repo.go）不在本工单可改清单内，两处 SQL 暂时各自维护；
+// 若级联口径变化，务必两边同步。
+func (a *AssetRepo) DeleteSite(ctx context.Context, siteID int64) error {
+	if a == nil || a.r == nil {
+		return errUninitialized()
+	}
+	tag, err := a.r.pool.Exec(ctx, `DELETE FROM sites WHERE id = $1`, siteID)
 	if err != nil {
 		return err
 	}

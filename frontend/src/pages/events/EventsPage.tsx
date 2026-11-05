@@ -6,6 +6,7 @@ import { Button, Table, Tag } from 'antd'
 import type { TableProps } from 'antd'
 
 import { assetEventApi, eventTypeLabel, eventTypeVariant, type AssetEvent } from '@/api/relations'
+import RecordDetailDrawer from '@/components/common/RecordDetailDrawer'
 import { formatDate } from '@/lib/utils'
 
 const eventFilter = [
@@ -31,6 +32,8 @@ export default function EventsPage() {
   // 仪表盘下钻入口：/events?type=content_change 直接落到对应过滤视图
   const [searchParams, setSearchParams] = useSearchParams()
   const [type, setType] = useState(() => searchParams.get('type') ?? '')
+  // 行点击打开的详情抽屉：受控存当前事件，before/after 全文在抽屉里看不截断
+  const [detailEvent, setDetailEvent] = useState<AssetEvent | null>(null)
   const limit = 200
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['asset-events-changes', type, limit],
@@ -61,6 +64,25 @@ export default function EventsPage() {
   }
 
   // /events 只有 limit 参数、无服务端排序，时间列走客户端排序
+  // 行点击看详情：写法同 DiscoveryCandidatesPanel 的 onRow
+  const onRow: TableProps<AssetEvent>['onRow'] = (e) => ({
+    className: 'cursor-pointer',
+    onClick: () => setDetailEvent(e),
+  })
+
+  const detailFields = detailEvent
+    ? [
+        { label: '时间', value: formatDate(detailEvent.created_at) },
+        {
+          label: '类型',
+          value: eventTypeLabel[detailEvent.event_type] ?? detailEvent.event_type,
+        },
+        { label: '项目', value: detailEvent.project_name || '' },
+        { label: '站点', value: detailEvent.asset_value || '' },
+        { label: '说明', value: detailEvent.title },
+      ]
+    : []
+
   const columns: TableProps<AssetEvent>['columns'] = [
     {
       title: '时间',
@@ -161,6 +183,7 @@ export default function EventsPage() {
           dataSource={items}
           rowKey="id"
           loading={isLoading}
+          onRow={onRow}
           pagination={{ pageSize: 50, hideOnSinglePage: true }}
           locale={{
             emptyText: (
@@ -171,6 +194,14 @@ export default function EventsPage() {
           }}
         />
       </div>
+
+      <RecordDetailDrawer
+        open={detailEvent !== null}
+        onClose={() => setDetailEvent(null)}
+        title="变更事件详情"
+        fields={detailFields}
+        raw={detailEvent ? { before: detailEvent.before, after: detailEvent.after } : undefined}
+      />
     </div>
   )
 }

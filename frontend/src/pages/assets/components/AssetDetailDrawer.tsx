@@ -98,6 +98,9 @@ export default function AssetDetailDrawer({
           </div>
         )
       }
+      // antd6 的 .ant-drawer-title 是 flex 项且未带 min-width:0，长域名会撑破标题区；
+      // 内层 div 的 min-w-0 压不住它，min-w-0 必须落在 title 本体上
+      classNames={{ title: 'min-w-0' }}
       styles={{ body: { padding: 16, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }}
     >
       <div className="flex gap-1 overflow-x-auto border-b px-1 pb-2">

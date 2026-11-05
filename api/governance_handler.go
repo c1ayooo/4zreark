@@ -461,6 +461,26 @@ func (h *GovernanceHandler) ProtectAsset(c *gin.Context) {
 	utils.SuccessWithMessage(c, "已设置保护期", gin.H{"id": id, "days": body.Days})
 }
 
+// UnprotectAsset 解除人工删除保护期（protected_until 置空）。
+// 与 ProtectAsset 相对：没有它，误设 90 天保护的资产在窗口内删不掉。
+// POST /api/assets/:id/unprotect
+func (h *GovernanceHandler) UnprotectAsset(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "非法资产 ID")
+		return
+	}
+	if err := h.cleanup.ClearProtection(c.Request.Context(), id); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			utils.NotFound(c, "资产不存在")
+			return
+		}
+		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
+		return
+	}
+	utils.SuccessWithMessage(c, "已解除保护期", gin.H{"id": id})
+}
+
 // --- 指纹规则（条件树） ---
 
 // SyncFingerprints 把内置规则集（dddd 快照 + 种子）幂等写入 PG。

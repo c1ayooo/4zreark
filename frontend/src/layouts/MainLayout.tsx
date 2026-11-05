@@ -34,7 +34,8 @@ export default function MainLayout() {
         )}
       >
         <Header onMenuClick={() => setMobileNavOpen(true)} />
-        <main className="flex-1 p-4 md:p-6">
+        {/* 纵向留白收窄一档（1366×768 首屏要放下筛选区+表格）：水平保持 p-4/px-6 惯例 */}
+        <main className="flex-1 p-4 md:px-6 md:py-4">
           {/* Suspense 只包内容区：路由切换时侧栏与顶栏不重新挂载，避免整页闪烁。
               PageTransition 按 pathname 做入场动效（fade + 上移）。 */}
           <PageTransition routeKey={location.pathname}>
@@ -49,7 +50,7 @@ export default function MainLayout() {
             </Suspense>
           </PageTransition>
         </main>
-        <footer className="border-t px-4 py-4 md:px-6">
+        <footer className="border-t px-4 py-3 md:px-6">
           <p className="text-center text-xs text-muted-foreground">4zreark · c1ayoo</p>
         </footer>
       </div>

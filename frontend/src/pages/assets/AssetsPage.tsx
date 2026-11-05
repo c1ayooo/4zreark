@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
-import { Button, Checkbox, Dropdown, Input, Modal, Pagination, Select, Table, Tag } from 'antd'
+import { Button, Checkbox, Dropdown, Input, Modal, Pagination, Select, Table, Tag, Tooltip } from 'antd'
 import type { MenuProps, TableProps } from 'antd'
 import {
   assetApi,
@@ -15,6 +15,7 @@ import {
   Site,
 } from '@/api/assets'
 import EmptyState from '@/components/common/EmptyState'
+import { useConfirm } from '@/components/common/confirm-provider'
 import CreateTaskFromAssetsDialog from '@/components/tasks/CreateTaskFromAssetsDialog'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
@@ -32,6 +33,8 @@ import {
   Trash2,
   SlidersHorizontal,
   RotateCcw,
+  Filter,
+  Info,
 } from 'lucide-react'
 import { statusTagClass } from '@/components/ui/StatusTag'
 import AssetDetailDrawer, { stateLabel } from './components/AssetDetailDrawer'
@@ -40,6 +43,7 @@ import {
   DEFAULT_SITE_COLUMNS,
   SITE_COLUMNS,
   SITE_COLUMNS_KEY,
+  activeProtection,
   buildAssetTableParts,
   loadSiteColumns,
   priorityLabel,
@@ -70,12 +74,22 @@ const CATALOGS: { value: AssetCatalog; label: string }[] = [
   { value: 'candidates', label: '候选' },
 ]
 
-const VIEWS: { value: AssetView; label: string }[] = [
+const VIEWS: { value: AssetView; label: string; title?: string }[] = [
   { value: '', label: '缺省' },
   { value: 'clues', label: '线索' },
   { value: 'lost', label: '失联' },
-  { value: 'interfaces', label: '接口' },
-  { value: 'crawler', label: '爬虫' },
+  {
+    value: 'interfaces',
+    label: '接口',
+    title:
+      '接口候选不要求 /api 前缀：非 GET 方法、JSON 响应、jsluice 来源、带查询串或接口路径段（graphql / gateway / rest 等）都会命中。站点粒度列出含接口的站点，切换粒度到「原始记录」可看具体 URL。',
+  },
+  {
+    value: 'crawler',
+    label: '爬虫',
+    title:
+      '爬虫视图收录 katana 爬出来的 URL（历史数据按爬虫特征兜底识别，目录扫描不带爬虫特征不会混入）。搜索框可用 source="katana"、is_interface="true"、method="POST"、content_type="json" 等条件继续收窄。站点粒度列出含爬虫记录的站点，切换粒度到「原始记录」可看具体 URL。',
+  },
   { value: 'icons', label: '图标' },
   { value: 'technologies', label: '技术栈' },
   { value: 'ignored', label: '已忽略' },
@@ -135,7 +149,7 @@ function downloadCSV(filename: string, rows: unknown[][]) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-/** 三段切换的小控件 */
+/** 三段切换的小控件（option 可带 title，hover 出 Tooltip 承载原视图说明条文案） */
 function Segmented<T extends string>({
   value,
   options,
@@ -143,34 +157,81 @@ function Segmented<T extends string>({
   disabled,
 }: {
   value: T
-  options: { value: T; label: string }[]
+  options: { value: T; label: string; title?: string }[]
   onChange: (v: T) => void
   disabled?: boolean
 }) {
   return (
     <div className="inline-flex overflow-hidden rounded-md border">
-      {options.map((o) => (
-        <button
-          key={o.value || 'default'}
-          type="button"
-          disabled={disabled}
-          onClick={() => onChange(o.value)}
-          className={
-            'px-3 py-1.5 text-sm transition-colors ' +
-            (value === o.value
-              ? 'bg-foreground text-background'
-              : 'bg-background hover:bg-muted disabled:opacity-50')
-          }
-        >
-          {o.label}
-        </button>
-      ))}
+      {options.map((o) => {
+        const btn = (
+          <button
+            key={o.value || 'default'}
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange(o.value)}
+            className={
+              'px-3 py-1.5 text-sm transition-colors ' +
+              (value === o.value
+                ? 'bg-foreground text-background'
+                : 'bg-background hover:bg-muted disabled:opacity-50')
+            }
+          >
+            {o.label}
+          </button>
+        )
+        return o.title ? (
+          <Tooltip key={o.value || 'default'} title={o.title}>
+            {btn}
+          </Tooltip>
+        ) : (
+          btn
+        )
+      })}
     </div>
   )
 }
 
+// —— §9 宽表响应式：columns.tsx 已带 responsive 的列保持不动，这里按列标题补齐其余次要列，
+// 从右往左逐级收窄（窄视口只留主列 + 状态列），375 宽下不出现横向滚动。
+type ColumnResponsive = NonNullable<
+  NonNullable<TableProps<AssetRow>['columns']>[number]['responsive']
+>
+
+const RESPONSIVE_BY_KIND: Record<string, Record<string, ColumnResponsive>> = {
+  // 站点展开（入口粒度）：入口/连通常显
+  siteExpanded: {
+    项目: ['lg'],
+    最近发现: ['md'],
+    记录数: ['sm'],
+    协议: ['md'],
+  },
+  // 原始记录：记录本体 + 状态码常显
+  record: {
+    'IP / 服务': ['xl'],
+    项目: ['lg'],
+    观察时间: ['lg'],
+    标题: ['md'],
+    '来源 / 方法': ['md'],
+    状态码: ['sm'],
+  },
+  domain: {
+    项目: ['lg'],
+    最近发现: ['md'],
+    可达: ['md'],
+    站点数: ['sm'],
+  },
+  ip: {
+    项目: ['lg'],
+    最近发现: ['md'],
+    域名数: ['sm'],
+    站点数: ['sm'],
+  },
+}
+
 export default function AssetsPage() {
   const { toast } = useToast()
+  const confirm = useConfirm()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -194,6 +255,16 @@ export default function AssetsPage() {
     const n = Number(searchParams.get('page_size'))
     return [20, 50, 100, 200, 500].includes(n) ? n : 50
   })
+  // 次要筛选收进「更多筛选」默认收起；深链 q/kind/catalog/view 进来时自动展开，
+  // 保证外部链接带进来的条件对用户可见。
+  const [moreFiltersOpen, setMoreFiltersOpen] = useState(() => {
+    if (searchParams.get('q')) return true
+    const k = searchParams.get('kind')
+    if (k && k !== 'site') return true
+    const c = searchParams.get('catalog')
+    if (c && c !== 'all') return true
+    return !!searchParams.get('view')
+  })
   const [cursorStack, setCursorStack] = useState<Array<string | undefined>>([undefined])
   const [detailSite, setDetailSite] = useState<Site | null>(null)
   const [detailTab, setDetailTab] = useState<'overview' | 'endpoints' | 'records' | 'fingerprints' | 'verifications'>('overview')
@@ -205,8 +276,8 @@ export default function AssetsPage() {
   const cursor = cursorStack[cursorStack.length - 1]
   const clusterView = view === 'icons' || view === 'technologies'
   const riskSort = sort === 'risk' && (kind === 'domain' || kind === 'ip' || (kind === 'site' && siteGroup))
-  // 排序适用于：站点归并 / 域名 / IP，且不在聚类视图。工具栏控件常驻渲染、
-  // 按需禁用——任何切换都不改变工具栏的几何形状（高度、位置零变化）。
+  // 排序适用于：站点归并 / 域名 / IP，且不在聚类视图。工具栏控件按需禁用——
+  // 排序在「更多筛选」面板内，展开/收起不影响第一行工具区的几何形状。
   const sortApplicable = !clusterView && (kind === 'domain' || kind === 'ip' || (kind === 'site' && siteGroup))
 
   // 聚类下钻：把图标/技术栈变成资产列表的过滤条件，回到站点粒度看命中的资产。
@@ -397,6 +468,69 @@ export default function AssetsPage() {
     onError: (e: any) => toast({ title: '设置失败', description: e?.message, variant: 'destructive' }),
   })
 
+  const unprotect = useMutation({
+    mutationFn: (site: Site) => assetApi.unprotect(site.id),
+    onSuccess: () => toast({ title: '已解除保护期，删除与自动归档不再被拦截' }),
+    onError: (e: any) => toast({ title: '解除失败', description: e?.message, variant: 'destructive' }),
+  })
+
+  // 永久删除：成功后失效列表与总览；后端拒绝（含保护期）错误原样透传 destructive toast。
+  const remove = useMutation({
+    mutationFn: (site: Site) => assetApi.delete(site.id),
+    onSuccess: (_, site) => {
+      toast({ title: `已删除 ${site.value}` })
+      refresh()
+    },
+    onError: (e: any) => toast({ title: '删除失败', description: e?.message, variant: 'destructive' }),
+  })
+
+  // 删除入口：无保护走一次强确认；保护期内展示到期时间，走「解除保护 → 再次确认 → 删除」两步路径，
+  // 不让用户在确认后撞后端的保护期报错。
+  const handleDelete = async (site: Site) => {
+    const until = activeProtection(site)
+    const aftermath = '将删除该站点及其验证记录、变更事件、入口与指纹命中；原始记录保留。删除后不可恢复。'
+    if (!until) {
+      const ok = await confirm({
+        title: `删除资产 ${site.value}？`,
+        description: aftermath,
+        confirmText: '删除',
+        destructive: true,
+      })
+      if (ok) remove.mutate(site)
+      return
+    }
+    const ok = await confirm({
+      title: `删除资产 ${site.value}？`,
+      description: `该资产处于删除保护期，到期时间 ${until.slice(0, 19).replace('T', ' ')}。${aftermath}`,
+      confirmText: '解除保护并删除',
+      destructive: true,
+    })
+    if (!ok) return
+    try {
+      await assetApi.unprotect(site.id)
+    } catch (e: any) {
+      toast({ title: '解除保护失败', description: e?.message, variant: 'destructive' })
+      return
+    }
+    const ok2 = await confirm({
+      title: `删除资产 ${site.value}？`,
+      description: `保护期已解除。${aftermath}`,
+      confirmText: '删除',
+      destructive: true,
+    })
+    if (ok2) {
+      remove.mutate(site)
+      return
+    }
+    // 最后一步取消：把刚解除的保护期按原到期时间补回去，不让保护被静默丢掉。
+    const remainDays = Math.max(1, Math.ceil((new Date(until).getTime() - Date.now()) / 86400000))
+    try {
+      await assetApi.protect(site.id, remainDays)
+    } catch (e: any) {
+      toast({ title: '恢复保护期失败，请手动重新设置', description: e?.message, variant: 'destructive' })
+    }
+  }
+
   // 星标开关：本地先翻（列表不闪），失败时回滚靠失效重取。
   const star = useMutation({
     mutationFn: ({ site, starred }: { site: Site; starred: boolean }) =>
@@ -473,6 +607,8 @@ export default function AssetsPage() {
   }
 
   const applySavedView = (v: SavedAssetView) => {
+    // 保存的视图可能设置了收起的次要筛选（粒度/口径/项目等），展开让条件可见
+    setMoreFiltersOpen(true)
     setQ(v.q)
     setAppliedQ(v.q)
     setProjectId(v.projectId)
@@ -520,7 +656,7 @@ export default function AssetsPage() {
   const hasMore = data?.has_more ?? false
   const stats = overview.data?.data
   const policy = data?.connectivity_policy
-  const busy = probe.isPending || verify.isPending || protect.isPending
+  const busy = probe.isPending || verify.isPending || protect.isPending || unprotect.isPending || remove.isPending
   const expanded = kind === 'site' && !siteGroup
 
   const exportCurrent = (siteSubset?: Site[]) => {
@@ -598,7 +734,7 @@ export default function AssetsPage() {
   const virtualize = kind === 'site' && !expanded && pageSize >= 100 && !clusterView && expandedSiteIDs.size === 0
 
   // —— 列定义：四种行形态各自的列集与行键/行事件，在 components/columns.tsx 按粒度构建 ——
-  const { columns, rowKey, onRow } = buildAssetTableParts({
+  const tableParts = buildAssetTableParts({
     kind,
     expanded,
     riskSort,
@@ -609,11 +745,30 @@ export default function AssetsPage() {
     probe,
     verify,
     protect,
+    unprotect,
+    onDelete: (site) => void handleDelete(site),
     star,
     ignore,
     setDetailSite,
     navigate,
   })
+  // 按当前粒度补齐次要列的 responsive 断点（columns.tsx 已标注的列不被覆盖）
+  const respMap = expanded
+    ? RESPONSIVE_BY_KIND.siteExpanded
+    : kind === 'record'
+      ? RESPONSIVE_BY_KIND.record
+      : kind === 'domain'
+        ? RESPONSIVE_BY_KIND.domain
+        : kind === 'ip'
+          ? RESPONSIVE_BY_KIND.ip
+          : undefined
+  const columns = respMap
+    ? (tableParts.columns ?? []).map((c) => {
+        const responsive = typeof c?.title === 'string' ? respMap[c.title] : undefined
+        return responsive ? { ...c, responsive } : c
+      })
+    : tableParts.columns
+  const { rowKey, onRow } = tableParts
 
   // 站点归并粒度：行多选（key 与 host/value 对齐），行内展开最近记录。
   const siteMode = kind === 'site' && !expanded
@@ -767,24 +922,50 @@ export default function AssetsPage() {
       : techClusters.data?.data.total ?? 0
     : total
 
+  // 「更多筛选」里生效中的次要条件数，给收起态的开关按钮一个一眼可见的信号
+  const activeMoreCount =
+    (projectId !== '0' ? 1 : 0) +
+    (activeFp ? 1 : 0) +
+    (kind !== 'site' ? 1 : 0) +
+    (catalog !== 'all' ? 1 : 0) +
+    (siteGroup ? 0 : 1) +
+    (starredOnly ? 1 : 0) +
+    (sort !== 'first_seen' ? 1 : 0) +
+    (pageSize !== 50 ? 1 : 0)
+
   return (
-    <div className="space-y-5 p-6">
-      <div className="flex items-start justify-between">
-        <div>
+    <div className="space-y-4">
+      {/* 标题行：裸 h1（§3 不放说明副标题），统计与判定口径收进 Tooltip 图标 */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-1.5">
           <h1 className="text-2xl font-semibold">资产探索</h1>
-          <p className="text-sm text-muted-foreground">
-            原始记录 {(stats?.record_count ?? 0).toLocaleString()} 条 · 归并站点{' '}
-            {(stats?.sites ?? 0).toLocaleString()} 个 · 域名 {(stats?.domains ?? 0).toLocaleString()} 个 ·
-            可访问 {(stats?.verified_sites ?? 0).toLocaleString()} 个 · 失联{' '}
-            {(stats?.lost_count ?? 0).toLocaleString()} 个
-          </p>
-          {policy && (
-            <p className="mt-1 text-[13px] text-muted-foreground">
-              判定口径：连续失败 {policy.failure_threshold} 次转失联 · 重试间隔 {policy.first_hours}/
-              {policy.second_hours}/{policy.repeat_hours} 小时 · 失联 {policy.cleanup_days} 天后可归档
-              {policy.auto_cleanup ? '（自动）' : '（手动）'}
-            </p>
-          )}
+          <Tooltip
+            title={
+              <div className="space-y-1">
+                <p>
+                  原始记录 {(stats?.record_count ?? 0).toLocaleString()} 条 · 归并站点{' '}
+                  {(stats?.sites ?? 0).toLocaleString()} 个 · 域名 {(stats?.domains ?? 0).toLocaleString()} 个 ·
+                  可访问 {(stats?.verified_sites ?? 0).toLocaleString()} 个 · 失联{' '}
+                  {(stats?.lost_count ?? 0).toLocaleString()} 个
+                </p>
+                {policy && (
+                  <p>
+                    判定口径：连续失败 {policy.failure_threshold} 次转失联 · 重试间隔 {policy.first_hours}/
+                    {policy.second_hours}/{policy.repeat_hours} 小时 · 失联 {policy.cleanup_days} 天后可归档
+                    {policy.auto_cleanup ? '（自动）' : '（手动）'}
+                  </p>
+                )}
+              </div>
+            }
+          >
+            <button
+              type="button"
+              aria-label="资产统计与判定口径说明"
+              className="rounded-full p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <Info className="h-4 w-4" />
+            </button>
+          </Tooltip>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Dropdown
@@ -812,8 +993,9 @@ export default function AssetsPage() {
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[300px]">
+      {/* 工具区第一行：搜索 + 查询/清空 + 视图 + 计数 + 更多筛选开关（flex-wrap，窄屏换行不重叠） */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[240px] flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             className="pl-9 font-mono text-sm"
@@ -834,110 +1016,119 @@ export default function AssetsPage() {
         >
           清空
         </Button>
-        <Select
-          className="w-[200px]"
-          value={projectId}
-          onChange={changeProject}
-          placeholder="全部项目"
-          options={[
-            { value: '0', label: '全部项目' },
-            ...(projects.data?.data ?? []).map((p) => ({
-              value: String(p.id),
-              label: `${p.name}（${p.asset_count}）`,
-            })),
-          ]}
-        />
-        <Select
-          className="w-[200px]"
-          value={activeFp || undefined}
-          onChange={(v) => changeFp(typeof v === 'string' ? v : '')}
-          placeholder="按指纹筛选"
-          allowClear
-          showSearch
-          optionFilterProp="value"
-          loading={appOptions.isLoading}
-          options={(appOptions.data?.data.items ?? []).map((o) => ({
-            value: o.name,
-            label: `${o.name}（${o.site_count}）`,
-          }))}
-        />
-      </div>
-
-      <div className="flex flex-wrap items-center gap-4">
-        <div className="flex items-center gap-2">
-          <span className="text-[13px] text-muted-foreground">粒度</span>
-          <Segmented value={kind} options={KINDS} onChange={changeKind} />
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-[13px] text-muted-foreground">口径</span>
-          <Segmented value={catalog} options={CATALOGS} onChange={(v) => { setCatalog(v); setPage(1) }} />
-        </div>
         <div className="flex items-center gap-2">
           <span className="text-[13px] text-muted-foreground">视图</span>
           <Segmented value={view} options={VIEWS} onChange={changeView} />
-        </div>
-        <span
-          className="flex items-center gap-2 text-[13px] text-muted-foreground"
-          title={kind === 'site' ? undefined : '仅站点粒度支持按站点归并'}
-        >
-          <Checkbox
-            checked={siteGroup}
-            disabled={kind !== 'site'}
-            onChange={(e) => { setSiteGroup(e.target.checked); setPage(1) }}
-          >
-            按站点归并
-          </Checkbox>
-        </span>
-        <span className="flex items-center gap-2 text-[13px] text-muted-foreground">
-          <Checkbox checked={starredOnly} onChange={(e) => { setStarredOnly(e.target.checked); setPage(1) }}>
-            只看星标
-          </Checkbox>
-        </span>
-        <div className="flex items-center gap-2">
-          <span className={'text-[13px] ' + (sortApplicable ? 'text-muted-foreground' : 'text-muted-foreground/50')}>
-            排序
-          </span>
-          <Segmented value={sort} options={SORTS} disabled={!sortApplicable} onChange={(v) => { setSort(v); setPage(1) }} />
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-[13px] text-muted-foreground">每页</span>
-          <Select
-            className="w-[76px]"
-            value={String(clusterView ? 60 : pageSize)}
-            disabled={clusterView}
-            title={clusterView ? '图标/技术栈聚类视图固定每页 60' : undefined}
-            onChange={(v) => { setPageSize(Number(v)); setPage(1) }}
-            options={[20, 50, 100, 200, 500].map((n) => ({ value: String(n), label: String(n) }))}
-          />
         </div>
         <span className="ml-auto flex items-center gap-2 text-sm text-muted-foreground">
           {list.isFetching && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-label="加载中" />}
           {cursorMode ? `已加载 ${items.length} 条` : `共 ${total.toLocaleString()} 条`}
         </span>
+        <Button
+          onClick={() => setMoreFiltersOpen((v) => !v)}
+          aria-expanded={moreFiltersOpen}
+          aria-controls="assets-more-filters"
+        >
+          <Filter className="mr-2 h-4 w-4" />
+          更多筛选{activeMoreCount > 0 ? ` · ${activeMoreCount}` : ''}
+        </Button>
       </div>
 
+      {/* 更多筛选：次要筛选项默认收起，深链 q/kind/catalog/view 进来时自动展开 */}
+      {moreFiltersOpen && (
+        <div id="assets-more-filters" className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <Select
+            className="w-[180px]"
+            value={projectId}
+            onChange={changeProject}
+            placeholder="全部项目"
+            options={[
+              { value: '0', label: '全部项目' },
+              ...(projects.data?.data ?? []).map((p) => ({
+                value: String(p.id),
+                label: `${p.name}（${p.asset_count}）`,
+              })),
+            ]}
+          />
+          <Select
+            className="w-[180px]"
+            value={activeFp || undefined}
+            onChange={(v) => changeFp(typeof v === 'string' ? v : '')}
+            placeholder="按指纹筛选"
+            allowClear
+            showSearch
+            optionFilterProp="value"
+            loading={appOptions.isLoading}
+            options={(appOptions.data?.data.items ?? []).map((o) => ({
+              value: o.name,
+              label: `${o.name}（${o.site_count}）`,
+            }))}
+          />
+          <div className="flex items-center gap-2">
+            <span className="text-[13px] text-muted-foreground">粒度</span>
+            <Segmented value={kind} options={KINDS} onChange={changeKind} />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[13px] text-muted-foreground">口径</span>
+            <Segmented value={catalog} options={CATALOGS} onChange={(v) => { setCatalog(v); setPage(1) }} />
+          </div>
+          <span
+            className="flex items-center gap-2 text-[13px] text-muted-foreground"
+            title={kind === 'site' ? undefined : '仅站点粒度支持按站点归并'}
+          >
+            <Checkbox
+              checked={siteGroup}
+              disabled={kind !== 'site'}
+              onChange={(e) => { setSiteGroup(e.target.checked); setPage(1) }}
+            >
+              按站点归并
+            </Checkbox>
+          </span>
+          <span className="flex items-center gap-2 text-[13px] text-muted-foreground">
+            <Checkbox checked={starredOnly} onChange={(e) => { setStarredOnly(e.target.checked); setPage(1) }}>
+              只看星标
+            </Checkbox>
+          </span>
+          <div className="flex items-center gap-2">
+            <span className={'text-[13px] ' + (sortApplicable ? 'text-muted-foreground' : 'text-muted-foreground/50')}>
+              排序
+            </span>
+            <Segmented value={sort} options={SORTS} disabled={!sortApplicable} onChange={(v) => { setSort(v); setPage(1) }} />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[13px] text-muted-foreground">每页</span>
+            <Select
+              className="w-[76px]"
+              value={String(clusterView ? 60 : pageSize)}
+              disabled={clusterView}
+              title={clusterView ? '图标/技术栈聚类视图固定每页 60' : undefined}
+              onChange={(v) => { setPageSize(Number(v)); setPage(1) }}
+              options={[20, 50, 100, 200, 500].map((n) => ({ value: String(n), label: String(n) }))}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* 当前生效的查询串压缩成单行 chip，× 可直接清除 */}
       {appliedQ && (
-        <div className="rounded border bg-muted/40 px-3 py-2 font-mono text-[13px] text-muted-foreground">
-          q = {appliedQ}
-        </div>
-      )}
-
-      {view === 'interfaces' && (
-        <div className="rounded border bg-muted/40 px-3 py-2 text-[13px] text-muted-foreground">
-          接口候选不要求 <span className="font-mono">/api</span> 前缀：非 GET 方法、JSON 响应、
-          jsluice 来源、带查询串或接口路径段（graphql / gateway / rest 等）都会命中。
-          {kind === 'site' ? '当前列出含接口的站点，切换粒度到「原始记录」可看具体 URL。' : ''}
-        </div>
-      )}
-
-      {view === 'crawler' && (
-        <div className="rounded border bg-muted/40 px-3 py-2 text-[13px] text-muted-foreground">
-          爬虫视图收录 katana 爬出来的 URL（历史数据按爬虫特征兜底识别，目录扫描不带爬虫特征不会混入）。
-          搜索框可用 <span className="font-mono">source="katana"</span>、
-          <span className="font-mono">is_interface="true"</span>、
-          <span className="font-mono">method="POST"</span>、
-          <span className="font-mono">content_type="json"</span> 等条件继续收窄。
-          {kind === 'site' ? '当前列出含爬虫记录的站点，切换粒度到「原始记录」可看具体 URL。' : ''}
+        <div className="flex">
+          <span className="flex max-w-full items-center gap-1 rounded-full border bg-muted/40 py-0.5 pl-3 pr-1.5">
+            <span className="truncate font-mono text-[13px] text-muted-foreground" title={appliedQ}>
+              {appliedQ}
+            </span>
+            <button
+              type="button"
+              aria-label="清除查询条件"
+              className="shrink-0 rounded-full p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              onClick={() => {
+                setQ('')
+                setAppliedQ('')
+                setPage(1)
+              }}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </span>
         </div>
       )}
 
@@ -996,7 +1187,7 @@ export default function AssetsPage() {
             loading={list.isFetching}
             pagination={false}
             virtual={virtualize}
-            scroll={virtualize ? { y: '70vh' } : undefined}
+            scroll={virtualize ? { x: 'max-content', y: '70vh' } : { x: 'max-content' }}
             rowSelection={rowSelection as TableProps<AssetRow>['rowSelection']}
             expandable={expandable as TableProps<AssetRow>['expandable']}
             onRow={onRow}

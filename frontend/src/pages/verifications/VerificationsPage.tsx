@@ -4,9 +4,11 @@ import { RefreshCw, RotateCcw, ShieldAlert, ShieldCheck, ShieldQuestion } from '
 import { Button, Card, Input, Select, Table, Tag } from 'antd'
 import type { TableProps } from 'antd'
 
+import { useNavigate } from 'react-router-dom'
 import { projectApi } from '@/api/projects'
 import { verificationApi, type VerificationRow } from '@/api/verifications'
 import EmptyState from '@/components/common/EmptyState'
+import RecordDetailDrawer from '@/components/common/RecordDetailDrawer'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
@@ -38,6 +40,7 @@ const statusVariant = (status: string): 'default' | 'secondary' | 'destructive' 
 const badgeCls = statusTagClass
 export default function VerificationsPage() {
   const { toast } = useToast()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin')
   const [projectId, setProjectId] = useState('0')
@@ -47,6 +50,8 @@ export default function VerificationsPage() {
   useEffect(() => { setPage(1) }, [debouncedReason])
   const [page, setPage] = useState(1)
   const pageSize = 30
+  // 行点击打开的详情抽屉：受控存当前流水，detail 全文与资产档案入口在这里
+  const [detailRow, setDetailRow] = useState<VerificationRow | null>(null)
 
   const projects = useQuery({ queryKey: ['asset-projects'], queryFn: () => projectApi.list() })
   const stats = useQuery({
@@ -119,6 +124,29 @@ export default function VerificationsPage() {
     { key: 'inconclusive', label: '不确定', value: countOf('inconclusive'), icon: ShieldQuestion },
   ]
 
+  // 行点击看详情：写法同 DiscoveryCandidatesPanel 的 onRow
+  const onRow: TableProps<VerificationRow>['onRow'] = (r) => ({
+    className: 'cursor-pointer',
+    onClick: () => setDetailRow(r),
+  })
+
+  const projectName = detailRow
+    ? projects.data?.data?.find((p) => p.id === detailRow.project_id)?.name ??
+      String(detailRow.project_id)
+    : ''
+  const detailFields = detailRow
+    ? [
+        { label: '站点', value: detailRow.host },
+        { label: '站点 ID', value: String(detailRow.site_id) },
+        { label: '项目', value: projectName },
+        { label: '结果', value: statusLabel[detailRow.status] ?? detailRow.status },
+        { label: '失败原因', value: detailRow.reason_code || '' },
+        { label: 'HTTP 状态码', value: detailRow.http_status ? String(detailRow.http_status) : '' },
+        { label: '尝试次数', value: String(detailRow.attempts) },
+        { label: '观测时间', value: formatDate(detailRow.observed_at) },
+      ]
+    : []
+
   const columns: TableProps<VerificationRow>['columns'] = [
     {
       title: '时间',
@@ -174,7 +202,11 @@ export default function VerificationsPage() {
             type="text"
             size="small"
             disabled={singleRecheck.isPending}
-            onClick={() => singleRecheck.mutate(r.site_id)}
+            onClick={(e) => {
+              // 复验按钮不触发行点击，避免误开详情抽屉
+              e.stopPropagation()
+              singleRecheck.mutate(r.site_id)
+            }}
           >
             复验
           </Button>
@@ -267,6 +299,7 @@ export default function VerificationsPage() {
           dataSource={rows}
           rowKey="id"
           loading={list.isLoading}
+          onRow={onRow}
           locale={{ emptyText: <EmptyState title="暂无验证流水" className="border-0" /> }}
           pagination={{
             current: page,
@@ -278,6 +311,25 @@ export default function VerificationsPage() {
           }}
         />
       </div>
+
+      <RecordDetailDrawer
+        open={detailRow !== null}
+        onClose={() => setDetailRow(null)}
+        title="验证记录详情"
+        fields={detailFields}
+        raw={
+          detailRow && Object.keys(detailRow.detail ?? {}).length > 0
+            ? detailRow.detail
+            : undefined
+        }
+        footer={
+          detailRow ? (
+            <Button type="primary" block onClick={() => navigate(`/assets/${detailRow.site_id}`)}>
+              打开资产档案
+            </Button>
+          ) : undefined
+        }
+      />
     </div>
   )
 }

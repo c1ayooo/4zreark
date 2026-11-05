@@ -9,6 +9,7 @@ import {
   type DiscoveryCandidate,
 } from '@/api/discovery'
 import { useConfirm } from '@/components/common/confirm-provider'
+import RecordDetailDrawer from '@/components/common/RecordDetailDrawer'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
 
@@ -50,6 +51,8 @@ export function DiscoveryCandidatesPanel({ projectId }: { projectId: number }) {
   const [sourceFilter, setSourceFilter] = useState<string>('all')
   const [tierFilter, setTierFilter] = useState<'all' | 'high' | 'mid' | 'low'>('all')
   const [keyword, setKeyword] = useState('')
+  // 行点击打开的详情抽屉：受控存当前候选，值全文在这里看不截断
+  const [detailCandidate, setDetailCandidate] = useState<DiscoveryCandidate | null>(null)
 
   const candidatesQuery = useQuery({
     queryKey: ['project-candidates', projectId, status],
@@ -237,7 +240,11 @@ export function DiscoveryCandidatesPanel({ projectId }: { projectId: number }) {
                   className="h-auto p-0"
                   loading={isDeciding(c.id, true)}
                   disabled={decideMutation.isPending && !isDeciding(c.id, true)}
-                  onClick={() => decideMutation.mutate({ ids: [c.id], accept: true })}
+                  onClick={(e) => {
+                    // 行点击已绑详情抽屉，操作按钮阻止冒泡避免误开
+                    e.stopPropagation()
+                    decideMutation.mutate({ ids: [c.id], accept: true })
+                  }}
                 >
                   接受
                 </Button>
@@ -247,7 +254,10 @@ export function DiscoveryCandidatesPanel({ projectId }: { projectId: number }) {
                   className="text-destructive h-auto p-0"
                   loading={isDeciding(c.id, false)}
                   disabled={decideMutation.isPending && !isDeciding(c.id, false)}
-                  onClick={() => handleRejectOne(c.id)}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleRejectOne(c.id)
+                  }}
                 >
                   拒绝
                 </Button>
@@ -284,6 +294,35 @@ export function DiscoveryCandidatesPanel({ projectId }: { projectId: number }) {
       />
     ),
   }
+
+  // 行点击看详情：勾选列的点击不触发（写法同 assets columns.tsx 的 onRow）
+  const onRow: TableProps<DiscoveryCandidate>['onRow'] = (c) => ({
+    className: 'cursor-pointer',
+    onClick: (e) => {
+      if ((e.target as HTMLElement).closest('.ant-table-selection-column')) return
+      setDetailCandidate(c)
+    },
+  })
+
+  const detailFields = detailCandidate
+    ? [
+        { label: '值', value: detailCandidate.value },
+        {
+          label: '类型',
+          value: candidateKindLabel[detailCandidate.kind] ?? detailCandidate.kind,
+        },
+        { label: '置信度', value: `${detailCandidate.confidence}%` },
+        { label: '来源', value: sourceLabel[detailCandidate.source] ?? detailCandidate.source },
+        {
+          label: '状态',
+          value:
+            STATUS_OPTIONS.find((o) => o.value === detailCandidate.status)?.label ??
+            detailCandidate.status,
+        },
+        { label: '发现时间', value: formatDate(detailCandidate.created_at) },
+        { label: '决策时间', value: detailCandidate.decided_at ?? '' },
+      ]
+    : []
 
   return (
     <Card
@@ -398,10 +437,18 @@ export function DiscoveryCandidatesPanel({ projectId }: { projectId: number }) {
         dataSource={filteredItems}
         rowKey="id"
         rowSelection={rowSelection}
+        onRow={onRow}
         loading={candidatesQuery.isLoading}
         size="small"
         locale={{ emptyText: '没有符合当前条件的候选' }}
         pagination={{ pageSize: 10, hideOnSinglePage: true }}
+      />
+      <RecordDetailDrawer
+        open={detailCandidate !== null}
+        onClose={() => setDetailCandidate(null)}
+        title="发现候选详情"
+        fields={detailFields}
+        raw={detailCandidate ?? undefined}
       />
     </Card>
   )

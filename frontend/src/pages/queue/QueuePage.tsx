@@ -6,6 +6,7 @@ import type { TableProps } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors'
 import { useConfirm } from '@/components/common/confirm-provider'
+import RecordDetailDrawer from '@/components/common/RecordDetailDrawer'
 import { cn, formatDate } from '@/lib/utils'
 import {
   ListTodo,
@@ -437,6 +438,35 @@ function TaskTable({
   onRetry?: (id: string) => void
   pagination?: TableProps<QueueTask>['pagination']
 }) {
+  // 行点击打开的详情抽屉：payload/错误信息全文在这里看，不截断
+  const [detailTask, setDetailTask] = useState<QueueTask | null>(null)
+
+  // 行点击看详情：写法同 DiscoveryCandidatesPanel 的 onRow
+  const onRow: TableProps<QueueTask>['onRow'] = (t) => ({
+    className: 'cursor-pointer',
+    onClick: () => setDetailTask(t),
+  })
+
+  const statusLabel = detailTask
+    ? (statusConfig[detailTask.status]?.label ?? detailTask.status)
+    : ''
+  const detailFields = detailTask
+    ? [
+        { label: '任务ID', value: detailTask.id },
+        { label: '类型', value: detailTask.type },
+        { label: '状态', value: statusLabel },
+        { label: '优先级', value: String(detailTask.priority) },
+        { label: '重试次数', value: `${detailTask.retries} / ${detailTask.maxRetries}` },
+        { label: '创建时间', value: formatDate(detailTask.createdAt) },
+        { label: '开始时间', value: detailTask.startedAt ? formatDate(detailTask.startedAt) : '' },
+        {
+          label: '完成时间',
+          value: detailTask.completedAt ? formatDate(detailTask.completedAt) : '',
+        },
+        ...(detailTask.error ? [{ label: '错误信息', value: detailTask.error }] : []),
+      ]
+    : []
+
   const columns: TableProps<QueueTask>['columns'] = [
     {
       title: '任务ID',
@@ -489,7 +519,10 @@ function TaskTable({
               size="small"
               title="重试"
               icon={<RotateCcw className="h-4 w-4" />}
-              onClick={() => onRetry?.(t.id)}
+              onClick={(e) => {
+                e.stopPropagation()
+                onRetry?.(t.id)
+              }}
             />
           )}
           {showCancel && (
@@ -499,7 +532,10 @@ function TaskTable({
               danger
               title="取消"
               icon={<Trash2 className="h-4 w-4" />}
-              onClick={() => onCancel?.(t.id)}
+              onClick={(e) => {
+                e.stopPropagation()
+                onCancel?.(t.id)
+              }}
             />
           )}
         </div>
@@ -514,10 +550,19 @@ function TaskTable({
         dataSource={tasks}
         rowKey="id"
         loading={loading}
+        onRow={onRow}
         locale={{
           emptyText: <div className="py-8 text-center text-muted-foreground">{emptyText}</div>,
         }}
         pagination={pagination ?? false}
+      />
+
+      <RecordDetailDrawer
+        open={detailTask !== null}
+        onClose={() => setDetailTask(null)}
+        title="队列任务详情"
+        fields={detailFields}
+        raw={detailTask ? { payload: detailTask.payload, result: detailTask.result } : undefined}
       />
     </div>
   )

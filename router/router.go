@@ -68,7 +68,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 		statusHandler := api.NewStatusHandler()
 		apiGroup.GET("/status", statusHandler.Status)
 		apiGroup.GET("/system/version", api.NewSystemUpdateHandler().Version)
-				authGroup := apiGroup.Group("/auth")
+		authGroup := apiGroup.Group("/auth")
 		{
 			authGroup.POST("/login", authHandler.Login)
 			authGroup.POST("/register", authHandler.Register)
@@ -215,6 +215,8 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				protected.GET("/governance/retention", middleware.RequirePermission("settings:write"), retentionHandler.Policy)
 				protected.POST("/governance/retention/run", middleware.RequirePermission("settings:write"), retentionHandler.Run)
 				protected.POST("/assets/:id/protect", middleware.RequirePermission("asset:write"), govHandler.ProtectAsset)
+				protected.POST("/assets/:id/unprotect", middleware.RequirePermission("asset:write"), govHandler.UnprotectAsset)
+				protected.DELETE("/assets/:id", middleware.RequirePermission("asset:delete"), assetHandler.DeleteAsset)
 				protected.POST("/assets/:id/governance", middleware.RequirePermission("asset:write"), assetHandler.UpdateAssetGovernance)
 				protected.GET("/assets/:id/fingerprints", middleware.RequirePermission("fingerprint:read"), govHandler.SiteFingerprints)
 				protected.GET("/governance/engine-usage", middleware.RequirePermission("governance:read"), govHandler.EngineUsageStatus)

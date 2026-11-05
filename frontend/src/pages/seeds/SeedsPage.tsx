@@ -8,6 +8,7 @@ import type { TableProps } from 'antd'
 import { assetApi } from '@/api/assets'
 import { seedsApi, type Seed, type SeedKind } from '@/api/seeds'
 import EmptyState from '@/components/common/EmptyState'
+import RecordDetailDrawer from '@/components/common/RecordDetailDrawer'
 
 const KIND_LABEL: Record<SeedKind, string> = {
   domain: '域名',
@@ -31,6 +32,8 @@ export default function SeedsPage() {
   const [searchParams] = useSearchParams()
   const [projectId, setProjectId] = useState(() => searchParams.get('project_id') || '0')
   const [keyword, setKeyword] = useState('')
+  // 行点击看详情；「项目详情」按钮在行内，stopPropagation 避免一起打开抽屉
+  const [detail, setDetail] = useState<Seed | null>(null)
 
   const projects = useQuery({ queryKey: ['asset-projects'], queryFn: () => assetApi.projects() })
   const seeds = useQuery({ queryKey: ['seeds', projectId], queryFn: () => seedsApi.list(projectId) })
@@ -114,12 +117,41 @@ export default function SeedsPage() {
       key: 'actions',
       width: 96,
       render: (_, s) => (
-        <Button type="link" size="small" className="px-0" onClick={() => navigate(`/projects/${s.project_id}`)}>
+        <Button
+          type="link"
+          size="small"
+          className="px-0"
+          onClick={(e) => {
+            e.stopPropagation()
+            navigate(`/projects/${s.project_id}`)
+          }}
+        >
           项目详情
         </Button>
       ),
     },
   ]
+
+  // 行点击看详情；种子的写入入口在项目详情页，抽屉底部保留「进入项目」跳转
+  const onRow: TableProps<Seed>['onRow'] = (s) => ({
+    className: 'cursor-pointer',
+    onClick: () => setDetail(s),
+  })
+
+  const detailFields = detail
+    ? [
+        { label: '种子值', value: detail.value },
+        { label: '类型', value: KIND_LABEL[detail.kind] ?? detail.kind },
+        { label: '状态', value: detail.enabled ? '启用' : '停用' },
+        { label: '归属项目', value: projectName(detail.project_id) },
+        { label: '覆盖站点', value: String(coverage(detail)) },
+        { label: '创建时间', value: detail.created_at ? new Date(detail.created_at).toLocaleString() : '' },
+        {
+          label: '能力配置（JSON）',
+          value: detail.capability ? JSON.stringify(detail.capability, null, 2) : '',
+        },
+      ]
+    : []
 
   return (
     <div className="space-y-4 p-6">
@@ -168,6 +200,7 @@ export default function SeedsPage() {
           columns={columns}
           dataSource={items}
           rowKey="id"
+          onRow={onRow}
           loading={seeds.isLoading}
           pagination={false}
           locale={{
@@ -192,6 +225,25 @@ export default function SeedsPage() {
           }}
         />
       </div>
+
+      <RecordDetailDrawer
+        open={detail !== null}
+        onClose={() => setDetail(null)}
+        title={detail ? `种子详情 · ${detail.value}` : '种子详情'}
+        fields={detailFields}
+        raw={detail ?? undefined}
+        footer={
+          detail ? (
+            <Button
+              type="primary"
+              block
+              onClick={() => navigate(`/projects/${detail.project_id}`)}
+            >
+              进入项目
+            </Button>
+          ) : null
+        }
+      />
     </div>
   )
 }
