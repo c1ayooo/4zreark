@@ -1186,8 +1186,12 @@ export default function AssetsPage() {
             rowKey={rowKey}
             loading={list.isFetching}
             pagination={false}
+            size="small"
+            // 固定布局：「资产」格的 nowrap 元信息行在 auto 布局下会把表格撑到
+            // 内容宽（要横向滚动才能看全），fixed 让它吸收余宽、行内截断。
+            tableLayout="fixed"
             virtual={virtualize}
-            scroll={virtualize ? { x: 'max-content', y: '70vh' } : { x: 'max-content' }}
+            scroll={virtualize ? { y: '70vh' } : undefined}
             rowSelection={rowSelection as TableProps<AssetRow>['rowSelection']}
             expandable={expandable as TableProps<AssetRow>['expandable']}
             onRow={onRow}

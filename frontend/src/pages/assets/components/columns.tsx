@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Button, Dropdown, Tag } from 'antd'
+import { Button, Dropdown, Tag, Tooltip } from 'antd'
 import type { TableProps } from 'antd'
 import {
   ChevronDown,
@@ -69,42 +69,41 @@ const riskTitle = (s: Site) => {
 }
 
 // 站点 favicon。图标只在探测可达后采集，还没探过的站点显示占位。
-function SiteIcon({ sha256, alt }: { sha256: string; alt: string }) {
+// compact 用于「资产」单元格内联（size-3.5），默认独立列尺寸（size-6）。
+function SiteIcon({ sha256, alt, compact }: { sha256: string; alt: string; compact?: boolean }) {
   const [failed, setFailed] = useState(false)
   if (!sha256 || failed) {
-    return <Globe className="text-muted-foreground size-4 shrink-0" />
+    return <Globe className={`text-muted-foreground shrink-0 ${compact ? 'size-3.5' : 'size-4'}`} />
   }
   return (
     <img
       src={assetApi.iconURL(sha256)}
       alt={alt}
       loading="lazy"
-      className="size-6 shrink-0 rounded-sm object-contain"
+      className={`shrink-0 rounded-sm object-contain ${compact ? 'size-3.5' : 'size-6'}`}
       onError={() => setFailed(true)}
     />
   )
 }
 
-export type SiteColumn = 'icon' | 'star' | 'risk' | 'status' | 'title' | 'records' | 'project' | 'first_seen' | 'actions'
+// v2 紧凑化：图标/状态码/项目并入「资产」单元格，不再作为独立列可配。
+export type SiteColumn = 'star' | 'risk' | 'title' | 'records' | 'first_seen' | 'actions'
 
 export const SITE_COLUMNS: { key: SiteColumn; label: string }[] = [
-  { key: 'icon', label: '图标' },
   { key: 'star', label: '星标' },
   { key: 'risk', label: '风险' },
-  { key: 'status', label: '状态码' },
   { key: 'title', label: '标题' },
   { key: 'records', label: '记录 / 最近记录' },
-  { key: 'project', label: '项目' },
   { key: 'first_seen', label: '发现时间' },
   { key: 'actions', label: '操作' },
 ]
 
 export const DEFAULT_SITE_COLUMNS: Record<SiteColumn, boolean> = {
-  icon: true, star: true, risk: true, status: true, title: true,
-  records: true, project: true, first_seen: true, actions: true,
+  star: true, risk: true, title: true,
+  records: true, first_seen: false, actions: true,
 }
 
-export const SITE_COLUMNS_KEY = 'zre.asset.siteColumns.v1'
+export const SITE_COLUMNS_KEY = 'zre.asset.siteColumns.v2'
 
 export function loadSiteColumns(): Record<SiteColumn, boolean> {
   try {
@@ -186,56 +185,54 @@ export function buildAssetTableParts({
       {
         title: '资产',
         render: (_, s) => {
-          // 单行紧凑：完整入口/技术栈/标签点行看抽屉，表内只留前几项 + 溢出计数
+          // 单行紧凑：favicon/状态码/项目并入本格，不再占独立列（v2 紧凑化）；
+          // 完整入口/技术栈/标签点行看抽屉，表内只留前几项 + 溢出计数
           const eps = s.endpoints ?? []
           const epExtra = eps.length > 3 ? eps.length - 3 : 0
           const techs = s.technology_stack
           const techExtra = techs.length > 2 ? techs.length - 2 : 0
           const tagExtra = (s.tags?.length ?? 0) > 2 ? s.tags!.length - 2 : 0
           return (
-            <div className="min-w-0">
-              <div className="truncate text-sm font-medium">{s.value}</div>
-              <div className="text-muted-foreground mt-0.5 flex items-center gap-1 overflow-hidden whitespace-nowrap text-[13px]">
-                {eps.length > 0 ? (
-                  <>
-                    {eps.slice(0, 3).map((e) => (
-                      <span
-                        key={`${e.scheme}-${e.port}`}
-                        title={`最近状态码 ${e.status_code || '—'}`}
-                        className="rounded-sm bg-muted px-1.5 py-0.5"
-                      >
-                        {e.scheme}:{e.port}
-                      </span>
-                    ))}
-                    {epExtra > 0 && <span className="text-[11px]">+{epExtra}</span>}
-                  </>
-                ) : (
-                  <span>
-                    {s.protocol}:{s.port}
-                  </span>
-                )}
-                <span className="truncate">{s.ip || '—'}</span>
-                {techs.length > 0 && (
-                  <span className="truncate">
-                    · {techs.slice(0, 2).join(', ')}
-                    {techExtra > 0 && ` +${techExtra}`}
-                  </span>
-                )}
-                {tagExtra > 0 && <span className="text-[11px]">· 标签 +{tagExtra}</span>}
+            <div className="flex min-w-0 items-center gap-2">
+              <SiteIcon sha256={s.icon_sha256} alt={s.host} compact />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium">{s.value}</div>
+                <div className="text-muted-foreground mt-0.5 flex items-center gap-1 overflow-hidden whitespace-nowrap text-[13px]">
+                  {statusTag(s.http_status)}
+                  {eps.length > 0 ? (
+                    <>
+                      {eps.slice(0, 3).map((e) => (
+                        <span
+                          key={`${e.scheme}-${e.port}`}
+                          title={`最近状态码 ${e.status_code || '—'}`}
+                          className="rounded-sm bg-muted px-1.5 py-0.5"
+                        >
+                          {e.scheme}:{e.port}
+                        </span>
+                      ))}
+                      {epExtra > 0 && <span className="text-[11px]">+{epExtra}</span>}
+                    </>
+                  ) : (
+                    <span>
+                      {s.protocol}:{s.port}
+                    </span>
+                  )}
+                  <span className="truncate">{s.ip || '—'}</span>
+                  {techs.length > 0 && (
+                    <span className="truncate">
+                      · {techs.slice(0, 2).join(', ')}
+                      {techExtra > 0 && ` +${techExtra}`}
+                    </span>
+                  )}
+                  {tagExtra > 0 && <span className="text-[11px]">· 标签 +{tagExtra}</span>}
+                  {s.project_name && <span className="truncate">· {s.project_name}</span>}
+                </div>
               </div>
             </div>
           )
         },
       },
     ]
-    if (siteCols.icon) {
-      siteColumns.push({
-        title: '图标',
-        width: 52,
-        responsive: ['sm'],
-        render: (_, s) => <SiteIcon sha256={s.icon_sha256} alt={s.host} />,
-      })
-    }
     if (siteCols.star) {
       siteColumns.push({
         title: '星标',
@@ -271,20 +268,11 @@ export function buildAssetTableParts({
         ),
       })
     }
-    if (siteCols.status) {
-      siteColumns.push({
-        title: '状态码',
-        width: 90,
-        align: 'right',
-        responsive: ['sm'],
-        render: (_, s) => statusTag(s.http_status),
-      })
-    }
     if (siteCols.title) {
       siteColumns.push({
         title: '标题',
         responsive: ['md'],
-        render: (_, s) => <span className="block max-w-[260px] truncate text-sm">{s.title || '—'}</span>,
+        render: (_, s) => <span className="block max-w-[200px] truncate text-sm">{s.title || '—'}</span>,
       })
     }
     if (siteCols.records) {
@@ -315,14 +303,6 @@ export function buildAssetTableParts({
         },
       })
     }
-    if (siteCols.project) {
-      siteColumns.push({
-        title: '项目',
-        width: 120,
-        responsive: ['lg'],
-        render: (_, s) => <span className="text-sm">{s.project_name}</span>,
-      })
-    }
     if (siteCols.first_seen) {
       siteColumns.push({
         title: '发现时间',
@@ -349,18 +329,32 @@ export function buildAssetTableParts({
     if (siteCols.actions) {
       siteColumns.push({
         title: '操作',
-        width: 150,
+        width: 104,
         responsive: ['sm'],
         render: (_, s) => {
           const isOpen = expandedSiteIDs.has(s.id)
           return (
-            <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-              <Button size="small" onClick={() => navigate(`/assets/${s.id}`)} disabled={busy}>
-                <Eye className="mr-1 h-3.5 w-3.5" /> 详情
-              </Button>
-              <Button size="small" onClick={() => probe.mutate(s)} disabled={busy}>
-                <Radar className="mr-1 h-3.5 w-3.5" /> 探测
-              </Button>
+            <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+              <Tooltip title="详情">
+                <Button
+                  size="small"
+                  type="text"
+                  aria-label="详情"
+                  onClick={() => navigate(`/assets/${s.id}`)}
+                  disabled={busy}
+                  icon={<Eye className="h-3.5 w-3.5" />}
+                />
+              </Tooltip>
+              <Tooltip title="探测">
+                <Button
+                  size="small"
+                  type="text"
+                  aria-label="探测"
+                  onClick={() => probe.mutate(s)}
+                  disabled={busy}
+                  icon={<Radar className="h-3.5 w-3.5" />}
+                />
+              </Tooltip>
               <Dropdown
                 trigger={['click']}
                 menu={{
@@ -431,7 +425,9 @@ export function buildAssetTableParts({
                   ],
                 }}
               >
-                <Button size="small" type="text" disabled={busy} icon={<MoreHorizontal className="h-4 w-4" />} />
+                <Tooltip title="更多">
+                  <Button size="small" type="text" disabled={busy} aria-label="更多操作" icon={<MoreHorizontal className="h-4 w-4" />} />
+                </Tooltip>
               </Dropdown>
             </div>
           )
