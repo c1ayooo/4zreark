@@ -30,6 +30,7 @@ const channelTypeIcons: Record<string, React.ReactNode> = {
   dingtalk: <MessageSquare className="h-4 w-4 text-blue-500" />,
   feishu: <MessageSquare className="h-4 w-4 text-purple-500" />,
   wechat: <MessageSquare className="h-4 w-4 text-green-500" />,
+  telegram: <MessageSquare className="h-4 w-4 text-sky-500" />,
   email: <Mail className="h-4 w-4 text-orange-500" />,
   webhook: <Webhook className="h-4 w-4 text-gray-500" />,
 }
@@ -38,6 +39,7 @@ const channelTypeLabels: Record<string, string> = {
   dingtalk: '钉钉',
   feishu: '飞书',
   wechat: '企业微信',
+  telegram: 'Telegram',
   email: '邮件',
   webhook: 'WebHook',
 }
@@ -76,6 +78,8 @@ export default function NotifyPage() {
     appSecret: '',
     receiveIdType: 'open_id',
     receiveId: '',
+    telegramToken: '',
+    telegramChatId: '',
     minLevel: '' as NotifyConfig['min_level'],
   })
 
@@ -90,6 +94,8 @@ export default function NotifyPage() {
       appSecret: '',
       receiveIdType: 'open_id',
       receiveId: '',
+      telegramToken: '',
+      telegramChatId: '',
       minLevel: '',
     })
 
@@ -217,6 +223,17 @@ export default function NotifyPage() {
       min_level: newChannel.minLevel || undefined,
     }
 
+    if (newChannel.type === 'telegram') {
+      if (!newChannel.telegramToken || !newChannel.telegramChatId) {
+        toast({ title: '请填写 Bot Token 和 Chat ID', variant: 'destructive' })
+        return
+      }
+      config.telegram_bot_token = newChannel.telegramToken
+      config.telegram_chat_id = newChannel.telegramChatId
+      createMutation.mutate(config)
+      return
+    }
+
     if (newChannel.type === 'feishu' && newChannel.mode === 'app') {
       if (!newChannel.appId || !newChannel.appSecret || !newChannel.receiveId) {
         toast({ title: '请填写 App ID、App Secret 和接收者 ID', variant: 'destructive' })
@@ -284,6 +301,8 @@ export default function NotifyPage() {
         return config.feishu_webhook || ''
       case 'wechat':
         return config.wechat_webhook || ''
+      case 'telegram':
+        return config.telegram_chat_id || ''
       case 'webhook':
         return config.webhook_url || ''
       default:
@@ -633,6 +652,7 @@ export default function NotifyPage() {
                 { value: 'dingtalk', label: '钉钉' },
                 { value: 'feishu', label: '飞书' },
                 { value: 'wechat', label: '企业微信' },
+                { value: 'telegram', label: 'Telegram' },
                 { value: 'webhook', label: 'WebHook' },
               ]}
             />
@@ -672,7 +692,31 @@ export default function NotifyPage() {
             </div>
           )}
 
-          {newChannel.type === 'feishu' && newChannel.mode === 'app' ? (
+          {newChannel.type === 'telegram' ? (
+            <>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Bot Token</label>
+                <Input
+                  type="password"
+                  placeholder="BotFather 签发的 token"
+                  value={newChannel.telegramToken}
+                  onChange={(e) =>
+                    setNewChannel({ ...newChannel, telegramToken: e.target.value })
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Chat ID</label>
+                <Input
+                  placeholder="群 chat_id 或个人 user id"
+                  value={newChannel.telegramChatId}
+                  onChange={(e) =>
+                    setNewChannel({ ...newChannel, telegramChatId: e.target.value })
+                  }
+                />
+              </div>
+            </>
+          ) : newChannel.type === 'feishu' && newChannel.mode === 'app' ? (
             <>
               <div className="space-y-2">
                 <label className="text-sm font-medium">App ID</label>

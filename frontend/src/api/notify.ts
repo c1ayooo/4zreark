@@ -2,7 +2,7 @@ import api, { ApiResponse } from '@/lib/api'
 
 // 通知配置 - 匹配后端 NotifyConfig 结构
 export interface NotifyConfig {
-  type: 'dingtalk' | 'feishu' | 'wechat' | 'email' | 'webhook'
+  type: 'dingtalk' | 'feishu' | 'wechat' | 'email' | 'webhook' | 'telegram'
   enabled: boolean
   name: string
   /** 渠道最低接收级别：低于门槛的消息跳过该渠道；空 = 全收 */
@@ -19,6 +19,9 @@ export interface NotifyConfig {
   feishu_receive_id?: string
   // WeChat
   wechat_webhook?: string
+  // Telegram（列表回显时 bot_token 为脱敏值）
+  telegram_bot_token?: string
+  telegram_chat_id?: string
   // Email
   smtp_host?: string
   smtp_port?: number

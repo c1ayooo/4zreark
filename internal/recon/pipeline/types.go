@@ -65,6 +65,10 @@ type HTTPServiceFinding struct {
 	PageTitle    string   `json:"page_title,omitempty"`
 	FaviconMMH3  string   `json:"favicon_mmh3,omitempty"`
 	Technologies []string `json:"technologies,omitempty"`
+	// ClusterSuspect 为 true 表示同 IP 存在 ≥ vhostdedup.ClusterMinGroup 个
+	// （含本站）与它同形态（状态码/长度桶/标题一致）的站点：默认后端基线未能
+	// 剔除时的聚类兜底打标，疑似 catch-all 默认页阵列，待人工复核（只打标不剔除）。
+	ClusterSuspect bool `json:"cluster_suspect,omitempty"`
 }
 
 // Sink persists findings. created reports whether the record was new; it drives
@@ -108,22 +112,29 @@ func (s SinkFunc) SaveHTTPService(ctx context.Context, f HTTPServiceFinding) (bo
 // Stats holds per-stage counters. NewAssets is filled only when a Sink reports
 // created=true; without a Sink it stays zero.
 type Stats struct {
-	Candidates       int            `json:"candidates"`
-	FromPassive      int            `json:"from_passive"`
-	FromPermute      int            `json:"from_permute"`
-	FromBrute        int            `json:"from_brute"`
-	WildcardFiltered int            `json:"wildcard_filtered"`
-	Live             int            `json:"live"`
-	NewAssets        int            `json:"new_assets"`
-	Dead             int            `json:"dead"`
-	ScanIPs          int            `json:"scan_ips"`
-	OpenPorts        int            `json:"open_ports"`
-	HTTPProbed       int            `json:"http_probed"`
-	HTTPAlive        int            `json:"http_alive"`
+	Candidates       int `json:"candidates"`
+	FromPassive      int `json:"from_passive"`
+	FromPermute      int `json:"from_permute"`
+	FromBrute        int `json:"from_brute"`
+	WildcardFiltered int `json:"wildcard_filtered"`
+	Live             int `json:"live"`
+	NewAssets        int `json:"new_assets"`
+	Dead             int `json:"dead"`
+	ScanIPs          int `json:"scan_ips"`
+	OpenPorts        int `json:"open_ports"`
+	HTTPProbed       int `json:"http_probed"`
+	HTTPAlive        int `json:"http_alive"`
 	// HoneypotSuspects 触发蜜罐护栏的 IP 数：端口被截断到 Web 口，待人工复核。
-	HoneypotSuspects int            `json:"honeypot_suspects"`
-	Levels           map[string]int `json:"levels"`
-	Errors           []string       `json:"errors,omitempty"`
+	HoneypotSuspects int `json:"honeypot_suspects"`
+	// VhostFiltered 被随机 Host 基线判定为 catch-all 默认页而剔除的站点数：
+	// 候选与基线标题一致、长度同桶且无业务特征（favicon 不同/独立标题均视为业务放行）。
+	VhostFiltered int `json:"vhost_filtered"`
+	// VhostClusterSuspects 同 IP 同形态站点达到聚类阈值而兜底打标的站点数（只打标未剔除）。
+	VhostClusterSuspects int `json:"vhost_cluster_suspects"`
+	// VhostBaselineFailed 基线探针失败而放弃去噪的 IP 数：这些 IP 的候选全部放行。
+	VhostBaselineFailed int            `json:"vhost_baseline_failed"`
+	Levels              map[string]int `json:"levels"`
+	Errors              []string       `json:"errors,omitempty"`
 }
 
 // Result is the full output of one run. Sink receives the same findings as they

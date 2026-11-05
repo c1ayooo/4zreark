@@ -106,6 +106,11 @@ type Manifest struct {
 	Entries       []EntryInfo     `json:"entries"`              // db.dump / files.tar.gz 的 sha256
 	Files         []string        `json:"files"`                // files.tar.gz 内的相对路径清单
 	Extensions    []ExtensionInfo `json:"extensions,omitempty"` // 业务 schema 内的扩展，恢复前预创建
+	// RowCounts 是核心表（CoreTables）行数快照，恢复端拿它与恢复后的实际行数交叉比对；
+	// 值为 null 表示 Create 时该表计数失败（不阻塞备份）。旧格式备份没有该字段。
+	RowCounts map[string]*int64 `json:"row_counts,omitempty"`
+	// RowCountsNote 记录行数采集的降级原因（哪些表失败/为何未采集），与 RowCounts 配套。
+	RowCountsNote string `json:"row_counts_note,omitempty"`
 }
 
 // CreateOptions 控制 Create 的行为。
@@ -119,6 +124,7 @@ type CreateOptions struct {
 	Stderr   io.Writer     // 子进程 stderr 透传目标（nil = 丢弃）
 	Warn     io.Writer     // 告警输出（nil = 丢弃）
 	Now      func() time.Time
+	Counts   RowCounter // 核心表行数采集接缝：nil = 默认 psql 实现（单测注入假计数器）
 }
 
 // CreateResult 是 Create 的产物描述。
@@ -142,6 +148,7 @@ type RestoreOptions struct {
 	Stderr   io.Writer     // 子进程 stderr 透传目标
 	Warn     io.Writer     // 告警输出
 	Now      func() time.Time
+	Counts   RowCounter // 核心表行数采集接缝：nil = 默认 psql 实现（单测注入假计数器）
 }
 
 // RestoreResult 是 Restore 的结果描述。
@@ -150,6 +157,11 @@ type RestoreResult struct {
 	FilesRestored []string // files.tar.gz 解出的相对路径
 	DirsBackedUp  []string // 恢复前被改名为 .bak-<ts> 的旧目录
 	BusyConns     int      // 恢复前观测到的活跃连接数（-1 表示未检查）
+	// RowCountDiffs 是恢复后核心表行数与 manifest 快照不一致的清单
+	// （空 = 全部一致或未比对）；不一致只告警不改变恢复成败，处理权交给调用方。
+	RowCountDiffs []RowCountDiff
+	// RowCountsSkipped 为 true 表示未做行数比对：旧格式备份没有快照，或本机缺 psql。
+	RowCountsSkipped bool
 }
 
 // BackupSummary 是 List 对单个备份文件的摘要；解析失败时 Err 非空。
@@ -597,8 +609,10 @@ func Create(ctx context.Context, opts CreateOptions) (*CreateResult, error) {
 	}
 	// 记录装在业务 schema 里的扩展：pg_dump --schema 不导出它们，恢复端要预创建。
 	// psql 不可用时降级为告警（备份仍有效，只是恢复全新库时可能要手动 CREATE EXTENSION）。
+	// psql 的查找结果同时供下方行数采集复用。
+	psqlBin, psqlErr := FindTool("psql", opts.PGBinDir)
 	var extensions []ExtensionInfo
-	if psqlBin, perr := FindTool("psql", opts.PGBinDir); perr == nil {
+	if psqlErr == nil {
 		exts, qerr := ListSchemaExtensions(ctx, psqlBin, &target)
 		if qerr != nil {
 			fmt.Fprintf(warn, "[warn] 读取 schema 内扩展清单失败（继续备份）: %v\n", qerr)
@@ -615,6 +629,14 @@ func Create(ctx context.Context, opts CreateOptions) (*CreateResult, error) {
 	} else {
 		fmt.Fprintln(warn, "[warn] 未找到 psql，无法记录 schema 内扩展清单（建议安装 postgresql-client）")
 	}
+
+	// 核心表行数快照：恢复端拿它与恢复后的实际行数交叉比对（见 verifyRowCounts）。
+	// 注意快照取自 pg_dump 之后的活库，与转储内容有微小时间差，比对按线索而非精确断言。
+	rowCounter := opts.Counts
+	if rowCounter == nil && psqlErr == nil {
+		rowCounter = &PGRowCounter{PsqlBin: psqlBin, Target: target}
+	}
+	rowCounts, rowCountNote := collectRowCounts(ctx, rowCounter, warn)
 	manifest := Manifest{
 		Version:       FormatVersion,
 		CreatedAt:     now,
@@ -625,6 +647,8 @@ func Create(ctx context.Context, opts CreateOptions) (*CreateResult, error) {
 		Entries:       entries,
 		Files:         fileList,
 		Extensions:    extensions,
+		RowCounts:     rowCounts,
+		RowCountsNote: rowCountNote,
 	}
 	mf, err := os.Create(filepath.Join(tmpDir, entryManifest))
 	if err != nil {
@@ -847,8 +871,30 @@ func Restore(ctx context.Context, opts RestoreOptions) (*RestoreResult, error) {
 		fmt.Fprintln(warn, "[warn] 备份内没有文件卷，跳过")
 	}
 
+	// 7. 行数交叉比对：Create 记进 manifest 的核心表行数 vs 恢复后的实际行数。
+	// 旧格式备份没有 row_counts 快照 → 跳过比对并在结果注明 skipped，不报错
+	// （旧备份要能继续恢复）；psql 缺失同理降级跳过。
+	counter := opts.Counts
+	if counter == nil && psqlErr == nil {
+		counter = &PGRowCounter{PsqlBin: psqlBin, Target: target}
+	}
+	switch {
+	case len(m.RowCounts) == 0:
+		result.RowCountsSkipped = true
+		fmt.Fprintln(warn, "[warn] manifest 未记录核心表行数（旧格式备份），跳过行数交叉比对")
+	case counter == nil:
+		result.RowCountsSkipped = true
+		fmt.Fprintln(warn, "[warn] 未找到 psql，无法统计恢复后行数，跳过行数交叉比对")
+	default:
+		result.RowCountDiffs = verifyRowCounts(ctx, counter, m.RowCounts, warn)
+	}
+
 	fmt.Fprintf(warn, "[5/5] 恢复完成：%d 个文件落地，%d 个旧目录已备份\n",
 		len(result.FilesRestored), len(result.DirsBackedUp))
+	if len(result.RowCountDiffs) > 0 {
+		fmt.Fprintf(warn, "[warn] 行数交叉比对发现 %d 张核心表不一致，恢复可能不完整，请核查目标库\n",
+			len(result.RowCountDiffs))
+	}
 	return result, nil
 }
 

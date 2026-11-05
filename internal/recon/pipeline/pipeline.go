@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/c1ayooo/4zreark/internal/recon/brute"
-	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"github.com/c1ayooo/4zreark/internal/recon/dnsres"
 	"github.com/c1ayooo/4zreark/internal/recon/fingerprint"
 	"github.com/c1ayooo/4zreark/internal/recon/permute"
@@ -25,6 +24,8 @@ import (
 	"github.com/c1ayooo/4zreark/internal/recon/score"
 	"github.com/c1ayooo/4zreark/internal/recon/subdomain"
 	"github.com/c1ayooo/4zreark/internal/recon/svcid"
+	"github.com/c1ayooo/4zreark/internal/recon/vhostdedup"
+	"github.com/c1ayooo/4zreark/internal/safehttp"
 )
 
 type liveName struct {
@@ -311,23 +312,27 @@ func Run(ctx context.Context, opts Options, progress Progress) (*Result, error) 
 				return http.ErrUseLastResponse
 			}
 		}
-		type httpTarget struct {
-			host   string
-			port   int
-			scheme string
-		}
 		var targets []httpTarget
 		for key, sv := range svcByIDPPort {
 			if sv.Protocol == "http" || sv.Protocol == "https" {
-				targets = append(targets, httpTarget{key.ip, key.port, sv.Protocol})
+				targets = append(targets, httpTarget{host: key.ip, ip: key.ip, port: key.port, scheme: sv.Protocol})
 			}
 		}
 		// Fallback when port scanning is off: probe web ports on live names.
+		// 去噪按 IP 聚组，域名直探取存活名的首个 IP；无 IP 的候选不去噪、照常入库。
 		if !opts.EnablePortscan {
 			for _, ln := range live {
-				targets = append(targets, httpTarget{ln.name, 80, "http"}, httpTarget{ln.name, 443, "https"})
+				ip := ""
+				if len(ln.ips) > 0 {
+					ip = ln.ips[0]
+				}
+				targets = append(targets,
+					httpTarget{host: ln.name, ip: ip, port: 80, scheme: "http"},
+					httpTarget{host: ln.name, ip: ip, port: 443, scheme: "https"})
 			}
 		}
+		// 探活与入库解耦：先探完，再按 IP 做默认后端去噪（vhostdedup.go），最后统一入库。
+		alive := make([]aliveSite, 0, len(targets))
 		for _, tgt := range targets {
 			if ctx.Err() != nil {
 				break
@@ -340,9 +345,27 @@ func Run(ctx context.Context, opts Options, progress Progress) (*Result, error) 
 			}
 			stats.HTTPAlive++
 			techs := matchTechnologies(opts.FingerprintRules, obs)
+			resp := vhostdedup.Response{
+				StatusCode: obs.Status, BodyLen: len(obs.Body),
+				Title: obs.Title, FaviconMMH3: obs.IconHash,
+			}
+			// Body 只剩去噪分桶用（长度已进 resp），置空引用让大页面观测滞留期间可回收。
+			obs.Body = ""
+			alive = append(alive, aliveSite{target: tgt, url: url, obs: obs, techs: techs, resp: resp})
+		}
+
+		drop, mark, vst := vhostFilter(ctx, client, alive)
+		stats.VhostFiltered = vst.Filtered
+		stats.VhostClusterSuspects = vst.ClusterMarked
+		stats.VhostBaselineFailed = vst.BaselineFailed
+		for i, a := range alive {
+			if drop[i] {
+				continue
+			}
 			saveService(HTTPServiceFinding{
-				URL: url, StatusCode: obs.Status, PageTitle: obs.Title,
-				FaviconMMH3: obs.IconHash, Technologies: techs,
+				URL: a.url, StatusCode: a.obs.Status, PageTitle: a.obs.Title,
+				FaviconMMH3: a.obs.IconHash, Technologies: a.techs,
+				ClusterSuspect: mark[i],
 			})
 		}
 		report("http")

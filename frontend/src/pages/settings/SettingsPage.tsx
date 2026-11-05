@@ -12,10 +12,11 @@ import { monitoringApi } from '@/api/monitoring'
 import { useConfirm } from '@/components/common/confirm-provider'
 import { useToast } from '@/components/ui/use-toast'
 import { MCPAccessPanel } from '@/components/settings/MCPAccessPanel'
+import { MCPGovernancePanel } from './components/MCPGovernancePanel'
 import { ToolRuntimePanel } from '@/components/settings/ToolRuntimePanel'
 import { ProxyPanel } from '@/components/settings/ProxyPanel'
 import DatasourceSessionsTab from '@/components/settings/DatasourceSessionsTab'
-import { Moon, Sun, Monitor, Palette, User, Lock, Key, CheckCircle, XCircle, Plug, Database, Plus, Trash2, Gauge, Globe } from 'lucide-react'
+import { Moon, Sun, Monitor, Palette, User, Lock, Key, CheckCircle, XCircle, Plug, Database, Plus, Trash2, Gauge, Globe, ShieldCheck } from 'lucide-react'
 
 export default function SettingsPage() {
   const confirm = useConfirm()
@@ -674,6 +675,16 @@ export default function SettingsPage() {
                     </span>
                   ),
                   children: <MCPAccessPanel />,
+                },
+                {
+                  key: 'mcp-governance',
+                  label: (
+                    <span className="flex items-center gap-2">
+                      <ShieldCheck className="h-4 w-4" />
+                      MCP 治理
+                    </span>
+                  ),
+                  children: <MCPGovernancePanel />,
                 },
                 {
                   key: 'tool-runtime',

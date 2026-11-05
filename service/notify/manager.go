@@ -243,6 +243,9 @@ func mergeMaskedSecrets(in, existing NotifyConfig) NotifyConfig {
 	in.FeishuSecret = keep(in.FeishuSecret, existing.FeishuSecret)
 	in.FeishuAppSecret = keep(in.FeishuAppSecret, existing.FeishuAppSecret)
 	in.SMTPPassword = keep(in.SMTPPassword, existing.SMTPPassword)
+	// Telegram bot token 同为脱敏回显字段：改渠道级别/触发测试时前端回传的是
+	// 星号串，不保住旧值会把真实 token 覆盖掉、渠道直接打挂。
+	in.TelegramBotToken = keep(in.TelegramBotToken, existing.TelegramBotToken)
 	return in
 }
 
