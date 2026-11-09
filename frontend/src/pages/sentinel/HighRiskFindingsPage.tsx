@@ -18,6 +18,7 @@ import { CheckCircle2, Flame, ListChecks, ShieldCheck } from 'lucide-react'
 import { sentinelApi, type SentinelArtifactStatus, type SentinelFinding } from '@/api/sentinel'
 import PocVerifyCard from './audit/PocVerifyCard'
 import JudgmentBasisCard from './audit/JudgmentBasisCard'
+import FindingArtifactsCard from './audit/FindingArtifactsCard'
 import { PageHeader, SeverityTag, VulnClassTag, FindingGradeTag, FindingStatusTag, fmtNumber, fmtTime } from './audit/shared'
 
 type ArtifactSummary = NonNullable<SentinelFinding['artifacts']>[number]
@@ -241,10 +242,12 @@ export default function HighRiskFindingsPage() {
         columns={columns}
         dataSource={items}
         expandable={{
-          /** 行展开 = 判定依据卡 + 方案 B 靶场验证卡：不跳页，原地看「凭什么判」与「验证结论」并触发验证 */
+          /** 行展开 = 判定依据卡 + LLM 产物内容卡（poc/nuclei 本体）+ 方案 B 靶场验证卡：
+           *  不跳页，原地看「凭什么判 → LLM 生成了什么 → 验证结论」并触发验证 */
           expandedRowRender: (r) => (
             <div className="space-y-3 py-1">
               <JudgmentBasisCard commitId={r.commit_id} finding={r} />
+              <FindingArtifactsCard findingId={r.id} />
               <PocVerifyCard findingId={r.id} />
             </div>
           ),
