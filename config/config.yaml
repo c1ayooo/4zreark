@@ -40,7 +40,7 @@ postgres:
 
 # 已决定移除 Redis：队列 / 去重 / 登出由 PG 承担。该段待代码层删掉 go-redis 后一并移除
 scanner:
-  worker_count: 10
+  worker_count: 2
   timeout: 300
   retry_count: 3
   # 默认 false：终态任务的僵尸 River job 只 JobCancel，交给 River 回收；
@@ -86,7 +86,7 @@ collection:
   # 收集侧 AI Gate：off 关闭；shadow 只判定不路由；enforce 允许规则层消费。
   # 默认 off，先离线/影子跑，避免模型不稳定影响收集主链。
   gate_mode: off
-  gate_workers: 4
+  gate_workers: 2
 
 # 分布式扫描节点。
 #   role=all    单机模式（默认）：Web + 本机扫描，本地持有 PostgreSQL
@@ -109,7 +109,7 @@ node:
   windows_binary: ""        # 一键部署 Windows 时使用的 worker.exe 路径，留空则在 server 同目录找 worker-windows-amd64.exe
   rem_binary: ""            # rem 反连隧道二进制路径，留空用工具运行时托管版本（data/tools）
   tunnel_dir: ""            # rem 隧道记录目录，留空用 /tmp/4zreark-tunnels；主机重启后要恢复请改成持久目录
-  max_tasks: 5              # 单节点同时执行的任务数（River MaxWorkers，启动时生效）
+  max_tasks: 2              # 单节点同时执行的任务数（River MaxWorkers，启动时生效）
   heartbeat_interval: 30    # 心跳秒数
   tags: []                  # 例如 ["overseas", "high-performance"]
   capabilities: []          # 留空 = 默认全能力
@@ -158,7 +158,7 @@ sentinel:
     - github.com
   collect_interval_minutes: 60
   collect_workers: 2
-  judge_workers: 3
+  judge_workers: 2
   max_commits_per_run: 50
   token_budget: 10000
   max_hunk_lines: 40

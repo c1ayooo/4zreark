@@ -13,6 +13,7 @@ type ConcurrencyBudget struct {
 	Gate      int
 	Collect   int
 	Judge     int
+	Artifacts int
 	Repro     int
 	TaskQueue int
 	Probe     int
@@ -37,21 +38,30 @@ func ComputeConcurrencyBudget(cfg *config.Config) ConcurrencyBudget {
 	if b.Gate <= 0 {
 		b.Gate = 4
 	}
-	// sentinel collect/judge 在客户端里是常量；repro 由独立 pocsmith 进程消费。
-	b.Collect = 4
-	b.Judge = 8
+	// sentinel collect/judge 与队列 MaxWorkers 同源（config.yaml），改配置两边同步生效；
+	// artifacts（LLM 产物流水线）固定串行；repro 由独立 pocsmith 进程消费。
+	b.Collect = cfg.Sentinel.CollectWorkers
+	if b.Collect <= 0 {
+		b.Collect = 4
+	}
+	b.Judge = cfg.Sentinel.JudgeWorkers
+	if b.Judge <= 0 {
+		b.Judge = 8
+	}
+	b.Artifacts = 1
 	b.Repro = 2
 	b.TaskQueue = cfg.Scanner.WorkerCount
 	if b.TaskQueue <= 0 {
 		b.TaskQueue = 10
 	}
-	b.Probe = 8
+	// 全局口径：同域最多 2 并发（可慢不可挂）。
+	b.Probe = 2
 	b.MaxConns = cfg.Postgres.MaxConns
 	if b.MaxConns <= 0 {
 		b.MaxConns = 50
 	}
 
-	b.Total = b.Scan + b.Gate + b.Collect + b.Judge + b.Repro + b.TaskQueue + b.Probe
+	b.Total = b.Scan + b.Gate + b.Collect + b.Judge + b.Artifacts + b.Repro + b.TaskQueue + b.Probe
 	if b.Total <= b.MaxConns {
 		return b
 	}
