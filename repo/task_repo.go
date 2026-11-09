@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -212,10 +213,12 @@ func scanTask(row pgx.Row) (*models.Task, error) {
 		createdAt   time.Time
 		updatedAt   time.Time
 		detailsB    []byte
+		planID      sql.NullString
+		parentID    sql.NullString
 	)
 	err := row.Scan(&hexID, &wsID, &t.ProjectID, &t.Name, &t.Description, &typeStr, &statusStr, &t.Targets,
 		&t.TargetType, &configB, &t.IsScheduled, &t.CronExpr, &t.Progress, &t.NodeID,
-		&t.PlanID, &t.ParentID, &t.Stage, &t.CollectionMode,
+		&planID, &parentID, &t.Stage, &t.CollectionMode,
 		&startedAt, &completedAt,
 		&stats.TotalTargets, &stats.ScannedTargets, &stats.DiscoveredAssets,
 		&stats.DiscoveredVulns, &stats.DiscoveredPorts, &stats.LastScannedIndex,
@@ -239,6 +242,8 @@ func scanTask(row pgx.Row) (*models.Task, error) {
 			return nil, err
 		}
 	}
+	t.PlanID = planID.String
+	t.ParentID = parentID.String
 	t.Type = models.TaskType(typeStr)
 	t.Status = models.TaskStatus(statusStr)
 	t.ResultStats = stats
