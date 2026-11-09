@@ -142,6 +142,10 @@ func NewSentinelQueue(ctx context.Context, pool *pgxpool.Pool, cfg config.Sentin
 		workers := river.NewWorkers()
 		river.AddWorker(workers, &sentinelCollectWorker{source: source})
 		river.AddWorker(workers, &sentinelJudgeWorker{judge: judge})
+		// repro worker 仅在 pocsmith 进程消费；主进程注册哑实现只为通过
+		// Insert 的 kind 注册校验（sentinel_repro 队列不在本进程 Queues 里，
+		// 永远不会被本进程拉取执行）。
+		river.AddWorker(workers, &sentinelReproWorker{})
 		riverCfg.Workers = workers
 		riverCfg.Queues = map[string]river.QueueConfig{
 			SentinelCollectQueueName: {MaxWorkers: cfg.CollectWorkers},
@@ -270,4 +274,90 @@ func (q *SentinelQueue) scheduleOnce(ctx context.Context) {
 			log.Printf("[Sentinel] 提交 %d 入队失败: %v", c.ID, err)
 		}
 	}
+}
+
+// ---- pocsmith 差分复现（v0.3 §7.6-7.9）----
+//
+// 队列与采集/判定同库不同名；worker 只在独立进程 pocsmith（cmd/pocsmith）里
+// 注册——docker build/run 吃满 CPU/磁盘，不能和控制面抢资源（文档 §3.0 决策）。
+
+const (
+	SentinelReproQueueName = "sentinel_repro"
+	SentinelReproJobKind   = "sentinel_repro_finding"
+)
+
+// SentinelReproArgs 复现一条发现。
+type SentinelReproArgs struct {
+	FindingID int64 `json:"finding_id" river:"unique"`
+}
+
+// Kind 实现 river.JobArgs。
+func (SentinelReproArgs) Kind() string { return SentinelReproJobKind }
+
+type sentinelReproWorker struct {
+	river.WorkerDefaults[SentinelReproArgs]
+	repro *ReproService
+}
+
+func (w *sentinelReproWorker) Work(ctx context.Context, job *river.Job[SentinelReproArgs]) error {
+	if w.repro == nil {
+		// 主进程的哑 worker 防御：sentinel_repro 队列不在其 Queues 里，理论不可达。
+		return errors.New("repro worker 归属 pocsmith 进程，本进程不应执行该作业")
+	}
+	err := w.repro.Repro(ctx, job.Args.FindingID)
+	// 输入/环境问题（缺 PoC、计划非法、docker 不可用）不重试：再跑结果一样。
+	if errors.Is(err, errSentinelReproInput) {
+		return river.JobCancel(err)
+	}
+	return sentinelJobError(err)
+}
+
+// NewSentinelReproClient 是 pocsmith 专用的 River 客户端：只注册 repro worker，
+// 只消费 sentinel_repro 队列。与主进程的 SentinelQueue 共享 river_job 表，互不抢作业。
+func NewSentinelReproClient(ctx context.Context, pool *pgxpool.Pool, repro *ReproService) (*river.Client[pgx.Tx], error) {
+	if pool == nil {
+		return nil, errors.New("pocsmith 缺少 PostgreSQL 连接池")
+	}
+	if repro == nil {
+		return nil, errors.New("pocsmith 缺少复现服务")
+	}
+	driver := riverpgxv5.New(pool)
+	migrator, err := rivermigrate.New(driver, nil)
+	if err != nil {
+		return nil, fmt.Errorf("初始化 River 迁移器失败: %w", err)
+	}
+	if _, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
+		return nil, fmt.Errorf("执行 River 迁移失败: %w", err)
+	}
+	workers := river.NewWorkers()
+	river.AddWorker(workers, &sentinelReproWorker{repro: repro})
+	client, err := river.NewClient(driver, &river.Config{
+		MaxAttempts:          2,
+		JobTimeout:           40 * time.Minute,
+		RescueStuckJobsAfter: 90 * time.Minute,
+		Workers:              workers,
+		Queues: map[string]river.QueueConfig{
+			SentinelReproQueueName: {MaxWorkers: 2},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("创建 pocsmith River 客户端失败: %w", err)
+	}
+	return client, nil
+}
+
+// EnqueueRepro 把发现复现放进队列（主进程控制面调用；worker 在 pocsmith）。
+func (q *SentinelQueue) EnqueueRepro(ctx context.Context, findingID int64) error {
+	if q == nil || q.client == nil {
+		return errors.New("提交哨兵队列未初始化")
+	}
+	_, err := q.client.Insert(ctx, SentinelReproArgs{FindingID: findingID}, &river.InsertOpts{
+		Queue:       SentinelReproQueueName,
+		MaxAttempts: 2,
+		UniqueOpts:  sentinelUniqueOpts(),
+	})
+	if err != nil {
+		return fmt.Errorf("复现任务入队失败: %w", err)
+	}
+	return nil
 }

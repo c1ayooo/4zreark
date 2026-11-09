@@ -119,16 +119,18 @@ type CommitJudgment struct {
 
 // CommitFinding 是判定命中后落地的可验证发现。
 type CommitFinding struct {
-	ID         int64     `json:"id"`
-	CommitID   int64     `json:"commit_id"`
-	JudgmentID *int64    `json:"judgment_id"`
-	VulnClass  string    `json:"vuln_class"`
-	Severity   string    `json:"severity"`
-	Status     string    `json:"status"`
-	Title      string    `json:"title"`
-	Detail     string    `json:"detail"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID         int64      `json:"id"`
+	CommitID   int64      `json:"commit_id"`
+	JudgmentID *int64     `json:"judgment_id"`
+	VulnClass  string     `json:"vuln_class"`
+	Severity   string     `json:"severity"`
+	Status     string     `json:"status"`
+	Title      string     `json:"title"`
+	Detail     string     `json:"detail"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	VerifiedAt *time.Time `json:"verified_at"`
+	VerifiedBy string     `json:"verified_by"`
 }
 
 // Sentinel 是提交哨兵域的仓储入口。
@@ -566,7 +568,7 @@ func (s *Sentinel) CreateFinding(ctx context.Context, f *CommitFinding) (int64, 
 // ListFindingsByCommit 列出某提交下的发现。
 func (s *Sentinel) ListFindingsByCommit(ctx context.Context, commitID int64) ([]*CommitFinding, error) {
 	rows, err := s.pool().Query(ctx, `
-		select id, commit_id, judgment_id, vuln_class, severity, status, title, detail, created_at, updated_at
+		select id, commit_id, judgment_id, vuln_class, severity, status, title, detail, created_at, updated_at, verified_at, verified_by
 		  from finding where commit_id = $1 order by id desc`, commitID)
 	if err != nil {
 		return nil, err
@@ -577,7 +579,7 @@ func (s *Sentinel) ListFindingsByCommit(ctx context.Context, commitID int64) ([]
 	for rows.Next() {
 		var f CommitFinding
 		if err := rows.Scan(&f.ID, &f.CommitID, &f.JudgmentID, &f.VulnClass, &f.Severity,
-			&f.Status, &f.Title, &f.Detail, &f.CreatedAt, &f.UpdatedAt); err != nil {
+			&f.Status, &f.Title, &f.Detail, &f.CreatedAt, &f.UpdatedAt, &f.VerifiedAt, &f.VerifiedBy); err != nil {
 			return nil, err
 		}
 		items = append(items, &f)
@@ -764,10 +766,10 @@ func (s *Sentinel) CountArtifactsByKind(ctx context.Context, findingID int64, ki
 func (s *Sentinel) GetFinding(ctx context.Context, id int64) (*CommitFinding, error) {
 	var f CommitFinding
 	err := s.pool().QueryRow(ctx, `
-		select id, commit_id, judgment_id, vuln_class, severity, status, title, detail, created_at, updated_at
+		select id, commit_id, judgment_id, vuln_class, severity, status, title, detail, created_at, updated_at, verified_at, verified_by
 		  from finding where id = $1`, id).
 		Scan(&f.ID, &f.CommitID, &f.JudgmentID, &f.VulnClass, &f.Severity,
-			&f.Status, &f.Title, &f.Detail, &f.CreatedAt, &f.UpdatedAt)
+			&f.Status, &f.Title, &f.Detail, &f.CreatedAt, &f.UpdatedAt, &f.VerifiedAt, &f.VerifiedBy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -781,6 +783,20 @@ func (s *Sentinel) GetFinding(ctx context.Context, id int64) (*CommitFinding, er
 func (s *Sentinel) SetFindingStatus(ctx context.Context, id int64, status string) error {
 	tag, err := s.pool().Exec(ctx,
 		`update finding set status = $2, updated_at = now() where id = $1`, id, status)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// MarkFindingVerified 定格机器复现通过：verified_at/by 写入 finding。
+func (s *Sentinel) MarkFindingVerified(ctx context.Context, id int64, by string) error {
+	tag, err := s.pool().Exec(ctx,
+		`update finding set verified_at = now(), verified_by = $2, updated_at = now() where id = $1`,
+		id, by)
 	if err != nil {
 		return err
 	}

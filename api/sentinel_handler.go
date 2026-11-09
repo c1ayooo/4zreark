@@ -605,3 +605,27 @@ func (h *SentinelHandler) PublishArtifact(c *gin.Context) {
 	h.audit(c, "artifact.publish", strconv.FormatInt(id, 10), map[string]interface{}{"template_id": templateID})
 	utils.SuccessWithMessage(c, "已发布到 PoC 库", gin.H{"template_id": templateID})
 }
+
+// ReproFinding 把发现送进 pocsmith 差分复现队列（worker 在独立进程）。
+func (h *SentinelHandler) ReproFinding(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "发现 id 非法")
+		return
+	}
+	if _, err := h.store.GetFinding(c.Request.Context(), id); err != nil {
+		utils.NotFound(c, "发现不存在")
+		return
+	}
+	q := service.DefaultSentinelQueue()
+	if q == nil {
+		utils.BadRequest(c, "提交哨兵未启用（sentinel.enabled=false）")
+		return
+	}
+	if err := q.EnqueueRepro(c.Request.Context(), id); err != nil {
+		utils.InternalError(c, "复现入队失败: "+err.Error())
+		return
+	}
+	h.audit(c, "finding.repro", strconv.FormatInt(id, 10), nil)
+	utils.SuccessWithMessage(c, "已加入复现队列（由 pocsmith 进程执行）", gin.H{"finding_id": id})
+}

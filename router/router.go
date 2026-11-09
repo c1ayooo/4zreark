@@ -768,6 +768,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				sentinelGroup.GET("/findings", middleware.RequirePermission("sentinel:read"), sentinelHandler.ListFindings)
 				// 发现生命周期 + 产物链（§11.8）：状态流转 / 产物 CRUD / AI 生成 / 下载闸门 / 发布 PoC 库
 				sentinelGroup.PATCH("/findings/:id", middleware.RequirePermission("sentinel:write"), sentinelHandler.PatchFinding)
+				sentinelGroup.POST("/findings/:id/repro", middleware.RequirePermission("sentinel:write"), sentinelHandler.ReproFinding)
 				sentinelGroup.GET("/findings/:id/artifacts", middleware.RequirePermission("sentinel:read"), sentinelHandler.ListFindingArtifacts)
 				sentinelGroup.POST("/findings/:id/artifacts", middleware.RequirePermission("sentinel:write"), sentinelHandler.CreateFindingArtifact)
 				sentinelGroup.POST("/findings/:id/generate-nuclei", middleware.RequirePermission("sentinel:write"), sentinelHandler.GenerateFindingNuclei)
