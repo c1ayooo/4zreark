@@ -185,6 +185,16 @@ func (m *Manager) httpClient() *http.Client {
 		}
 	} else if direct {
 		tr.Proxy = nil
+	} else {
+		// 未显式配置代理时，github.com 仍走环境变量代理，但 release 资产
+		// CDN 直连：部分代理节点对该 CDN 的长连接会中途 EOF/握手失败。
+		tr.Proxy = func(req *http.Request) (*url.URL, error) {
+			switch strings.ToLower(req.URL.Hostname()) {
+			case "release-assets.githubusercontent.com", "objects.githubusercontent.com":
+				return nil, nil
+			}
+			return http.ProxyFromEnvironment(req)
+		}
 	}
 	c.Transport = tr
 	return &c
@@ -711,7 +721,7 @@ func isProxyEnv(e string) bool {
 
 // absPath 把 root 相对路径（data/nuclei/...）转绝对：exec 的相对 binary
 // 会基于 cmd.Dir 解析，Dir 与 binary 同时相对时会拼出双重相对路径
-//（data/nuclei/data/nuclei/bin/nuclei）→ 恒 ENOENT，模板下载/更新从未成功过。
+// （data/nuclei/data/nuclei/bin/nuclei）→ 恒 ENOENT，模板下载/更新从未成功过。
 func (m *Manager) absPath(p string) string {
 	if filepath.IsAbs(p) {
 		return p

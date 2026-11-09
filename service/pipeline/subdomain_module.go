@@ -546,10 +546,16 @@ type DomainVerifyModule struct {
 	resultChan      chan interface{}
 	concurrency     int
 	targetDelay     time.Duration
+	// checkTakeover 控制是否执行子域接管检测。默认 true 保持旧行为；
+	// 任务配置显式关闭时不再对每个子域跑一遍 CNAME 检测。
+	checkTakeover bool
 }
 
 // SetTargetDelay 设置单目标之间的间隔，用于控制请求节奏、避免被封 IP。
 func (m *DomainVerifyModule) SetTargetDelay(d time.Duration) { m.targetDelay = d }
+
+// SetCheckTakeover 设置是否执行子域接管检测。
+func (m *DomainVerifyModule) SetCheckTakeover(enabled bool) { m.checkTakeover = enabled }
 
 // NewDomainVerifyModule 创建域名验证模块
 func NewDomainVerifyModule(ctx context.Context, nextModule ModuleRunner, concurrency int) *DomainVerifyModule {
@@ -568,6 +574,7 @@ func NewDomainVerifyModule(ctx context.Context, nextModule ModuleRunner, concurr
 		takeoverScanner: subdomain.NewTakeoverScanner(10),
 		resultChan:      make(chan interface{}, 500),
 		concurrency:     concurrency,
+		checkTakeover:   true,
 	}
 	return m
 }
@@ -706,25 +713,28 @@ func (m *DomainVerifyModule) checkSubdomain(sr SubdomainResult) {
 	// 子域名接管检测：目标是被发现的子域本身，而不是根域。
 	// 传根域会导致真正的子域接管（子域 CNAME 指向失效云服务）漏检，
 	// 且每个子域结果都会对同一根域重复检测一次。
-	takeoverResult, err := m.takeoverScanner.Scan(ctx, subdomain)
-	if err != nil {
-		log.Printf("[%s] Takeover scan error for %s: %v", m.name, subdomain, err)
-	} else if takeoverResult != nil && takeoverResult.Vulnerable {
-		log.Printf("[%s] Potential subdomain takeover detected: %s (Service: %s, CNAME: %s)",
-			m.name, subdomain, takeoverResult.Service, takeoverResult.CNAME)
-		// 发送接管检测结果
-		takeoverRes := TakeoverResult{
-			Domain:       takeoverResult.Domain,
-			CNAME:        takeoverResult.CNAME,
-			Service:      takeoverResult.Service,
-			Vulnerable:   takeoverResult.Vulnerable,
-			Fingerprints: takeoverResult.Fingerprints,
-			Reason:       takeoverResult.Reason,
-		}
-		select {
-		case <-m.ctx.Done():
-			return
-		case m.resultChan <- takeoverRes:
+	// checkTakeover=false 时整段跳过（阶段编排的 S1「只收集域名」依赖这个开关）。
+	if m.checkTakeover {
+		takeoverResult, err := m.takeoverScanner.Scan(ctx, subdomain)
+		if err != nil {
+			log.Printf("[%s] Takeover scan error for %s: %v", m.name, subdomain, err)
+		} else if takeoverResult != nil && takeoverResult.Vulnerable {
+			log.Printf("[%s] Potential subdomain takeover detected: %s (Service: %s, CNAME: %s)",
+				m.name, subdomain, takeoverResult.Service, takeoverResult.CNAME)
+			// 发送接管检测结果
+			takeoverRes := TakeoverResult{
+				Domain:       takeoverResult.Domain,
+				CNAME:        takeoverResult.CNAME,
+				Service:      takeoverResult.Service,
+				Vulnerable:   takeoverResult.Vulnerable,
+				Fingerprints: takeoverResult.Fingerprints,
+				Reason:       takeoverResult.Reason,
+			}
+			select {
+			case <-m.ctx.Done():
+				return
+			case m.resultChan <- takeoverRes:
+			}
 		}
 	}
 

@@ -22,6 +22,9 @@ const (
 	TaskTypeMonitor        TaskType = "monitor"
 	TaskTypeFull           TaskType = "full"
 	TaskTypeCustom         TaskType = "custom" // 用户自定义多种扫描类型组合
+	// TaskTypeCollection 是「信息收集」预设：除漏洞验证外默认全跑。
+	// asset_discovery 保留兼容，语义与 collection 接近但不含接管/JS/接口探测。
+	TaskTypeCollection TaskType = "collection"
 
 	// 协议识别与无凭据暴露面（reconkit T5）。
 	// service_detect 是前端历史值，语义与 service_identify 相同。
@@ -191,7 +194,7 @@ func (c TaskConfig) WantsPorts(taskType TaskType) bool {
 		return true
 	}
 	switch taskType {
-	case TaskTypePortScan, TaskTypeFull, TaskTypeAssetDiscovery:
+	case TaskTypePortScan, TaskTypeFull, TaskTypeAssetDiscovery, TaskTypeCollection:
 		return true
 	}
 	return false
@@ -208,8 +211,8 @@ func (c TaskConfig) WantsURLs(taskType TaskType) bool {
 	switch taskType {
 	case TaskTypeCrawler, TaskTypeDirScan, TaskTypeFull:
 		return true
-	// asset_discovery 执行器分支固定开爬虫：跑了爬虫却不收 URL，等于白爬。
-	case TaskTypeAssetDiscovery:
+	// asset_discovery / collection 执行器分支固定开爬虫：跑了爬虫却不收 URL，等于白爬。
+	case TaskTypeAssetDiscovery, TaskTypeCollection:
 		return true
 	}
 	return false
@@ -228,8 +231,8 @@ func (c TaskConfig) WantsFingerprints(taskType TaskType) bool {
 	case TaskTypeFingerprint, TaskTypeServiceID, TaskTypeServiceDetect,
 		TaskTypeCrawler, TaskTypeDirScan, TaskTypeFull:
 		return true
-	// asset_discovery 执行器分支固定开指纹（含图标跟随）：同样不该扫了不收。
-	case TaskTypeAssetDiscovery:
+	// asset_discovery / collection 执行器分支固定开指纹（含图标跟随）：同样不该扫了不收。
+	case TaskTypeAssetDiscovery, TaskTypeCollection:
 		return true
 	}
 	return false

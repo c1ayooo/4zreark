@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -139,6 +140,9 @@ func (s *ToolRuntimeService) InstalledTools(ctx context.Context, f toolruntime.I
 				external = append(external, externalTool("nuclei", nst.BinaryPath,
 					toolruntime.SourceOverride, "nuclei.binary_path 指向项目外部，不算平台安装"))
 			}
+		} else if p, lookErr := exec.LookPath("nuclei"); lookErr == nil && !pathWithin(p, nst.Root) {
+			external = append(external, externalTool("nuclei", p,
+				toolruntime.SourceSystem, "系统 PATH 上的 nuclei 不算平台安装；独立运行时会自动下载到项目内 data/bin/nuclei/bin"))
 		}
 	}
 

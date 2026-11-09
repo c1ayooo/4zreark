@@ -59,3 +59,19 @@ func TestExpectedChecksumIgnoresJunk(t *testing.T) {
 		t.Fatalf("有效行应被解析: %q ok=%v", got, ok)
 	}
 }
+
+// 官方 v3.11.1 的清单资产带版本号；旧版裸名作为兜底候选。
+func TestChecksumsURLVersioned(t *testing.T) {
+	want := "https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_checksums.txt"
+	if got := checksumsURL("3.11.1"); got != want {
+		t.Fatalf("checksumsURL = %s, want %s", got, want)
+	}
+	if got := checksumsURL("v3.11.1"); got != want {
+		t.Fatalf("带 v 前缀版本应归一化: %s", got)
+	}
+	cands := checksumCandidates("3.11.1")
+	if len(cands) != 2 || cands[0] != want ||
+		!strings.HasSuffix(cands[1], "/v3.11.1/checksums.txt") {
+		t.Fatalf("候选清单应含带版本号与裸名两种: %v", cands)
+	}
+}

@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>方案 C · 独立验证控制台（项目风格）</title>
+<style>
+  :root {
+    --bg: hsl(240 30% 99%); --card: #fff; --border: hsl(240 12% 93%); --fg: hsl(220 10% 10%);
+    --muted: hsl(215 5% 51%); --primary: hsl(142 71% 35%); --primary-dark: hsl(150 70% 24%);
+    --accent: hsl(142 65% 95%); --radius: 1rem;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { font: 14px/1.65 "Noto Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--fg); padding: 32px; }
+  .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+  .page { max-width: 1200px; margin: 0 auto; }
+  .crumb { color: var(--muted); margin-bottom: 14px; font-size: 13px; }
+  .crumb a { color: var(--primary); text-decoration: none; }
+  .head { margin-bottom: 20px; }
+  .head h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.025em; }
+  .head .desc { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 16px; }
+  .stat { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 20px; }
+  .stat .l { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .stat .n { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
+  .stat .n.green { color: var(--primary); } .stat .n.red { color: #cf1322; } .stat .n.orange { color: #d46b08; } .stat .n.blue { color: #0958d9; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 24px; margin-bottom: 16px; }
+  .toolbar { display: flex; gap: 8px; margin-bottom: 14px; align-items: center; }
+  .chip { font-size: 12px; padding: 3px 14px; border-radius: 999px; border: 1px solid var(--border); cursor: pointer; color: var(--muted); background: #fff; }
+  .chip.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .btn { display: inline-block; font-size: 12px; padding: 2px 12px; border-radius: 6px; cursor: pointer; border: 1px solid var(--border); background: #fff; color: var(--fg); }
+  .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 12px; }
+  td { padding: 11px 10px; border-bottom: 1px solid var(--bg); }
+  tr:hover td { background: #fafafa; }
+  .link { color: var(--primary); cursor: pointer; }
+  .badge { display: inline-block; font-size: 11px; padding: 1px 10px; border-radius: 6px; color: #fff; font-weight: 700; font-family: "JetBrains Mono", monospace; }
+  .b-pass { background: var(--primary); } .b-fail { background: #ff7875; } .b-err { background: #faad14; color:#613400; } .b-run { background: #1677ff; } .b-wait { background: #f0f0f0; color: #666; }
+  .tag { font-size: 11px; line-height: 20px; padding: 0 7px; border-radius: 4px; border: 1px solid; font-family: "JetBrains Mono", monospace; }
+  .t-critical { background: #fff0f6; border-color: #ffadd2; color: #c41d7f; }
+  .t-high { background: #fff1f0; border-color: #ffa39e; color: #cf1322; }
+  .t-class { background: #e6f4ff; border-color: #91caff; color: #0958d9; }
+  .progress { width: 110px; height: 6px; background: var(--border); border-radius: 999px; overflow: hidden; display: inline-block; vertical-align: middle; margin-right: 8px; }
+  .progress i { display: block; height: 100%; background: var(--primary); border-radius: 999px; }
+  .ops { white-space: nowrap; }
+  .ops .btn { margin-right: 6px; }
+  .foot { font-size: 12px; color: var(--muted); margin-top: 12px; display: flex; justify-content: space-between; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumb"><a href="index.html">方案 C：独立验证控制台</a> — 哨兵新增一级 tab，统一运营 Tier 3a/3b</div>
+
+  <div class="head">
+    <h1>验证控制台</h1>
+    <div class="desc">靶场验证（AI 方案 → 隔离内网靶场 → PoC 三态判定）与沙箱差分复现的统一队列视图。判定权属于 PoC 输出，机器结论直接落产物。</div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="l">待验证（python-poc 已 verified）</div><div class="n orange">3</div></div>
+    <div class="stat"><div class="l">执行中（队列串行）</div><div class="n blue">1</div></div>
+    <div class="stat"><div class="l">验证通过（已机器确认）</div><div class="n green">12</div></div>
+    <div class="stat"><div class="l">未确认 / 报错</div><div class="n red">4</div></div>
+    <div class="stat"><div class="l">平均耗时 · 近 7 日</div><div class="n">2m10s</div></div>
+  </div>
+
+  <div class="card">
+    <div class="toolbar">
+      <span class="chip on">全部</span><span class="chip">通过</span><span class="chip">未确认</span><span class="chip">执行中</span><span class="chip">待验证</span><span class="chip">仅 web 类</span>
+      <span style="margin-left:auto">
+        <span class="btn">批量重跑失败项</span>
+        <span class="btn primary">按严重度补齐验证</span>
+      </span>
+    </div>
+
+    <table>
+      <tr><th>发现</th><th>类别 / 严重度</th><th>靶场镜像（AI 方案）</th><th>verdict</th><th>进度 / 耗时</th><th style="width:180px">操作</th></tr>
+      <tr>
+        <td><span class="link">Spring WebMvc 数据绑定 RCE（#4127）</span></td>
+        <td><span class="tag t-class">RCE</span> <span class="tag t-critical">critical</span></td>
+        <td class="mono muted">vulhub/spring-webmvc:CVE-2022-22965</td>
+        <td><span class="badge b-pass">VULNERABLE</span></td>
+        <td><span class="progress"><i style="width:100%"></i></span>1m42s</td>
+        <td class="ops"><span class="btn">日志</span><span class="btn">环境</span><span class="btn">重跑</span></td>
+      </tr>
+      <tr>
+        <td><span class="link">Log4j2 JNDI 远程加载（#4102）</span></td>
+        <td><span class="tag t-class">RCE</span> <span class="tag t-critical">critical</span></td>
+        <td class="mono muted">vulhub/log4j2:CVE-2021-44228</td>
+        <td><span class="badge b-run">执行中</span></td>
+        <td><span class="progress"><i style="width:60%"></i></span>就绪探测</td>
+        <td class="ops"><span class="btn">事件流</span></td>
+      </tr>
+      <tr>
+        <td><span class="link">Struts2 S2-045 OGNL 注入（#4088）</span></td>
+        <td><span class="tag t-class">RCE</span> <span class="tag t-critical">critical</span></td>
+        <td class="mono muted">vulhub/struts2:s2-045</td>
+        <td><span class="badge b-fail">NOT VULNERABLE</span></td>
+        <td><span class="progress"><i style="width:100%"></i></span>58s</td>
+        <td class="ops"><span class="btn">日志</span><span class="btn">重跑</span></td>
+      </tr>
+      <tr>
+        <td><span class="link">Confluence OGNL 表达式注入（#4071）</span></td>
+        <td><span class="tag t-class">INJECTION</span> <span class="tag t-high">high</span></td>
+        <td class="mono muted">vulhub/confluence:CVE-2022-26134</td>
+        <td><span class="badge b-err">ERROR</span></td>
+        <td><span class="progress"><i style="width:100%"></i></span>靶场未就绪（120s）</td>
+        <td class="ops"><span class="btn">日志</span><span class="btn primary">修正方案重跑</span></td>
+      </tr>
+      <tr>
+        <td><span class="link">Go net/http 越界读（#4055）</span></td>
+        <td><span class="tag t-class">OOB_READ</span> <span class="tag t-high">high</span></td>
+        <td class="muted">—（内存破坏类 · 走差分复现）</td>
+        <td><span class="badge b-wait">不适配</span></td>
+        <td class="muted">—</td>
+        <td class="ops"><span class="btn">差分复现 →</span></td>
+      </tr>
+      <tr>
+        <td><span class="link">ThinkPHP 多语言 RCE（#4033）</span></td>
+        <td><span class="tag t-class">RCE</span> <span class="tag t-high">high</span></td>
+        <td class="muted">—</td>
+        <td><span class="badge b-wait">待验证</span></td>
+        <td class="muted">python-poc 已 verified</td>
+        <td class="ops"><span class="btn primary">发起验证</span></td>
+      </tr>
+    </table>
+
+    <div class="foot">
+      <span>执行 worker：pocsmith 进程 · 队列 sentinel_poc_verify · 串行（MaxWorkers=1）</span>
+      <span>安全边界：--internal 隔离内网 · 镜像白名单 vulhub/、ghcr.io/ · AI 仅出声明式方案</span>
+    </div>
+  </div>
+</div>
+</body>
+</html>

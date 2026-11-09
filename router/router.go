@@ -261,6 +261,9 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				ghLeakAdmin := api.NewGitHubLeakAdminHandler()
 				protected.GET("/github-monitor/runtime", middleware.RequirePermission("asset:read"), ghLeakAdmin.RuntimeStatus)
 				protected.GET("/github-monitor/stats", middleware.RequirePermission("asset:read"), ghLeakAdmin.Stats)
+				// 统一 Token 池只读视图：与设置页 /github/tokens 同一个 List 处理器/同一张表，
+				// 但挂 asset:read（operator 无 settings:read），供「敏感信息监控」页展示配额消耗。
+				protected.GET("/github-monitor/tokens", middleware.RequirePermission("asset:read"), api.NewGitHubTokenHandler().List)
 				// 全局命中（独立「敏感信息监控」页）：不带项目过滤，与 /projects/:id/... 并存不冲突
 				protected.GET("/github-monitor/findings", middleware.RequirePermission("asset:read"), ghLeakAdmin.GlobalFindings)
 				protected.PUT("/github-monitor/findings/:fid/status", middleware.RequirePermission("asset:write"), ghLeakAdmin.GlobalUpdateFindingStatus)
@@ -808,6 +811,11 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				sentinelGroup.GET("/findings", middleware.RequirePermission("sentinel:read"), sentinelHandler.ListFindings)
 				// 发现报告导出（md / pdf）：静态段需注册在 /findings/:id 之前，gin 静态优先
 				sentinelGroup.GET("/findings/export", middleware.RequirePermission("sentinel:read"), sentinelHandler.ExportFindings)
+				// 高危漏洞工作台：统计卡数据源
+				sentinelGroup.GET("/findings/summary", middleware.RequirePermission("sentinel:read"), sentinelHandler.FindingsSummary)
+				// POC 靶场验证（Tier 3b）：状态查询 + 手动触发（verified python-poc 自动入队之外的人工通道）
+				sentinelGroup.GET("/findings/:id/poc-verify", middleware.RequirePermission("sentinel:read"), sentinelHandler.GetPocVerifyStatus)
+				sentinelGroup.POST("/findings/:id/poc-verify", middleware.RequirePermission("sentinel:write"), sentinelHandler.VerifyPoc)
 				// 发现生命周期 + 产物链（§11.8）：状态流转 / 产物 CRUD / AI 生成 / 下载闸门 / 发布 PoC 库
 				sentinelGroup.PATCH("/findings/:id", middleware.RequirePermission("sentinel:write"), sentinelHandler.PatchFinding)
 				sentinelGroup.POST("/findings/:id/repro", middleware.RequirePermission("sentinel:write"), sentinelHandler.ReproFinding)

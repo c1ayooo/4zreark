@@ -111,6 +111,9 @@ export interface SentinelFinding {
   grade: string
   created_at: string
   updated_at: string
+  /** 机器验证通过时间（靶场验证 / 差分复现），null = 尚未机器确认 */
+  verified_at: string | null
+  verified_by: string
   repo_id: string
   repo_full_name: string
   sha: string
@@ -174,6 +177,45 @@ export interface SentinelPaged<T> {
   total: number
   page: number
   size: number
+}
+
+/** POC 靶场验证（Tier 3b）结论 */
+export interface PocVerifyVerdict {
+  passed: boolean
+  verdict: 'vulnerable' | 'not_vulnerable' | 'error' | string
+  reason: string
+  env?: Record<string, unknown>
+  exit_code?: number
+  exec_detail?: string
+}
+
+/** 验证时间线上的一步 */
+export interface PocVerifyStep {
+  title: string
+  detail?: string
+  state: 'done' | 'fail' | 'info' | string
+  time: string
+}
+
+/** 一条发现的靶场验证完整状态（GET /sentinel/findings/:id/poc-verify） */
+export interface PocVerifyStatus {
+  finding_id: number
+  /** 已有 verified 的 python-poc（可发起验证） */
+  has_poc: boolean
+  /** finding 已机器验证 */
+  verified: boolean
+  /** 最近一次验证仍在执行 */
+  running: boolean
+  verify?: PocVerifyVerdict | null
+  timeline?: PocVerifyStep[]
+}
+
+/** 高危发现统计（GET /sentinel/findings/summary） */
+export interface FindingsSummary {
+  high_risk: number
+  verified: number
+  confirmed: number
+  pending_poc: number
 }
 
 /** SuccessWithPagination 的原始响应 */
@@ -407,6 +449,24 @@ export const sentinelApi = {
   /** 发布 verified 的 nuclei 模板到 PoC 库，返回模板 id；重复发布后端 400 */
   publishArtifact: (id: number) =>
     unwrap(api.post<unknown, ApiResponse<{ template_id: number }>>(`/sentinel/artifacts/${id}/publish`)),
+
+  /** 高危发现统计（高危漏洞工作台卡片） */
+  findingsSummary: () =>
+    unwrap(api.get<unknown, ApiResponse<FindingsSummary>>('/sentinel/findings/summary')),
+
+  /** 一条发现的靶场验证状态（结论 + 时间线）；执行中可轮询（10s 足够） */
+  pocVerifyStatus: (findingId: number) =>
+    unwrap(
+      api.get<unknown, ApiResponse<PocVerifyStatus>>(`/sentinel/findings/${findingId}/poc-verify`),
+    ),
+
+  /** 把发现排入靶场验证队列（worker 在 pocsmith，串行执行）；force 忽略已有结论重跑 */
+  verifyPoc: (findingId: number, force = false) =>
+    unwrap(
+      api.post<unknown, ApiResponse<{ queued: boolean }>>(`/sentinel/findings/${findingId}/poc-verify`, {
+        force,
+      }),
+    ),
 
   runs: (params: { run_type?: string; limit?: number } = {}) =>
     unwrap(api.get<unknown, ApiResponse<SentinelRun[]>>('/sentinel/runs', { params })),

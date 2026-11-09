@@ -39,6 +39,7 @@ import {
   Gauge,
   GitBranch,
   GitCommitHorizontal,
+  Flame,
   ShieldAlert,
   MessagesSquare,
   ListChecks,
@@ -78,6 +79,7 @@ const menuGroups: MenuGroup[] = [
     label: '代码审计',
     items: [
       { path: '/sentinel', icon: ShieldAlert, label: '哨兵总览', roles: ALL },
+      { path: '/sentinel/high-risk', icon: Flame, label: '高危漏洞', roles: ALL },
       { path: '/sentinel/audit/tasks', icon: ListChecks, label: '分析任务', roles: ALL },
       { path: '/sentinel/audit/results', icon: ClipboardCheck, label: '分析结果', roles: ALL },
       { path: '/sentinel/audit/artifacts', icon: Package, label: '分析产物', roles: ALL },

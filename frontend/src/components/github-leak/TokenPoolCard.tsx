@@ -1,167 +1,123 @@
-import { useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Button, Input, Popconfirm, Progress, Switch, Table } from 'antd'
-import { KeyRound, Plus } from 'lucide-react'
-import { githubMonitorApi, type GitHubPoolToken } from '@/api/githubMonitor'
-import { useToast } from '@/components/ui/use-toast'
-import { formatDate } from '@/lib/utils'
+import { useQuery } from '@tanstack/react-query'
+import { Button, Progress, Table, Tag } from 'antd'
+import { KeyRound, RefreshCw } from 'lucide-react'
+import { githubTokensApi, type GitHubToken } from '@/api/githubTokens'
+import { cn, formatDate } from '@/lib/utils'
 import { LEAK_OPS_KEY } from './shared'
 
-/** Token 池：多账号按剩余配额轮换；明文只在提交时输入，列表仅回显掩码。 */
+/**
+ * Token 池配额（只读）：数据源与「系统设置 → GitHub Token 池」完全同源
+ * （GET /github-monitor/tokens → service.GitHubTokenStore()），这里只展示
+ * 消耗情况，不提供任何配置/写操作；配置入口唯一保留在设置页。
+ */
 export function TokenPoolCard() {
-  const { toast } = useToast()
-  const queryClient = useQueryClient()
-  const [label, setLabel] = useState('')
-  const [token, setToken] = useState('')
-
   const tokensQuery = useQuery({
-    queryKey: [...LEAK_OPS_KEY, 'tokens'],
-    queryFn: () => githubMonitorApi.tokens(),
-    refetchInterval: 120000,
+    queryKey: [...LEAK_OPS_KEY, 'tokens-readonly'],
+    queryFn: () => githubTokensApi.listReadOnly(),
+    refetchInterval: 60000,
   })
-  const tokens = tokensQuery.data?.data ?? []
-
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: LEAK_OPS_KEY })
-
-  const mutation = useMutation({
-    mutationFn: async (
-      action:
-        | { type: 'add'; token: string; label?: string }
-        | { type: 'delete'; id: string }
-        | { type: 'enable'; id: string; enabled: boolean }
-        | { type: 'refresh'; id: string },
-    ) => {
-      if (action.type === 'delete') return githubMonitorApi.deleteToken(action.id)
-      if (action.type === 'enable') return githubMonitorApi.setTokenEnabled(action.id, action.enabled)
-      if (action.type === 'refresh') return githubMonitorApi.refreshToken(action.id)
-      return githubMonitorApi.addToken({ token: action.token, label: action.label })
-    },
-    onSuccess: (res) => {
-      toast({ title: res.message || '已更新' })
-      setLabel('')
-      setToken('')
-      invalidate()
-    },
-    onError: (e: Error) => toast({ title: '操作失败', description: e.message, variant: 'destructive' }),
-  })
+  const tokens = tokensQuery.data?.data?.items ?? []
 
   const columns = [
     {
       title: '账号',
       key: 'label',
-      width: 200,
-      render: (_: unknown, t: GitHubPoolToken) => (
+      width: 170,
+      render: (_: unknown, t: GitHubToken) => (
         <div className="text-xs">
-          <div className="font-medium">{t.label}</div>
+          <div className="font-medium">{t.label || '未命名'}</div>
           <div className="font-mono text-[10px] text-muted-foreground">{t.masked}</div>
         </div>
       ),
     },
     {
+      title: '状态',
+      key: 'enabled',
+      width: 70,
+      render: (_: unknown, t: GitHubToken) => (
+        <Tag color={t.enabled ? 'success' : 'default'} className="m-0">
+          {t.enabled ? '启用' : '停用'}
+        </Tag>
+      ),
+    },
+    {
       title: '剩余配额',
       key: 'rate',
-      width: 190,
-      render: (_: unknown, t: GitHubPoolToken) =>
-        t.rate_remaining < 0 ? (
-          <span className="text-xs text-muted-foreground">未采集</span>
-        ) : (
+      width: 180,
+      render: (_: unknown, t: GitHubToken) => {
+        if (!t.enabled || t.rate_remaining < 0) {
+          return <span className="text-xs text-muted-foreground">{t.enabled ? '未采集' : '—'}</span>
+        }
+        return (
           <div className="flex items-center gap-2">
             <Progress
               percent={t.rate_limit ? Math.round((t.rate_remaining / t.rate_limit) * 100) : 0}
               size="small"
-              className="w-24 [&_.ant-progress-text]:text-[10px]"
+              className="w-20 [&_.ant-progress-text]:text-[10px]"
               strokeColor={t.rate_remaining <= 0 ? '#ef4444' : undefined}
             />
             <span className="font-mono text-[10px] text-muted-foreground">
               {t.rate_remaining}/{t.rate_limit}
             </span>
           </div>
-        ),
+        )
+      },
     },
     {
-      title: '重置时间',
+      title: '已用',
+      key: 'used',
+      width: 80,
+      render: (_: unknown, t: GitHubToken) => (
+        <span className={cn('font-mono text-[11px]', t.rate_used > 0 && 'text-amber-500')}>
+          {t.rate_used}
+        </span>
+      ),
+    },
+    {
+      title: '额度重置',
       key: 'reset',
-      width: 150,
-      render: (_: unknown, t: GitHubPoolToken) => (
+      width: 135,
+      render: (_: unknown, t: GitHubToken) => (
         <span className="text-[10px] text-muted-foreground">
           {t.rate_reset_at ? formatDate(t.rate_reset_at) : '—'}
         </span>
       ),
     },
     {
-      title: '启用',
-      key: 'enabled',
-      width: 70,
-      render: (_: unknown, t: GitHubPoolToken) => (
-        <Switch
-          size="small"
-          checked={t.enabled}
-          loading={mutation.isPending && mutation.variables?.type === 'enable'}
-          onChange={(enabled) => mutation.mutate({ type: 'enable', id: t.id, enabled })}
-        />
-      ),
-    },
-    {
-      title: '操作',
-      key: 'ops',
-      width: 120,
-      render: (_: unknown, t: GitHubPoolToken) => (
-        <div className="flex gap-2">
-          <Button
-            type="link"
-            size="small"
-            className="h-auto p-0 text-xs"
-            loading={mutation.isPending && mutation.variables?.type === 'refresh'}
-            onClick={() => mutation.mutate({ type: 'refresh', id: t.id })}
-          >
-            刷新
-          </Button>
-          <Popconfirm title="删除该 Token？" onConfirm={() => mutation.mutate({ type: 'delete', id: t.id })}>
-            <Button type="link" size="small" className="h-auto p-0 text-xs text-destructive">
-              删除
-            </Button>
-          </Popconfirm>
-        </div>
+      title: '最近采集',
+      key: 'checked',
+      width: 135,
+      render: (_: unknown, t: GitHubToken) => (
+        <span className="text-[10px] text-muted-foreground">
+          {t.last_checked_at ? formatDate(t.last_checked_at) : '—'}
+        </span>
       ),
     },
   ]
 
   return (
     <div className="rounded-xl border border-border bg-card/50 p-4">
-      <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
-        <KeyRound className="size-4 text-primary" /> Token 池
-      </div>
-      <p className="mb-3 text-xs text-muted-foreground">
-        多账号按剩余配额轮换（5000 次/日/号）；池为空时回退项目级单 Token。同号重复入池会被拒绝，token 不回显。
-      </p>
-      <div className="mb-3 flex flex-wrap gap-2">
-        <Input
-          size="small"
-          className="w-52"
-          placeholder="备注名（可选）"
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-        />
-        <Input.Password
-          size="small"
-          className="w-80"
-          placeholder="ghp_… 开头的 Personal Access Token"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          onPressEnter={() => token.trim() && mutation.mutate({ type: 'add', token: token.trim(), label: label.trim() || undefined })}
-        />
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <KeyRound className="size-4 text-primary" /> Token 池配额（只读）
+          <span className="text-xs font-normal text-muted-foreground">共 {tokens.length} 个账号</span>
+        </div>
         <Button
           size="small"
-          type="primary"
-          icon={<Plus className="size-3.5" />}
-          disabled={!token.trim()}
-          loading={mutation.isPending && mutation.variables?.type === 'add'}
-          onClick={() => mutation.mutate({ type: 'add', token: token.trim(), label: label.trim() || undefined })}
+          icon={<RefreshCw className="size-3" />}
+          loading={tokensQuery.isFetching}
+          onClick={() => tokensQuery.refetch()}
         >
-          入池
+          刷新展示
         </Button>
       </div>
-      <Table<GitHubPoolToken>
+      <p className="mb-3 text-xs text-muted-foreground">
+        平台统一池的配额消耗视图（与系统设置、监控巡查、情报检索共用一份数据）；每 60 秒自动更新，此处不提供配置。
+      </p>
+      {tokensQuery.isError && (
+        <p className="mb-2 text-xs text-destructive">读取配额失败：{(tokensQuery.error as Error)?.message}</p>
+      )}
+      <Table<GitHubToken>
         rowKey="id"
         size="small"
         tableLayout="fixed"
@@ -169,8 +125,8 @@ export function TokenPoolCard() {
         dataSource={tokens}
         loading={tokensQuery.isLoading}
         pagination={false}
-        scroll={{ x: 730 }}
-        locale={{ emptyText: '池为空——监控将使用项目级单 Token' }}
+        scroll={{ x: 770 }}
+        locale={{ emptyText: '池为空——请到「系统设置 → GitHub Token 池」添加' }}
       />
     </div>
   )

@@ -496,6 +496,63 @@ func deriveFullName(cloneURL string) string {
 	return parts[len(parts)-2] + "/" + parts[len(parts)-1]
 }
 
+// FindingsSummary 高危发现统计（高危漏洞工作台的卡片）。
+func (h *SentinelHandler) FindingsSummary(c *gin.Context) {
+	sum, err := h.store.SummarizeFindings(c.Request.Context())
+	if err != nil {
+		utils.InternalError(c, "统计发现失败: "+err.Error())
+		return
+	}
+	utils.Success(c, sum)
+}
+
+// GetPocVerifyStatus 一条发现的靶场验证状态（结论 + 时间线）。
+func (h *SentinelHandler) GetPocVerifyStatus(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "发现 id 非法")
+		return
+	}
+	st, err := service.GetPocVerifyStatus(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			utils.NotFound(c, "发现不存在")
+			return
+		}
+		utils.InternalError(c, "查询验证状态失败: "+err.Error())
+		return
+	}
+	utils.Success(c, st)
+}
+
+// VerifyPoc 把发现排入靶场验证队列（force 忽略已有结论重跑）。
+func (h *SentinelHandler) VerifyPoc(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "发现 id 非法")
+		return
+	}
+	var body struct {
+		Force bool `json:"force"`
+	}
+	if c.Request.ContentLength > 0 {
+		if err := c.ShouldBindJSON(&body); err != nil {
+			utils.BadRequest(c, "参数错误: "+err.Error())
+			return
+		}
+	}
+	if err := service.TriggerPocVerify(c.Request.Context(), id, body.Force); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			utils.NotFound(c, "发现不存在")
+			return
+		}
+		utils.InternalError(c, err.Error())
+		return
+	}
+	h.audit(c, "finding.verify_poc", strconv.FormatInt(id, 10), map[string]interface{}{"force": body.Force})
+	utils.Success(c, gin.H{"queued": true})
+}
+
 // parseSentinelTime 接受 RFC3339 或 YYYY-MM-DD。
 func parseSentinelTime(raw string) *time.Time {
 	raw = strings.TrimSpace(raw)

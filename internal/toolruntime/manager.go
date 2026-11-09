@@ -1,7 +1,6 @@
 package toolruntime
 
 import (
-	"github.com/c1ayooo/4zreark/internal/datadir"
 	"archive/tar"
 	"archive/zip"
 	"bytes"
@@ -11,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/datadir"
 	"io"
 	"net/http"
 	"os"
@@ -435,9 +435,9 @@ func (m *Manager) record(ctx context.Context, rec UpdateRecord) {
 type ToolStatus struct {
 	ToolState
 	Path            string `json:"path"`
-	Managed         bool   `json:"managed"`      // 路径来自托管目录
-	InProject       bool   `json:"in_project"`   // 项目内部是否有平台安装副本
-	Source          string `json:"source"`       // 当前解析路径来源
+	Managed         bool   `json:"managed"`    // 路径来自托管目录
+	InProject       bool   `json:"in_project"` // 项目内部是否有平台安装副本
+	Source          string `json:"source"`     // 当前解析路径来源
 	SizeBytes       int64  `json:"size_bytes"`
 	DiskVersion     string `json:"disk_version"` // 二进制自报版本（尽力而为）
 	DiskSHA256      string `json:"disk_sha256"`

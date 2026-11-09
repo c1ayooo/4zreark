@@ -16,6 +16,7 @@ import { Button, Drawer, Dropdown, Input, Popconfirm, Select, Table, Tooltip } f
 import type { TableProps } from 'antd'
 import { Download, FileText, Play, Search, Sparkles } from 'lucide-react'
 import { sentinelApi, type SentinelCommit, type SentinelFindingStatus } from '@/api/sentinel'
+import PocVerifyCard from './PocVerifyCard'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors'
 import {
@@ -740,6 +741,10 @@ export default function AnalysisResultsPage() {
                             <div className="mt-0.5 text-[11px] leading-relaxed text-secondary-foreground">
                               {f.detail}
                             </div>
+                          )}
+                          {/* 高危发现挂靶场验证状态卡（Tier 3b）：方案 B —— 环境事实 + 流程时间线 + verdict 横幅 */}
+                          {(f.severity === 'high' || f.severity === 'critical') && (
+                            <PocVerifyCard findingId={f.id} />
                           )}
                         </div>
                       ))}

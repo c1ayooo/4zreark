@@ -32,6 +32,7 @@ const SettingsPage = lazy(() => import('@/pages/settings/SettingsPage'))
 const NotifyPage = lazy(() => import('@/pages/notify/NotifyPage'))
 const MonitorPage = lazy(() => import('@/pages/monitor/MonitorPage'))
 const SentinelOverviewPage = lazy(() => import('@/pages/sentinel/OverviewPage'))
+const SentinelHighRiskFindingsPage = lazy(() => import('@/pages/sentinel/HighRiskFindingsPage'))
 const SentinelReposPage = lazy(() => import('@/pages/sentinel/ReposPage'))
 const SentinelCommitsPage = lazy(() => import('@/pages/sentinel/CommitsPage'))
 const SentinelCommitDetailPage = lazy(() => import('@/pages/sentinel/CommitDetailPage'))
@@ -189,6 +190,7 @@ function App() {
             <Route path="/takeover" element={<TakeoverPage />} />
             <Route path="/monitor" element={<MonitorPage />} />
             <Route path="/sentinel" element={<SentinelOverviewPage />} />
+            <Route path="/sentinel/high-risk" element={<SentinelHighRiskFindingsPage />} />
             <Route path="/sentinel/repos" element={<SentinelReposPage />} />
             <Route path="/sentinel/commits" element={<SentinelCommitsPage />} />
             <Route path="/sentinel/commits/:id" element={<SentinelCommitDetailPage />} />

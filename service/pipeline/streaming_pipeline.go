@@ -46,6 +46,10 @@ type PipelineConfig struct {
 	// 漏洞扫描
 	VulnScan bool `json:"vuln_scan"`
 
+	// GogoPOC 控制端口扫描是否把 gogo 内置 poc 命中写成漏洞结果。
+	// 默认 false：信息收集任务不应通过端口模块旁路产出漏洞条目。
+	GogoPOC bool `json:"gogo_poc"`
+
 	// 爬虫
 	WebCrawler bool `json:"web_crawler"`
 	// 爬取深度与单目标结果上限；0 = 用模块默认（深度 3、不限页）。
@@ -87,6 +91,14 @@ type PipelineConfig struct {
 	// 它们防的是多目标速率乘法放大，与「干活的线程数」不是一个量纲）；
 	// rate 令牌桶仍照常限 QPS，并发槽拉大不会放大对目标的实际请求速率。
 	FixedModuleConcurrency int `json:"fixed_module_concurrency,omitempty"`
+
+	// UASeed 是 UA 会话的站点级种子。由 master 按项目派生后随任务下发，
+	// worker 不持库也能复现同一站点在跨阶段/跨任务使用同一 UA。
+	UASeed string `json:"ua_seed,omitempty"`
+
+	// PortBackend 选择端口发现后端：auto（默认）/naabu/gogo/native。
+	// auto：信息收集优先 naabu，漏洞/服务识别任务保留 gogo，缺失逐级回退。
+	PortBackend string `json:"port_backend,omitempty"`
 }
 
 // rate 返回生效的每秒请求上限。默认 10：目标面大的项目（集团子公司批量
@@ -501,6 +513,7 @@ func (p *StreamingPipeline) buildModuleChain() error {
 	// 端口扫描模块
 	if p.config.PortScan {
 		p.portScanModule = NewPortScanModule(p.ctx, lastModule, p.config.PortRange, p.config.PortScanMode)
+		p.portScanModule.SetGogoPOC(p.config.GogoPOC)
 		p.portScanModule.SetRate(p.config.rate(), p.config.moduleConcurrency(2), p.config.targetDelay())
 		p.portScanModule.SetInput(make(chan interface{}, 500))
 		p.portScanModule.SetProgressTracker(p.progressTracker)
@@ -518,6 +531,7 @@ func (p *StreamingPipeline) buildModuleChain() error {
 	// 子域名安全检测模块
 	if p.config.SubdomainScan {
 		p.securityModule = NewDomainVerifyModule(p.ctx, lastModule, p.config.moduleConcurrency(2))
+		p.securityModule.SetCheckTakeover(p.config.SubdomainCheckTakeover)
 		p.securityModule.SetTargetDelay(p.config.targetDelay())
 		p.securityModule.SetInput(make(chan interface{}, 500))
 		p.securityModule.SetProgressTracker(p.progressTracker)

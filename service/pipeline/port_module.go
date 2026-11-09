@@ -30,7 +30,13 @@ type PortScanModule struct {
 	ratePerSec  int
 	concurrency int
 	targetDelay time.Duration
+	// enableGogoPOC 控制是否把 gogo 内置 poc 命中写成漏洞结果。
+	// 默认 false：信息收集任务不应通过端口模块旁路产出漏洞条目。
+	enableGogoPOC bool
 }
+
+// SetGogoPOC 设置是否启用 gogo 内置 poc 命中转漏洞结果。
+func (m *PortScanModule) SetGogoPOC(enabled bool) { m.enableGogoPOC = enabled }
 
 // SetRate 设置端口扫描的速率、并发与单目标间隔。
 // 默认值刻意保守：高频 SYN/connect 扫描最容易触发云厂商和目标的封禁策略。
@@ -374,23 +380,26 @@ func (m *PortScanModule) scanPorts(ds DomainSkip) {
 	}
 
 	// gogo 内置 poc 命中：走统一漏洞结果通道（Source=gogo），severity 按
-	// fingers 口径映射。gogo 的 poc 集是粗筛，进漏洞清单后仍走人工复核。
-	for _, v := range scanResult.Vulns {
-		target := v.Target
-		if target == "" {
-			target = net.JoinHostPort(ds.Domain, "0")
-		}
-		select {
-		case <-m.ctx.Done():
-			return
-		case m.resultChan <- VulnResult{
-			Target:    target,
-			Name:      v.Name,
-			Severity:  gogoSeverity(v.SeverityLevel),
-			Source:    "gogo",
-			MatchedAt: target,
-			Timestamp: time.Now(),
-		}:
+	// fingers 口径映射。默认不落漏洞清单——信息收集任务不应通过端口模块
+	// 旁路产出漏洞条目；只有显式勾选 gogo_poc 的任务才启用。
+	if m.enableGogoPOC {
+		for _, v := range scanResult.Vulns {
+			target := v.Target
+			if target == "" {
+				target = net.JoinHostPort(ds.Domain, "0")
+			}
+			select {
+			case <-m.ctx.Done():
+				return
+			case m.resultChan <- VulnResult{
+				Target:    target,
+				Name:      v.Name,
+				Severity:  gogoSeverity(v.SeverityLevel),
+				Source:    "gogo",
+				MatchedAt: target,
+				Timestamp: time.Now(),
+			}:
+			}
 		}
 	}
 

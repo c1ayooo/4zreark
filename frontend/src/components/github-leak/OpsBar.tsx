@@ -17,19 +17,14 @@ export function OpsBar({ onChanged }: { onChanged?: () => void }) {
   }
 
   const ops = useMutation({
-    mutationFn: async (action: 'run' | 'backfill' | 'refresh-tokens') => {
-      if (action === 'run') return githubMonitorApi.runNow()
-      if (action === 'backfill') return githubMonitorApi.backfill()
-      return githubMonitorApi.refreshAllTokens()
+    mutationFn: async (action: 'run' | 'backfill') => {
+      const res = action === 'run' ? await githubMonitorApi.runNow() : await githubMonitorApi.backfill()
+      return res.data as { accepted?: boolean; filled?: number }
     },
-    onSuccess: (res, action) => {
-      const msg =
-        action === 'run'
-          ? '已加入巡查队列'
-          : action === 'backfill'
-            ? `已补全 ${(res.data as { filled?: number } | undefined)?.filled ?? 0} 条明文`
-            : '全池配额已刷新'
-      toast({ title: msg })
+    onSuccess: (data, action) => {
+      toast({
+        title: action === 'run' ? '已加入巡查队列' : `已补全 ${data?.filled ?? 0} 条明文`,
+      })
       invalidate()
     },
     onError: (e: Error) => toast({ title: '操作失败', description: e.message, variant: 'destructive' }),
@@ -126,13 +121,6 @@ export function OpsBar({ onChanged }: { onChanged?: () => void }) {
         onClick={() => waterline.mutate()}
       >
         重置水线
-      </Button>
-      <Button
-        size="small"
-        loading={busy('refresh-tokens')}
-        onClick={() => ops.mutate('refresh-tokens')}
-      >
-        刷新配额
       </Button>
     </div>
   )

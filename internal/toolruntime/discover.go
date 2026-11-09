@@ -140,11 +140,11 @@ func DiscoverInstalled(opts DiscoverOptions) DiscoverResult {
 
 // InstalledFilter 是平台工具检索条件；指针字段为 nil 时不过滤。
 type InstalledFilter struct {
-	Query       string
-	Source      string
-	InProject   *bool
-	Managed     *bool
-	Executable  *bool
+	Query      string
+	Source     string
+	InProject  *bool
+	Managed    *bool
+	Executable *bool
 }
 
 // FilterInstalled 按关键字/来源/位置过滤并稳定排序。

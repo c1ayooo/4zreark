@@ -185,7 +185,7 @@ export default function InstalledToolsCard({ onChanged }: { onChanged?: () => vo
           type="warning"
           showIcon
           message={`环境里发现 ${data.external_count} 个外部工具，不算平台自身安装`}
-          description="平台只把项目内部目录里的二进制视为已安装。点击「检测并安装缺失工具」会把缺失工具自动下载到项目目录内部；也可勾选「含外部」查看这些路径。"
+          description="平台只把项目内部目录里的二进制视为已安装。「检测并安装缺失工具」会补装受管工具；nuclei 由独立运行时自动下载到 data/bin/nuclei。勾选「含外部」可查看环境里的这些路径。"
         />
       )}
       <Table

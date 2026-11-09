@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>POC 靶场验证 · 前端原型选型（项目风格版）</title>
+<style>
+  :root {
+    --bg: hsl(240 30% 99%); --card: #fff; --border: hsl(240 12% 93%); --fg: hsl(220 10% 10%);
+    --muted: hsl(215 5% 51%); --primary: hsl(142 71% 35%); --accent: hsl(142 65% 95%);
+    --radius: 1rem;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { font: 15px/1.7 "Noto Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--fg); padding: 48px; }
+  .page { max-width: 880px; margin: 0 auto; }
+  h1 { font-size: 24px; font-weight: 600; letter-spacing: -0.025em; }
+  .sub { color: var(--muted); font-size: 14px; margin: 4px 0 32px; }
+  .opt { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 26px 30px; margin-bottom: 16px; }
+  .opt h2 { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+  .opt h2 a { color: var(--primary); text-decoration: none; }
+  .opt h2 a:hover { text-decoration: underline; }
+  .opt p { color: var(--muted); font-size: 14px; margin-bottom: 4px; }
+  .pill { display: inline-block; font-size: 12px; padding: 1px 10px; border-radius: 999px; margin-left: 8px; vertical-align: 2px; }
+  .p-low { background: var(--accent); color: hsl(150 70% 24%); border: 1px solid #b7eb8f; }
+  .p-mid { background: #fff7e6; color: #d46b08; border: 1px solid #ffd591; }
+  .p-high { background: #fff1f0; color: #cf1322; border: 1px solid #ffa39e; }
+  .who { font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>POC 靶场验证 · 前端呈现 — 三个原型</h1>
+  <div class="sub">已按项目「纯白轻线」主题（antd 6 + Tailwind + lucide，绿色主色，发丝线边框，1rem 圆角，胶囊标签）重做 · 对应 Tier 3b 靶场验证流水线</div>
+
+  <div class="opt">
+    <h2><a href="a-lightweight.html">方案 A · 轻量徽标型</a><span class="pill p-low">改动最小</span></h2>
+    <p>发现详情「产物」tab 内：顶部绿色主按钮「发起靶场验证」+ poc-verify 产物卡（verdict 徽标、环境信息行、日志内联）。不新增页面与卡片。</p>
+    <p class="who">适合：验证作为产物链一环，运营看产物中心即可。约 1 个组件改动。</p>
+  </div>
+
+  <div class="opt">
+    <h2><a href="b-statuscard.html">方案 B · 验证状态卡 + 流程时间线</a><span class="pill p-mid">信息最完整</span></h2>
+    <p>发现详情页独立「靶场验证」卡片：左侧环境事实（镜像 / TARGET / 隔离边界 / 强制重跑），右侧六步流水线时间线，底部 verdict 大横幅 + 自动验证提示。</p>
+    <p class="who">适合：向使用者解释「AI 参与了什么、边界在哪」；单发现视角体验最好。约 2 个组件改动。</p>
+  </div>
+
+  <div class="opt">
+    <h2><a href="c-console.html">方案 C · 独立验证控制台</a><span class="pill p-high">改动最大</span></h2>
+    <p>哨兵下新增一级 tab：统计卡 + 验证任务表格（verdict 徽标、进度条、批量重跑、按严重度补齐）+ 内存破坏类自动分流到差分复现。</p>
+    <p class="who">适合：验证量大、统一运营 Tier 3a/3b；涉及新路由 + 后端列表 API。</p>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>方案 B · 验证状态卡 + 流程时间线（项目风格）</title>
+<style>
+  :root {
+    --bg: hsl(240 30% 99%); --card: #fff; --border: hsl(240 12% 93%); --fg: hsl(220 10% 10%);
+    --muted: hsl(215 5% 51%); --primary: hsl(142 71% 35%); --primary-dark: hsl(150 70% 24%);
+    --accent: hsl(142 65% 95%); --radius: 1rem;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { font: 14px/1.65 "Noto Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--fg); padding: 32px; }
+  .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+  .page { max-width: 1120px; margin: 0 auto; }
+  .crumb { color: var(--muted); margin-bottom: 14px; font-size: 13px; }
+  .crumb a { color: var(--primary); text-decoration: none; }
+  .head { margin-bottom: 20px; }
+  .head h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.025em; }
+  .meta { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .tag { font-size: 12px; line-height: 20px; padding: 0 7px; border-radius: 4px; border: 1px solid; }
+  .t-critical { background: #fff0f6; border-color: #ffadd2; color: #c41d7f; }
+  .t-class { background: #e6f4ff; border-color: #91caff; color: #0958d9; font-family: "JetBrains Mono", monospace; font-size: 11px; }
+  .t-grade { background: #fff1f0; border-color: #ffccc7; color: #cf1322; font-weight: 700; font-family: "JetBrains Mono", monospace; font-size: 11px; }
+  .t-ok { background: var(--accent); border-color: #b7eb8f; color: var(--primary-dark); }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px 26px; margin-bottom: 16px; }
+  .card h2 { font-size: 15px; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; gap: 10px; }
+  h2 .rt { margin-left: auto; display: flex; gap: 8px; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 12px; border-radius: 8px; cursor: pointer; border: 1px solid var(--border); background: #fff; color: var(--fg); }
+  .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .btn.warn { color: #d4380d; border-color: #ffbb96; background: #fff2e8; }
+  .grid { display: grid; grid-template-columns: 400px 1px 1fr; gap: 26px; }
+  .sep { background: var(--border); }
+  .kv { display: flex; margin-bottom: 11px; font-size: 13px; }
+  .kv .k { width: 78px; color: var(--muted); flex-shrink: 0; }
+  .kv .v { flex: 1; word-break: break-all; }
+  .code { font-family: "JetBrains Mono", monospace; font-size: 12px; background: #fafafa; border: 1px solid var(--border); padding: 1px 6px; border-radius: 6px; }
+  .iso { background: var(--accent); border: 1px solid #b7eb8f; color: var(--primary-dark); font-size: 12px; border-radius: 10px; padding: 9px 13px; margin: 6px 0 14px; }
+  .link { color: var(--primary); cursor: pointer; }
+  /* 时间线：绿色 = 完成 */
+  .tl { position: relative; padding-left: 26px; }
+  .tl::before { content: ""; position: absolute; left: 8px; top: 6px; bottom: 6px; width: 2px; background: var(--border); }
+  .step { position: relative; margin-bottom: 15px; }
+  .dot { position: absolute; left: -26px; top: 2px; width: 18px; height: 18px; border-radius: 50%; font-size: 11px; line-height: 18px; text-align: center; color: #fff; background: var(--primary); }
+  .step .t { font-weight: 600; font-size: 13.5px; }
+  .step .d { font-size: 12px; color: var(--muted); margin-top: 1px; }
+  .cost { color: var(--muted); margin-left: 6px; }
+  .verdict-banner { margin-top: 18px; border-radius: 12px; padding: 14px 18px; display: flex; align-items: center; gap: 14px; background: var(--accent); border: 1px solid #b7eb8f; color: var(--primary-dark); }
+  .vb { font-size: 17px; font-weight: 800; letter-spacing: .5px; font-family: "JetBrains Mono", monospace; }
+  .verdict-banner .desc { font-size: 13px; color: var(--fg); flex: 1; }
+  .pipeline { font-size: 12px; color: var(--muted); display: flex; gap: 18px; margin-top: 10px; }
+  .pipeline b { color: var(--fg); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumb">哨兵 / 发现 / <a href="index.html">方案 B：验证状态卡 + 流程时间线</a> — 发现详情页内独立卡片</div>
+
+  <div class="head">
+    <h1>Spring WebMvc 数据绑定 RCE（CVE-2022-22965 变体）</h1>
+    <div class="meta">
+      <span class="tag t-grade">S</span><span class="tag t-critical">critical</span>
+      <span class="tag t-class">RCE</span><span class="tag" style="border:1px solid var(--border);color:var(--muted);background:#fafafa">vulhub/spring-webmvc</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>
+      🎯 靶场验证
+      <span class="tag t-ok">已完成 · 通过</span>
+      <span class="rt">
+        <span class="btn warn">强制重跑 (force)</span>
+        <span class="btn">差分复现</span>
+        <span class="btn primary">查看验证日志</span>
+      </span>
+    </h2>
+
+    <div class="grid">
+      <div>
+        <div class="kv"><span class="k">靶场镜像</span><span class="v"><span class="code">vulhub/spring-webmvc:CVE-2022-22965</span></span></div>
+        <div class="kv"><span class="k">方案来源</span><span class="v">AI 生成（env-plan）· 白名单校验通过，人工无需介入</span></div>
+        <div class="kv"><span class="k">TARGET</span><span class="v"><span class="code">http://pocverify-target:8080/</span></span></div>
+        <div class="kv"><span class="k">就绪探测</span><span class="v"><span class="code">GET / → HTTP 200</span></span></div>
+        <div class="kv"><span class="k">PoC</span><span class="v">python-poc <span style="color:var(--primary-dark)">verified</span> · 退出码 0</span></div>
+        <div class="kv"><span class="k">总耗时</span><span class="v">1m42s（拉镜像 38s · 就绪 21s · PoC 43s）</span></div>
+        <div class="iso">🛡 隔离边界：靶场与 PoC 同处 docker --internal 网络，容器间互通、无外网出口；镜像受 vulhub/、ghcr.io/ 白名单约束；AI 仅提供声明式参数，编排为确定性代码</div>
+        <span class="btn">查看环境方案 JSON</span>
+        <div class="pipeline">
+          <span>队列深度 <b>0</b></span><span>近期通过率 <b>78%</b></span><span>平均耗时 <b>2m10s</b></span>
+        </div>
+      </div>
+
+      <div class="sep"></div>
+
+      <div class="tl">
+        <div class="step"><span class="dot">✓</span>
+          <div class="t">生成环境方案（LLM）</div>
+          <div class="d">image=vulhub/spring-webmvc:CVE-2022-22965 · 白名单校验通过</div>
+        </div>
+        <div class="step"><span class="dot">✓</span>
+          <div class="t">拉取靶场镜像<span class="cost">38s</span></div>
+        </div>
+        <div class="step"><span class="dot">✓</span>
+          <div class="t">创建隔离网络并启动靶场</div>
+          <div class="d">--internal 无外网出口 · 主机名 pocverify-target</div>
+        </div>
+        <div class="step"><span class="dot">✓</span>
+          <div class="t">就绪探测<span class="d" style="display:inline">GET / → 200 · 21s</span></div>
+        </div>
+        <div class="step"><span class="dot">✓</span>
+          <div class="t">执行 PoC</div>
+          <div class="d">python /poc/poc_verify.py · TARGET 注入 · 43s</div>
+        </div>
+        <div class="step"><span class="dot">✓</span>
+          <div class="t">清理（容器 + 网络）</div>
+          <div class="d">幂等 cleanup，失败仅告警</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="verdict-banner">
+      <span class="vb">✓ VULNERABLE</span>
+      <span class="desc">PoC 自判 VULNERABLE（退出码 0，日志含漏洞判定标记）· finding 已自动 MarkFindingVerified</span>
+      <span class="btn" style="border-color:#b7eb8f">查看 poc-verify 产物</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>产物</h2>
+    <div class="kv"><span class="k">python-poc</span><span class="v">verified · <span class="code">poc_verify.py</span>（本次执行的输入）</span></div>
+    <div class="kv"><span class="k">deep-analysis</span><span class="v">verified · 结论：确认（优先于一级判定采信）</span></div>
+    <div class="kv"><span class="k">poc-verify</span><span class="v">verified · JSON 结论 + 执行日志（kind=repro_log）</span></div>
+  </div>
+</div>
+</body>
+</html>

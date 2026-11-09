@@ -131,6 +131,51 @@ var Specs = []ToolSpec{
 		AutoUpdateByDefault: true,
 	},
 	{
+		Name:           "httpx",
+		Repo:           "projectdiscovery/httpx",
+		Description:    "HTTP 探活与标题/指纹/状态码富化（JSON 输出）",
+		DefaultVersion: "1.6.0",
+
+		AssetName: func(version, goos, goarch string) (string, error) {
+			if goos == "darwin" && (goarch == "386" || goarch == "arm") {
+				return "", fmt.Errorf("httpx 没有 darwin/%s 官方构建", goarch)
+			}
+			return fmt.Sprintf("httpx_%s_%s_%s.zip", trimV(version), goos, goarch), nil
+		},
+		ChecksumAsset:    "", // 清单名带版本号，checksumAssetName 动态拼
+		Archive:          ArchiveZip,
+		VersionProbeArgs: []string{"-version"},
+		HelpArgs:         []string{"-h"},
+
+		// scanner/webscan/httpx_cli.go buildArgs；上游改名会在更新门被拦下。
+		RequiredFlags: []string{"-l", "-json", "-silent", "-title", "-tech-detect",
+			"-status-code", "-web-server", "-follow-redirects", "-H", "-o",
+			"-threads", "-rate-limit", "-timeout", "-no-color"},
+		AutoUpdateByDefault: true,
+	},
+	{
+		Name:           "naabu",
+		Repo:           "projectdiscovery/naabu",
+		Description:    "端口发现（connect 模式，JSON 输出）",
+		DefaultVersion: "2.3.0",
+
+		AssetName: func(version, goos, goarch string) (string, error) {
+			if goos == "darwin" && (goarch == "386" || goarch == "arm") {
+				return "", fmt.Errorf("naabu 没有 darwin/%s 官方构建", goarch)
+			}
+			return fmt.Sprintf("naabu_%s_%s_%s.zip", trimV(version), goos, goarch), nil
+		},
+		ChecksumAsset:    "", // 清单名带版本号，checksumAssetName 动态拼
+		Archive:          ArchiveZip,
+		VersionProbeArgs: []string{"-version"},
+		HelpArgs:         []string{"-h"},
+
+		// scanner/portscan/naabu_runner.go buildArgs；connect 模式不需要 root。
+		RequiredFlags: []string{"-host", "-p", "-json", "-silent", "-o",
+			"-rate", "-c", "-timeout", "-scan-type", "-no-color"},
+		AutoUpdateByDefault: true,
+	},
+	{
 		Name:           "rem",
 		Repo:           "chainreactors/rem",
 		Description:    "节点部署反向隧道（gost 替代）",
@@ -180,8 +225,12 @@ func SpecNames() []string {
 
 // checksumAssetName 解析某版本对应的 sha256 清单资产名。
 func (t ToolSpec) checksumAssetName(version string) string {
-	if t.Name == "katana" {
+	switch t.Name {
+	case "katana":
 		return fmt.Sprintf("katana-%s-checksums.txt", trimV(version))
+	case "httpx", "naabu":
+		// projectdiscovery 系的清单名是 <tool>_<ver>_checksums.txt。
+		return fmt.Sprintf("%s_%s_checksums.txt", t.Name, trimV(version))
 	}
 	return t.ChecksumAsset
 }

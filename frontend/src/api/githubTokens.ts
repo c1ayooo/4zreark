@@ -30,6 +30,11 @@ export const githubTokensApi = {
   list: (): Promise<ApiResponse<{ items: GitHubToken[]; total: number }>> =>
     api.get('/github/tokens'),
 
+  /** 只读配额视图（敏感信息监控页用）：与 list 同一数据源、返回结构一致，
+   *  但挂 asset:read，operator 无需 settings:read 即可查看消耗。 */
+  listReadOnly: (): Promise<ApiResponse<{ items: GitHubToken[]; total: number }>> =>
+    api.get('/github-monitor/tokens'),
+
   add: (body: GitHubTokenInput): Promise<ApiResponse<GitHubToken>> =>
     api.post('/github/tokens', body),
 

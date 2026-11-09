@@ -747,7 +747,7 @@ func (s *Sentinel) ListFindings(ctx context.Context, f FindingFilter) ([]*Findin
 	args = append(args, f.Size, (f.Page-1)*f.Size)
 	rows, err := s.pool().Query(ctx, `
 		select f.id, f.commit_id, f.judgment_id, f.vuln_class, f.severity, f.status,
-		       f.title, f.detail, f.created_at, f.updated_at, f.grade,
+		       f.title, f.detail, f.created_at, f.updated_at, f.grade, f.verified_at,
 		       c.repo_id, coalesce(r.full_name, ''), c.sha, c.subject, c.committed_at,
 		       coalesce(j.model, '')
 		  from finding f
@@ -765,13 +765,63 @@ func (s *Sentinel) ListFindings(ctx context.Context, f FindingFilter) ([]*Findin
 	for rows.Next() {
 		var it FindingListItem
 		if err := rows.Scan(&it.ID, &it.CommitID, &it.JudgmentID, &it.VulnClass, &it.Severity, &it.Status,
-			&it.Title, &it.Detail, &it.CreatedAt, &it.UpdatedAt, &it.Grade,
+			&it.Title, &it.Detail, &it.CreatedAt, &it.UpdatedAt, &it.Grade, &it.VerifiedAt,
 			&it.RepoID, &it.RepoFullName, &it.SHA, &it.Subject, &it.CommittedAt, &it.Model); err != nil {
 			return nil, 0, err
 		}
 		items = append(items, &it)
 	}
 	return items, total, rows.Err()
+}
+
+// FindingsSummary 是发现域统计（高危漏洞工作台首页卡片）。
+type FindingsSummary struct {
+	HighRisk   int64 `json:"high_risk"`   // severity in (high, critical)
+	Verified   int64 `json:"verified"`    // 其中已机器验证（verified_at 非空）
+	Confirmed  int64 `json:"confirmed"`   // 其中人工 confirmed
+	PendingPoc int64 `json:"pending_poc"` // 其中尚未机器验证（待靶场验证/差分复现）
+}
+
+// SummarizeFindings 统计高危发现的验证完成度。单条聚合查询，无分页。
+func (s *Sentinel) SummarizeFindings(ctx context.Context) (*FindingsSummary, error) {
+	var sum FindingsSummary
+	err := s.pool().QueryRow(ctx, `
+		select
+			count(*) filter (where f.severity in ('high', 'critical')),
+			count(*) filter (where f.severity in ('high', 'critical') and f.verified_at is not null),
+			count(*) filter (where f.severity in ('high', 'critical') and f.status = 'confirmed'),
+			count(*) filter (where f.severity in ('high', 'critical') and f.verified_at is null)
+		  from finding f`).Scan(&sum.HighRisk, &sum.Verified, &sum.Confirmed, &sum.PendingPoc)
+	if err != nil {
+		return nil, err
+	}
+	return &sum, nil
+}
+
+// ListPocVerifyEvents 取某发现最近的靶场验证事件（时间线数据源）。
+// payload 里带 finding_id（service 层写入），按 id 倒序取回后由调用方按 run 分组。
+func (s *Sentinel) ListPocVerifyEvents(ctx context.Context, findingID int64, limit int) ([]*SentinelRunEvent, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	rows, err := s.pool().Query(ctx, `
+		select id, run_id, seq, level, kind, message, payload, created_at
+		  from sentinel_run_event
+		 where kind like 'poc_verify%' and payload->>'finding_id' = $1
+		 order by id desc limit $2`, findingID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events := make([]*SentinelRunEvent, 0, 16)
+	for rows.Next() {
+		var e SentinelRunEvent
+		if err := rows.Scan(&e.ID, &e.RunID, &e.Seq, &e.Level, &e.Kind, &e.Message, &e.Payload, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		events = append(events, &e)
+	}
+	return events, rows.Err()
 }
 
 // FindingExportRow 是导出报告的一行：finding 全字段 + 来源提交/仓库 + 判定详情。

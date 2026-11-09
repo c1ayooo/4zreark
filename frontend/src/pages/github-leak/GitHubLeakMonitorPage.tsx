@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import { Alert, Skeleton, Tag } from 'antd'
 import {
   Activity,
@@ -16,6 +17,7 @@ import { OpsBar } from '@/components/github-leak/OpsBar'
 import { SuppressionCard } from '@/components/github-leak/SuppressionCard'
 import { TokenPoolCard } from '@/components/github-leak/TokenPoolCard'
 import { LEAK_OPS_KEY } from '@/components/github-leak/shared'
+import { useAuthStore } from '@/store/auth'
 import { cn, formatDate } from '@/lib/utils'
 
 /**
@@ -24,6 +26,10 @@ import { cn, formatDate } from '@/lib/utils'
  * 两者共用 internal/githubleak，但这里的命中、Token 池、抑制、运维都不过滤项目。
  */
 export default function GitHubLeakMonitorPage() {
+  // 设置页 /github/tokens 要求 settings:read（operator 无此权限），
+  // 故只有 admin 展示「前往配置」链接；operator 只读查看配额消耗。
+  const canConfigureTokens = useAuthStore((s) => s.user?.role === 'admin')
+
   const runtimeQuery = useQuery({
     queryKey: [...LEAK_OPS_KEY, 'runtime'],
     queryFn: () => githubMonitorApi.runtime(),
@@ -116,6 +122,19 @@ export default function GitHubLeakMonitorPage() {
           <OpsBar />
 
           <GlobalFindingsTable />
+
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-card/40 px-3 py-2 text-[11px] text-muted-foreground">
+            <span>
+              Token 池为平台统一池，此处仅展示配额消耗；添加、启停与删除统一在「系统设置 → GitHub Token 池」完成。
+            </span>
+            {canConfigureTokens ? (
+              <Link to="/settings?tab=github-tokens" className="text-primary hover:underline">
+                前往系统设置配置 →
+              </Link>
+            ) : (
+              <span>配置需管理员权限，当前角色仅可查看</span>
+            )}
+          </div>
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <TokenPoolCard />

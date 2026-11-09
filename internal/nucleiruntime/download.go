@@ -3,6 +3,7 @@ package nucleiruntime
 import (
 	"archive/zip"
 	"context"
+	"errors"
 	"fmt"
 	"github.com/c1ayooo/4zreark/internal/useragent"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // downloadURL 是 GitHub release 的固定形态，抽出来便于测试。
@@ -72,7 +74,7 @@ func (m *Manager) installBinary(ctx context.Context, version string, progress fu
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 	reportProgress(progress, "下载 nuclei 二进制", 10, "连接 GitHub release…")
-	if err := m.download(ctx, u, tmp, func(done, total int64) {
+	if err := m.downloadAny(ctx, []string{u}, tmp, func(done, total int64) {
 		pct := 20
 		msg := fmt.Sprintf("已下载 %.1f MB", float64(done)/(1<<20))
 		if total > 0 {
@@ -127,7 +129,79 @@ func (m *Manager) installBinary(ctx context.Context, version string, progress fu
 	return nil
 }
 
+// download 保留单 URL 入口；与自动安装一样享受重试与镜像兜底。
 func (m *Manager) download(ctx context.Context, url string, dst *os.File, progress func(done, total int64)) error {
+	return m.downloadAny(ctx, []string{url}, dst, progress)
+}
+
+// downloadAny 依次尝试「每个直连 URL → 该 URL 的镜像」，每个候选重试 2 次。
+// EOF / 连接重置往往只影响单次连接，换源重试后自动安装才能继续。
+func (m *Manager) downloadAny(ctx context.Context, urls []string, dst *os.File, progress func(done, total int64)) error {
+	candidates := downloadCandidates(urls)
+	var lastErr error
+	for _, u := range candidates {
+		for attempt := 0; attempt < 2; attempt++ {
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("下载 nuclei 失败: %w", err)
+			}
+			if err := dst.Truncate(0); err != nil {
+				return fmt.Errorf("重置下载文件失败: %w", err)
+			}
+			if _, err := dst.Seek(0, io.SeekStart); err != nil {
+				return fmt.Errorf("重置下载文件失败: %w", err)
+			}
+			attemptCtx, cancel := context.WithTimeout(ctx, 8*time.Minute)
+			err := m.downloadOnce(attemptCtx, u, dst, progress)
+			cancel()
+			if err == nil {
+				return nil
+			}
+			lastErr = err
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("下载 nuclei 失败: %w", lastErr)
+			case <-time.After(time.Duration(attempt+1) * time.Second):
+			}
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("没有可用的下载地址")
+	}
+	return fmt.Errorf("下载 nuclei 失败: %w", lastErr)
+}
+
+// downloadCandidates 直连优先；其次 ZRE_GH_MIRROR（逗号分隔）或内置镜像。
+func downloadCandidates(urls []string) []string {
+	var mirrors []string
+	if raw := strings.TrimSpace(os.Getenv("ZRE_GH_MIRROR")); raw != "" {
+		for _, m := range strings.Split(raw, ",") {
+			if m = strings.TrimRight(strings.TrimSpace(m), "/"); m != "" {
+				mirrors = append(mirrors, m)
+			}
+		}
+	} else {
+		mirrors = []string{"https://ghfast.top", "https://gh-proxy.com", "https://ghproxy.net"}
+	}
+	out := make([]string, 0, len(urls)*(len(mirrors)+1))
+	seen := map[string]bool{}
+	add := func(u string) {
+		if u != "" && !seen[u] {
+			seen[u] = true
+			out = append(out, u)
+		}
+	}
+	for _, u := range urls {
+		add(u)
+	}
+	for _, u := range urls {
+		for _, m := range mirrors {
+			add(m + "/" + u)
+		}
+	}
+	return out
+}
+
+func (m *Manager) downloadOnce(ctx context.Context, url string, dst *os.File, progress func(done, total int64)) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("创建下载请求失败: %w", err)
@@ -135,11 +209,11 @@ func (m *Manager) download(ctx context.Context, url string, dst *os.File, progre
 	req.Header.Set("User-Agent", useragent.Pick())
 	resp, err := m.httpClient().Do(req)
 	if err != nil {
-		return fmt.Errorf("下载 nuclei 失败: %w", err)
+		return fmt.Errorf("GET %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("下载 nuclei 失败: HTTP %d (%s)", resp.StatusCode, url)
+		return fmt.Errorf("HTTP %d (%s)", resp.StatusCode, url)
 	}
 	sink := &progressWriter{dst: dst, total: resp.ContentLength, cb: progress}
 	n, err := io.Copy(sink, io.LimitReader(resp.Body, downloadLimit+1))

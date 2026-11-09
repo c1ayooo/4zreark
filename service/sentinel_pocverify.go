@@ -401,6 +401,121 @@ func truncateRunLog(s string, n int) string {
 	return s
 }
 
+// ---- 发现级靶场验证状态与触发（前端高危漏洞工作台 / 详情卡数据源）----
+
+// PocVerifyStep 是验证时间线上的一步。
+type PocVerifyStep struct {
+	Title  string    `json:"title"`
+	Detail string    `json:"detail,omitempty"`
+	State  string    `json:"state"` // done / fail / info
+	Time   time.Time `json:"time"`
+}
+
+// PocVerifyStatus 是一条发现的靶场验证完整状态（方案 B 卡片数据）。
+type PocVerifyStatus struct {
+	FindingID int64             `json:"finding_id"`
+	HasPoc    bool              `json:"has_poc"`           // 已有 verified 的 python-poc（可发起验证）
+	Verified  bool              `json:"verified"`          // finding 已机器验证（verified_at 非空）
+	Running   bool              `json:"running"`           // 最近一次验证仍在执行
+	Verify    *PocVerifyVerdict `json:"verify,omitempty"`  // 机器结论（有 poc-verify 产物时）
+	Timeline  []PocVerifyStep   `json:"timeline,omitempty"` // 最近一次执行的步骤时间线
+}
+
+// pocVerifyStepTitles 把事件 kind 映射成时间线标题。
+var pocVerifyStepTitles = map[string]string{
+	"poc_verify_plan":      "生成环境方案（LLM）",
+	"poc_verify_plan_ok":   "环境方案校验通过",
+	"poc_verify_pull":      "拉取靶场镜像",
+	"poc_verify_probe":     "等待靶场就绪",
+	"poc_verify_run":       "执行 PoC",
+	"poc_verify_passed":    "验证通过",
+	"poc_verify_not_passed": "验证未确认",
+	"poc_verify_failed":    "执行失败",
+	"poc_verify_skipped":   "跳过",
+}
+
+// GetPocVerifyStatus 组装一条发现的验证状态：
+// 结论与输入看产物，过程看最近一次 poc_verify 批次的事件流。
+func GetPocVerifyStatus(ctx context.Context, findingID int64) (*PocVerifyStatus, error) {
+	store := repo.Default().Sentinel()
+	f, err := store.GetFinding(ctx, findingID)
+	if err != nil {
+		return nil, err
+	}
+	st := &PocVerifyStatus{FindingID: findingID, Verified: f.VerifiedAt != nil}
+
+	arts, err := store.ListArtifacts(ctx, findingID)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range arts {
+		switch {
+		case a.Kind == "poc" && a.Title == pythonPocTitle && a.Status == "verified":
+			st.HasPoc = true
+		case a.Kind == "repro_log" && a.Title == pocVerifyTitle:
+			if v, err := parsePocVerifyContent(a.Content); err == nil {
+				st.Verify = v
+			}
+		}
+	}
+
+	// 时间线：事件按 id 倒序取回，取最近一个 run 的顺序回放。
+	events, err := store.ListPocVerifyEvents(ctx, findingID, 100)
+	if err != nil {
+		return nil, err
+	}
+	var curRun int64 = -1
+	for _, e := range events {
+		if curRun == -1 {
+			curRun = e.RunID
+		}
+		if e.RunID != curRun {
+			break // 只回放最近一次执行
+		}
+		step := PocVerifyStep{
+			Title: pocVerifyStepTitles[e.Kind],
+			State: "done",
+			Time:  e.CreatedAt,
+		}
+		if e.Message != "" && e.Kind != "poc_verify_start" {
+			step.Detail = e.Message
+		}
+		switch e.Level {
+		case "error":
+			step.State = "fail"
+		case "info":
+			if strings.Contains(e.Kind, "start") {
+				step.State = "info"
+				st.Running = true
+			}
+		}
+		if step.Title != "" {
+			st.Timeline = append(st.Timeline, step)
+		}
+	}
+	// 事件是倒序取的，回放需正序。
+	for i, j := 0, len(st.Timeline)-1; i < j; i, j = i+1, j-1 {
+		st.Timeline[i], st.Timeline[j] = st.Timeline[j], st.Timeline[i]
+	}
+	return st, nil
+}
+
+// TriggerPocVerify 把一条发现排入靶场验证队列（API 入口，与 MCP 工具同一闸）。
+func TriggerPocVerify(ctx context.Context, findingID int64, force bool) error {
+	if !pocVerifyEnabled() {
+		return errors.New("靶场验证未开启（sentinel.poc_verify.enabled=false）")
+	}
+	q := DefaultSentinelQueue()
+	if q == nil {
+		return errors.New("提交哨兵未启用（sentinel.enabled=false）")
+	}
+	store := repo.Default().Sentinel()
+	if _, err := store.GetFinding(ctx, findingID); err != nil {
+		return err
+	}
+	return q.EnqueuePocVerify(ctx, findingID, force)
+}
+
 const pocVerifyEnvSystemPrompt = `你是漏洞靶场环境工程师。给定一条漏洞发现和待验证的 Python PoC 脚本，
 请选择一个公开可拉的漏洞靶场镜像让 PoC 在上面打出漏洞。硬性要求：
 1. 只输出一个 JSON 对象，字段：image（靶场镜像）、env（镜像环境变量数组，KEY=VALUE）、

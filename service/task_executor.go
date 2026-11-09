@@ -664,6 +664,9 @@ func (e *TaskExecutor) processTask(ctx context.Context, task *models.Task, jobID
 			ApiProbe:               true,
 		})
 
+	case models.TaskTypeCollection:
+		e.executeStreamingPipeline(ctx, task, jobID, buildCollectionConfig(task))
+
 	case models.TaskTypeSubdomain:
 		e.executeStreamingPipeline(ctx, task, jobID, &pipeline.PipelineConfig{
 			SubdomainScan:          true,
@@ -872,6 +875,24 @@ func (e *TaskExecutor) buildCustomConfig(task *models.Task) *pipeline.PipelineCo
 	return config
 }
 
+// buildCollectionConfig 构造「信息收集」预设：除漏洞验证外默认全跑。
+// 用户显式给的 scan_types 仍会在 executeStreamingPipeline 里覆盖本预设
+// （高级自定义场景）；空列表则保留这里的全集。
+func buildCollectionConfig(task *models.Task) *pipeline.PipelineConfig {
+	config := pipeline.DefaultPipelineConfig()
+	pipeline.CollectionModuleSet().ApplyTo(config)
+	config.PortScanMode = "top1000"
+	config.PortRange = "1-1000"
+	config.SkipCDN = true
+	config.SubdomainMaxEnumTime = 15
+	config.SubdomainResolveIP = true
+	log.Printf("[TaskExecutor] Built collection config for task %s: subdomain=%v takeover=%v probe=%v port=%v fingerprint=%v crawler=%v js=%v api=%v dir=%v sensitive=%v vuln=%v",
+		task.ID.Hex(), config.SubdomainScan, config.SubdomainCheckTakeover, config.SubdomainHTTPProbe,
+		config.PortScan, config.Fingerprint, config.WebCrawler, config.JsAudit, config.ApiProbe,
+		config.DirScan, config.SensitiveScan, config.VulnScan)
+	return config
+}
+
 // executeStreamingPipeline 使用 StreamingPipeline 执行任务
 // applyScanTypes 用任务配置里的模块列表覆盖流水线模块开关。
 // 只描述「扫什么」；模块之间的依赖在这里补齐，模板不用承担链路知识。
@@ -880,55 +901,17 @@ func applyScanTypes(cfg *pipeline.PipelineConfig, scanTypes []string) {
 		return
 	}
 
-	cfg.SubdomainScan = false
-	cfg.PortScan = false
-	cfg.Fingerprint = false
-	cfg.VulnScan = false
-	cfg.WebCrawler = false
-	cfg.DirScan = false
-	cfg.SensitiveScan = false
-	cfg.JsAudit = false
-
-	for _, raw := range scanTypes {
-		switch strings.ToLower(strings.TrimSpace(raw)) {
-		case "subdomain":
-			cfg.SubdomainScan = true
-		case "port_scan", "portscan", "port":
-			cfg.PortScan = true
-		case "fingerprint":
-			cfg.Fingerprint = true
-		case "vuln_scan", "vulnscan", "vuln":
-			cfg.VulnScan = true
-		case "crawler":
-			cfg.WebCrawler = true
-		case "dir_scan", "dirscan", "directory":
-			cfg.DirScan = true
-		case "sensitive":
-			cfg.SensitiveScan = true
-		case "api_probe", "wih":
-			cfg.ApiProbe = true
-		case "js_audit", "js_secret", "jsaudit":
-			cfg.JsAudit = true
-			// 没爬虫就没有 JS URL，依赖在这里补齐
-			cfg.WebCrawler = true
-		}
-	}
+	// 模块选择收敛到 ModuleSet：映射、依赖补齐、写回三步都由 pipeline 包负责。
+	// 这里不再手工清零布尔值，避免新增模块时漏掉某个开关（takeover/api_probe
+	// 此前就是这样被静默丢掉的）。
+	ms := pipeline.ModuleSetFromScanTypes(scanTypes)
+	ms.ApplyTo(cfg)
 
 	if cfg.SubdomainScan {
 		if cfg.SubdomainMaxEnumTime <= 0 {
 			cfg.SubdomainMaxEnumTime = 10
 		}
 		cfg.SubdomainResolveIP = true
-		cfg.SubdomainHTTPProbe = true
-	}
-
-	// 依赖补齐：指纹/爬虫/目录/敏感都要吃 HTTP 端点，漏洞要吃指纹结果。
-	// 少了上游模块整条链就断了，所以这里自动带上。
-	if cfg.Fingerprint || cfg.WebCrawler || cfg.DirScan || cfg.SensitiveScan || cfg.VulnScan {
-		cfg.PortScan = true
-	}
-	if cfg.VulnScan || cfg.WebCrawler || cfg.DirScan || cfg.SensitiveScan {
-		cfg.Fingerprint = true
 	}
 	if cfg.PortScan {
 		if cfg.PortScanMode == "" {
@@ -1072,9 +1055,12 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 				config.NucleiCustomTemplatesDir = keysDir
 			} else {
 				log.Printf("[TaskExecutor] JS 审计已开启但 keys 规则目录不存在: %s", keysDir)
+				e.logAction(task, "JSAudit", "warn", "JS 审计已开启但 keys 规则目录不存在，已跳过该模块: "+keysDir)
 				config.JsAudit = false
 			}
 		} else {
+			log.Printf("[TaskExecutor] JS 审计已开启但 nuclei 运行时不可用")
+			e.logAction(task, "JSAudit", "warn", "JS 审计已开启但 nuclei 运行时不可用，已跳过该模块")
 			config.JsAudit = false
 		}
 	}

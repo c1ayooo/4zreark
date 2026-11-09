@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>方案 A · 轻量徽标型（项目风格）</title>
+<style>
+  :root {
+    --bg: hsl(240 30% 99%); --card: #fff; --border: hsl(240 12% 93%); --fg: hsl(220 10% 10%);
+    --muted: hsl(215 5% 51%); --primary: hsl(142 71% 35%); --primary-dark: hsl(150 70% 24%);
+    --accent: hsl(142 65% 95%); --radius: 1rem;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { font: 14px/1.65 "Noto Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--fg); padding: 32px; }
+  .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+  .page { max-width: 1080px; margin: 0 auto; }
+  .crumb { color: var(--muted); margin-bottom: 14px; font-size: 13px; }
+  .crumb a { color: var(--primary); text-decoration: none; }
+  .head { margin-bottom: 20px; }
+  .head h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.025em; }
+  .head .desc { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .meta { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  /* antd 胶囊 Tag（项目 severityColor 映射） */
+  .tag { font-size: 12px; line-height: 20px; padding: 0 7px; border-radius: 4px; border: 1px solid; }
+  .t-critical { background: #fff0f6; border-color: #ffadd2; color: #c41d7f; }
+  .t-high { background: #fff1f0; border-color: #ffa39e; color: #cf1322; }
+  .t-class { background: #e6f4ff; border-color: #91caff; color: #0958d9; }
+  .t-class, .t-grade { font-family: "JetBrains Mono", monospace; font-size: 11px; }
+  .t-grade { background: #fff1f0; border-color: #ffccc7; color: #cf1322; font-weight: 700; }
+  .t-plain { background: #fafafa; border-color: #d9d9d9; color: #666; }
+  /* 绿色主色：按钮 / 链接 / 选中 */
+  .btn { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; padding: 5px 15px; border-radius: 8px; cursor: pointer; border: 1px solid var(--border); background: #fff; color: var(--fg); }
+  .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .btn.primary:hover { background: hsl(142 71% 30%); }
+  .btn.mini { font-size: 12px; padding: 1px 10px; border-radius: 6px; }
+  .link { color: var(--primary); cursor: pointer; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px 26px; margin-bottom: 16px; }
+  .tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--border); padding: 0 4px; margin: 18px 0 18px; }
+  .tabs span { padding: 9px 2px; color: var(--muted); cursor: pointer; font-size: 14px; }
+  .tabs .on { color: var(--primary); border-bottom: 2px solid var(--primary); font-weight: 600; }
+  .actions { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .hint { font-size: 12px; color: var(--muted); }
+  .art { border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; }
+  .art-head { display: flex; align-items: center; gap: 10px; }
+  .kind { font-size: 11px; padding: 1px 8px; border-radius: 4px; color: #fff; font-family: "JetBrains Mono", monospace; }
+  .k-report { background: #722ed1; } .k-poc { background: #fa8c16; } .k-nuclei { background: #13c2c2; } .k-log { background: var(--primary); }
+  .title { font-weight: 600; font-size: 14px; }
+  .status { font-size: 12px; padding: 0 9px; border-radius: 999px; border: 1px solid; margin-left: auto; }
+  .s-draft { color: #d48806; border-color: #ffe58f; background: #fffbe6; }
+  .s-verified { color: var(--primary-dark); border-color: #b7eb8f; background: var(--accent); }
+  .verdict { margin-top: 10px; padding: 10px 14px; border-radius: 10px; display: flex; align-items: center; gap: 10px; }
+  .v-pass { background: var(--accent); border: 1px solid #b7eb8f; color: var(--primary-dark); }
+  .v-badge { font-weight: 700; font-size: 12px; padding: 2px 10px; border-radius: 6px; color: #fff; background: var(--primary); font-family: "JetBrains Mono", monospace; }
+  .v-reason { flex: 1; font-size: 13px; color: var(--fg); }
+  .env-line { margin-top: 8px; font-size: 12px; color: var(--muted); display: flex; gap: 18px; flex-wrap: wrap; }
+  .env-line b { color: var(--fg); font-weight: 500; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  pre.log { margin-top: 10px; background: hsl(220 16% 8%); color: #c8d3f5; font: 12px/1.55 "JetBrains Mono", monospace; padding: 12px 14px; border-radius: 8px; max-height: 110px; overflow: hidden; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumb">哨兵 / 发现 / <a href="index.html">方案 A：轻量徽标型</a> — 不新增页面卡片，全部收敛在「发现详情 → 产物」tab</div>
+
+  <div class="head">
+    <h1>Spring WebMvc 数据绑定 RCE（CVE-2022-22965 变体）</h1>
+    <div class="desc">发现 #4127 · 来自提交 <span class="mono">a3f9c2e1</span> · 机器验证已通过</div>
+    <div class="meta">
+      <span class="tag t-grade">S</span>
+      <span class="tag t-critical">critical</span>
+      <span class="tag t-class">RCE</span>
+      <span class="tag t-plain">vulhub/spring-webmvc</span>
+      <span class="tag t-plain">置信 0.91</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="tabs"><span>概览</span><span class="on">产物（5）</span><span>批次事件</span><span>通知</span></div>
+
+    <div class="actions">
+      <span class="hint">python-poc 已人工 verified，可发起靶场验证（AI 选靶场 → 隔离内网执行 → 机器判定）</span>
+      <span>
+        <span class="btn">差分复现</span>
+        <span class="btn primary">▸ 发起靶场验证</span>
+      </span>
+    </div>
+
+    <div class="art">
+      <div class="art-head">
+        <span class="kind k-log">repro_log</span><span class="title">poc-verify</span>
+        <span class="status s-verified">verified · 机器生成</span>
+      </div>
+      <div class="verdict v-pass">
+        <span class="v-badge">VULNERABLE</span>
+        <span class="v-reason">PoC 自判 VULNERABLE（退出码 0，日志含漏洞判定标记）· finding 已自动验证</span>
+        <span class="btn mini">查看日志</span>
+      </div>
+      <div class="env-line">
+        <span><b>靶场镜像</b> <span class="mono">vulhub/spring-webmvc:CVE-2022-22965</span></span>
+        <span><b>TARGET</b> <span class="mono">http://pocverify-target:8080/</span></span>
+        <span><b>网络</b> docker --internal（无外网出口）</span>
+        <span><b>耗时</b> 1m42s</span>
+      </div>
+      <pre class="log">__POC_START__ probing http://pocverify-target:8080/
+[+] payload delivered (class.module.classLoader…)
+[+] response marker matched: vulnerable-check-7719
+VULNERABLE</pre>
+    </div>
+
+    <div class="art">
+      <div class="art-head">
+        <span class="kind k-poc">poc</span><span class="title">python-poc</span>
+        <span class="status s-verified">verified</span>
+        <span class="btn mini" style="margin-left:8px">下载</span>
+      </div>
+      <div class="note">Python3 验证脚本 · 目标从 TARGET 读取 · 输出三态判定 · requests 单依赖</div>
+    </div>
+
+    <div class="art">
+      <div class="art-head">
+        <span class="kind k-report">report</span><span class="title">deep-analysis</span>
+        <span class="status s-verified">verified</span>
+      </div>
+      <div class="note">结论：确认 —— 完整文件上下文复核，diff 外无既有防护（应优先于一级判定采信）</div>
+    </div>
+
+    <div class="art">
+      <div class="art-head">
+        <span class="kind k-report">report</span><span class="title">exploit-guide</span>
+        <span class="status s-draft">draft</span>
+        <span class="btn mini" style="margin-left:8px">审核通过</span>
+      </div>
+      <div class="note">利用文档：概述 / 影响范围 / 前置条件 / 利用步骤 / 影响评估 / 修复确认</div>
+    </div>
+
+    <div class="art">
+      <div class="art-head">
+        <span class="kind k-nuclei">nuclei</span><span class="title">spring4shell-rce</span>
+        <span class="status s-draft">draft</span>
+        <span class="btn mini" style="margin-left:8px">审核通过</span>
+      </div>
+      <div class="note">web 类自动草拟 · 人工 verified 后可用于授权回归</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

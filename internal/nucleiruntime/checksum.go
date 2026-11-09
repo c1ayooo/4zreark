@@ -20,8 +20,17 @@ import (
 
 const allowUncheckedEnv = "ZRE_NUCLEI_ALLOW_UNCHECKED"
 
+// 官方 release 的清单名带版本号（nuclei_3.11.1_checksums.txt），
+// 旧版本/私有镜像可能仍用裸 checksums.txt；两者都作为候选。
 func checksumsURL(version string) string {
-	return fmt.Sprintf("https://github.com/projectdiscovery/nuclei/releases/download/v%s/checksums.txt", version)
+	v := strings.TrimPrefix(strings.TrimSpace(version), "v")
+	return fmt.Sprintf("https://github.com/projectdiscovery/nuclei/releases/download/v%s/nuclei_%s_checksums.txt", v, v)
+}
+
+func checksumCandidates(version string) []string {
+	v := strings.TrimPrefix(strings.TrimSpace(version), "v")
+	base := fmt.Sprintf("https://github.com/projectdiscovery/nuclei/releases/download/v%s", v)
+	return []string{checksumsURL(v), base + "/checksums.txt"}
 }
 
 // expectedChecksum 从上游 checksums.txt（格式："<sha256>  <file>" 或 BSD 风格
@@ -91,9 +100,9 @@ func (m *Manager) fetchExpectedChecksum(ctx context.Context, version, asset stri
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
-	if err := m.download(ctx, checksumsURL(version), tmp, nil); err != nil {
+	if err := m.downloadAny(ctx, checksumCandidates(version), tmp, nil); err != nil {
 		tmp.Close()
-		return "", fmt.Errorf("上游 checksums.txt 不可用（如需跳过校验设 %s=1）: %w", allowUncheckedEnv, err)
+		return "", fmt.Errorf("上游 checksums 清单不可用（如需跳过校验设 %s=1）: %w", allowUncheckedEnv, err)
 	}
 	if err := tmp.Close(); err != nil {
 		return "", err

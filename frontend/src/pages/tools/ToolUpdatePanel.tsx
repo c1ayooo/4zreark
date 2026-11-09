@@ -289,6 +289,8 @@ export default function ToolUpdatePanel() {
 
   return (
     <div className="space-y-4">
+      <InstalledToolsCard onChanged={load} />
+
       <Card
         title="托管工具更新策略"
         extra={

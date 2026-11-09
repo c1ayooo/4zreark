@@ -88,20 +88,6 @@ export interface GitHubSuppression {
   created_at: string
 }
 
-/** Token 池账号（token 不回显，只有 masked；配额字段供面板展示） */
-export interface GitHubPoolToken {
-  id: string
-  label: string
-  masked: string
-  enabled: boolean
-  rate_limit: number
-  rate_remaining: number
-  rate_used: number
-  rate_reset_at: string | null
-  last_checked_at: string | null
-  created_at: string
-}
-
 /** 规则精度统计（确认/误报/忽略与精确率） */
 export interface GitHubRulePrecision {
   rule_name: string
@@ -224,15 +210,6 @@ export const githubMonitorApi = {
   cleanupPreview: () => api.post<unknown, ApiResponse<GitHubCleanupReport>>('/github-monitor/cleanup/preview'),
   cleanupApply: () => api.post<unknown, ApiResponse<GitHubCleanupReport>>('/github-monitor/cleanup/apply'),
 
-  // ---- Token 池 ----
-
-  tokens: () => api.get<unknown, ApiResponse<GitHubPoolToken[]>>('/github-tokens'),
-  addToken: (body: { label?: string; token: string }) =>
-    api.post<unknown, ApiResponse<GitHubPoolToken>>('/github-tokens', body),
-  deleteToken: (id: string) => api.delete<unknown, ApiResponse<null>>(`/github-tokens/${id}`),
-  setTokenEnabled: (id: string, enabled: boolean) =>
-    api.patch<unknown, ApiResponse<null>>(`/github-tokens/${id}/enabled`, { enabled }),
-  refreshToken: (id: string) =>
-    api.post<unknown, ApiResponse<GitHubPoolToken>>(`/github-tokens/${id}/refresh`),
-  refreshAllTokens: () => api.post<unknown, ApiResponse<GitHubPoolToken[]>>('/github-tokens/refresh'),
+  // Token 池配置统一在「系统设置 → GitHub Token 池」（githubTokensApi）。
+  // 全局页只读展示配额消耗，见 githubTokensApi.listReadOnly() 与 TokenPoolCard。
 }
