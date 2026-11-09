@@ -176,7 +176,7 @@ type intelSettings struct {
 
 func NewIntelService() *IntelService {
 	return &IntelService{tokenFn: func(ctx context.Context) string {
-		return NewSourceService().GitHubToken(ctx)
+		return intelGitHubToken(ctx)
 	}}
 }
 
@@ -185,11 +185,29 @@ func NewIntelServiceWithToken(fn func(context.Context) string) *IntelService {
 	return &IntelService{tokenFn: fn}
 }
 
+// intelGitHubToken 解析 GitHub 凭据：环境变量/数据源 github 凭据优先（显式配置），
+// 都没有时依次回退两条平台池：
+//   - 设置页「GitHub Token」池（app_settings github.tokens，简单轮询）
+//   - 监控面板「Token 池」（github_token_pool，按剩余配额轮换；监控未初始化时跳过）
+// 两条池都空时返回空串，由调用方报错。
+func intelGitHubToken(ctx context.Context) string {
+	if tok := NewSourceService().GitHubToken(ctx); tok != "" {
+		return tok
+	}
+	if tok := PickGitHubToken(ctx); tok != "" {
+		return tok
+	}
+	if pool := GitHubTokenPool(); pool != nil {
+		return pool.Pick(ctx)
+	}
+	return ""
+}
+
 func (s *IntelService) githubToken(ctx context.Context) string {
 	if s.tokenFn != nil {
 		return strings.TrimSpace(s.tokenFn(ctx))
 	}
-	return NewSourceService().GitHubToken(ctx)
+	return intelGitHubToken(ctx)
 }
 
 func (s *IntelService) store() (repo.IntelRepo, error) {
@@ -541,7 +559,7 @@ func (s *IntelService) EnrichIntel(uniqueKey string) (*githubpoc.Result, error) 
 
 	token := s.githubToken(ctx)
 	if token == "" {
-		return nil, errors.New("未配置 GitHub Token（环境变量 GITHUB_TOKEN 或数据源 github 凭据），GitHub 检索能力不可用")
+		return nil, errors.New("未配置 GitHub Token（环境变量 GITHUB_TOKEN、数据源 github 凭据或 Token 池均未就绪），GitHub 检索能力不可用")
 	}
 	client := githubpoc.NewClient(func() string { return token })
 	client.Proxy = func() string { return outbound.ProxyURLFor("intel") }

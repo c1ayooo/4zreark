@@ -32,8 +32,12 @@ backup_*.sql
 test/.sock.lock
 cmd/tmptls/
 
-# ZCode 本地配置、会话与技能（只在本地保留）
+# IDE / CodeBuddy 本地配置、会话与技能（只在本地保留，不上传）
 .zcode/
+.codebuddy/
+
+# Windows 下载附带的 Zone 标记（压缩包附属流，非项目文件）
+*:Zone.Identifier
 
 # Python 字节码
 __pycache__/
