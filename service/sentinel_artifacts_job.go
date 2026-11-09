@@ -53,8 +53,7 @@ func (w *sentinelArtifactsWorker) Work(ctx context.Context, job *river.Job[Senti
 		// 发现被删等永久性缺失：取消而不是重试。
 		return river.JobCancel(fmt.Errorf("发现不存在: %w", err))
 	}
-	runHighRiskArtifacts(runCtx, w.judge, job.Args.FindingID, job.Args.CommitID, f.VulnClass)
-	return nil
+	return runHighRiskArtifacts(runCtx, w.judge, job.Args.FindingID, job.Args.CommitID, f.VulnClass)
 }
 
 // EnqueueArtifacts 把产物流水线放进队列（幂等：同一发现排队中不会重复入队）。
@@ -64,7 +63,7 @@ func (q *SentinelQueue) EnqueueArtifacts(ctx context.Context, findingID, commitI
 	}
 	_, err := q.client.Insert(ctx, SentinelArtifactsArgs{FindingID: findingID, CommitID: commitID}, &river.InsertOpts{
 		Queue:       SentinelArtifactsQueueName,
-		MaxAttempts: 2,
+		MaxAttempts: 3,
 		UniqueOpts:  sentinelUniqueOpts(),
 	})
 	if err != nil {

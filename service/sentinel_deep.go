@@ -74,14 +74,17 @@ func effectiveDeepLLMConfig(ctx context.Context) deepLLMConfig {
 //  3. exploit-guide（仅 web 类）。
 //
 // 内存破坏类没有远程验证面：只深审，验证产物走 Tier 3a 容器差分复现。
-func runHighRiskArtifacts(ctx context.Context, j *SentinelJudge, findingID, commitID int64, vulnClass string) {
+// 返回值：三步全部失败时返回最后一个错误（river 据此重试；上游限流 429 等
+// 瞬时故障靠退避错峰自愈）。任一产物成功即返回 nil——重试时幂等跳过已有产物。
+func runHighRiskArtifacts(ctx context.Context, j *SentinelJudge, findingID, commitID int64, vulnClass string) error {
 	deepSem <- struct{}{}
 	defer func() { <-deepSem }()
 
-	// 1. 深审：失败不阻塞后续产物（python-poc/exploit-guide 退化为仅 diff 输入）。
+	var lastErr error
 	deepReport := ""
 	if deepAnalysisEnabled() {
 		if a, err := runDeepAnalysis(ctx, j, findingID, commitID); err != nil {
+			lastErr = err
 			log.Printf("[Sentinel] 深审失败 finding=%d commit=%d: %v", findingID, commitID, err)
 		} else {
 			deepReport = a.Content
@@ -89,26 +92,28 @@ func runHighRiskArtifacts(ctx context.Context, j *SentinelJudge, findingID, comm
 	}
 
 	if !isWebVulnClass(vulnClass) {
-		return
+		return lastErr
 	}
 
-	// 2. Python 验证脚本。
 	if autoArtifactOn(func(c *config.SentinelAutoArtifactsConfig) *bool { return c.PythonPOC }) {
 		if a, err := GeneratePythonPOC(ctx, findingID, deepReport); err != nil {
+			lastErr = err
 			log.Printf("[Sentinel] python-poc 生成失败 finding=%d: %v", findingID, err)
 		} else if a != nil {
+			lastErr = nil
 			log.Printf("[Sentinel] python-poc 生成完成 finding=%d artifact=%d", findingID, a.ID)
 		}
 	}
 
-	// 3. 利用文档。
 	if autoArtifactOn(func(c *config.SentinelAutoArtifactsConfig) *bool { return c.ExploitGuide }) {
 		if a, err := GenerateExploitGuide(ctx, findingID, deepReport); err != nil {
 			log.Printf("[Sentinel] exploit-guide 生成失败 finding=%d: %v", findingID, err)
 		} else if a != nil {
+			lastErr = nil
 			log.Printf("[Sentinel] exploit-guide 生成完成 finding=%d artifact=%d", findingID, a.ID)
 		}
 	}
+	return lastErr
 }
 
 // runDeepAnalysis 读 mirror 文件全文 → LLM 细查 → 落 deep-analysis 草稿产物。
