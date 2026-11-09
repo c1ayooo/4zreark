@@ -91,6 +91,8 @@ func GetGitHubMonitor() (*GitHubMonitorService, error) {
 					"kind":       e.Kind,
 					"dedup_key":  e.DedupKey,
 					"item_count": len(e.Items),
+					// 站内通知（铃铛 / 通知管理）点击后进入敏感信息监控页处置命中。
+					"link": "/github-leaks",
 				},
 			}
 			notify.GetGlobalManager().SendAsync(msg)
