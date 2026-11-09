@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS finding (
     judgment_id bigint      REFERENCES judgment(id) ON DELETE SET NULL,
     vuln_class  text        NOT NULL DEFAULT 'OTHER',
     severity    text        NOT NULL DEFAULT 'info',
-    status      text        NOT NULL DEFAULT 'open',      -- open/verifying/confirmed/dismissed
+    status      text        NOT NULL DEFAULT 'open',      -- open / confirmed / ignored / resolved
     title       text        NOT NULL DEFAULT '',
     detail      text        NOT NULL DEFAULT '',
     created_at  timestamptz NOT NULL DEFAULT now(),
@@ -100,10 +100,13 @@ CREATE INDEX IF NOT EXISTS finding_status_idx ON finding (status, id DESC);
 CREATE TABLE IF NOT EXISTS artifact (
     id         bigserial   PRIMARY KEY,
     finding_id bigint      NOT NULL REFERENCES finding(id) ON DELETE CASCADE,
-    kind       text        NOT NULL DEFAULT 'poc',        -- poc / repro_log / patch
+    kind       text        NOT NULL DEFAULT 'poc',        -- poc / nuclei / report / patch / repro_log
+    title      text        NOT NULL DEFAULT '',
+    status     text        NOT NULL DEFAULT 'draft',      -- draft/pending_review/verified/rejected/deprecated
     path       text        NOT NULL DEFAULT '',
     content    text        NOT NULL DEFAULT '',
-    created_at timestamptz NOT NULL DEFAULT now()
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS artifact_finding_idx ON artifact (finding_id, id DESC);

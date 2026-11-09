@@ -12,16 +12,18 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
-import { Button, Drawer, Input, Select, Table, Tooltip } from 'antd'
+import { Button, Drawer, Input, Popconfirm, Select, Table, Tooltip } from 'antd'
 import type { TableProps } from 'antd'
 import { Play, Search, Sparkles } from 'lucide-react'
-import { sentinelApi, type SentinelCommit } from '@/api/sentinel'
+import { sentinelApi, type SentinelCommit, type SentinelFindingStatus } from '@/api/sentinel'
 import { useToast } from '@/components/ui/use-toast'
+import { getErrorMessage } from '@/lib/errors'
 import {
   CommitStatusTag,
   ConfidenceBar,
   EmptyBlock,
   ErrorPanel,
+  FindingStatusSelect,
   Metric,
   PageHeader,
   SeverityTag,
@@ -101,6 +103,32 @@ export default function AnalysisResultsPage() {
     },
     onError: (e: Error) =>
       toast({ title: '入队失败', description: e?.message, variant: 'destructive' }),
+  })
+
+  const patchFindingMutation = useMutation({
+    mutationFn: ({ id, status }: { id: number; status: SentinelFindingStatus }) =>
+      sentinelApi.patchFinding(id, status),
+    onSuccess: (f) => {
+      toast({ title: `发现 #${f.id} 状态已更新` })
+      queryClient.invalidateQueries({ queryKey: ['sentinel', 'findings'] })
+      queryClient.invalidateQueries({ queryKey: ['sentinel', 'commit'] })
+    },
+    onError: (e: Error) =>
+      toast({ title: '状态更新失败', description: getErrorMessage(e), variant: 'destructive' }),
+  })
+
+  const generateNucleiMutation = useMutation({
+    mutationFn: (id: number) => sentinelApi.generateFindingNuclei(id),
+    onSuccess: (a) => {
+      toast({
+        title: `nuclei 模板已生成（draft，#${a.id}）`,
+        description: '生成物是候选而非结论，到「分析产物」审核 verified 后才可发布。',
+        duration: 6,
+      })
+      queryClient.invalidateQueries({ queryKey: ['sentinel', 'finding-artifacts'] })
+    },
+    onError: (e: Error) =>
+      toast({ title: '生成失败', description: getErrorMessage(e), variant: 'destructive', duration: 6 }),
   })
 
   const openDetail = (id: number) => {
@@ -512,6 +540,34 @@ export default function AnalysisResultsPage() {
                             <span className="text-[11.5px] font-medium text-foreground">{f.title}</span>
                             <SeverityTag severity={f.severity} />
                             <span className="font-mono text-[10px] text-muted-foreground">{f.vuln_class}</span>
+                            <span className="ml-auto flex items-center gap-1.5">
+                              <Popconfirm
+                                title="生成 nuclei 模板？"
+                                description="依据修复 diff 由模型草拟，约 30-60 秒，落 draft 待审核。"
+                                onConfirm={() => generateNucleiMutation.mutate(f.id)}
+                              >
+                                <Button
+                                  size="small"
+                                  type="text"
+                                  icon={<Sparkles size={11} />}
+                                  className="!px-1.5 text-[11px]"
+                                  loading={
+                                    generateNucleiMutation.isPending &&
+                                    generateNucleiMutation.variables === f.id
+                                  }
+                                >
+                                  生成 nuclei
+                                </Button>
+                              </Popconfirm>
+                              <FindingStatusSelect
+                                status={f.status}
+                                loading={
+                                  patchFindingMutation.isPending &&
+                                  patchFindingMutation.variables?.id === f.id
+                                }
+                                onChange={(next) => patchFindingMutation.mutate({ id: f.id, status: next })}
+                              />
+                            </span>
                           </div>
                           {f.detail && (
                             <div className="mt-0.5 text-[11px] leading-relaxed text-secondary-foreground">

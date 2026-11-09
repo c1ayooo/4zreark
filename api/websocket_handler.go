@@ -87,6 +87,15 @@ func NewHub() *Hub {
 	}
 }
 
+// BroadcastTryNonBlocking 向所有 WS 客户端广播一条已序列化消息：
+// 队列满或无人消费时直接丢弃——UI 刷新不能反向阻塞采集/判定等后台任务。
+func (h *Hub) BroadcastTryNonBlocking(payload []byte) {
+	select {
+	case h.broadcast <- payload:
+	default:
+	}
+}
+
 // Stop 通知 Hub 与其上所有连接退出；可重复调用。
 func (h *Hub) Stop() {
 	h.stopOnce.Do(func() { close(h.stopCh) })

@@ -766,6 +766,14 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 
 				// 产物：判定命中后落地的发现（跨仓库分页）
 				sentinelGroup.GET("/findings", middleware.RequirePermission("sentinel:read"), sentinelHandler.ListFindings)
+				// 发现生命周期 + 产物链（§11.8）：状态流转 / 产物 CRUD / AI 生成 / 下载闸门 / 发布 PoC 库
+				sentinelGroup.PATCH("/findings/:id", middleware.RequirePermission("sentinel:write"), sentinelHandler.PatchFinding)
+				sentinelGroup.GET("/findings/:id/artifacts", middleware.RequirePermission("sentinel:read"), sentinelHandler.ListFindingArtifacts)
+				sentinelGroup.POST("/findings/:id/artifacts", middleware.RequirePermission("sentinel:write"), sentinelHandler.CreateFindingArtifact)
+				sentinelGroup.POST("/findings/:id/generate-nuclei", middleware.RequirePermission("sentinel:write"), sentinelHandler.GenerateFindingNuclei)
+				sentinelGroup.PUT("/artifacts/:id/status", middleware.RequirePermission("sentinel:write"), sentinelHandler.SetArtifactStatus)
+				sentinelGroup.GET("/artifacts/:id/download", middleware.RequirePermission("sentinel:read"), sentinelHandler.DownloadArtifact)
+				sentinelGroup.POST("/artifacts/:id/publish", middleware.RequirePermission("sentinel:write"), sentinelHandler.PublishArtifact)
 
 				sentinelGroup.GET("/runs", middleware.RequirePermission("sentinel:read"), sentinelHandler.ListRuns)
 				sentinelGroup.GET("/runs/:id/events", middleware.RequirePermission("sentinel:read"), sentinelHandler.ListRunEvents)

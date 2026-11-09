@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button, Card, Drawer, Progress, Select, Switch, Table, Tag } from 'antd'
 import type { TableProps } from 'antd'
 import { Link, useSearchParams } from 'react-router-dom'
 import { History } from 'lucide-react'
 import { sentinelApi, SentinelCommit, SentinelRun, SentinelRunEvent } from '@/api/sentinel'
+import { useWebSocket } from '@/hooks/useWebSocket'
 import { formatDate } from '@/lib/utils'
 import { fmtRelative } from './audit/shared'
 
@@ -131,10 +132,21 @@ export default function SentinelCommitsPage() {
   const [page, setPage] = useState(1)
   const [size, setSize] = useState(20)
   const [eventsRun, setEventsRun] = useState<SentinelRun | null>(null)
+  const queryClient = useQueryClient()
 
   const repoID = params.get('repo_id') ?? ''
   const status = params.get('status') ?? ''
   const onlyFix = params.get('security_fix') === 'true'
+
+  // 采集/判定批次事件实时推送：收到即失效相关查询，下面的 5s/10s 轮询只做兜底
+  useWebSocket('/api/ws', {
+    onMessage: (message) => {
+      if (message.type === 'sentinel_run_event') {
+        queryClient.invalidateQueries({ queryKey: ['sentinel-runs'] })
+        queryClient.invalidateQueries({ queryKey: ['sentinel-commits'] })
+      }
+    },
+  })
 
   const reposQuery = useQuery({
     queryKey: ['sentinel-repos', ''],

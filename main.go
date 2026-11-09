@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -471,6 +472,22 @@ func main() {
 	defer wsHub.Stop()
 	go wsHub.Run()
 	go wsHub.StartMonitorTask()
+
+	// sentinel run 事件（采集/判定）→ WS 广播：前端订阅 sentinel_run_event 实时刷新。
+	// 广播非阻塞，Hub 停止或拥塞时静默丢弃，绝不拖慢落库方。
+	repo.OnRunEvent = func(ev *repo.SentinelRunEvent) {
+		payload, err := json.Marshal(gin.H{
+			"type":    "sentinel_run_event",
+			"run_id":  ev.RunID,
+			"seq":     ev.Seq,
+			"kind":    ev.Kind,
+			"level":   ev.Level,
+			"message": ev.Message,
+		})
+		if err == nil {
+			wsHub.BroadcastTryNonBlocking(payload)
+		}
+	}
 
 	// Setup router with WebSocket hub
 	r := router.SetupRouterWithWebSocket(wsHub, nodeHub)

@@ -669,4 +669,123 @@ func (s *Sentinel) ListFindings(ctx context.Context, f FindingFilter) ([]*Findin
 	return items, total, rows.Err()
 }
 
+// CommitArtifact 是 finding 的产物：PoC 源码、nuclei 模板、patch 证据、复现日志。
+// 状态机 draft → pending_review → verified / rejected → deprecated，
+// 铁律：非 verified 产物不可下载、不可发布到 PoC 库（service 层守卫）。
+type CommitArtifact struct {
+	ID        int64     `json:"id"`
+	FindingID int64     `json:"finding_id"`
+	Kind      string    `json:"kind"`
+	Title     string    `json:"title"`
+	Status    string    `json:"status"`
+	Path      string    `json:"path"`
+	Content   string    `json:"content"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
 
+const artifactColumns = `id, finding_id, kind, title, status, path, content, created_at, updated_at`
+
+func scanArtifact(row pgx.Row) (*CommitArtifact, error) {
+	var a CommitArtifact
+	if err := row.Scan(&a.ID, &a.FindingID, &a.Kind, &a.Title, &a.Status, &a.Path,
+		&a.Content, &a.CreatedAt, &a.UpdatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &a, nil
+}
+
+// InsertArtifact 新建产物，返回带 id / 时间戳的记录。
+func (s *Sentinel) InsertArtifact(ctx context.Context, a *CommitArtifact) (int64, error) {
+	err := s.pool().QueryRow(ctx, `
+		insert into artifact (finding_id, kind, title, status, path, content)
+		values ($1,$2,coalesce(nullif($3,''),'untitled'),coalesce(nullif($4,''),'draft'),$5,$6)
+		returning id, created_at, updated_at`,
+		a.FindingID, a.Kind, a.Title, a.Status, a.Path, a.Content).
+		Scan(&a.ID, &a.CreatedAt, &a.UpdatedAt)
+	if err != nil {
+		return 0, err
+	}
+	return a.ID, nil
+}
+
+// ListArtifacts 列出某发现下的全部产物（含 content，供预览）。
+func (s *Sentinel) ListArtifacts(ctx context.Context, findingID int64) ([]*CommitArtifact, error) {
+	rows, err := s.pool().Query(ctx, `
+		select `+artifactColumns+` from artifact where finding_id = $1 order by id desc`, findingID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]*CommitArtifact, 0, 4)
+	for rows.Next() {
+		var a CommitArtifact
+		if err := rows.Scan(&a.ID, &a.FindingID, &a.Kind, &a.Title, &a.Status, &a.Path,
+			&a.Content, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, &a)
+	}
+	return items, rows.Err()
+}
+
+// GetArtifact 按 id 读取产物。
+func (s *Sentinel) GetArtifact(ctx context.Context, id int64) (*CommitArtifact, error) {
+	return scanArtifact(s.pool().QueryRow(ctx,
+		`select `+artifactColumns+` from artifact where id = $1`, id))
+}
+
+// SetArtifactStatus 流转产物状态。
+func (s *Sentinel) SetArtifactStatus(ctx context.Context, id int64, status string) error {
+	tag, err := s.pool().Exec(ctx,
+		`update artifact set status = $2, updated_at = now() where id = $1`, id, status)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// CountArtifactsByKind 统计某发现下指定 kind 的产物数（自动固化 patch 前判重用）。
+func (s *Sentinel) CountArtifactsByKind(ctx context.Context, findingID int64, kind string) (int64, error) {
+	var n int64
+	err := s.pool().QueryRow(ctx,
+		`select count(*) from artifact where finding_id = $1 and kind = $2`, findingID, kind).Scan(&n)
+	return n, err
+}
+
+// GetFinding 按 id 读取单个发现。
+func (s *Sentinel) GetFinding(ctx context.Context, id int64) (*CommitFinding, error) {
+	var f CommitFinding
+	err := s.pool().QueryRow(ctx, `
+		select id, commit_id, judgment_id, vuln_class, severity, status, title, detail, created_at, updated_at
+		  from finding where id = $1`, id).
+		Scan(&f.ID, &f.CommitID, &f.JudgmentID, &f.VulnClass, &f.Severity,
+			&f.Status, &f.Title, &f.Detail, &f.CreatedAt, &f.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
+// SetFindingStatus 流转发现状态（枚举校验在 service 层）。
+func (s *Sentinel) SetFindingStatus(ctx context.Context, id int64, status string) error {
+	tag, err := s.pool().Exec(ctx,
+		`update finding set status = $2, updated_at = now() where id = $1`, id, status)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}

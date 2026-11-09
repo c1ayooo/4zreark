@@ -1,4 +1,5 @@
 import api, { ApiResponse } from '@/lib/api'
+import { getErrorMessage } from '@/lib/errors'
 
 /**
  * CommitSentinel（提交哨兵）：采集公开仓库提交 → 判定是否为安全修复 → 落地发现。
@@ -90,6 +91,8 @@ export interface SentinelJudgment {
   created_at: string
 }
 
+export type SentinelFindingStatus = 'open' | 'confirmed' | 'ignored' | 'resolved'
+
 export interface SentinelFinding {
   id: number
   commit_id: number
@@ -107,6 +110,23 @@ export interface SentinelFinding {
   subject: string
   committed_at: string
   model: string
+}
+
+/** 产物链（v0.3 §11.8）：draft → pending_review → verified / rejected → deprecated */
+export type SentinelArtifactStatus = 'draft' | 'pending_review' | 'verified' | 'rejected' | 'deprecated'
+
+export type SentinelArtifactKind = 'poc' | 'nuclei' | 'report' | 'patch' | 'repro_log'
+
+export interface SentinelArtifact {
+  id: number
+  finding_id: number
+  kind: SentinelArtifactKind
+  title: string
+  status: SentinelArtifactStatus
+  path: string
+  content: string
+  created_at: string
+  updated_at: string
 }
 
 export interface SentinelRun {
@@ -221,6 +241,32 @@ const unwrap = <T>(p: Promise<ApiResponse<T>>) => p.then((r) => r.data)
 const paged = <T>(p: Promise<SentinelPagedRaw<T>>): Promise<SentinelPaged<T>> =>
   p.then((r) => ({ list: r.data ?? [], total: r.total, page: r.page, size: r.size }))
 
+/** responseType:'blob' 时 4xx/5xx 的 JSON 错误体也是 Blob，转回文本提取 message */
+async function blobErrorMessage(e: unknown, fallback: string): Promise<string> {
+  const data = (e as { response?: { data?: unknown } } | null | undefined)?.response?.data
+  if (typeof Blob !== 'undefined' && data instanceof Blob) {
+    try {
+      const body = JSON.parse(await data.text()) as { message?: string }
+      if (body.message) return body.message
+    } catch {
+      // 非 JSON 错误体，走默认文案
+    }
+  }
+  return getErrorMessage(e, fallback)
+}
+
+/** 与后端 DownloadArtifact 的 filename 清洗一致：仅保留可打印 ASCII，兜底 artifact-{id} */
+function artifactFilename(title: string, id: number): string {
+  const clean = title
+    .split('')
+    .filter((c) => {
+      const code = c.charCodeAt(0)
+      return code > 32 && code < 127 && c !== '/' && c !== '\\'
+    })
+    .join('')
+  return `${clean || `artifact-${id}`}.txt`
+}
+
 export const sentinelApi = {
   overview: () => unwrap(api.get<unknown, ApiResponse<SentinelOverview>>('/sentinel/overview')),
 
@@ -265,6 +311,55 @@ export const sentinelApi = {
 
   findings: (params: FindingQuery = {}) =>
     paged(api.get<unknown, SentinelPagedRaw<SentinelFinding>>('/sentinel/findings', { params })),
+
+  /** 流转发现状态（open/confirmed/ignored/resolved）；open→confirmed 时后端自动固化 patch 证据产物 */
+  patchFinding: (id: number, status: SentinelFindingStatus) =>
+    unwrap(api.patch<unknown, ApiResponse<SentinelFinding>>(`/sentinel/findings/${id}`, { status })),
+
+  findingArtifacts: (findingId: number) =>
+    unwrap(api.get<unknown, ApiResponse<SentinelArtifact[]>>(`/sentinel/findings/${findingId}/artifacts`)),
+
+  /** 人工新增产物（粘贴 PoC/模板/报告），后端落 draft 待审 */
+  createFindingArtifact: (findingId: number, body: { kind: SentinelArtifactKind; title: string; content: string }) =>
+    unwrap(api.post<unknown, ApiResponse<SentinelArtifact>>(`/sentinel/findings/${findingId}/artifacts`, body)),
+
+  /** 模型依据修复 diff 草拟 nuclei 模板：同步调用 30-60s，落 draft，别被全局 30s 超时打断 */
+  generateFindingNuclei: (findingId: number) =>
+    unwrap(
+      api.post<unknown, ApiResponse<SentinelArtifact>>(`/sentinel/findings/${findingId}/generate-nuclei`, null, {
+        timeout: 180000,
+      }),
+    ),
+
+  setArtifactStatus: (id: number, status: SentinelArtifactStatus) =>
+    unwrap(api.put<unknown, ApiResponse<SentinelArtifact>>(`/sentinel/artifacts/${id}/status`, { status })),
+
+  /** 产物下载地址（仅 verified 可下载，后端对非 verified 返回 403） */
+  artifactDownloadURL: (id: number) => `/api/sentinel/artifacts/${id}/download`,
+
+  /** 文本下载：走 api 实例带 Authorization 拿 blob 再触发浏览器下载（同 reports.download 套路），403 时抛 message */
+  downloadArtifact: async (artifact: Pick<SentinelArtifact, 'id' | 'title'>): Promise<void> => {
+    let blob: Blob
+    try {
+      blob = await api.get<unknown, Blob>(`/sentinel/artifacts/${artifact.id}/download`, {
+        responseType: 'blob',
+      })
+    } catch (e) {
+      throw new Error(await blobErrorMessage(e, '仅 verified 产物可下载'))
+    }
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = artifactFilename(artifact.title, artifact.id)
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    window.URL.revokeObjectURL(url)
+  },
+
+  /** 发布 verified 的 nuclei 模板到 PoC 库，返回模板 id；重复发布后端 400 */
+  publishArtifact: (id: number) =>
+    unwrap(api.post<unknown, ApiResponse<{ template_id: number }>>(`/sentinel/artifacts/${id}/publish`)),
 
   runs: (params: { run_type?: string; limit?: number } = {}) =>
     unwrap(api.get<unknown, ApiResponse<SentinelRun[]>>('/sentinel/runs', { params })),

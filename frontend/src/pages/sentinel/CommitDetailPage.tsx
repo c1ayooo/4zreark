@@ -2,9 +2,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Card, Progress, Skeleton, Tag, message } from 'antd'
 import { ArrowLeft, RefreshCw, ShieldCheck } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
-import { sentinelApi } from '@/api/sentinel'
+import { sentinelApi, type SentinelFindingStatus } from '@/api/sentinel'
 import { formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors'
+import { FindingStatusSelect } from './audit/shared'
 
 const severityColor: Record<string, string> = {
   critical: 'magenta',
@@ -56,6 +57,16 @@ export default function SentinelCommitDetailPage() {
     mutationFn: () => sentinelApi.judgeCommit(id),
     onSuccess: () => {
       message.success('已加入判定队列，稍后刷新查看结论')
+      queryClient.invalidateQueries({ queryKey: ['sentinel-commit', id] })
+    },
+    onError: (err) => message.error(getErrorMessage(err)),
+  })
+
+  const patchFindingMutation = useMutation({
+    mutationFn: ({ findingId, status }: { findingId: number; status: SentinelFindingStatus }) =>
+      sentinelApi.patchFinding(findingId, status),
+    onSuccess: (f) => {
+      message.success(`发现 #${f.id} 状态已更新`)
       queryClient.invalidateQueries({ queryKey: ['sentinel-commit', id] })
     },
     onError: (err) => message.error(getErrorMessage(err)),
@@ -183,8 +194,17 @@ export default function SentinelCommitDetailPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <Tag color="red">{finding.vuln_class}</Tag>
                   <Tag color={severityColor[finding.severity] ?? 'default'}>{finding.severity}</Tag>
-                  <Tag>{finding.status}</Tag>
                   <span className="ml-auto font-mono text-xs text-muted-foreground">{finding.repo_full_name}</span>
+                  <FindingStatusSelect
+                    status={finding.status}
+                    loading={
+                      patchFindingMutation.isPending &&
+                      patchFindingMutation.variables?.findingId === finding.id
+                    }
+                    onChange={(next) =>
+                      patchFindingMutation.mutate({ findingId: finding.id, status: next })
+                    }
+                  />
                 </div>
                 <div className="mt-2 font-mono text-sm">{finding.title}</div>
                 <p className="mt-1 text-sm leading-6 text-muted-foreground">{finding.detail}</p>

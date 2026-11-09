@@ -1,27 +1,42 @@
 /**
- * 代码审计 · 分析产物
+ * 代码审计 · 产物中心
  *
- * 产物 = 判定命中后落地的 finding（可验证发现），每条都能回溯到源提交。
- * 状态流转由后端 finding.status 决定（open → confirmed / ignored / resolved）。
+ * 产物 = 发现的证据链：poc / nuclei / report / patch / repro_log。
+ * 状态机：draft → pending_review → verified / rejected → deprecated；
+ * 铁律沿用文档：非 verified 产物不可下载、不可发布到 PoC 库；
+ * nuclei 模板由模型草拟（分析结果页触发），人工 verified 后才进扫描分发链。
  *
  * 真实接口：
- *   GET /api/sentinel/findings?status=&severity=&repo_id=&page=&size=
+ *   GET  /api/sentinel/findings?status=&page=&size=
+ *   GET  /api/sentinel/findings/{id}/artifacts
+ *   POST /api/sentinel/findings/{id}/artifacts
+ *   PUT  /api/sentinel/artifacts/{id}/status
+ *   GET  /api/sentinel/artifacts/{id}/download   （仅 verified）
+ *   POST /api/sentinel/artifacts/{id}/publish    （仅 verified 的 nuclei）
  */
-import { useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
-import { Button, Drawer, Select, Table } from 'antd'
+import { useState } from 'react'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
+import { Button, Drawer, Input, Popconfirm, Select, Table, Tooltip } from 'antd'
 import type { TableProps } from 'antd'
-import { ArrowUpRight, Package } from 'lucide-react'
-import { sentinelApi, type SentinelFinding } from '@/api/sentinel'
+import { Download, Package, Upload } from 'lucide-react'
 import {
+  sentinelApi,
+  type SentinelArtifact,
+  type SentinelArtifactKind,
+  type SentinelArtifactStatus,
+  type SentinelFinding,
+} from '@/api/sentinel'
+import { useToast } from '@/components/ui/use-toast'
+import { getErrorMessage } from '@/lib/errors'
+import {
+  ArtifactStatusSelect,
+  ARTIFACT_STATUS_LABELS,
   EmptyBlock,
   ErrorPanel,
   FindingStatusTag,
-  Metric,
   PageHeader,
   SeverityTag,
-  fmtNumber,
   fmtTime,
 } from './shared'
 
@@ -33,117 +48,334 @@ const STATUS_OPTIONS = [
   { value: 'resolved', label: '已处置' },
 ]
 
-const SEVERITY_OPTIONS = [
-  { value: '', label: '全部严重度' },
-  { value: 'critical', label: 'critical' },
-  { value: 'high', label: 'high' },
-  { value: 'medium', label: 'medium' },
-  { value: 'low', label: 'low' },
-  { value: 'info', label: 'info' },
+const KIND_OPTIONS: { value: SentinelArtifactKind; label: string }[] = [
+  { value: 'poc', label: 'PoC' },
+  { value: 'nuclei', label: 'nuclei 模板' },
+  { value: 'report', label: '报告' },
+  { value: 'patch', label: '补丁' },
+  { value: 'repro_log', label: '复现日志' },
 ]
 
+const CREATE_FORM_INIT: { kind: SentinelArtifactKind; title: string; content: string } = {
+  kind: 'poc',
+  title: '',
+  content: '',
+}
+
+const PREVIEW_LINES = 12
+
+/** content 预览：默认最多 12 行，可展开 */
+function ContentPreview({ content }: { content: string }) {
+  const [open, setOpen] = useState(false)
+  const lines = content.split('\n')
+  const clipped = !open && lines.length > PREVIEW_LINES
+  return (
+    <div className="mt-1.5">
+      <pre
+        className={`m-0 whitespace-pre-wrap rounded-lg border border-border bg-muted/30 p-2 font-mono text-[10.5px] leading-relaxed text-secondary-foreground ${
+          clipped ? 'max-h-[200px] overflow-hidden' : 'max-h-80 overflow-auto'
+        }`}
+      >
+        {(clipped ? lines.slice(0, PREVIEW_LINES) : lines).join('\n')}
+      </pre>
+      {lines.length > PREVIEW_LINES && (
+        <Button size="small" type="link" className="!px-0 text-[10.5px]" onClick={() => setOpen((v) => !v)}>
+          {open ? '收起' : `展开全部 ${lines.length} 行`}
+        </Button>
+      )}
+    </div>
+  )
+}
+
+/** 抽屉主体：单个发现的产物列表 + 新增产物表单。数据流收敛在这里，页面只管选行。 */
+function FindingArtifacts({ finding }: { finding: SentinelFinding }) {
+  const { toast } = useToast()
+  const queryClient = useQueryClient()
+  const [form, setForm] = useState(CREATE_FORM_INIT)
+
+  const artifactsQuery = useQuery({
+    queryKey: ['sentinel', 'finding-artifacts', finding.id],
+    queryFn: () => sentinelApi.findingArtifacts(finding.id),
+  })
+  const artifacts = artifactsQuery.data ?? []
+
+  const invalidateArtifacts = () =>
+    queryClient.invalidateQueries({ queryKey: ['sentinel', 'finding-artifacts'] })
+
+  const statusMutation = useMutation({
+    mutationFn: ({ id, status }: { id: number; status: SentinelArtifactStatus }) =>
+      sentinelApi.setArtifactStatus(id, status),
+    onSuccess: (a) => {
+      toast({ title: `产物 #${a.id} 状态已更新为「${ARTIFACT_STATUS_LABELS[a.status] ?? a.status}」` })
+      invalidateArtifacts()
+    },
+    onError: (e: Error) =>
+      toast({ title: '状态更新失败', description: getErrorMessage(e), variant: 'destructive' }),
+  })
+
+  const downloadMutation = useMutation({
+    mutationFn: (a: SentinelArtifact) => sentinelApi.downloadArtifact(a),
+    onError: (e: Error) =>
+      toast({ title: '下载失败', description: getErrorMessage(e), variant: 'destructive' }),
+  })
+
+  const publishMutation = useMutation({
+    mutationFn: (id: number) => sentinelApi.publishArtifact(id),
+    onSuccess: (res) => {
+      toast({ title: `已发布到 PoC 库（模板 #${res.template_id}）`, duration: 6 })
+      invalidateArtifacts()
+    },
+    onError: (e: Error) =>
+      toast({ title: '发布失败', description: getErrorMessage(e), variant: 'destructive' }),
+  })
+
+  const createMutation = useMutation({
+    mutationFn: (body: { kind: SentinelArtifactKind; title: string; content: string }) =>
+      sentinelApi.createFindingArtifact(finding.id, body),
+    onSuccess: (a) => {
+      toast({ title: `产物已创建（draft，#${a.id}）` })
+      setForm(CREATE_FORM_INIT)
+      invalidateArtifacts()
+    },
+    onError: (e: Error) =>
+      toast({ title: '创建失败', description: getErrorMessage(e), variant: 'destructive' }),
+  })
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-xl border border-border bg-card px-3 py-2.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[13px] font-medium text-foreground">{finding.title}</span>
+          <SeverityTag severity={finding.severity} />
+          <FindingStatusTag status={finding.status} />
+          <span className="ml-auto font-mono text-[10.5px] text-muted-foreground">{finding.vuln_class}</span>
+        </div>
+        <div className="mt-1 flex items-center gap-2 text-[10.5px] text-muted-foreground">
+          <Link
+            to={`/sentinel/commits/${finding.commit_id}`}
+            className="font-mono text-primary hover:underline"
+          >
+            {finding.sha.slice(0, 8)}
+          </Link>
+          <span className="font-mono">{finding.repo_full_name || finding.repo_id}</span>
+          <span className="truncate">{finding.subject}</span>
+        </div>
+      </div>
+
+      <div>
+        <div className="mb-1.5 flex items-center gap-2">
+          <span className="text-[12px] font-semibold text-foreground">产物</span>
+          <span className="text-[10.5px] text-muted-foreground">{artifacts.length} 条</span>
+          <Button
+            size="small"
+            type="text"
+            className="ml-auto !px-1.5 text-[11px]"
+            onClick={() => artifactsQuery.refetch()}
+            loading={artifactsQuery.isFetching}
+          >
+            刷新
+          </Button>
+        </div>
+
+        {artifactsQuery.error ? (
+          <ErrorPanel error={artifactsQuery.error} onRetry={() => artifactsQuery.refetch()} />
+        ) : null}
+
+        {artifacts.length === 0 && !artifactsQuery.isLoading && !artifactsQuery.error ? (
+          <EmptyBlock>
+            还没有产物：可在「分析结果」让模型依据修复 diff 草拟 nuclei 模板，或在下方手工提交。
+          </EmptyBlock>
+        ) : null}
+
+        <div className="space-y-2">
+          {artifacts.map((a) => {
+            const canDownload = a.status === 'verified'
+            const canPublish = a.kind === 'nuclei' && a.status === 'verified'
+            return (
+              <div key={a.id} className="rounded-xl border border-border bg-card px-3 py-2.5">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="rounded-full bg-secondary px-1.5 py-0.5 font-mono text-[9.5px] text-secondary-foreground">
+                    {a.kind}
+                  </span>
+                  <span className="text-[12.5px] font-medium text-foreground">
+                    {a.title || '(无标题)'}
+                  </span>
+                  <span className="ml-auto">
+                    <ArtifactStatusSelect
+                      status={a.status}
+                      loading={statusMutation.isPending && statusMutation.variables?.id === a.id}
+                      onChange={(next) => statusMutation.mutate({ id: a.id, status: next })}
+                    />
+                  </span>
+                </div>
+                <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+                  <span className="font-mono">{fmtTime(a.updated_at)}</span>
+                  {a.path && <span className="truncate font-mono">{a.path}</span>}
+                  <span className="ml-auto flex items-center gap-1">
+                    <Tooltip title={canDownload ? undefined : '铁律：非 verified 产物不可下载'}>
+                      <span>
+                        <Button
+                          size="small"
+                          type="text"
+                          icon={<Download size={11} />}
+                          className="!px-1.5 text-[11px]"
+                          disabled={!canDownload}
+                          loading={
+                            downloadMutation.isPending && downloadMutation.variables?.id === a.id
+                          }
+                          onClick={() => downloadMutation.mutate(a)}
+                        >
+                          下载
+                        </Button>
+                      </span>
+                    </Tooltip>
+                    <Popconfirm title="发布到 PoC 库？" onConfirm={() => publishMutation.mutate(a.id)}>
+                      <Button
+                        size="small"
+                        type="text"
+                        icon={<Upload size={11} />}
+                        className="!px-1.5 text-[11px]"
+                        disabled={!canPublish}
+                        loading={publishMutation.isPending && publishMutation.variables === a.id}
+                      >
+                        发布
+                      </Button>
+                    </Popconfirm>
+                  </span>
+                </div>
+                <ContentPreview content={a.content} />
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-border bg-card px-3 py-2.5">
+        <div className="mb-1.5 text-[12px] font-semibold text-foreground">新增产物</div>
+        <div className="space-y-2">
+          <Select
+            value={form.kind}
+            onChange={(kind) => setForm((f) => ({ ...f, kind: kind as SentinelArtifactKind }))}
+            className="w-[170px]"
+            options={KIND_OPTIONS}
+          />
+          <Input
+            value={form.title}
+            onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+            placeholder="标题"
+            allowClear
+          />
+          <Input.TextArea
+            value={form.content}
+            onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))}
+            placeholder="粘贴 PoC / nuclei 模板 / 报告内容"
+            rows={5}
+          />
+          <Button
+            type="primary"
+            size="small"
+            loading={createMutation.isPending}
+            disabled={!form.content.trim()}
+            onClick={() =>
+              createMutation.mutate({ kind: form.kind, title: form.title.trim(), content: form.content })
+            }
+          >
+            提交（落 draft 待审核）
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function AnalysisArtifactsPage() {
-  const navigate = useNavigate()
   const [status, setStatus] = useState('')
-  const [severity, setSeverity] = useState('')
-  const [repoId, setRepoId] = useState('')
   const [page, setPage] = useState(1)
   const [size, setSize] = useState(20)
-  const [preview, setPreview] = useState<SentinelFinding | null>(null)
-
-  const reposQuery = useQuery({
-    queryKey: ['sentinel', 'repos', ''],
-    queryFn: () => sentinelApi.repos(),
-  })
-  const repos = reposQuery.data?.items ?? []
+  const [active, setActive] = useState<SentinelFinding | null>(null)
 
   const findingsQuery = useQuery({
-    queryKey: ['sentinel', 'findings', { status, severity, repoId, page, size }],
-    queryFn: () =>
-      sentinelApi.findings({
-        status: status || undefined,
-        severity: severity || undefined,
-        repo_id: repoId || undefined,
-        page,
-        size,
-      }),
+    queryKey: ['sentinel', 'findings', { status, page, size }],
+    queryFn: () => sentinelApi.findings({ status: status || undefined, page, size }),
     refetchInterval: 60000,
   })
-
   const items = findingsQuery.data?.list ?? []
   const total = findingsQuery.data?.total ?? 0
 
-  const stats = useMemo(() => {
-    const critical = items.filter((f) => f.severity === 'critical').length
-    const high = items.filter((f) => f.severity === 'high').length
-    const open = items.filter((f) => f.status === 'open').length
-    const repoSet = new Set(items.map((f) => f.repo_full_name).filter(Boolean))
-    return { critical, high, open, repos: repoSet.size }
-  }, [items])
+  // 产物数：一页一条查询（含 content，与抽屉共用同一缓存 key），mutations 后按前缀失效
+  const artifactCounts = useQueries({
+    queries: items.map((f) => ({
+      queryKey: ['sentinel', 'finding-artifacts', f.id] as const,
+      queryFn: () => sentinelApi.findingArtifacts(f.id),
+    })),
+    combine: (results) => {
+      const counts: Record<number, number> = {}
+      results.forEach((r, i) => {
+        if (r.data) counts[items[i].id] = r.data.length
+      })
+      return counts
+    },
+  })
 
   const columns: TableProps<SentinelFinding>['columns'] = [
     {
       title: '发现',
       key: 'title',
       render: (_, r) => (
-        <div className="min-w-[260px]">
+        <div className="min-w-[240px]">
           <div className="flex items-center gap-1.5">
             <span className="text-[12.5px] font-medium text-foreground">{r.title}</span>
             <span className="rounded-full bg-secondary px-1.5 py-0.5 font-mono text-[9.5px] text-secondary-foreground">
               #{r.id}
             </span>
           </div>
-          <div className="font-mono text-[10.5px] text-muted-foreground">{r.vuln_class}</div>
+          <div className="truncate text-[10.5px] text-muted-foreground">{r.repo_full_name || r.repo_id}</div>
         </div>
       ),
     },
     {
-      title: '来源',
-      key: 'source',
+      title: 'SHA',
+      key: 'sha',
+      width: 110,
       render: (_, r) => (
-        <div className="min-w-[220px]">
-          <div className="font-mono text-[11px] text-secondary-foreground">{r.repo_full_name || r.repo_id}</div>
-          <div className="truncate text-[10.5px] text-muted-foreground">
-            <span className="font-mono">{r.sha.slice(0, 8)}</span> · {r.subject || '(无标题)'}
-          </div>
-        </div>
+        <Link
+          to={`/sentinel/commits/${r.commit_id}`}
+          className="font-mono text-[11px] text-primary hover:underline"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {r.sha.slice(0, 8)}
+        </Link>
       ),
     },
-    { title: '严重度', key: 'severity', width: 92, render: (_, r) => <SeverityTag severity={r.severity} /> },
+    {
+      title: '类型',
+      key: 'vuln_class',
+      width: 130,
+      render: (_, r) => (
+        <span className="font-mono text-[10.5px] text-muted-foreground">{r.vuln_class}</span>
+      ),
+    },
+    { title: '严重度', key: 'severity', width: 90, render: (_, r) => <SeverityTag severity={r.severity} /> },
     { title: '状态', key: 'status', width: 90, render: (_, r) => <FindingStatusTag status={r.status} /> },
     {
-      title: '判定模型',
-      key: 'model',
-      width: 132,
-      render: (_, r) => (
-        <span className="font-mono text-[10.5px] text-muted-foreground">{r.model || '—'}</span>
-      ),
+      title: '产物数',
+      key: 'artifacts',
+      width: 80,
+      render: (_, r) => {
+        const n = artifactCounts[r.id]
+        return n === undefined ? (
+          <span className="text-[10.5px] text-muted-foreground">…</span>
+        ) : (
+          <span className="font-mono text-[11px] tabular-nums">{n}</span>
+        )
+      },
     },
     {
       title: '落地时间',
       key: 'time',
-      width: 124,
+      width: 110,
       render: (_, r) => (
         <span className="font-mono text-[10.5px] text-muted-foreground">{fmtTime(r.created_at)}</span>
-      ),
-    },
-    {
-      title: '',
-      key: 'action',
-      width: 88,
-      render: (_, r) => (
-        <Button
-          size="small"
-          type="text"
-          icon={<ArrowUpRight size={12} />}
-          className="!px-1.5 text-[11px]"
-          onClick={(e) => {
-            e.stopPropagation()
-            navigate(`/sentinel/audit/results?commit=${r.commit_id}`)
-          }}
-        >
-          源提交
-        </Button>
       ),
     },
   ]
@@ -152,7 +384,7 @@ export default function AnalysisArtifactsPage() {
     <div className="space-y-4">
       <PageHeader
         title="分析产物"
-        desc="判定命中的可验证发现：严重度、状态与来源提交一一对应，不做二次推断"
+        desc="发现的证据链：PoC / nuclei / 报告 / 补丁，verified 前不可下载与发布"
         actions={
           <Button
             size="small"
@@ -169,23 +401,6 @@ export default function AnalysisArtifactsPage() {
         <ErrorPanel error={findingsQuery.error} onRetry={() => findingsQuery.refetch()} />
       ) : null}
 
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-        <Metric label="发现总数" value={fmtNumber(total)} hint="当前筛选条件" />
-        <Metric
-          label="critical + high"
-          value={fmtNumber(stats.critical + stats.high)}
-          hint="本页高危口径"
-          tone={stats.critical + stats.high ? 'text-rose-700' : undefined}
-        />
-        <Metric
-          label="待处理"
-          value={fmtNumber(stats.open)}
-          hint="status = open"
-          tone={stats.open ? 'text-amber-700' : undefined}
-        />
-        <Metric label="涉及仓库" value={fmtNumber(stats.repos)} hint="本页去重" />
-      </div>
-
       <div className="flex flex-wrap items-center gap-2">
         <Select
           value={status}
@@ -196,26 +411,8 @@ export default function AnalysisArtifactsPage() {
           className="w-[132px]"
           options={STATUS_OPTIONS}
         />
-        <Select
-          value={severity}
-          onChange={(v) => {
-            setSeverity(v)
-            setPage(1)
-          }}
-          className="w-[140px]"
-          options={SEVERITY_OPTIONS}
-        />
-        <Select
-          value={repoId}
-          onChange={(v) => {
-            setRepoId(v)
-            setPage(1)
-          }}
-          className="w-[210px]"
-          options={[{ value: '', label: '全部仓库' }, ...repos.map((r) => ({ value: r.id, label: r.full_name }))]}
-        />
         <span className="ml-auto text-[10.5px] text-muted-foreground">
-          {items.length} / {total} 条
+          点行打开产物抽屉 · 共 {total} 条发现
         </span>
       </div>
 
@@ -223,7 +420,7 @@ export default function AnalysisArtifactsPage() {
         {!findingsQuery.isLoading && items.length === 0 && !findingsQuery.error ? (
           <div className="p-3">
             <EmptyBlock>
-              还没有发现。发现由判定命中产生：先在「分析结果」里让提交跑出 <span className="font-mono">is_security_fix=true</span>。
+              还没有发现。发现由判定命中产生：先在「分析结果」里让提交跑出安全修复。
             </EmptyBlock>
           </div>
         ) : (
@@ -233,7 +430,7 @@ export default function AnalysisArtifactsPage() {
             loading={findingsQuery.isLoading}
             columns={columns}
             dataSource={items}
-            onRow={(r) => ({ onClick: () => setPreview(r), className: 'cursor-pointer' })}
+            onRow={(r) => ({ onClick: () => setActive(r), className: 'cursor-pointer' })}
             pagination={{
               current: page,
               pageSize: size,
@@ -251,74 +448,14 @@ export default function AnalysisArtifactsPage() {
         )}
       </div>
 
-      <div className="text-[10.5px] leading-relaxed text-muted-foreground">
-        产物不单独存储漏洞描述，它的可信度完全绑定判定：模型、置信度、evidence 都在源提交的详情里，
-        所以这里每条都提供「源提交」跳转，避免脱离上下文使用结论。
-      </div>
-
       <Drawer
-        open={!!preview}
-        onClose={() => setPreview(null)}
-        width={620}
-        title={preview ? `发现 #${preview.id}` : ''}
+        open={!!active}
+        onClose={() => setActive(null)}
+        width={640}
+        title={active ? `发现 #${active.id} · ${active.title}` : ''}
         destroyOnClose
       >
-        {preview && (
-          <div className="space-y-3">
-            <div className="rounded-xl border border-border bg-card px-3 py-2.5">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[13px] font-medium text-foreground">{preview.title}</span>
-                <SeverityTag severity={preview.severity} />
-                <FindingStatusTag status={preview.status} />
-                <span className="ml-auto font-mono text-[10.5px] text-muted-foreground">
-                  {preview.vuln_class}
-                </span>
-              </div>
-              <div className="mt-1.5 text-[11.5px] leading-relaxed text-secondary-foreground">
-                {preview.detail || '无详细描述'}
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-border bg-card px-3 py-2.5">
-              <div className="mb-1.5 text-[12px] font-semibold text-foreground">溯源</div>
-              <dl className="grid gap-1 text-[11.5px]">
-                <div className="flex gap-2">
-                  <dt className="w-20 shrink-0 text-muted-foreground">仓库</dt>
-                  <dd className="font-mono text-secondary-foreground">
-                    {preview.repo_full_name || preview.repo_id}
-                  </dd>
-                </div>
-                <div className="flex gap-2">
-                  <dt className="w-20 shrink-0 text-muted-foreground">提交</dt>
-                  <dd className="min-w-0 font-mono text-secondary-foreground">
-                    {preview.sha.slice(0, 12)}
-                  </dd>
-                </div>
-                <div className="flex gap-2">
-                  <dt className="w-20 shrink-0 text-muted-foreground">标题</dt>
-                  <dd className="min-w-0 text-secondary-foreground">{preview.subject || '—'}</dd>
-                </div>
-                <div className="flex gap-2">
-                  <dt className="w-20 shrink-0 text-muted-foreground">提交时间</dt>
-                  <dd className="font-mono text-secondary-foreground">{fmtTime(preview.committed_at)}</dd>
-                </div>
-                <div className="flex gap-2">
-                  <dt className="w-20 shrink-0 text-muted-foreground">判定模型</dt>
-                  <dd className="font-mono text-secondary-foreground">{preview.model || '—'}</dd>
-                </div>
-              </dl>
-            </div>
-
-            <Button
-              type="primary"
-              size="small"
-              icon={<ArrowUpRight size={12} />}
-              onClick={() => navigate(`/sentinel/audit/results?commit=${preview.commit_id}`)}
-            >
-              查看源提交与判定依据
-            </Button>
-          </div>
-        )}
+        {active && <FindingArtifacts finding={active} />}
       </Drawer>
     </div>
   )

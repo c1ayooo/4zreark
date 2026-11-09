@@ -1,6 +1,8 @@
 package api
 
 import (
+	"errors"
+	"fmt"
 	"log"
 	"net/url"
 	"strconv"
@@ -419,4 +421,187 @@ func parseSentinelTime(raw string) *time.Time {
 		}
 	}
 	return nil
+}
+
+// PatchFinding 流转发现状态（open/confirmed/ignored/resolved）；
+// 确认时 service 层自动固化 patch 证据产物。
+func (h *SentinelHandler) PatchFinding(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "发现 id 非法")
+		return
+	}
+	var body struct {
+		Status string `json:"status"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		utils.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+	f, err := service.SetFindingStatus(c.Request.Context(), id, strings.TrimSpace(body.Status))
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			utils.NotFound(c, "发现不存在")
+			return
+		}
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	h.audit(c, "finding.status", strconv.FormatInt(id, 10), map[string]interface{}{"status": f.Status})
+	utils.SuccessWithMessage(c, "发现状态已更新", f)
+}
+
+// ListFindingArtifacts 某发现下的产物列表（含 content，供前端预览）。
+func (h *SentinelHandler) ListFindingArtifacts(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "发现 id 非法")
+		return
+	}
+	items, err := h.store.ListArtifacts(c.Request.Context(), id)
+	if err != nil {
+		utils.InternalError(c, "查询产物失败: "+err.Error())
+		return
+	}
+	if items == nil {
+		items = []*repo.CommitArtifact{}
+	}
+	utils.Success(c, items)
+}
+
+// CreateFindingArtifact 人工新增产物（粘贴 PoC/模板/报告），落 draft 待审。
+func (h *SentinelHandler) CreateFindingArtifact(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "发现 id 非法")
+		return
+	}
+	var body struct {
+		Kind    string `json:"kind"`
+		Title   string `json:"title"`
+		Content string `json:"content"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		utils.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+	a, err := service.AddFindingArtifact(c.Request.Context(), id, body.Kind, body.Title, body.Content)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			utils.NotFound(c, "发现不存在")
+			return
+		}
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	h.audit(c, "artifact.create", strconv.FormatInt(a.ID, 10), map[string]interface{}{"kind": a.Kind, "finding_id": id})
+	utils.SuccessWithMessage(c, "产物已创建（draft，待审核）", a)
+}
+
+// GenerateFindingNuclei 让模型依据修复 diff 草拟 nuclei 模板（同步，落 draft）。
+func (h *SentinelHandler) GenerateFindingNuclei(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "发现 id 非法")
+		return
+	}
+	a, err := service.GenerateNucleiTemplate(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			utils.NotFound(c, "发现不存在")
+			return
+		}
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	h.audit(c, "artifact.generate_nuclei", strconv.FormatInt(a.ID, 10), map[string]interface{}{"finding_id": id, "title": a.Title})
+	utils.SuccessWithMessage(c, "nuclei 模板已生成（draft，请人工审核后再 verified/发布）", a)
+}
+
+// SetArtifactStatus 流转产物状态（draft/pending_review/verified/rejected/deprecated）。
+func (h *SentinelHandler) SetArtifactStatus(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "产物 id 非法")
+		return
+	}
+	var body struct {
+		Status string `json:"status"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		utils.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+	a, err := service.SetArtifactStatus(c.Request.Context(), id, strings.TrimSpace(body.Status))
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			utils.NotFound(c, "产物不存在")
+			return
+		}
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	h.audit(c, "artifact.status", strconv.FormatInt(id, 10), map[string]interface{}{"status": a.Status})
+	utils.SuccessWithMessage(c, "产物状态已更新", a)
+}
+
+// DownloadArtifact 下载产物内容；非 verified 一律 403（铁律：未审核产物不可下发）。
+func (h *SentinelHandler) DownloadArtifact(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "产物 id 非法")
+		return
+	}
+	a, err := service.GetArtifactForDownload(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			utils.NotFound(c, "产物不存在")
+			return
+		}
+		if errors.Is(err, service.ErrArtifactNotVerified) {
+			utils.Error(c, utils.ErrCodeForbidden, err.Error())
+			return
+		}
+		utils.InternalError(c, "读取产物失败: "+err.Error())
+		return
+	}
+	filename := a.Title
+	if filename == "" {
+		filename = fmt.Sprintf("artifact-%d", a.ID)
+	}
+	filename = strings.Map(func(r rune) rune {
+		if r > 32 && r < 127 && r != '/' && r != '\\' {
+			return r
+		}
+		return -1
+	}, filename)
+	if filename == "" {
+		filename = fmt.Sprintf("artifact-%d", a.ID)
+	}
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename+".txt"))
+	c.Data(200, "text/plain; charset=utf-8", []byte(a.Content))
+}
+
+// PublishArtifact 把 verified 的 nuclei 模板发布到 PoC 库（pocs 表），返回模板 id。
+func (h *SentinelHandler) PublishArtifact(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "产物 id 非法")
+		return
+	}
+	templateID, err := service.PublishArtifact(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			utils.NotFound(c, "产物不存在")
+			return
+		}
+		if errors.Is(err, service.ErrArtifactNotVerified) {
+			utils.Error(c, utils.ErrCodeForbidden, err.Error())
+			return
+		}
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	h.audit(c, "artifact.publish", strconv.FormatInt(id, 10), map[string]interface{}{"template_id": templateID})
+	utils.SuccessWithMessage(c, "已发布到 PoC 库", gin.H{"template_id": templateID})
 }

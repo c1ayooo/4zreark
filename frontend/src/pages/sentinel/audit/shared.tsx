@@ -7,9 +7,13 @@
  *   分析产物 = 判定落地的发现（finding）
  */
 import type { ReactNode } from 'react'
-import { Button } from 'antd'
-import { AlertTriangle, RefreshCw } from 'lucide-react'
-import type { SentinelRepo } from '@/api/sentinel'
+import { Button, Dropdown } from 'antd'
+import { AlertTriangle, ChevronDown, Loader2, RefreshCw } from 'lucide-react'
+import type {
+  SentinelArtifactStatus,
+  SentinelFindingStatus,
+  SentinelRepo,
+} from '@/api/sentinel'
 
 /* ---------------- 时间 / 数字 ---------------- */
 
@@ -201,6 +205,110 @@ export function FindingStatusTag({ status }: { status: string }) {
     <span className={`inline-flex shrink-0 rounded-full border px-1.5 py-0.5 text-[11px] font-medium ${m.cls}`}>
       {m.label}
     </span>
+  )
+}
+
+/** 发现状态流转：当前状态渲染 FindingStatusTag，点开切换到其余三个状态（合法性由后端校验） */
+export function FindingStatusSelect({
+  status,
+  onChange,
+  loading,
+}: {
+  status: string
+  onChange: (next: SentinelFindingStatus) => void
+  loading?: boolean
+}) {
+  const items = Object.entries(FINDING_STATUS)
+    .filter(([value]) => value !== status)
+    .map(([value, tone]) => ({ key: value, label: tone.label }))
+  return (
+    <Dropdown
+      menu={{ items, onClick: ({ key }) => onChange(key as SentinelFindingStatus) }}
+      disabled={loading}
+      trigger={['click']}
+    >
+      <button
+        type="button"
+        disabled={loading}
+        className="inline-flex shrink-0 cursor-pointer items-center gap-0.5 disabled:cursor-default disabled:opacity-60"
+      >
+        <FindingStatusTag status={status} />
+        {loading ? (
+          <Loader2 size={11} className="animate-spin text-muted-foreground" />
+        ) : (
+          <ChevronDown size={11} className="text-muted-foreground" />
+        )}
+      </button>
+    </Dropdown>
+  )
+}
+
+const ARTIFACT_STATUS: Record<string, Tone> = {
+  draft: { label: '草稿', cls: 'border-slate-200 bg-slate-50 text-slate-500 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-400' },
+  pending_review: { label: '待审核', cls: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900 dark:bg-sky-950/50 dark:text-sky-300' },
+  verified: { label: '已验证', cls: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-300' },
+  rejected: { label: '已驳回', cls: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-300' },
+  deprecated: { label: '已废弃', cls: 'border-slate-200 bg-slate-50 text-slate-500 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-400' },
+}
+
+export const ARTIFACT_STATUS_LABELS: Record<string, string> = Object.fromEntries(
+  Object.entries(ARTIFACT_STATUS).map(([value, tone]) => [value, tone.label]),
+)
+
+/** 产物状态机的合法流向（前端选项口径，后端仍做枚举校验） */
+export const ARTIFACT_NEXT: Record<string, SentinelArtifactStatus[]> = {
+  draft: ['pending_review'],
+  pending_review: ['verified', 'rejected'],
+  verified: ['deprecated'],
+  rejected: ['deprecated'],
+  deprecated: [],
+}
+
+export function ArtifactStatusTag({ status }: { status: string }) {
+  const m = ARTIFACT_STATUS[status] ?? {
+    label: status || '未知',
+    cls: 'border-slate-200 bg-slate-50 text-slate-600',
+  }
+  return (
+    <span className={`inline-flex shrink-0 rounded-full border px-1.5 py-0.5 text-[11px] font-medium ${m.cls}`}>
+      {m.label}
+    </span>
+  )
+}
+
+/** 产物状态流转：当前状态渲染 ArtifactStatusTag，点开只给合法流向选项 */
+export function ArtifactStatusSelect({
+  status,
+  onChange,
+  loading,
+}: {
+  status: string
+  onChange: (next: SentinelArtifactStatus) => void
+  loading?: boolean
+}) {
+  const items = (ARTIFACT_NEXT[status] ?? []).map((value) => ({
+    key: value,
+    label: ARTIFACT_STATUS_LABELS[value] ?? value,
+  }))
+  return (
+    <Dropdown
+      menu={{ items, onClick: ({ key }) => onChange(key as SentinelArtifactStatus) }}
+      disabled={loading || items.length === 0}
+      trigger={['click']}
+    >
+      <button
+        type="button"
+        disabled={loading}
+        className="inline-flex shrink-0 cursor-pointer items-center gap-0.5 disabled:cursor-default disabled:opacity-60"
+      >
+        <ArtifactStatusTag status={status} />
+        {loading ? (
+          <Loader2 size={11} className="animate-spin text-muted-foreground" />
+        ) : (
+          <ChevronDown size={11} className="text-muted-foreground" />
+        )}
+      </button>
+    </Dropdown>
   )
 }
 

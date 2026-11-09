@@ -145,6 +145,11 @@ func (s *Sentinel) UpdateRun(ctx context.Context, id int64, fields map[string]in
 	return nil
 }
 
+// OnRunEvent 是 run 事件的外发钩子：AppendRunEvent 落库成功后同步回调。
+// 由 main 装配（当前用途：WS Hub 广播给前端实时刷新）；回调内部自行保证
+// 非阻塞与降级，repo 层不感知订阅方，回调为 nil 时零开销。
+var OnRunEvent func(ev *SentinelRunEvent)
+
 // AppendRunEvent 在事务内自增 run.last_seq 并写入事件，保证 seq 连续且唯一。
 func (s *Sentinel) AppendRunEvent(ctx context.Context, ev *SentinelRunEvent) (int64, error) {
 	tx, err := s.pool().Begin(ctx)
@@ -174,6 +179,9 @@ func (s *Sentinel) AppendRunEvent(ctx context.Context, ev *SentinelRunEvent) (in
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
+	}
+	if OnRunEvent != nil {
+		OnRunEvent(ev)
 	}
 	return ev.Seq, nil
 }
