@@ -1,12 +1,12 @@
 package monitor
 
 import (
-	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"github.com/c1ayooo/4zreark/internal/useragent"
 	"io"
 	"net/http"
@@ -334,7 +334,7 @@ func (m *PageMonitor) checkPage(page *MonitoredPage) (*PageChange, error) {
 	}
 
 	// 设置默认 User-Agent
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 
 	// 设置自定义请求头
 	for k, v := range headers {
@@ -625,7 +625,7 @@ func (m *PageMonitor) fetchAndStore(page *MonitoredPage) error {
 		return err
 	}
 
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}

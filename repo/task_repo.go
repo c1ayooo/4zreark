@@ -57,7 +57,8 @@ type TaskRepo interface {
 type taskRepo struct{ r *Repo }
 
 const taskColumns = `id, workspace_id, project_id, name, description, type, status, targets, target_type,
-	config, is_scheduled, cron_expr, progress, node_id, started_at, completed_at,
+	config, is_scheduled, cron_expr, progress, node_id, plan_id, parent_id, stage, collection_mode,
+	started_at, completed_at,
 	total_targets, scanned_targets, discovered_assets, discovered_vulns, discovered_ports,
 	last_scanned_index, completed_stages, retry_count, last_error, created_by, tags,
 	created_at, updated_at, progress_details`
@@ -77,6 +78,10 @@ var taskUpdatable = map[string]string{
 	"cron_expr":          "cron_expr",
 	"progress":           "progress",
 	"node_id":            "node_id",
+	"plan_id":            "plan_id",
+	"parent_id":          "parent_id",
+	"stage":              "stage",
+	"collection_mode":    "collection_mode",
 	"started_at":         "started_at",
 	"completed_at":       "completed_at",
 	"retry_count":        "retry_count",
@@ -210,6 +215,7 @@ func scanTask(row pgx.Row) (*models.Task, error) {
 	)
 	err := row.Scan(&hexID, &wsID, &t.ProjectID, &t.Name, &t.Description, &typeStr, &statusStr, &t.Targets,
 		&t.TargetType, &configB, &t.IsScheduled, &t.CronExpr, &t.Progress, &t.NodeID,
+		&t.PlanID, &t.ParentID, &t.Stage, &t.CollectionMode,
 		&startedAt, &completedAt,
 		&stats.TotalTargets, &stats.ScannedTargets, &stats.DiscoveredAssets,
 		&stats.DiscoveredVulns, &stats.DiscoveredPorts, &stats.LastScannedIndex,
@@ -724,7 +730,6 @@ func (r *taskRepo) DeleteTemplate(ctx context.Context, id string) error {
 	}
 	return nil
 }
-
 
 // --- 执行认领 ---
 

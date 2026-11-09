@@ -127,6 +127,7 @@ func (m ModuleSet) ApplyTo(cfg *PipelineConfig) {
 	cfg.SubdomainScan = m.Subdomain
 	cfg.SubdomainCheckTakeover = m.Takeover
 	cfg.SubdomainHTTPProbe = m.HTTPProbe
+	cfg.HTTPProbeScan = m.HTTPProbe && !m.Subdomain
 	cfg.PortScan = m.PortScan
 	cfg.Fingerprint = m.Fingerprint
 	cfg.VulnScan = m.VulnScan

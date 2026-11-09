@@ -414,7 +414,7 @@ func (m *JSAuditModule) fetchBytes(rawURL string) []byte {
 	if err != nil {
 		return nil
 	}
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	req.Header.Set("Accept", "*/*")
 	resp, err := m.client.Do(req)
 	if err != nil {
@@ -437,7 +437,7 @@ func (m *JSAuditModule) fetch(workDir, rawURL string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	req.Header.Set("Accept", "*/*")
 
 	resp, err := m.client.Do(req)

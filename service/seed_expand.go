@@ -5,8 +5,8 @@ import (
 	"crypto/md5"
 	"crypto/tls"
 	"encoding/binary"
-	"errors"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -18,10 +18,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"github.com/c1ayooo/4zreark/internal/recon/spacemap"
 	"github.com/c1ayooo/4zreark/internal/recon/spacemap/certquery"
 	"github.com/c1ayooo/4zreark/internal/recon/spacemap/icpquery"
+	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"github.com/c1ayooo/4zreark/repo"
 
 	"golang.org/x/net/idna"
@@ -673,7 +673,8 @@ func probeHTTPAndCert(ctx context.Context, host string) (scheme, body string, sa
 	return "", "", sanHosts, lastErr
 }
 
-func (s *CycleService) expandDict(ctx context.Context, value string, capability map[string]any, maxTargets int) ([]repo.TargetInput, []string, error) {	base, err := normalizeDomainValue(value)
+func (s *CycleService) expandDict(ctx context.Context, value string, capability map[string]any, maxTargets int) ([]repo.TargetInput, []string, error) {
+	base, err := normalizeDomainValue(value)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1111,7 +1112,6 @@ func capabilityStrings(v any) []string {
 		return nil
 	}
 }
-
 
 // iconFP 一次 favicon 反查用的指纹对：mmh3（fofa 口径）+ md5（quake/hunter/zoomeye 口径）。
 type iconFP struct {

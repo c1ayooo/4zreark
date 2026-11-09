@@ -4,15 +4,14 @@
 package githubtokens
 
 import (
-
-	"github.com/c1ayooo/4zreark/internal/safehttp"
-	"github.com/c1ayooo/4zreark/internal/secretbox"
 	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/safehttp"
+	"github.com/c1ayooo/4zreark/internal/secretbox"
 	"net/http"
 	"regexp"
 	"strings"

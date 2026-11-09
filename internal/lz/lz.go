@@ -19,9 +19,9 @@ func String(key, val string) Field { return Field{key, val} }
 func Int(key string, val int) Field {
 	return Field{key, val}
 }
-func Bool(key string, val bool) Field  { return Field{key, val} }
+func Bool(key string, val bool) Field      { return Field{key, val} }
 func Time(key string, val time.Time) Field { return Field{key, val} }
-func Int64(key string, val int64) Field { return Field{key, val} }
+func Int64(key string, val int64) Field    { return Field{key, val} }
 func Error(err error) Field {
 	if err == nil {
 		return Field{"error", nil}

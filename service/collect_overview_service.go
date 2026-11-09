@@ -31,7 +31,7 @@ type CollectOverview struct {
 	EntityTotal  int            `json:"entity_total"`
 	EntityType   map[string]int `json:"entity_type"` // root/branch/invest/group
 	SeedCount    int            `json:"seed_count"`
-	Candidates   map[string]int `json:"candidates"` // candidate/imported/rejected
+	Candidates   map[string]int `json:"candidates"`       // candidate/imported/rejected
 	CandidateNIP int            `json:"candidate_no_icp"` // 无备案号的待确认候选（不会自动转种子）
 	SiteCount    int            `json:"site_count"`
 	// 采集任务

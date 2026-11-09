@@ -50,6 +50,10 @@ type PipelineConfig struct {
 	// 默认 false：信息收集任务不应通过端口模块旁路产出漏洞条目。
 	GogoPOC bool `json:"gogo_poc"`
 
+	// HTTPProbeScan 启用独立探活模块（S2）。与 SubdomainHTTPProbe 不同：
+	// 前者是链上独立入口，专门吃上一阶段落库的域名/URL；后者是子域枚举内嵌富化。
+	HTTPProbeScan bool `json:"http_probe_scan"`
+
 	// 爬虫
 	WebCrawler bool `json:"web_crawler"`
 	// 爬取深度与单目标结果上限；0 = 用模块默认（深度 3、不限页）。
@@ -181,6 +185,7 @@ type StreamingPipeline struct {
 	dirScanModule     *DirScanModule
 	sensitiveModule   *SensitiveModule
 	wihModule         *WihProbeModule
+	httpProbeModule   *HttpProbeModule
 
 	// 进度追踪
 	progressTracker *ProgressTracker
@@ -486,6 +491,7 @@ func (p *StreamingPipeline) buildModuleChain() error {
 			}
 		}
 		p.crawlerModule.SetScope(p.scope)
+		p.crawlerModule.SetUASeed(p.config.UASeed)
 		p.crawlerModule.SetInput(make(chan interface{}, 500))
 		p.crawlerModule.SetProgressTracker(p.progressTracker)
 		lastModule = p.crawlerModule
@@ -514,6 +520,7 @@ func (p *StreamingPipeline) buildModuleChain() error {
 	if p.config.PortScan {
 		p.portScanModule = NewPortScanModule(p.ctx, lastModule, p.config.PortRange, p.config.PortScanMode)
 		p.portScanModule.SetGogoPOC(p.config.GogoPOC)
+		p.portScanModule.SetPortBackend(p.config.PortBackend)
 		p.portScanModule.SetRate(p.config.rate(), p.config.moduleConcurrency(2), p.config.targetDelay())
 		p.portScanModule.SetInput(make(chan interface{}, 500))
 		p.portScanModule.SetProgressTracker(p.progressTracker)
@@ -526,6 +533,15 @@ func (p *StreamingPipeline) buildModuleChain() error {
 		p.portPrepModule.SetInput(make(chan interface{}, 500))
 		p.portPrepModule.SetProgressTracker(p.progressTracker)
 		lastModule = p.portPrepModule
+	}
+
+	// 独立探活模块（S2）：吃上一阶段的域名/URL，输出存活 AssetHttp。
+	// 放在子域模块之前构建，使其成为仅有探活需求时的入口。
+	if p.config.HTTPProbeScan {
+		p.httpProbeModule = NewHttpProbeModule(p.ctx, lastModule, p.config.moduleConcurrency(4), p.config.UASeed)
+		p.httpProbeModule.SetInput(make(chan interface{}, 500))
+		p.httpProbeModule.SetProgressTracker(p.progressTracker)
+		lastModule = p.httpProbeModule
 	}
 
 	// 子域名安全检测模块
@@ -584,6 +600,9 @@ func (p *StreamingPipeline) getEntryModule() ModuleRunner {
 	}
 	if p.config.WebCrawler && p.crawlerModule != nil {
 		return p.crawlerModule
+	}
+	if p.config.HTTPProbeScan && p.httpProbeModule != nil {
+		return p.httpProbeModule
 	}
 	return nil
 }

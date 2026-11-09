@@ -206,7 +206,7 @@ func (m *Manager) downloadOnce(ctx context.Context, url string, dst *os.File, pr
 	if err != nil {
 		return fmt.Errorf("创建下载请求失败: %w", err)
 	}
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	resp, err := m.httpClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("GET %s: %w", url, err)

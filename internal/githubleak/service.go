@@ -12,7 +12,7 @@ import (
 	"github.com/c1ayooo/4zreark/internal/lz"
 
 	"github.com/c1ayooo/4zreark/internal/githubtokens"
-	)
+)
 
 type persistence interface {
 	AcquireRunLock(context.Context) (func(), bool, error)

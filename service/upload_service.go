@@ -26,10 +26,10 @@ import (
 //     summary 里直说「未解析」，避免模型基于空内容编造结论。
 
 const (
-	uploadMaxFiles    = 200   // zip 内最多解析的文件数
+	uploadMaxFiles    = 200       // zip 内最多解析的文件数
 	uploadMaxFileRead = 256 << 10 // 单文件最多读 256KB
-	uploadMaxSummary  = 28000 // 摘要字符上限
-	uploadTextPreview = 3     // 每个代码文件抽几行可疑片段
+	uploadMaxSummary  = 28000     // 摘要字符上限
+	uploadTextPreview = 3         // 每个代码文件抽几行可疑片段
 )
 
 var codeExts = map[string]bool{

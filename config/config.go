@@ -23,7 +23,58 @@ type Config struct {
 	FingerprintVerify AutoVerifyConfig   `mapstructure:"fingerprint_verify"`
 	MCP               MCPConfig          `mapstructure:"mcp"`
 	Sentinel          SentinelConfig     `mapstructure:"sentinel"`
+	Collection        CollectionConfig   `mapstructure:"collection"`
 	LLM               LLMConfig          `mapstructure:"llm"`
+}
+
+// CollectionConfig 是「信息收集」预设与阶段编排的开关/阈值。
+// Enabled=false 时保持旧行为（按任务类型硬编码模块集），便于一键回滚。
+type CollectionConfig struct {
+	Enabled           bool     `mapstructure:"enabled"`
+	Mode              string   `mapstructure:"mode"` // auto | full | staged
+	DefaultModules    []string `mapstructure:"default_modules"`
+	ExcludeModules    []string `mapstructure:"exclude_modules"`
+	MaxTargetsForFull int      `mapstructure:"max_targets_for_full"`
+	MinOnlineNodes    int      `mapstructure:"min_online_nodes"`
+	MaxFailRate       float64  `mapstructure:"max_fail_rate"`
+	StageTimeoutMin   int      `mapstructure:"stage_timeout_minutes"`
+	SiteScope         string   `mapstructure:"site_scope"` // host | registrable_domain | project
+}
+
+// Normalize 补齐信息收集默认值，避免各处重复判空。
+func (c *CollectionConfig) Normalize() {
+	if c == nil {
+		return
+	}
+	switch c.Mode {
+	case "auto", "full", "staged":
+	default:
+		c.Mode = "auto"
+	}
+	if len(c.DefaultModules) == 0 {
+		c.DefaultModules = []string{
+			"subdomain", "takeover", "http_probe", "port_scan", "fingerprint",
+			"crawler", "js_audit", "api_probe", "dir_scan", "sensitive",
+		}
+	}
+	if len(c.ExcludeModules) == 0 {
+		c.ExcludeModules = []string{"vuln_scan", "bruteforce", "gogo_poc"}
+	}
+	if c.MaxTargetsForFull <= 0 {
+		c.MaxTargetsForFull = 500
+	}
+	if c.MinOnlineNodes <= 0 {
+		c.MinOnlineNodes = 1
+	}
+	if c.MaxFailRate <= 0 || c.MaxFailRate > 1 {
+		c.MaxFailRate = 0.3
+	}
+	if c.StageTimeoutMin <= 0 {
+		c.StageTimeoutMin = 360
+	}
+	if c.SiteScope == "" {
+		c.SiteScope = "host"
+	}
 }
 
 // SentinelConfig 是提交哨兵域的运行参数（v0.3 §8 / 附录 B）。
@@ -394,6 +445,7 @@ func LoadConfig(path string) *Config {
 		applyNodeEnv(cfg)
 		applySecurityEnv(cfg)
 		applySentinelEnv(cfg)
+		applyCollectionConfig(cfg)
 		applyLLMEnv(cfg)
 	})
 
@@ -420,6 +472,7 @@ func LoadConfigRaw(raw []byte) *Config {
 		applyNodeEnv(cfg)
 		applySecurityEnv(cfg)
 		applySentinelEnv(cfg)
+		applyCollectionConfig(cfg)
 		applyLLMEnv(cfg)
 	})
 
@@ -460,6 +513,17 @@ func applySentinelEnv(c *Config) {
 		c.Sentinel.JudgeModel = v
 	}
 	c.Sentinel.Normalize()
+}
+
+// applyCollectionConfig 应用信息收集默认值与环境变量覆盖（ZRE_COLLECTION_*）。
+func applyCollectionConfig(c *Config) {
+	if v := os.Getenv("ZRE_COLLECTION_ENABLED"); v != "" {
+		c.Collection.Enabled = v == "1" || strings.EqualFold(v, "true")
+	}
+	if v := os.Getenv("ZRE_COLLECTION_MODE"); v != "" {
+		c.Collection.Mode = v
+	}
+	c.Collection.Normalize()
 }
 
 // applyLLMEnv 应用 LLM 接入参数（ZRE_LLM_*）。密钥只从环境读，不写回配置文件。

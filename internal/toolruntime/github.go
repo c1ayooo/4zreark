@@ -47,7 +47,7 @@ func (m *Manager) listReleases(ctx context.Context, repo string) ([]ghRelease, e
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	if tok := strings.TrimSpace(os.Getenv(ghAPITokenEnv)); tok != "" {
 		req.Header.Set("Authorization", "Bearer "+tok)
 	}
@@ -147,7 +147,7 @@ func (m *Manager) downloadURL(ctx context.Context, rawURL, dstPath string) error
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	resp, err := m.httpClient().Do(req)
 	if err != nil {
 		return err

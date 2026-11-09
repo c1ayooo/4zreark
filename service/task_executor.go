@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/useragent"
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/scanner/scope"
@@ -881,6 +882,8 @@ func (e *TaskExecutor) buildCustomConfig(task *models.Task) *pipeline.PipelineCo
 func buildCollectionConfig(task *models.Task) *pipeline.PipelineConfig {
 	config := pipeline.DefaultPipelineConfig()
 	pipeline.CollectionModuleSet().ApplyTo(config)
+	// 信息收集优先 naabu 做端口发现；naabu 缺失/失败时 port_module 回退 gogo/纯 Go。
+	config.PortBackend = "naabu"
 	config.PortScanMode = "top1000"
 	config.PortRange = "1-1000"
 	config.SkipCDN = true
@@ -943,6 +946,9 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 		config.SubdomainEngineQueryMax = task.Config.EngineQueryMaxPerEngine
 	}
 	ctx, cancel := context.WithTimeout(parent, 24*time.Hour)
+	// 任务级 UA seed：下游所有 HTTP 请求按 URL host 自动派生同站一致的 UA。
+	// worker 不持库，seed 已由 master 物化在 task.Config 里随任务下发。
+	ctx = useragent.WithSeed(ctx, task.Config.UASeed)
 	taskID := task.ID.Hex()
 
 	// 任务级节奏控制：调用方给的模块配置只决定「扫什么」，
@@ -959,6 +965,8 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 	if task.Config.Threads > 0 {
 		config.FixedModuleConcurrency = task.Config.Threads
 	}
+
+	config.UASeed = task.Config.UASeed
 
 	// 模块组合：任务配置里显式勾选 scan_types 时以其为准，
 	// 让「信息收集（不含漏洞）」「全量扫描」这类模板能自由组合模块，
@@ -1745,7 +1753,6 @@ func (e *TaskExecutor) logAction(task *models.Task, category, level, message str
 	}
 }
 
-
 // sevCN 严重度中文（报告包里已有同款映射，executor 侧独立小写比较）。
 func sevCN(s string) string {
 	switch strings.ToLower(s) {
@@ -1829,6 +1836,12 @@ func (e *TaskExecutor) completeTask(task *models.Task, jobID int64, resultCount 
 	log.Printf("[TaskExecutor] Task %s completed with %d results", task.ID.Hex(), resultCount)
 	e.finishJob(jobID, "")
 
+	// 阶段子任务完成 → 推进信息收集计划。remote worker 不持库，跳过；
+	// master 派单模式由 30s reconciler 兜底。
+	if !e.remote {
+		GetCollectionPlanService().OnStageDone(task, string(models.TaskStatusCompleted))
+	}
+
 	// 远程 worker 只负责执行，通知由平台在派单完成时统一发。
 	if e.remote {
 		return
@@ -1853,6 +1866,11 @@ func (e *TaskExecutor) failTask(task *models.Task, jobID int64, errMsg string) {
 	e.logAction(task, string(task.Type), "error", "执行失败："+errMsg)
 	log.Printf("[TaskExecutor] Task %s failed: %s", task.ID.Hex(), errMsg)
 	e.finishJob(jobID, errMsg)
+
+	// 部分失败继续：当前阶段记 failed，由编排服务决定是否推进下一阶段。
+	if !e.remote {
+		GetCollectionPlanService().OnStageDone(task, string(models.TaskStatusFailed))
+	}
 
 	if e.remote {
 		return

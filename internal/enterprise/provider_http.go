@@ -1,10 +1,10 @@
 package enterprise
 
 import (
-	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"context"
 	"crypto/tls"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"io"
 	"net/http"
 	"net/url"

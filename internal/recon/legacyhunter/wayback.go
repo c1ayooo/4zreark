@@ -71,7 +71,7 @@ func QueryCDX(ctx context.Context, domain string, opts CDXOptions) ([]CDXEntry, 
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("legacyhunter: CDX 请求失败: %w", err)

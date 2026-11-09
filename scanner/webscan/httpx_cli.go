@@ -61,7 +61,11 @@ func NewHTTPXScanner() *HTTPXScanner {
 
 // IsAvailable 检查 httpx 二进制是否在项目统一工具目录中可用。
 func (h *HTTPXScanner) IsAvailable() bool {
-	return h.BinPath != "" && toolruntime.ToolExists(h.BinPath)
+	if h.BinPath == "" {
+		return false
+	}
+	st, err := os.Stat(h.BinPath)
+	return err == nil && !st.IsDir()
 }
 
 // Probe 对一批目标做 HTTP 探活与富化。

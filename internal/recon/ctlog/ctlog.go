@@ -61,7 +61,7 @@ func fetchOnce(ctx context.Context, url, domain string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	req.Header.Set("Accept", "application/json")
 
 	// 被动收集源走代理设置页的 recon 配置（每次请求时取，热生效）。

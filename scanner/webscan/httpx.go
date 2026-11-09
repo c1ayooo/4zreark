@@ -120,10 +120,9 @@ func (h *HttpxScanner) Probe(ctx context.Context, target string) *HttpxResult {
 			continue
 		}
 
-		// 设置常用 headers
-		req.Header.Set("User-Agent", useragent.Pick())
+		// 按请求 host 派生站点会话：同一站在探活/指纹/爬虫等链路保持同一个 UA。
+		useragent.Apply(req)
 		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
-		req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 		req.Header.Set("Connection", "close")
 
 		startTime := time.Now()
@@ -264,7 +263,7 @@ func (h *HttpxScanner) getFavicon(ctx context.Context, faviconURL string) (strin
 		return "", nil
 	}
 
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 
 	resp, err := h.client.Do(req)
 	if err != nil {

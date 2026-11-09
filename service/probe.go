@@ -197,7 +197,7 @@ func ProbeEndpoint(ctx context.Context, host string, port int, scheme string) Pr
 
 	// 3) HTTP：拿到任意状态码都算连通（403/404/500 也算，这是 v2 §8 的明确口径）
 	url := fmt.Sprintf("%s://%s", scheme, net.JoinHostPort(host, fmt.Sprint(port)))
-	resp, body, err := fetchProbeHTTP(ctx, url, useragent.Pick())
+	resp, body, err := fetchProbeHTTP(ctx, url, "")
 	res.ElapsedMS = time.Since(start).Milliseconds()
 	if err != nil {
 		res.Outcome, res.ReasonCode = ProbeConnFail, "http_error"
@@ -210,15 +210,9 @@ func ProbeEndpoint(ctx context.Context, host string, port int, scheme string) Pr
 		return res
 	}
 
-	// 桌面 UA 被 WAF 挡掉时，用手机 UA 再试一次；手机站通常是另一套规则。
-	if shouldRetryWithMobile(resp.StatusCode) {
-		resp2, body2, err2 := fetchProbeHTTP(ctx, url, useragent.PickMobile())
-		res.ElapsedMS = time.Since(start).Milliseconds()
-		if err2 == nil && (resp2.StatusCode < 400 || resp2.StatusCode < resp.StatusCode) {
-			resp, body = resp2, body2
-			res.Detail = "mobile_ua"
-		}
-	}
+	// 同站一致性：403/406/429/503 不再换手机 UA 重试。WAF 拦截是站点级
+	// 结论，换 UA 既破坏会话一致性，也会把同一站点的行为拆成两套指纹。
+	// 仍按「有响应即 reachable」记录，由上层决定是否降速或跳过。
 
 	// 采集指纹快照：标题、Server、响应头、正文前 256KB
 	res.Body = string(body)
@@ -243,15 +237,6 @@ func ProbeEndpoint(ctx context.Context, host string, port int, scheme string) Pr
 	return res
 }
 
-func shouldRetryWithMobile(status int) bool {
-	switch status {
-	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotAcceptable,
-		http.StatusTooManyRequests, http.StatusServiceUnavailable:
-		return true
-	}
-	return false
-}
-
 // certFingerprint 取响应 TLS 握手里的叶子证书，返回 DER 的 SHA-256 十六进制。
 // 非 HTTPS 或拿不到连接状态时返回空串。
 //
@@ -270,9 +255,14 @@ func fetchProbeHTTP(ctx context.Context, url, ua string) (*http.Response, []byte
 	if err != nil {
 		return nil, nil, err
 	}
-	req.Header.Set("User-Agent", ua)
+	if ua != "" {
+		req.Header.Set("User-Agent", ua)
+		req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	} else {
+		// 按请求 host 派生站点会话：同一站在扫描/巡检/复核链路保持同一个 UA。
+		useragent.Apply(req)
+	}
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
-	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 	resp, err := probeClient.Do(req)
 	if err != nil {
 		return nil, nil, err

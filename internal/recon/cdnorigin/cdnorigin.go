@@ -10,10 +10,10 @@
 package cdnorigin
 
 import (
-	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"io"
 	"net/http"
 	"net/url"

@@ -126,7 +126,7 @@ func probeSoft404(ctx context.Context, rawURL string, client *http.Client) (soft
 	if err != nil {
 		return soft404Signature{}, false
 	}
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return soft404Signature{}, false

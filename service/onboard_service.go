@@ -300,7 +300,6 @@ func withProvider(in EnterpriseCollectInput, provider string) EnterpriseCollectI
 	return in
 }
 
-
 // createOnboardFollowupTasks 按项目 domain 种子批量创建后续扫描任务。
 // 种子为空（公司没有可解析的备案域名等）返回 (0, nil)，不报错。
 func createOnboardFollowupTasks(ctx context.Context, projectID int64, keyword string) (int, []error) {

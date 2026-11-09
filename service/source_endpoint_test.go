@@ -20,12 +20,12 @@ func TestCheckSourceEndpointHost(t *testing.T) {
 		}
 	}
 	bad := []string{
-		"http://api.github.com/x",            // 非 https
-		"https://evil-github.com/x",          // 后缀仿冒
-		"https://github.com.evil.io/x",       // 前缀仿冒
-		"https://api.github.com.evil.io/x",   // 深层仿冒
-		"ftp://github.com/x",                 // 协议不对
-		"https://user@github.com@evil.io/x",  // userinfo 混淆
+		"http://api.github.com/x",           // 非 https
+		"https://evil-github.com/x",         // 后缀仿冒
+		"https://github.com.evil.io/x",      // 前缀仿冒
+		"https://api.github.com.evil.io/x",  // 深层仿冒
+		"ftp://github.com/x",                // 协议不对
+		"https://user@github.com@evil.io/x", // userinfo 混淆
 		"not a url",
 	}
 	for _, u := range bad {

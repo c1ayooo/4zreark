@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/useragent"
 	"github.com/c1ayooo/4zreark/scanner/core"
 )
 
@@ -243,7 +244,11 @@ func (c *WebCrawler) fetchAndParse(ctx context.Context, targetURL, baseDomain st
 	if err != nil {
 		return links, forms, extras
 	}
-	req.Header.Set("User-Agent", c.UserAgent)
+	if ua := strings.TrimSpace(c.UserAgent); ua != "" {
+		req.Header.Set("User-Agent", ua)
+	} else {
+		useragent.Apply(req)
+	}
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {

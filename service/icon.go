@@ -106,7 +106,7 @@ func fetchBinary(ctx context.Context, rawURL string) ([]byte, string, bool) {
 	if err != nil {
 		return nil, "", false
 	}
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	req.Header.Set("Accept", "image/*,*/*;q=0.8")
 
 	resp, err := probeClient.Do(req)

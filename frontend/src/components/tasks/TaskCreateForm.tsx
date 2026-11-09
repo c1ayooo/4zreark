@@ -24,9 +24,13 @@ const scanTypes = [
   { id: 'dir_scan', label: '目录扫描', description: '扫描敏感目录' },
 ]
 
-// 页面入口（原 TaskCreatePage）默认配置：三模块组合 + 超时/并发
+// 页面入口默认配置：信息收集预设。
+// scanTypes 留空表示「由后端 CollectionModuleSet 决定（除漏洞验证外全跑）」，
+// collection_mode=auto 让后端按工具可用性/目标规模决定单链还是分阶段。
+// 对话框入口保持旧的端口扫描默认，避免影响既有批量建任务流程。
 const PAGE_DEFAULT_CONFIG: TaskConfig = {
-  scanTypes: ['subdomain', 'port_scan', 'fingerprint'],
+  scanTypes: [],
+  collection_mode: 'auto',
   port_scan_mode: 'quick',
   timeout: 30,
   concurrent: 0,
@@ -218,7 +222,8 @@ export default function TaskCreateForm({
       return
     }
 
-    if ((formData.config.scanTypes?.length ?? 0) === 0) {
+    const isCollection = Boolean(formData.config.collection_mode)
+    if (!isCollection && (formData.config.scanTypes?.length ?? 0) === 0) {
       toast({ title: '请选择至少一种扫描类型', variant: 'destructive' })
       return
     }
@@ -239,7 +244,15 @@ export default function TaskCreateForm({
     const pipelineTypes = selected.filter((t) => !STANDALONE.includes(t))
 
     const jobs: Array<{ label: string; type: string; config: TaskConfig }> = []
-    if (pipelineTypes.length > 0) {
+    if (isCollection) {
+      // 信息收集预设：scan_types 留空，后端按 CollectionModuleSet 展开；
+      // 若用户显式勾了流水线模块，则作为高级覆盖继续传。
+      jobs.push({
+        label: '',
+        type: 'collection',
+        config: { ...formData.config, scanTypes: pipelineTypes },
+      })
+    } else if (pipelineTypes.length > 0) {
       jobs.push({
         label: '',
         type: getTaskType(pipelineTypes),

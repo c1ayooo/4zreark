@@ -8,9 +8,10 @@ import (
 )
 
 // 三类错误对应 River 的失败语义（v0.3 §6）：
-//   ErrPermanent  → 重试无意义，river.JobCancel
-//   ErrRateLimited→ 配额/限流，river.JobSnooze(5m)
-//   其它（含 ErrTransient）→ 默认退避重试
+//
+//	ErrPermanent  → 重试无意义，river.JobCancel
+//	ErrRateLimited→ 配额/限流，river.JobSnooze(5m)
+//	其它（含 ErrTransient）→ 默认退避重试
 var (
 	// ErrPermanent 表示请求本身有问题：参数非法、鉴权失败、模型不存在、响应无法解析。
 	ErrPermanent = errors.New("llm permanent error")

@@ -136,7 +136,10 @@ func migrateMonitorTokens(ctx context.Context) int {
 		log.Printf("[M13] 读取 github_monitor_settings 失败: %v", err)
 		return 0
 	}
-	type kv struct{ id int64; plain string }
+	type kv struct {
+		id    int64
+		plain string
+	}
 	var items []kv
 	for rows.Next() {
 		var id int64

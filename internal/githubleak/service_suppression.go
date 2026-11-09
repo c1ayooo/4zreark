@@ -6,8 +6,7 @@ import (
 	"fmt"
 
 	"github.com/c1ayooo/4zreark/internal/lz"
-
-	)
+)
 
 // ResetWaterline 重置规则水位线（query 空=全部）→ 下一轮强制全量（历史回扫）。
 // 存储不支持时返回不可用错误（测试 fake 场景）。

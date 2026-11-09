@@ -40,13 +40,13 @@ type llmSettingsRecord struct {
 
 // LLMSettingsView 是给前端的视图：密钥不出库，只回「是否已配置 + 掩码」。
 type LLMSettingsView struct {
-	BaseURL          string     `json:"base_url"`
-	Model            string     `json:"model"`
-	APIKeyConfigured bool       `json:"api_key_configured"`
-	APIKeyMasked     string     `json:"api_key_masked"`
-	Temperature      float64    `json:"temperature"`
-	MaxTokens        int        `json:"max_tokens"`
-	TimeoutSeconds   int        `json:"timeout_seconds"`
+	BaseURL          string  `json:"base_url"`
+	Model            string  `json:"model"`
+	APIKeyConfigured bool    `json:"api_key_configured"`
+	APIKeyMasked     string  `json:"api_key_masked"`
+	Temperature      float64 `json:"temperature"`
+	MaxTokens        int     `json:"max_tokens"`
+	TimeoutSeconds   int     `json:"timeout_seconds"`
 	// Source: db（界面配置）| env（环境变量）| none（都没配，判定走桩模型）
 	Source    string     `json:"source"`
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`

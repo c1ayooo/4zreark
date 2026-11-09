@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/c1ayooo/4zreark/internal/useragent"
 )
 
 // Executor Nuclei 模板执行器
@@ -287,6 +289,9 @@ func (e *Executor) executePathHTTP(ctx context.Context, httpReq *HTTPRequest, ta
 		for k, v := range e.options.Headers {
 			req.Header.Set(k, v)
 		}
+		// 同站一致性：模板/配置未指定 UA 时按目标 host 派生；即使指定了，
+		// 也统一覆盖为站点会话 UA，避免同一站在不同模板里换身份。
+		useragent.Apply(req)
 
 		// 发送请求
 		resp, err := e.client.Do(req)

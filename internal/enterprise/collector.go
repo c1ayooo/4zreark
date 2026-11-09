@@ -32,9 +32,9 @@ type Collector struct {
 	maxPageWalk int
 	// maxDepth / maxNodes 是任务参数的硬上限，受 limitsMu 保护：
 	// 企业采集设置（前端可配，热更新）会在运行中改写，start() 每次取当前值钳制。
-	maxDepth  int
-	maxNodes  int
-	limitsMu  sync.Mutex
+	maxDepth int
+	maxNodes int
+	limitsMu sync.Mutex
 	// maxDigitalPerEntity 单实体数字资产拉取上限（sink 启用时生效）。
 	maxDigitalPerEntity int
 

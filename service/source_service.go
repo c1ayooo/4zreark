@@ -209,7 +209,7 @@ func (s *SourceService) Test(ctx context.Context, id int64) (*SourceTestResult, 
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	// GitHub 必须带 token 才叫“测试凭据”，否则匿名请求只能证明网络通。
 	if src.Kind == "github" && src.CredentialRef != "" {
 		ct, nonce, cerr := r.LoadCredential(ctx, src.CredentialRef)
@@ -408,10 +408,10 @@ func randomHex(n int) string {
 // 企业版（GHE）主机用 ZRE_GITHUB_EXTRA_HOSTS（逗号分隔域名）显式放行。
 func allowedSourceHosts() map[string]bool {
 	hosts := map[string]bool{
-		"github.com":       true,
-		"api.github.com":   true,
-		"raw.github.com":   true,
-		"gist.github.com":  true,
+		"github.com":      true,
+		"api.github.com":  true,
+		"raw.github.com":  true,
+		"gist.github.com": true,
 	}
 	if extra := strings.TrimSpace(os.Getenv("ZRE_GITHUB_EXTRA_HOSTS")); extra != "" {
 		for _, h := range strings.Split(extra, ",") {

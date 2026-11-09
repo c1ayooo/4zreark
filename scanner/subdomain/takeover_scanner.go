@@ -10,6 +10,7 @@ import (
 	"time"
 
 	reconkit_takeover "github.com/c1ayooo/4zreark/internal/recon/takeover"
+	"github.com/c1ayooo/4zreark/internal/useragent"
 )
 
 // TakeoverScanner 子域名接管检测器
@@ -744,6 +745,7 @@ func (s *TakeoverScanner) checkHTTP(ctx context.Context, domain string, fingerpr
 		if err != nil {
 			continue
 		}
+		useragent.Apply(req)
 
 		resp, err := s.client.Do(req)
 		if err != nil {

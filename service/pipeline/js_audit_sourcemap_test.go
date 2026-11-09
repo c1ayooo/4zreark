@@ -16,7 +16,7 @@ import (
 )
 
 // httptest 监听 127.0.0.1，safehttp 扫描档默认拒环回；测试进程统一放行
-//（与 service/probe_test.go 同款）。
+// （与 service/probe_test.go 同款）。
 func init() { os.Setenv("ZRE_SAFEHTTP_ALLOW_PRIVATE", "1") }
 
 // newTestJSAuditModule 构造不走 nuclei 的审计模块（scanner 为 nil 不影响
@@ -197,7 +197,7 @@ func mustJSONString(s string) string {
 }
 
 // 防回归：restoreSourceMap 内部持 m.mu，调用方绝不能在持锁状态下调用
-//（Mutex 不可重入 → fetch goroutine 死锁 → 任务永久卡 running，端到端实测踩过）。
+// （Mutex 不可重入 → fetch goroutine 死锁 → 任务永久卡 running，端到端实测踩过）。
 // 本测试模拟生产调用路径：先登记 files（短暂持锁），再无锁调用还原，并发跑。
 func TestRestoreSourceMapNoReentrantLock(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

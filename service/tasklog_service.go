@@ -109,7 +109,6 @@ func (s *TaskLogService) StartRetention() {
 	}()
 }
 
-
 // moduleCategory 流水线模块名 → 功能分类。
 func moduleCategory(module string) string {
 	switch module {
@@ -148,7 +147,8 @@ func stageLabel(module string) string {
 
 // LogAction 写一条动作日志（埋点统一入口）。
 // category: subdomain/port_scan/fingerprint/crawler/dir_scan/vuln_scan/
-//           service_identify/exposure_scan/clue_hunt/icp/enterprise/system
+//
+//	service_identify/exposure_scan/clue_hunt/icp/enterprise/system
 func LogAction(category, level, message string) {
 	r := repo.Default()
 	if r == nil {

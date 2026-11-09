@@ -6,8 +6,7 @@ import (
 	"strings"
 
 	"github.com/c1ayooo/4zreark/internal/lz"
-
-	)
+)
 
 // notifyNewFindings 本轮新命中聚合为一条 IM 通知（notifier 统一漏斗 → 机器人广播）。
 // 条目按「仓库×密钥值」聚合去重（重复出现是研判信号而非噪音），通知内直显具体

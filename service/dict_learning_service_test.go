@@ -15,8 +15,8 @@ func TestExtractSubdomainLabel(t *testing.T) {
 		{"a-b.example.com", "example.com", "a-b"},
 		{"api.test.example.com", "example.com", "api"}, // 多级前缀取最左段
 		{"api.test.example.com.", "example.com", "api"},
-		{"example.com", "example.com", ""},  // 根域自身
-		{"other.com", "example.com", ""},    // 不以根域结尾
+		{"example.com", "example.com", ""}, // 根域自身
+		{"other.com", "example.com", ""},   // 不以根域结尾
 		{"", "example.com", ""},
 		{"api.example.com", "", ""},
 		{"-bad.example.com", "example.com", ""}, // 非法标签
@@ -44,7 +44,7 @@ func TestExtractLearnedPath(t *testing.T) {
 		{"https://a.com", ""},
 		{"https://a.com/api?x=1", "/api"},
 		{"https://a.com/actuator/env", "/actuator/env"},
-		{"https://a.com/a b/c", ""}, // 空格等脏字符
+		{"https://a.com/a b/c", ""},                                                              // 空格等脏字符
 		{"https://a.com/" + repeat("s", 50) + "/" + repeat("t", 50) + "/" + repeat("u", 50), ""}, // 超长
 	}
 	for _, c := range cases {

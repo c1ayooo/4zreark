@@ -334,6 +334,11 @@ func main() {
 	log.Println("Cruise scheduler started")
 	defer cruiseService.Stop()
 
+	// 信息收集阶段编排对账：完成钩子丢失时（master 派单场景）由它推进计划。
+	collectionPlanSvc := service.GetCollectionPlanService()
+	collectionPlanSvc.StartReconciler(context.Background())
+	defer collectionPlanSvc.Stop()
+
 	// Start asset governance cycle scheduler（种子 → 计划 → 批次，每 60 秒推进一次）
 	log.Println("Starting governance cycle scheduler...")
 	cycleService := service.NewCycleService()

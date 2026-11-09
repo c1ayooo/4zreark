@@ -322,7 +322,7 @@ func gitlabJSON(ctx context.Context, endpoint, token string, out any) error {
 		return err
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	if token != "" {
 		req.Header.Set("PRIVATE-TOKEN", token)
 	}
@@ -344,7 +344,7 @@ func gitlabRaw(ctx context.Context, endpoint, token string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	if token != "" {
 		req.Header.Set("PRIVATE-TOKEN", token)
 	}
@@ -366,7 +366,7 @@ func githubJSON(ctx context.Context, endpoint, token string, out any) error {
 		return err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -388,7 +388,7 @@ func githubRaw(ctx context.Context, endpoint string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {

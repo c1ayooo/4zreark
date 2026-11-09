@@ -31,36 +31,36 @@ import (
 
 // FingerprintResult represents fingerprint detection result
 type FingerprintResult struct {
-	Target       string            `json:"target"`
-	URL          string            `json:"url,omitempty"`
-	StatusCode   int               `json:"status_code,omitempty"`
-	Title        string            `json:"title,omitempty"`
-	Server       string            `json:"server,omitempty"`
-	PoweredBy    string            `json:"powered_by,omitempty"`
-	Headers      map[string]string `json:"headers,omitempty"`
-	IconHash     string            `json:"icon_hash,omitempty"`
-	IconMD5      string            `json:"icon_md5,omitempty"`
-	IconSHA256   string            `json:"icon_sha256,omitempty"`
-	IconMMH3     int64             `json:"icon_mmh3,omitempty"`
-	IconType     string            `json:"icon_content_type,omitempty"`
-	IconData     []byte            `json:"-"`
-	BodyHash     string            `json:"body_hash,omitempty"`
-	BodyLength   int               `json:"body_length,omitempty"`
+	Target     string            `json:"target"`
+	URL        string            `json:"url,omitempty"`
+	StatusCode int               `json:"status_code,omitempty"`
+	Title      string            `json:"title,omitempty"`
+	Server     string            `json:"server,omitempty"`
+	PoweredBy  string            `json:"powered_by,omitempty"`
+	Headers    map[string]string `json:"headers,omitempty"`
+	IconHash   string            `json:"icon_hash,omitempty"`
+	IconMD5    string            `json:"icon_md5,omitempty"`
+	IconSHA256 string            `json:"icon_sha256,omitempty"`
+	IconMMH3   int64             `json:"icon_mmh3,omitempty"`
+	IconType   string            `json:"icon_content_type,omitempty"`
+	IconData   []byte            `json:"-"`
+	BodyHash   string            `json:"body_hash,omitempty"`
+	BodyLength int               `json:"body_length,omitempty"`
 	// 响应富化：一次扫描顺带采集的画像字段（fpmine 挖掘与资产分级用）
-	CertOrg      string    `json:"cert_org,omitempty"`       // TLS 证书 Subject.Organization
-	CertNotAfter time.Time `json:"cert_not_after,omitempty"` // TLS 证书到期时间（证书到期提醒用）
-	CookieNames  []string  `json:"cookie_names,omitempty"`   // Set-Cookie 的 cookie 名集合
-	JSFrameworks []string `json:"js_frameworks,omitempty"` // JS bundle 里的框架@版本（vue@3.4.21）
-	APIHosts    []string `json:"api_hosts,omitempty"`     // JS 里引用的 API/资源域名（跨域归属线索）
-	Fingerprints []Fingerprint     `json:"fingerprints"`
-	Technologies []string          `json:"technologies,omitempty"`
-	CMS          string            `json:"cms,omitempty"`
-	Framework    string            `json:"framework,omitempty"`
-	WebServer    string            `json:"web_server,omitempty"`
-	OS           string            `json:"os,omitempty"`
-	Language     string            `json:"language,omitempty"`
-	JSLibraries  []string          `json:"js_libraries,omitempty"`
-	ScanTime     time.Duration     `json:"scan_time_ms"`
+	CertOrg      string        `json:"cert_org,omitempty"`       // TLS 证书 Subject.Organization
+	CertNotAfter time.Time     `json:"cert_not_after,omitempty"` // TLS 证书到期时间（证书到期提醒用）
+	CookieNames  []string      `json:"cookie_names,omitempty"`   // Set-Cookie 的 cookie 名集合
+	JSFrameworks []string      `json:"js_frameworks,omitempty"`  // JS bundle 里的框架@版本（vue@3.4.21）
+	APIHosts     []string      `json:"api_hosts,omitempty"`      // JS 里引用的 API/资源域名（跨域归属线索）
+	Fingerprints []Fingerprint `json:"fingerprints"`
+	Technologies []string      `json:"technologies,omitempty"`
+	CMS          string        `json:"cms,omitempty"`
+	Framework    string        `json:"framework,omitempty"`
+	WebServer    string        `json:"web_server,omitempty"`
+	OS           string        `json:"os,omitempty"`
+	Language     string        `json:"language,omitempty"`
+	JSLibraries  []string      `json:"js_libraries,omitempty"`
+	ScanTime     time.Duration `json:"scan_time_ms"`
 }
 
 // Fingerprint represents a single fingerprint match
@@ -167,7 +167,7 @@ func (s *FingerprintScanner) ScanFingerprint(ctx context.Context, target string)
 		result.ScanTime = time.Since(start) / time.Millisecond
 		return result
 	}
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 
@@ -178,7 +178,7 @@ func (s *FingerprintScanner) ScanFingerprint(ctx context.Context, target string)
 			url = strings.Replace(url, "http://", "https://", 1)
 			result.URL = url
 			req, _ = http.NewRequestWithContext(ctx, "GET", url, nil)
-			req.Header.Set("User-Agent", useragent.Pick())
+			useragent.Apply(req)
 			resp, err = s.HTTPClient.Do(req)
 			if err != nil {
 				result.ScanTime = time.Since(start) / time.Millisecond
@@ -340,7 +340,7 @@ func (s *FingerprintScanner) fetchSameOriginScripts(ctx context.Context, pageURL
 			cancel()
 			continue
 		}
-		req.Header.Set("User-Agent", useragent.Pick())
+		useragent.Apply(req)
 		resp, gerr := s.HTTPClient.Do(req)
 		if gerr != nil {
 			cancel()
@@ -700,7 +700,7 @@ func (s *FingerprintScanner) getFaviconHash(ctx context.Context, baseURL string)
 		if err != nil {
 			continue
 		}
-		req.Header.Set("User-Agent", useragent.Pick())
+		useragent.Apply(req)
 
 		resp, err := s.HTTPClient.Do(req)
 		if err != nil {

@@ -6,6 +6,7 @@ import { sentinelApi, type SentinelFindingStatus } from '@/api/sentinel'
 import { formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors'
 import { FindingStatusSelect } from './audit/shared'
+import PocVerifyCard from './audit/PocVerifyCard'
 
 const severityColor: Record<string, string> = {
   critical: 'magenta',
@@ -209,6 +210,10 @@ export default function SentinelCommitDetailPage() {
                 </div>
                 <div className="mt-2 font-mono text-sm">{finding.title}</div>
                 <p className="mt-1 text-sm leading-6 text-muted-foreground">{finding.detail}</p>
+                {/* 高危发现挂靶场验证卡（方案 B）：环境事实 + 流程时间线 + verdict 横幅 */}
+                {(finding.severity === 'high' || finding.severity === 'critical') && (
+                  <PocVerifyCard findingId={finding.id} />
+                )}
               </div>
             ))}
           </div>

@@ -17,7 +17,6 @@
 package miit
 
 import (
-	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"bytes"
 	"context"
 	"crypto/md5"
@@ -26,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/safehttp"
 	"io"
 	"math/rand"
 	"net/http"

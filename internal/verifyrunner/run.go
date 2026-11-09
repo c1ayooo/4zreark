@@ -199,7 +199,7 @@ func runStep(ctx context.Context, client *http.Client, st *Step, vars map[string
 		sr.FailReason = err.Error()
 		return sr
 	}
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	for k, v := range st.Request.Headers {
 		req.Header.Set(render(k, vars), render(v, vars))
 	}

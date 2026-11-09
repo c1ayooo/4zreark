@@ -24,9 +24,9 @@ import (
 
 // SubdomainResult represents a discovered subdomain
 type SubdomainResult struct {
-	Subdomain   string   `json:"subdomain"`
-	Domain      string   `json:"domain"`
-	FullDomain  string   `json:"full_domain"`
+	Subdomain  string `json:"subdomain"`
+	Domain     string `json:"domain"`
+	FullDomain string `json:"full_domain"`
 	// Source 是发现来源（passive:crtsh / spacemap:fofa / brute / artifact:cert-san），
 	// 同一子域名被多路发现时保留首个命中的来源。
 	Source      string   `json:"source,omitempty"`
@@ -365,7 +365,7 @@ func (s *DomainScanner) doHTTPRequest(ctx context.Context, client *http.Client, 
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	return client.Do(req)
 }

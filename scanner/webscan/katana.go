@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -31,7 +32,12 @@ type KatanaScanner struct {
 	// Headless 起无头浏览器执行 JS 路由，SPA 场景才有实质产出；
 	// 渲染开销是普通模式的 5-10 倍，调用方按目标特征分流（见 crawler_module）。
 	Headless bool
+	// UASeed 是任务级 UA seed；按目标 host 派生会话，保证同站同 UA。
+	UASeed string
 }
+
+// SetUASeed 设置任务级 UA seed。
+func (k *KatanaScanner) SetUASeed(seed string) { k.UASeed = seed }
 
 // KatanaResult Katana 爬虫结果
 type KatanaResult struct {
@@ -88,6 +94,18 @@ func katanaCrawledURL(out KatanaJSONOutput) KatanaCrawledURL {
 	}
 }
 
+// siteKey 从目标 URL 取站点键（host:port）；没有协议时按原串处理。
+func siteKey(target string) string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return ""
+	}
+	if u, err := url.Parse(target); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return target
+}
+
 func headerValue(headers map[string]string, name string) string {
 	for k, v := range headers {
 		if strings.EqualFold(k, name) {
@@ -99,8 +117,8 @@ func headerValue(headers map[string]string, name string) string {
 
 // NewKatanaScanner 创建 Katana 扫描器
 func NewKatanaScanner() *KatanaScanner {
-	tm := core.NewToolsManager()
-	binPath := tm.GetToolPath("katana")
+	// 直接走 toolruntime，避免 core.ToolsManager 中间层与其它模块的解析路径分叉。
+	binPath := toolruntime.Default().ResolveToolPath("katana")
 
 	return &KatanaScanner{
 		BinPath:          binPath,
@@ -120,7 +138,7 @@ const headlessMinTimeoutSeconds = 60
 // commonArgs 是单目标与列表模式共用的参数。
 // -fs rdn 把 katana 的爬取范围显式限制在注册域内，避免工具自身跟随站外链接；
 // 结果层还有一次 scope 过滤，这里是工具层的第一道边界。
-func (k *KatanaScanner) commonArgs(outputPath string) []string {
+func (k *KatanaScanner) commonArgs(target, outputPath string) []string {
 	timeout := k.Timeout
 	if k.Headless && timeout < headlessMinTimeoutSeconds {
 		timeout = headlessMinTimeoutSeconds
@@ -131,7 +149,7 @@ func (k *KatanaScanner) commonArgs(outputPath string) []string {
 		"-timeout", fmt.Sprintf("%d", timeout),
 		"-rl", fmt.Sprintf("%d", k.RateLimit),
 		"-fs", "rdn",
-		"-H", "User-Agent: " + useragent.Pick(),
+		"-H", "User-Agent: " + useragent.ForSite(k.UASeed, siteKey(target)).UserAgent,
 		"-silent",
 		"-jsonl",                                                                                // 使用 JSON Lines 格式输出，包含状态码等信息
 		"-ob",                                                                                   // 不带响应体：默认会在每行塞完整 body，单行轻易超 64KB
@@ -190,7 +208,7 @@ func (k *KatanaScanner) Crawl(ctx context.Context, target string) (*KatanaResult
 	defer os.Remove(outputPath)
 
 	// 构建命令
-	args := append([]string{"-u", target}, k.commonArgs(outputPath)...)
+	args := append([]string{"-u", target}, k.commonArgs(target, outputPath)...)
 
 	cmd := exec.CommandContext(ctx, k.BinPath, args...)
 
@@ -322,8 +340,13 @@ func (k *KatanaScanner) CrawlList(ctx context.Context, urls []string) (*KatanaRe
 	outputFile.Close()
 	defer os.Remove(outputPath)
 
-	// 构建命令
-	args := append([]string{"-list", inputPath}, k.commonArgs(outputPath)...)
+	// 构建命令。批量模式一次进程只能带一个 UA，按首个目标派生，
+	// 流水线实际走单目标 Crawl，不会出现批量跨站复用 UA。
+	first := ""
+	if len(urls) > 0 {
+		first = urls[0]
+	}
+	args := append([]string{"-list", inputPath}, k.commonArgs(first, outputPath)...)
 
 	cmd := exec.CommandContext(ctx, k.BinPath, args...)
 

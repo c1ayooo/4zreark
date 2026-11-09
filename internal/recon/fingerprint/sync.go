@@ -276,7 +276,7 @@ var builtinSources = []upstreamSource{
 }
 
 // fingersResourcesURLs chainreactors/fingers 仓库 resources/ 下指纹集的候选下载地址
-//（raw master/main + jsdelivr 镜像，与其它上游源同模式）。
+// （raw master/main + jsdelivr 镜像，与其它上游源同模式）。
 func fingersResourcesURLs(file string) []string {
 	return []string{
 		"https://raw.githubusercontent.com/chainreactors/fingers/master/resources/" + file,

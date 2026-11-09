@@ -245,7 +245,7 @@ func (h *Hunter) headStatus(ctx context.Context, rawURL string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	resp, err := h.httpc.Do(req)
 	if err != nil {
 		return 0, err

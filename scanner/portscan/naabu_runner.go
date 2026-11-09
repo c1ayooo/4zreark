@@ -1,0 +1,178 @@
+package portscan
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+
+	"github.com/c1ayooo/4zreark/internal/datadir"
+	"github.com/c1ayooo/4zreark/internal/toolruntime"
+	"github.com/c1ayooo/4zreark/scanner/core"
+)
+
+// NaabuScanner 封装 projectdiscovery/naabu 外部二进制，用于端口发现。
+//
+// 分工：naabu 只做 L4 端口发现（connect 模式不需要 root），gogo 继续负责
+// 服务/协议识别与内置 poc；两者都缺失时由 port_module 回退纯 Go TCP。
+// 本文件只负责参数构建、进程执行与 JSONL 解析。
+type NaabuScanner struct {
+	BinPath  string
+	Rate     int // 每秒包数
+	Threads  int // 并发
+	Timeout  int // 单端口超时（秒）
+	TempDir  string
+	ScanType string // connect（默认，无 root）/ syn
+}
+
+// naabuJSON 是 naabu -json 一行的解析结果。
+type naabuJSON struct {
+	Host     string `json:"host"`
+	IP       string `json:"ip"`
+	Port     int    `json:"port"`
+	Protocol string `json:"protocol"`
+	TLS      bool   `json:"tls"`
+}
+
+// NewNaabuScanner 创建 naabu 扫描器。路径统一由 toolruntime 解析。
+func NewNaabuScanner() *NaabuScanner {
+	return &NaabuScanner{
+		BinPath:  toolruntime.Default().ResolveToolPath("naabu"),
+		Rate:     1000,
+		Threads:  25,
+		Timeout:  3,
+		TempDir:  datadir.TmpDir(),
+		ScanType: "connect",
+	}
+}
+
+// IsAvailable 检查 naabu 二进制是否在项目统一工具目录中可用。
+func (n *NaabuScanner) IsAvailable() bool {
+	if n.BinPath == "" {
+		return false
+	}
+	st, err := os.Stat(n.BinPath)
+	return err == nil && !st.IsDir()
+}
+
+// ScanPorts 对单个目标做端口发现，返回与 gogo 一致的 core.ScanResult，
+// 便于 port_module 在不改下游的情况下切换后端。
+func (n *NaabuScanner) ScanPorts(ctx context.Context, target, ports string) (*core.ScanResult, error) {
+	if !n.IsAvailable() {
+		return nil, fmt.Errorf("naabu not available")
+	}
+	result := &core.ScanResult{
+		Target:    target,
+		StartTime: time.Now(),
+		Ports:     make([]core.PortResult, 0, 16),
+	}
+
+	dir := n.TempDir
+	if dir == "" {
+		dir = datadir.TmpDir()
+	}
+	outFile, err := os.CreateTemp(dir, "naabu-out-*.jsonl")
+	if err != nil {
+		return nil, fmt.Errorf("create naabu output: %w", err)
+	}
+	outPath := outFile.Name()
+	outFile.Close()
+	defer os.Remove(outPath)
+
+	args := n.buildArgs(target, ports, outPath)
+	cmd := exec.CommandContext(ctx, n.BinPath, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+
+	parsed, parseErr := parseNaabuFile(outPath)
+	if ctx.Err() != nil {
+		result.EndTime = time.Now()
+		result.Ports = parsed
+		return result, ctx.Err()
+	}
+	result.EndTime = time.Now()
+	result.Ports = parsed
+	if runErr != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			return result, fmt.Errorf("naabu: %w", runErr)
+		}
+		return result, fmt.Errorf("naabu: %w (%s)", runErr, msg)
+	}
+	if parseErr != nil {
+		return result, parseErr
+	}
+	return result, nil
+}
+
+func (n *NaabuScanner) buildArgs(target, ports, outPath string) []string {
+	scanType := n.ScanType
+	if scanType == "" {
+		scanType = "connect"
+	}
+	args := []string{
+		"-host", target,
+		"-p", ports,
+		"-json",
+		"-silent",
+		"-no-color",
+		"-scan-type", scanType,
+		"-o", outPath,
+	}
+	if n.Rate > 0 {
+		args = append(args, "-rate", fmt.Sprintf("%d", n.Rate))
+	}
+	if n.Threads > 0 {
+		args = append(args, "-c", fmt.Sprintf("%d", n.Threads))
+	}
+	if n.Timeout > 0 {
+		args = append(args, "-timeout", fmt.Sprintf("%d", n.Timeout))
+	}
+	return args
+}
+
+func parseNaabuFile(path string) ([]core.PortResult, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("open naabu output: %w", err)
+	}
+	defer f.Close()
+
+	results := make([]core.PortResult, 0, 16)
+	seen := make(map[int]bool)
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var item naabuJSON
+		if err := json.Unmarshal([]byte(line), &item); err != nil {
+			continue
+		}
+		if item.Port <= 0 || item.Port > 65535 || seen[item.Port] {
+			continue
+		}
+		seen[item.Port] = true
+		results = append(results, core.PortResult{
+			Port:    item.Port,
+			State:   "open",
+			Service: guessService(item.Port),
+			IP:      item.IP,
+		})
+	}
+	if err := scanner.Err(); err != nil {
+		return results, fmt.Errorf("read naabu output: %w", err)
+	}
+	return results, nil
+}

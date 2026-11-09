@@ -78,17 +78,17 @@ type CandidateAsset struct {
 
 // Job 采集任务。
 type Job struct {
-	ID                   string     `json:"id"`
-	ProjectID            string     `json:"project_id"`
-	Owner                string     `json:"owner"`
-	Provider             string     `json:"provider"`
-	Keyword              string     `json:"keyword"`
-	Status               string     `json:"status"` // running / done / error / canceled
-	Depth                int        `json:"depth"`
+	ID        string `json:"id"`
+	ProjectID string `json:"project_id"`
+	Owner     string `json:"owner"`
+	Provider  string `json:"provider"`
+	Keyword   string `json:"keyword"`
+	Status    string `json:"status"` // running / done / error / canceled
+	Depth     int    `json:"depth"`
 	// ExpandGroup 展开集团成员（同集团兄弟公司，可选接口 GroupCompaniesProvider）；
 	// 仅内存传递，不落 enterprise_jobs 列。
-	ExpandGroup bool  `json:"expand_group"`
-	MaxNodes    int   `json:"max_nodes"`
+	ExpandGroup          bool       `json:"expand_group"`
+	MaxNodes             int        `json:"max_nodes"`
 	Nodes                int        `json:"nodes"`
 	Entities             int        `json:"entities"`
 	Domains              int        `json:"domains"`

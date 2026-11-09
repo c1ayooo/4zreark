@@ -25,8 +25,8 @@ const (
 // （遍历项目企业线索拉取 APP/小程序/公众号/新媒体，diff 后只把新增送候选池）；
 // enterprise_deep 企业深度采集（遍历项目企业线索逐个启动 BFS 子公司树展开）。
 const (
-	CruiseKindScan          = "scan"
-	CruiseKindDigitalAssets = "digital_assets"
+	CruiseKindScan           = "scan"
+	CruiseKindDigitalAssets  = "digital_assets"
 	CruiseKindEnterpriseDeep = "enterprise_deep"
 )
 
@@ -51,13 +51,13 @@ type CruiseTask struct {
 	// ProjectID 是巡航归属项目；扫描结果会并入该项目资产域。
 	ProjectID int64 `json:"project_id" bson:"project_id"`
 	// TargetSource 为 static 时使用 Targets；为 project 时每次执行按项目整体资产重新派生。
-	TargetSource string       `json:"target_source" bson:"target_source"`
+	TargetSource string `json:"target_source" bson:"target_source"`
 	// Kind 巡航类型：scan（默认，缺省为存量任务语义）| digital_assets。
-	Kind   string              `json:"kind" bson:"kind"`
-	Digital DigitalCruiseConfig `json:"digital" bson:"digital"`
-	Name         string       `json:"name" bson:"name"`
-	Description  string       `json:"description" bson:"description"`
-	Status       CruiseStatus `json:"status" bson:"status"`
+	Kind        string              `json:"kind" bson:"kind"`
+	Digital     DigitalCruiseConfig `json:"digital" bson:"digital"`
+	Name        string              `json:"name" bson:"name"`
+	Description string              `json:"description" bson:"description"`
+	Status      CruiseStatus        `json:"status" bson:"status"`
 
 	// 定时配置
 	CronExpr string `json:"cron_expr" bson:"cron_expr"` // Cron 表达式，如 "0 2 * * *" 每天凌晨2点
@@ -94,41 +94,41 @@ type CruiseTask struct {
 
 // CruiseTaskCreateRequest 创建巡航任务请求
 type CruiseTaskCreateRequest struct {
-	Name             string     `json:"name" binding:"required"`
-	Description      string     `json:"description"`
-	ProjectID        int64      `json:"project_id"`
-	Kind             string     `json:"kind"` // scan（默认）| digital_assets
-	TargetSource     string     `json:"target_source"`                // static | project
-	CronExpr         string     `json:"cron_expr" binding:"required"` // Cron 表达式
-	Timezone         string     `json:"timezone"`                     // 默认 Asia/Shanghai
-	Targets          []string   `json:"targets"`                      // static 模式必填
-	TargetType       string     `json:"target_type"`
-	TaskType         TaskType   `json:"task_type"` // scan 类型必填
-	Config           TaskConfig `json:"config"`
+	Name             string              `json:"name" binding:"required"`
+	Description      string              `json:"description"`
+	ProjectID        int64               `json:"project_id"`
+	Kind             string              `json:"kind"`                         // scan（默认）| digital_assets
+	TargetSource     string              `json:"target_source"`                // static | project
+	CronExpr         string              `json:"cron_expr" binding:"required"` // Cron 表达式
+	Timezone         string              `json:"timezone"`                     // 默认 Asia/Shanghai
+	Targets          []string            `json:"targets"`                      // static 模式必填
+	TargetType       string              `json:"target_type"`
+	TaskType         TaskType            `json:"task_type"` // scan 类型必填
+	Config           TaskConfig          `json:"config"`
 	Digital          DigitalCruiseConfig `json:"digital"`
-	NotifyOnComplete bool       `json:"notify_on_complete"`
-	NotifyOnVuln     bool       `json:"notify_on_vuln"`
-	NotifyChannels   []string   `json:"notify_channels"`
-	Tags             []string   `json:"tags"`
+	NotifyOnComplete bool                `json:"notify_on_complete"`
+	NotifyOnVuln     bool                `json:"notify_on_vuln"`
+	NotifyChannels   []string            `json:"notify_channels"`
+	Tags             []string            `json:"tags"`
 }
 
 // CruiseTaskUpdateRequest 更新巡航任务请求
 type CruiseTaskUpdateRequest struct {
-	Name             *string     `json:"name"`
-	Description      *string     `json:"description"`
-	ProjectID        *int64      `json:"project_id"`
-	TargetSource     *string     `json:"target_source"`
-	CronExpr         *string     `json:"cron_expr"`
-	Timezone         *string     `json:"timezone"`
-	Targets          []string    `json:"targets"`
-	TargetType       *string     `json:"target_type"`
-	TaskType         *TaskType   `json:"task_type"`
-	Config           *TaskConfig `json:"config"`
+	Name             *string              `json:"name"`
+	Description      *string              `json:"description"`
+	ProjectID        *int64               `json:"project_id"`
+	TargetSource     *string              `json:"target_source"`
+	CronExpr         *string              `json:"cron_expr"`
+	Timezone         *string              `json:"timezone"`
+	Targets          []string             `json:"targets"`
+	TargetType       *string              `json:"target_type"`
+	TaskType         *TaskType            `json:"task_type"`
+	Config           *TaskConfig          `json:"config"`
 	Digital          *DigitalCruiseConfig `json:"digital"`
-	NotifyOnComplete *bool       `json:"notify_on_complete"`
-	NotifyOnVuln     *bool       `json:"notify_on_vuln"`
-	NotifyChannels   []string    `json:"notify_channels"`
-	Tags             []string    `json:"tags"`
+	NotifyOnComplete *bool                `json:"notify_on_complete"`
+	NotifyOnVuln     *bool                `json:"notify_on_vuln"`
+	NotifyChannels   []string             `json:"notify_channels"`
+	Tags             []string             `json:"tags"`
 }
 
 // CruiseLog 巡航执行日志

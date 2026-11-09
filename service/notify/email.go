@@ -1,10 +1,10 @@
 package notify
 
 import (
-	"html/template"
 	"context"
 	"crypto/tls"
 	"fmt"
+	"html/template"
 	"net/smtp"
 	"strings"
 )

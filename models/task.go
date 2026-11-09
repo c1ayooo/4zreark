@@ -75,8 +75,14 @@ type Task struct {
 	Progress        int                    `json:"progress" bson:"progress"`                                     // 0-100
 	ProgressDetails map[string]interface{} `json:"progress_details,omitempty" bson:"progress_details,omitempty"` // 详细进度信息
 	NodeID          string                 `json:"node_id" bson:"node_id"`                                       // assigned scanner node
-	StartedAt       time.Time              `json:"started_at,omitempty" bson:"started_at,omitempty"`
-	CompletedAt     time.Time              `json:"completed_at,omitempty" bson:"completed_at,omitempty"`
+	// 信息收集分阶段编排：父计划 / 阶段 / 父任务。
+	// 普通任务这些字段为空，行为与改造前完全一致。
+	PlanID         string    `json:"plan_id,omitempty" bson:"plan_id,omitempty"`
+	ParentID       string    `json:"parent_id,omitempty" bson:"parent_id,omitempty"`
+	Stage          string    `json:"stage,omitempty" bson:"stage,omitempty"`
+	CollectionMode string    `json:"collection_mode,omitempty" bson:"collection_mode,omitempty"`
+	StartedAt      time.Time `json:"started_at,omitempty" bson:"started_at,omitempty"`
+	CompletedAt    time.Time `json:"completed_at,omitempty" bson:"completed_at,omitempty"`
 
 	// Results Summary
 	ResultStats TaskResultStats `json:"result_stats" bson:"result_stats"`
@@ -149,7 +155,7 @@ type TaskConfig struct {
 	PassDict    string `json:"pass_dict,omitempty" bson:"pass_dict,omitempty"`
 
 	// Crawler Config
-	MaxDepth       int  `json:"max_depth,omitempty" bson:"max_depth,omitempty"`
+	MaxDepth int `json:"max_depth,omitempty" bson:"max_depth,omitempty"`
 	// WatchCrawl 标记任务来自站点巡检的「变更慢爬」：executor 按最轻配置执行
 	//（不带端口扫描/指纹/子域），配合 RatePerSec/MaxPages 的保守值把对目标
 	// 的压力压到最低。
@@ -174,6 +180,15 @@ type TaskConfig struct {
 	IngestURLs         *bool `json:"ingest_urls,omitempty" bson:"ingest_urls,omitempty"`
 	IngestFingerprints *bool `json:"ingest_fingerprints,omitempty" bson:"ingest_fingerprints,omitempty"`
 	IngestIcons        *bool `json:"ingest_icons,omitempty" bson:"ingest_icons,omitempty"`
+
+	// UASeed 是任务级 UA 会话种子。master 建任务时按项目派生并随任务下发，
+	// worker 不持库也能在同一站点的所有 HTTP 出口复现同一个伪装 UA。
+	// 为空时执行器会按 host 用固定盐兜底（仍保持同站一致）。
+	UASeed string `json:"ua_seed,omitempty" bson:"ua_seed,omitempty"`
+
+	// CollectionMode 是任务级信息收集模式（auto/full/staged）。
+	// 空 = 用全局 collection.mode；显式值覆盖全局。
+	CollectionMode string `json:"collection_mode,omitempty" bson:"collection_mode,omitempty"`
 }
 
 func (c TaskConfig) hasScanType(name string) bool {

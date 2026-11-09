@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/c1ayooo/4zreark/config"
+	"github.com/c1ayooo/4zreark/internal/useragent"
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/service/pipeline"
@@ -79,6 +81,18 @@ func (s *TaskService) CreateTask(task *models.Task) error {
 	ctx, cancel := dbCtx()
 	defer cancel()
 
+	// 信息收集父任务：交给计划服务拆成阶段子任务，父任务本身不入 River 队列。
+	// 阶段子任务带 Stage，不会再次进入这个分支。
+	if task.Type == models.TaskTypeCollection && strings.TrimSpace(task.Stage) == "" &&
+		config.GetConfig().Collection.Enabled {
+		env := EvaluateCollectionEnv(len(task.Targets))
+		if env.Stage {
+			log.Printf("[Collection] 切分阶段执行: %v", env.Reasons)
+			return GetCollectionPlanService().CreatePlan(ctx, task)
+		}
+		log.Printf("[Collection] 环境正常，走单链流式执行")
+	}
+
 	tasks, jobs, err := s.stores()
 	if err != nil {
 		return err
@@ -94,6 +108,12 @@ func (s *TaskService) CreateTask(task *models.Task) error {
 	}
 	if err := validateScanTargets(task.Targets); err != nil {
 		return err
+	}
+
+	// UA 会话种子必须由 master 物化：worker 不持库，只消费随任务下发的内容。
+	// 同一项目共享 seed，站点键（host）在请求侧再参与 HMAC，因此不同站仍不同 UA。
+	if strings.TrimSpace(task.Config.UASeed) == "" {
+		task.Config.UASeed = useragent.DeriveSeed(useragent.Secret(), task.ProjectID)
 	}
 
 	// 字典必须在创建时物化：worker 节点不连数据库，只消费随任务下发的词表。

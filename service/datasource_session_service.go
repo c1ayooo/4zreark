@@ -17,16 +17,16 @@ import (
 // DatasourceSessionView 清单条目：Registry 元信息 + 存储状态合并。
 // Cookie/Password 不回传内容，只给有无标记。
 type DatasourceSessionView struct {
-	Name      string `json:"name"`
-	Label     string `json:"label"`
-	Auth      string `json:"auth"`
-	Available bool   `json:"available"`
-	Hint      string `json:"hint"`
-	Status    string `json:"status"` // unconfigured / active / expired
-	HasCookie bool   `json:"has_cookie"`
-	HasAccount bool  `json:"has_account"`
-	QrSupported bool `json:"qr_supported"`
-	UpdatedAt string `json:"updated_at,omitempty"`
+	Name        string `json:"name"`
+	Label       string `json:"label"`
+	Auth        string `json:"auth"`
+	Available   bool   `json:"available"`
+	Hint        string `json:"hint"`
+	Status      string `json:"status"` // unconfigured / active / expired
+	HasCookie   bool   `json:"has_cookie"`
+	HasAccount  bool   `json:"has_account"`
+	QrSupported bool   `json:"qr_supported"`
+	UpdatedAt   string `json:"updated_at,omitempty"`
 }
 
 type DatasourceSessionSaveInput struct {

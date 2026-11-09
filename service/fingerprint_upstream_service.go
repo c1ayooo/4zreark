@@ -319,7 +319,7 @@ func fetchFpUpstream(ctx context.Context, client *http.Client, rawURL, token str
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
 	}
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

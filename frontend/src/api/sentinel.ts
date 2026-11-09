@@ -120,6 +120,8 @@ export interface SentinelFinding {
   subject: string
   committed_at: string
   model: string
+  /** 产物摘要（仅列表接口返回）：验证产物列与展开行用 */
+  artifacts?: { id: number; kind: string; title: string; status: string }[]
 }
 
 /** 产物链（v0.3 §11.8）：draft → pending_review → verified / rejected → deprecated */

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/c1ayooo/4zreark/config"
+	"github.com/c1ayooo/4zreark/internal/useragent"
 )
 
 // SensitiveResult represents sensitive information detection result
@@ -223,7 +224,11 @@ func (s *ContentScanner) ScanSensitiveInfo(ctx context.Context, target string) *
 		result.ScanTime = time.Since(start) / time.Millisecond
 		return result
 	}
-	req.Header.Set("User-Agent", s.UserAgent)
+	if ua := strings.TrimSpace(s.UserAgent); ua != "" {
+		req.Header.Set("User-Agent", ua)
+	} else {
+		useragent.Apply(req)
+	}
 
 	resp, err := s.HTTPClient.Do(req)
 	if err != nil {

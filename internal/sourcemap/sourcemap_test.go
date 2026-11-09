@@ -130,7 +130,7 @@ func TestSafeFileName(t *testing.T) {
 	if got := SafeFileName(2, "a/b/c d+e.js"); got != "002-c_d_e.js" {
 		t.Errorf("非法字符应清洗: %q", got)
 	}
-	long := SafeFileName(1, strings.Repeat("x", 100) + ".js")
+	long := SafeFileName(1, strings.Repeat("x", 100)+".js")
 	if len(long) > 68 {
 		t.Errorf("超长文件名应截断: %d", len(long))
 	}

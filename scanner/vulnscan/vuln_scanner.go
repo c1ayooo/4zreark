@@ -3,6 +3,7 @@ package vulnscan
 import (
 	"context"
 	"crypto/tls"
+	"github.com/c1ayooo/4zreark/internal/useragent"
 	"github.com/c1ayooo/4zreark/scanner/core"
 	"io"
 	"net"
@@ -254,7 +255,11 @@ func (s *VulnScanner) executeTemplate(ctx context.Context, target string, templa
 			}
 
 			// Set headers
-			req.Header.Set("User-Agent", s.UserAgent)
+			if ua := strings.TrimSpace(s.UserAgent); ua != "" {
+				req.Header.Set("User-Agent", ua)
+			} else {
+				useragent.Apply(req)
+			}
 			for key, value := range request.Headers {
 				req.Header.Set(key, value)
 			}

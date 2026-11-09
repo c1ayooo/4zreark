@@ -49,8 +49,10 @@ func NewContentScanner(concurrency int) *ContentScanner {
 				return http.ErrUseLastResponse // 手动处理重定向
 			},
 		},
-		Concurrency:    concurrency,
-		UserAgent:      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+		Concurrency: concurrency,
+		// 留空：请求侧 useragent.Apply 会按目标 host 派生站点会话，
+		// 不再使用这条缺 Chrome 版本号的固定 UA（最强可识别指纹之一）。
+		UserAgent:      "",
 		Wordlist:       []string{},
 		Extensions:     []string{},
 		FollowRedirect: true, // 默认跟随重定向

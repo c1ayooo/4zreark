@@ -700,6 +700,43 @@ type FindingListItem struct {
 	Subject      string    `json:"subject"`
 	CommittedAt  time.Time `json:"committed_at"`
 	Model        string    `json:"model"`
+	// Artifacts 是该发现的产物摘要（高危工作台列表列用）：
+	// 只带 id/kind/title/status，不带 content。可能为空。
+	Artifacts []FindingArtifactSummary `json:"artifacts,omitempty"`
+}
+
+// FindingArtifactSummary 是产物在列表里的精简形态。
+type FindingArtifactSummary struct {
+	ID     int64  `json:"id"`
+	Kind   string `json:"kind"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
+}
+
+// listFindingArtifactSummaries 批量取发现的产物摘要，按 finding_id 分组返回。
+func (s *Sentinel) listFindingArtifactSummaries(ctx context.Context, findingIDs []int64) (map[int64][]FindingArtifactSummary, error) {
+	out := make(map[int64][]FindingArtifactSummary, len(findingIDs))
+	if len(findingIDs) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool().Query(ctx, `
+		select id, finding_id, kind, title, status
+		  from artifact
+		 where finding_id = any($1)
+		 order by id`, findingIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var a FindingArtifactSummary
+		var fid int64
+		if err := rows.Scan(&a.ID, &fid, &a.Kind, &a.Title, &a.Status); err != nil {
+			return nil, err
+		}
+		out[fid] = append(out[fid], a)
+	}
+	return out, rows.Err()
 }
 
 // ListFindings 分页查询全部发现，返回行与总数。
@@ -771,7 +808,23 @@ func (s *Sentinel) ListFindings(ctx context.Context, f FindingFilter) ([]*Findin
 		}
 		items = append(items, &it)
 	}
-	return items, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	// 批量补产物摘要（高危工作台的「验证产物」列）：一次 any 查询，不逐行回表。
+	ids := make([]int64, 0, len(items))
+	for _, it := range items {
+		ids = append(ids, it.ID)
+	}
+	arts, err := s.listFindingArtifactSummaries(ctx, ids)
+	if err != nil {
+		return nil, 0, err
+	}
+	for _, it := range items {
+		it.Artifacts = arts[it.ID]
+	}
+	return items, total, nil
 }
 
 // FindingsSummary 是发现域统计（高危漏洞工作台首页卡片）。

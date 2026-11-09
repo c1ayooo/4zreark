@@ -414,24 +414,24 @@ type PocVerifyStep struct {
 // PocVerifyStatus 是一条发现的靶场验证完整状态（方案 B 卡片数据）。
 type PocVerifyStatus struct {
 	FindingID int64             `json:"finding_id"`
-	HasPoc    bool              `json:"has_poc"`           // 已有 verified 的 python-poc（可发起验证）
-	Verified  bool              `json:"verified"`          // finding 已机器验证（verified_at 非空）
-	Running   bool              `json:"running"`           // 最近一次验证仍在执行
-	Verify    *PocVerifyVerdict `json:"verify,omitempty"`  // 机器结论（有 poc-verify 产物时）
+	HasPoc    bool              `json:"has_poc"`            // 已有 verified 的 python-poc（可发起验证）
+	Verified  bool              `json:"verified"`           // finding 已机器验证（verified_at 非空）
+	Running   bool              `json:"running"`            // 最近一次验证仍在执行
+	Verify    *PocVerifyVerdict `json:"verify,omitempty"`   // 机器结论（有 poc-verify 产物时）
 	Timeline  []PocVerifyStep   `json:"timeline,omitempty"` // 最近一次执行的步骤时间线
 }
 
 // pocVerifyStepTitles 把事件 kind 映射成时间线标题。
 var pocVerifyStepTitles = map[string]string{
-	"poc_verify_plan":      "生成环境方案（LLM）",
-	"poc_verify_plan_ok":   "环境方案校验通过",
-	"poc_verify_pull":      "拉取靶场镜像",
-	"poc_verify_probe":     "等待靶场就绪",
-	"poc_verify_run":       "执行 PoC",
-	"poc_verify_passed":    "验证通过",
+	"poc_verify_plan":       "生成环境方案（LLM）",
+	"poc_verify_plan_ok":    "环境方案校验通过",
+	"poc_verify_pull":       "拉取靶场镜像",
+	"poc_verify_probe":      "等待靶场就绪",
+	"poc_verify_run":        "执行 PoC",
+	"poc_verify_passed":     "验证通过",
 	"poc_verify_not_passed": "验证未确认",
-	"poc_verify_failed":    "执行失败",
-	"poc_verify_skipped":   "跳过",
+	"poc_verify_failed":     "执行失败",
+	"poc_verify_skipped":    "跳过",
 }
 
 // GetPocVerifyStatus 组装一条发现的验证状态：

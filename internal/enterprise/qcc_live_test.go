@@ -49,13 +49,13 @@ func TestQccLive(t *testing.T) {
 
 func TestParseCapitalWan(t *testing.T) {
 	cases := map[string]float64{
-		"6500万元":   6500,
-		"104250万元": 104250,
-		"1.2亿元":    12000,
-		"3000万人民币": 3000,
+		"6500万元":    6500,
+		"104250万元":  104250,
+		"1.2亿元":     12000,
+		"3000万人民币":  3000,
 		"50000000元": 5000,
-		"200万美元": 200,
-		"1.5亿美元": 15000,
+		"200万美元":    200,
+		"1.5亿美元":    15000,
 	}
 	for in, want := range cases {
 		got, ok := ParseCapitalWan(in)

@@ -86,6 +86,13 @@ func (m *CrawlerModule) SetRatePerHost(ratePerSec, hostRate, concurrency int) {
 
 func (m *CrawlerModule) SetScope(s *scope.Scope) { m.scope = s }
 
+// SetUASeed 把任务级 UA seed 透传给 katana，按目标 host 派生同站 UA。
+func (m *CrawlerModule) SetUASeed(seed string) {
+	if m.katanaScanner != nil {
+		m.katanaScanner.SetUASeed(seed)
+	}
+}
+
 func (m *CrawlerModule) allowsURL(raw string) bool {
 	return m.scope == nil || m.scope.AllowsURL(raw)
 }

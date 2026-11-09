@@ -87,6 +87,29 @@ func TestAssetNames(t *testing.T) {
 	if got := katana.checksumAssetName("1.8.0"); got != "katana-1.8.0-checksums.txt" {
 		t.Errorf("katana checksum asset = %s", got)
 	}
+
+	// httpx/naabu 走 projectdiscovery 的 <tool>_<ver>_<os>_<arch>.zip 与
+	// <tool>_<ver>_checksums.txt 命名；这两个断言防止上游资产名漂移后静默装不上。
+	for _, name := range []string{"httpx", "naabu"} {
+		spec, ok := Spec(name)
+		if !ok {
+			t.Fatalf("缺少受管工具 %s 的 Spec", name)
+		}
+		wantAsset := name + "_" + spec.DefaultVersion + "_linux_amd64.zip"
+		if a, err := spec.AssetName(spec.DefaultVersion, "linux", "amd64"); err != nil || a != wantAsset {
+			t.Errorf("%s linux asset = %s, err=%v, want %s", name, a, err, wantAsset)
+		}
+		if _, err := spec.AssetName(spec.DefaultVersion, "darwin", "386"); err == nil {
+			t.Errorf("%s darwin/386 应返回错误", name)
+		}
+		wantSum := name + "_" + spec.DefaultVersion + "_checksums.txt"
+		if got := spec.checksumAssetName(spec.DefaultVersion); got != wantSum {
+			t.Errorf("%s checksum asset = %s, want %s", name, got, wantSum)
+		}
+		if len(spec.RequiredFlags) == 0 {
+			t.Errorf("%s RequiredFlags 不能为空", name)
+		}
+	}
 }
 
 func TestFlagTokenMatching(t *testing.T) {

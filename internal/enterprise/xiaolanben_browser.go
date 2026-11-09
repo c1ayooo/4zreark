@@ -65,7 +65,7 @@ func (p *xiaolanbenProvider) queryBlocked(kind string) error {
 }
 
 // xlbChromeBin 统一走 internal/browser 的全平台检测入口
-//（环境变量/标准位/PATH/rod 与 playwright 缓存 + --version 探活 + 进程缓存）。
+// （环境变量/标准位/PATH/rod 与 playwright 缓存 + --version 探活 + 进程缓存）。
 func (p *xiaolanbenProvider) xlbChromeBin() string {
 	return browser.FindChrome()
 }

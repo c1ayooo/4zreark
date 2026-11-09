@@ -221,7 +221,7 @@ func (c *Client) getJSON(ctx context.Context, endpoint, token string, out any) e
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -390,7 +390,7 @@ func (c *Client) fetchRawFile(ctx context.Context, repo Repo, filePath string, l
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", useragent.Pick())
+	useragent.Apply(req)
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return "", err

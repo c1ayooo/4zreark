@@ -14,22 +14,22 @@ func TestForbidden(t *testing.T) {
 		scanAllowed  bool
 		strictAllowd bool
 	}{
-		{"127.0.0.1", false, false},              // loopback
-		{"::1", false, false},                    // IPv6 loopback
-		{"169.254.169.254", false, false},        // 云元数据（AWS/GCP/Azure）
-		{"169.254.1.1", false, false},            // 链路本地段其余地址
-		{"0.0.0.0", false, false},                // 未指定
-		{"10.1.2.3", true, false},                // 内网资产：探测放行，凭据出站拒绝
-		{"192.168.1.10", true, false},            // 同上
-		{"172.16.0.9", true, false},              // 同上
-		{"100.64.0.1", false, false},             // CGNAT 100.64/10（审计 H-1：此前放行）
-		{"100.100.100.200", false, false},        // 阿里云元数据，落在 CGNAT 段内
-		{"100.127.255.254", false, false},        // CGNAT 上边界
-		{"100.128.0.1", true, true},              // /10 之外，属公网
-		{"224.0.0.1", false, false},              // 组播
-		{"8.8.8.8", true, true},                  // 公网
-		{"fe80::1", false, false},                // IPv6 链路本地
-		{"fd00::1", true, false},                 // IPv6 ULA 算私网
+		{"127.0.0.1", false, false},       // loopback
+		{"::1", false, false},             // IPv6 loopback
+		{"169.254.169.254", false, false}, // 云元数据（AWS/GCP/Azure）
+		{"169.254.1.1", false, false},     // 链路本地段其余地址
+		{"0.0.0.0", false, false},         // 未指定
+		{"10.1.2.3", true, false},         // 内网资产：探测放行，凭据出站拒绝
+		{"192.168.1.10", true, false},     // 同上
+		{"172.16.0.9", true, false},       // 同上
+		{"100.64.0.1", false, false},      // CGNAT 100.64/10（审计 H-1：此前放行）
+		{"100.100.100.200", false, false}, // 阿里云元数据，落在 CGNAT 段内
+		{"100.127.255.254", false, false}, // CGNAT 上边界
+		{"100.128.0.1", true, true},       // /10 之外，属公网
+		{"224.0.0.1", false, false},       // 组播
+		{"8.8.8.8", true, true},           // 公网
+		{"fe80::1", false, false},         // IPv6 链路本地
+		{"fd00::1", true, false},          // IPv6 ULA 算私网
 	}
 	for _, c := range cases {
 		ip := net.ParseIP(c.ip)

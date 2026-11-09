@@ -3,9 +3,9 @@
 package spacemap
 
 import (
-	"strconv"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 

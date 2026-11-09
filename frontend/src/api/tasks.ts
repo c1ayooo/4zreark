@@ -137,6 +137,10 @@ export interface TaskConfig {
   // 爬虫保护：每站页数 / 深度上限（留空用引擎默认 100 页 / 3 层）
   max_pages?: number
   max_depth?: number
+  // 信息收集执行模式：auto 由后端按环境判定，full 单链，staged 分阶段。
+  collection_mode?: 'auto' | 'full' | 'staged'
+  // 任务级 UA 会话种子（master 物化下发；前端只做兼容透传）
+  ua_seed?: string
 }
 
 export interface TaskResult {

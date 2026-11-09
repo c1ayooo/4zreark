@@ -44,6 +44,33 @@ scanner:
   timeout: 300
   retry_count: 3
 
+# 信息收集预设与阶段编排。
+# enabled=false 时保持旧行为（按任务类型硬编码模块集），用于一键回滚。
+# mode=auto：环境正常走单链，工具缺失/目标过大/近期失败率高时自动切 staged。
+collection:
+  enabled: true
+  mode: auto
+  default_modules:
+    - subdomain
+    - takeover
+    - http_probe
+    - port_scan
+    - fingerprint
+    - crawler
+    - js_audit
+    - api_probe
+    - dir_scan
+    - sensitive
+  exclude_modules:
+    - vuln_scan
+    - bruteforce
+    - gogo_poc
+  max_targets_for_full: 500
+  min_online_nodes: 1
+  max_fail_rate: 0.3
+  stage_timeout_minutes: 360
+  site_scope: host
+
 # 分布式扫描节点。
 #   role=all    单机模式（默认）：Web + 本机扫描，本地持有 PostgreSQL
 #   role=master 控制面：持有 PostgreSQL/River，把任务通过 WebSocket 推给 worker

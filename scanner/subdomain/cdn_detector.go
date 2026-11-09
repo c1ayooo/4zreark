@@ -241,7 +241,7 @@ func (d *CDNDetector) checkHeaders(ctx context.Context, domain string) ([]string
 		if err != nil {
 			continue
 		}
-		req.Header.Set("User-Agent", useragent.Pick())
+		useragent.Apply(req)
 
 		resp, err := d.HTTPClient.Do(req)
 		if err != nil {
