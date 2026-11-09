@@ -50,6 +50,10 @@ type sentinelCollectWorker struct {
 }
 
 func (w *sentinelCollectWorker) Work(ctx context.Context, job *river.Job[SentinelCollectArgs]) error {
+	if err := sentinelGate.Acquire(ctx); err != nil {
+		return sentinelJobError(err)
+	}
+	defer sentinelGate.Release()
 	_, err := w.source.Collect(ctx, job.Args.RepoID)
 	return sentinelJobError(err)
 }
@@ -60,6 +64,10 @@ type sentinelJudgeWorker struct {
 }
 
 func (w *sentinelJudgeWorker) Work(ctx context.Context, job *river.Job[SentinelJudgeArgs]) error {
+	if err := sentinelGate.Acquire(ctx); err != nil {
+		return sentinelJobError(err)
+	}
+	defer sentinelGate.Release()
 	_, err := w.judge.Judge(ctx, job.Args.CommitID)
 	return sentinelJobError(err)
 }
@@ -171,6 +179,8 @@ func (q *SentinelQueue) Start(ctx context.Context) error {
 	if err := q.client.Start(ctx); err != nil {
 		return fmt.Errorf("启动提交哨兵 River 客户端失败: %w", err)
 	}
+	// 动态并发闸 watchdog：按内存水位运行时降档 2→1→0（可慢不可挂）。
+	StartSentinelGateWatchdog(ctx)
 	log.Printf("[Sentinel] River 已启动（queues=%s,%s,%s collect=%d judge=%d artifacts=1）",
 		SentinelCollectQueueName, SentinelJudgeQueueName, SentinelArtifactsQueueName, q.cfg.CollectWorkers, q.cfg.JudgeWorkers)
 

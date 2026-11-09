@@ -42,6 +42,10 @@ func (w *sentinelArtifactsWorker) Work(ctx context.Context, job *river.Job[Senti
 	if w.judge == nil {
 		return errors.New("产物流水线 worker 归属主进程（需 LLM 客户端），本进程不应执行该作业")
 	}
+	if err := sentinelGate.Acquire(ctx); err != nil {
+		return sentinelJobError(err)
+	}
+	defer sentinelGate.Release()
 	// 单条流水线最多三次长 LLM 调用；限时略低于全局 JobTimeout（30m）。
 	// 超时则 river 重试（MaxAttempts=2），而产物生成幂等（同名 draft 跳过），
 	// 重试会接着补齐缺失的产物，不会重复消耗。
