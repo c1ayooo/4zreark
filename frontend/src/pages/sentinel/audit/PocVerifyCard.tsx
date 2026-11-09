@@ -85,15 +85,19 @@ export default function PocVerifyCard({ findingId }: { findingId: number }) {
           </Tooltip>
         )}
         <span className="ml-auto flex items-center gap-1.5">
-          {!status?.has_poc && !status?.verified && (
-            <Tooltip title="需要一份 verified 的 kind=poc、title=python-poc 产物（高危命中后 LLM 自动草拟，到「分析产物」审核 verified 后可发起靶场验证）">
-              <span className="text-[11px] text-muted-foreground">缺少 verified python-poc，暂不可验证</span>
+          {!status?.has_poc && !status?.has_nuclei && !status?.verified && (
+            <Tooltip title="需要一份 verified 的 python-poc 或 nuclei 模板产物（高危命中后 LLM 自动草拟，到「分析产物」审核 verified 后即可发起靶场验证，两种引擎任一即可）">
+              <span className="text-[11px] text-muted-foreground">缺少 verified python-poc / nuclei 模板，暂不可验证</span>
             </Tooltip>
           )}
-          {status?.has_poc && !status.verified && !busy && (
+          {(status?.has_poc || status?.has_nuclei) && !status.verified && !busy && (
             <Popconfirm
               title="发起靶场验证？"
-              description="AI 选公开靶场镜像（白名单约束）→ docker 起 --internal 隔离内网靶场 → 执行 python-poc 判定可行性。无外网出口。"
+              description={
+                status.has_nuclei && !status.has_poc
+                  ? 'AI 选公开靶场镜像（白名单约束）→ docker 起 --internal 隔离内网靶场 → 用 nuclei 模板打靶判定。无外网出口。'
+                  : 'AI 选公开靶场镜像（白名单约束）→ docker 起 --internal 隔离内网靶场 → 执行 python-poc 判定可行性。无外网出口。'
+              }
               onConfirm={() => verifyMutation.mutate({ force: false })}
             >
               <Button size="small" type="primary" icon={<Play size={11} />} loading={verifyMutation.isPending}>
@@ -131,7 +135,13 @@ export default function PocVerifyCard({ findingId }: { findingId: number }) {
               )}
               <KV
                 k="输入 PoC"
-                v={status.has_poc ? 'python-poc（verified）' : '无 verified python-poc'}
+                v={
+                  status.has_poc
+                    ? 'python-poc（verified）'
+                    : status.has_nuclei
+                      ? 'nuclei 模板（verified，引擎=nuclei）'
+                      : '无 verified python-poc / nuclei 模板'
+                }
               />
               <KV
                 k="隔离边界"

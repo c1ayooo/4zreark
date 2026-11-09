@@ -202,8 +202,10 @@ export interface PocVerifyStep {
 /** 一条发现的靶场验证完整状态（GET /sentinel/findings/:id/poc-verify） */
 export interface PocVerifyStatus {
   finding_id: number
-  /** 已有 verified 的 python-poc（可发起验证） */
+  /** 已有 verified 的 python-poc */
   has_poc: boolean
+  /** 已有 verified 的 nuclei 模板（同样可发起验证，引擎=nuclei） */
+  has_nuclei: boolean
   /** finding 已机器验证 */
   verified: boolean
   /** 最近一次验证仍在执行 */

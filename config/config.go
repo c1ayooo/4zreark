@@ -121,6 +121,8 @@ type SentinelPocVerifyConfig struct {
 	Enabled *bool `mapstructure:"enabled"`
 	// PythonImage 执行 PoC 与就绪探测用的 Python 镜像。
 	PythonImage string `mapstructure:"python_image"`
+	// NucleiImage 引擎为 nuclei 时的执行镜像（含 nuclei 二进制）。
+	NucleiImage string `mapstructure:"nuclei_image"`
 	// ImageAllow 靶场镜像白名单前缀（AI 选的镜像必须命中其一）。
 	// 默认 vulhub/ 与 ghcr.io/。
 	ImageAllow []string `mapstructure:"image_allow"`
@@ -132,6 +134,9 @@ type SentinelPocVerifyConfig struct {
 func (p *SentinelPocVerifyConfig) Normalize() {
 	if p.PythonImage == "" {
 		p.PythonImage = "python:3.11-slim"
+	}
+	if p.NucleiImage == "" {
+		p.NucleiImage = "projectdiscovery/nuclei:latest"
 	}
 	if len(p.ImageAllow) == 0 {
 		p.ImageAllow = []string{"vulhub/", "ghcr.io/"}

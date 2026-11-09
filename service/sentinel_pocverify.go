@@ -147,12 +147,17 @@ func (s *PocVerifyService) Verify(ctx context.Context, findingID int64, force bo
 		return nil
 	}
 
+	// 验证输入二选一：verified 的 python-poc（python 引擎）或 verified 的 nuclei
+	// 模板（nuclei 引擎）——有哪样用哪样，不必等另一条流水线补齐。
 	pocContent := ""
+	nucleiContent := ""
 	if arts, err := store.ListArtifacts(ctx, findingID); err == nil {
 		for _, a := range arts {
-			if a.Kind == "poc" && a.Title == pythonPocTitle && a.Status == "verified" {
+			switch {
+			case a.Kind == "poc" && a.Title == pythonPocTitle && a.Status == "verified" && pocContent == "":
 				pocContent = a.Content
-				break
+			case a.Kind == "nuclei" && a.Status == "verified" && nucleiContent == "":
+				nucleiContent = a.Content
 			}
 		}
 		if !force {
@@ -165,16 +170,24 @@ func (s *PocVerifyService) Verify(ctx context.Context, findingID int64, force bo
 			}
 		}
 	}
-	if pocContent == "" {
-		msg := "缺少 verified 的 python-poc 产物：先在产物中心审核通过 kind=poc、title=python-poc 的产物"
+	engine := "python"
+	pocInput := pocContent
+	pocLabel := "python-poc"
+	if pocContent == "" && nucleiContent != "" {
+		engine = "nuclei"
+		pocInput = nucleiContent
+		pocLabel = "nuclei 模板"
+	}
+	if pocInput == "" {
+		msg := "缺少 verified 的 python-poc 或 nuclei 模板产物：任一审核通过后即可发起验证"
 		emit("info", "poc_verify_skipped", msg, nil)
 		finishRun("completed", "")
 		return nil
 	}
 
 	// ---- 1. AI 出环境方案（受白名单与 URL/环境变量校验约束）----
-	emit("info", "poc_verify_plan", "生成靶场环境方案（LLM）", nil)
-	plan, err := s.planEnv(ctx, f, pocContent)
+	emit("info", "poc_verify_plan", "生成靶场环境方案（LLM，输入 "+pocLabel+"）", nil)
+	plan, err := s.planEnv(ctx, f, pocInput, pocLabel)
 	if err != nil {
 		emit("error", "poc_verify_failed", "环境方案生成失败: "+err.Error(), nil)
 		finishRun("failed", err.Error())
@@ -218,27 +231,47 @@ func (s *PocVerifyService) Verify(ctx context.Context, findingID int64, force bo
 		return nil // 环境问题重试意义有限，落证据收尾
 	}
 
-	if err := s.sandbox.WritePoc("poc_verify.py", pocContent); err != nil {
-		emit("error", "poc_verify_failed", "写入 PoC 失败: "+err.Error(), nil)
-		finishRun("failed", err.Error())
-		return errSentinelPocVerifyInput
-	}
-	emit("info", "poc_verify_run", "执行 PoC: python /poc/poc_verify.py", nil)
-	res, err := s.sandbox.RunPoC(ctx, network, cfg.PythonImage,
-		[]string{"python", "/poc/poc_verify.py"},
-		[]string{"TARGET=" + plan.TargetURL})
-	if err != nil {
-		emit("error", "poc_verify_failed", err.Error(), nil)
-		finishRun("failed", err.Error())
-		return err
+	var res *sentinelsandbox.ExecResult
+	var verdict *PocVerifyVerdict
+	if engine == "nuclei" {
+		if err := s.sandbox.WritePoc("poc_verify.yaml", pocInput); err != nil {
+			emit("error", "poc_verify_failed", "写入模板失败: "+err.Error(), nil)
+			finishRun("failed", err.Error())
+			return errSentinelPocVerifyInput
+		}
+		emit("info", "poc_verify_run", "执行 nuclei: -t /poc/poc_verify.yaml -u "+plan.TargetURL, nil)
+		res, err = s.sandbox.RunPoC(ctx, network, cfg.NucleiImage,
+			[]string{"nuclei", "-u", plan.TargetURL, "-t", "/poc/poc_verify.yaml", "-json", "-silent"},
+			[]string{"TARGET=" + plan.TargetURL})
+		if err != nil {
+			emit("error", "poc_verify_failed", err.Error(), nil)
+			finishRun("failed", err.Error())
+			return err
+		}
+		verdict = classifyNucleiVerdict(res)
+	} else {
+		if err := s.sandbox.WritePoc("poc_verify.py", pocInput); err != nil {
+			emit("error", "poc_verify_failed", "写入 PoC 失败: "+err.Error(), nil)
+			finishRun("failed", err.Error())
+			return errSentinelPocVerifyInput
+		}
+		emit("info", "poc_verify_run", "执行 PoC: python /poc/poc_verify.py", nil)
+		res, err = s.sandbox.RunPoC(ctx, network, cfg.PythonImage,
+			[]string{"python", "/poc/poc_verify.py"},
+			[]string{"TARGET=" + plan.TargetURL})
+		if err != nil {
+			emit("error", "poc_verify_failed", err.Error(), nil)
+			finishRun("failed", err.Error())
+			return err
+		}
+		verdict = classifyPocVerdict(res)
 	}
 
 	// ---- 3. 判定 + 落证据 ----
-	verdict := classifyPocVerdict(res)
 	verdict.Env = map[string]any{
 		"image": plan.Image, "env": plan.Env, "port": plan.Port,
 		"probe_path": plan.ProbePath, "target_url": plan.TargetURL,
-		"python_image": cfg.PythonImage, "network": "docker --internal（无外网出口）",
+		"engine": engine, "network": "docker --internal（无外网出口）",
 		"notes": plan.Notes,
 	}
 	verdict.ExecDetail = fmt.Sprintf("耗时 %s，PoC 容器退出码 %d，超时 %v", time.Since(started).Round(time.Second), res.ExitCode, res.TimedOut)
@@ -271,7 +304,7 @@ func (s *PocVerifyService) Verify(ctx context.Context, findingID int64, force bo
 }
 
 // planEnv 让 LLM 生成环境方案并做安全校验。
-func (s *PocVerifyService) planEnv(ctx context.Context, f *repo.CommitFinding, pocContent string) (*pocVerifyEnvPlan, error) {
+func (s *PocVerifyService) planEnv(ctx context.Context, f *repo.CommitFinding, pocInput, pocLabel string) (*pocVerifyEnvPlan, error) {
 	cfg := pocVerifyCfg()
 	g, err := loadFindingGenContext(ctx, f.ID)
 	if err != nil {
@@ -281,13 +314,13 @@ func (s *PocVerifyService) planEnv(ctx context.Context, f *repo.CommitFinding, p
 	if live.cfg.MaxTokens < 4096 {
 		live.cfg.MaxTokens = 4096
 	}
-	poc := pocContent
+	poc := pocInput
 	if len(poc) > 8000 {
 		poc = poc[:8000] + "\n…（超长截断）"
 	}
 	user := fmt.Sprintf(
-		"仓库: %s\n漏洞类别: %s\n严重度: %s\n发现标题: %s\n\n## 待验证的 PoC 脚本\n```python\n%s\n```\n\n请为该 PoC 生成靶场环境方案（JSON）。",
-		g.commit.RepoFullName, f.VulnClass, f.Severity, f.Title, poc)
+		"仓库: %s\n漏洞类别: %s\n严重度: %s\n发现标题: %s\n\n## 待验证输入（%s）\n```\n%s\n```\n\n请为该验证输入生成靶场环境方案（JSON）。",
+		g.commit.RepoFullName, f.VulnClass, f.Severity, f.Title, pocLabel, poc)
 	raw, err := llmArtifactCall(ctx, live, pocVerifyEnvSystemPrompt, user)
 	if err != nil {
 		return nil, err
@@ -364,6 +397,30 @@ func validateEnvPlan(plan *pocVerifyEnvPlan, cfg config.SentinelPocVerifyConfig)
 
 // classifyPocVerdict 按 PoC 约定的三态输出判定。约定见 python-poc 的生成
 // prompt：脚本结尾必须输出 VULNERABLE / NOT VULNERABLE / ERROR。
+// classifyNucleiVerdict 按 nuclei -json 输出判定：JSONL 里出现
+// matcher-status=true 即命中。退出码非 0 且无任何 JSON 行视为执行失败。
+func classifyNucleiVerdict(res *sentinelsandbox.ExecResult) *PocVerifyVerdict {
+	matched := strings.Contains(res.Log, `"matcher-status":true`) ||
+		strings.Contains(res.Log, `"matcher-status": true`)
+	switch {
+	case matched:
+		return &PocVerifyVerdict{
+			Verdict: "vulnerable", Passed: true,
+			Reason: "nuclei 模板在靶场上命中（matcher-status=true）",
+		}
+	case res.ExitCode == 0 && strings.TrimSpace(res.Log) != "":
+		return &PocVerifyVerdict{
+			Verdict: "not_vulnerable", Passed: false,
+			Reason: "nuclei 执行完成但无匹配（靶场版本可能不受影响或模板条件不满足）",
+		}
+	default:
+		return &PocVerifyVerdict{
+			Verdict: "error", Passed: false,
+			Reason: fmt.Sprintf("nuclei 执行异常（退出码 %d，无有效输出）", res.ExitCode),
+		}
+	}
+}
+
 func classifyPocVerdict(res *sentinelsandbox.ExecResult) *PocVerifyVerdict {
 	logText := res.Log
 	switch {
@@ -415,6 +472,7 @@ type PocVerifyStep struct {
 type PocVerifyStatus struct {
 	FindingID int64             `json:"finding_id"`
 	HasPoc    bool              `json:"has_poc"`            // 已有 verified 的 python-poc（可发起验证）
+	HasNuclei bool              `json:"has_nuclei"`         // 已有 verified 的 nuclei 模板（同样可发起验证）
 	Verified  bool              `json:"verified"`           // finding 已机器验证（verified_at 非空）
 	Running   bool              `json:"running"`            // 最近一次验证仍在执行
 	Verify    *PocVerifyVerdict `json:"verify,omitempty"`   // 机器结论（有 poc-verify 产物时）
@@ -452,6 +510,8 @@ func GetPocVerifyStatus(ctx context.Context, findingID int64) (*PocVerifyStatus,
 		switch {
 		case a.Kind == "poc" && a.Title == pythonPocTitle && a.Status == "verified":
 			st.HasPoc = true
+		case a.Kind == "nuclei" && a.Status == "verified":
+			st.HasNuclei = true
 		case a.Kind == "repro_log" && a.Title == pocVerifyTitle:
 			if v, err := parsePocVerifyContent(a.Content); err == nil {
 				st.Verify = v
