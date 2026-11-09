@@ -355,6 +355,14 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				taskGroup.GET("/:id/results/export", middleware.RequirePermission("task:read"), resultHandler.ExportResults)
 			}
 
+			// 信息收集计划与阶段账本（只读）
+			collectionHandler := api.NewCollectionHandler()
+			collectionGroup := protected.Group("/collection")
+			{
+				collectionGroup.GET("/plans", middleware.RequirePermission("task:read"), collectionHandler.ListPlans)
+				collectionGroup.GET("/plans/:id", middleware.RequirePermission("task:read"), collectionHandler.GetPlan)
+			}
+
 			// Results routes (for tag management and batch operations)
 			resultGroup := protected.Group("/results")
 			{

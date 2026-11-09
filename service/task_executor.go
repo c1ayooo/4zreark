@@ -1840,6 +1840,15 @@ func (e *TaskExecutor) completeTask(task *models.Task, jobID int64, resultCount 
 	// master 派单模式由 30s reconciler 兜底。
 	if !e.remote {
 		GetCollectionPlanService().OnStageDone(task, string(models.TaskStatusCompleted))
+
+		// 原文快照 + Gate 影子入队：异步、独立超时，失败不影响任务完成。
+		// gate_mode=off 时 IngestTaskRaw 会立即返回，不产生额外 IO。
+		taskCopy := *task
+		go func() {
+			ingestCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			IngestTaskRaw(ingestCtx, &taskCopy)
+		}()
 	}
 
 	// 远程 worker 只负责执行，通知由平台在派单完成时统一发。

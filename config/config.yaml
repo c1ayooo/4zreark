@@ -43,6 +43,9 @@ scanner:
   worker_count: 10
   timeout: 300
   retry_count: 3
+  # 默认 false：终态任务的僵尸 River job 只 JobCancel，交给 River 回收；
+  # 只有极端运维场景才显式开启强删（会写审计日志）。
+  force_clean_terminal_jobs: false
 
 # 信息收集预设与阶段编排。
 # enabled=false 时保持旧行为（按任务类型硬编码模块集），用于一键回滚。
@@ -70,6 +73,10 @@ collection:
   max_fail_rate: 0.3
   stage_timeout_minutes: 360
   site_scope: host
+  # 收集侧 AI Gate：off 关闭；shadow 只判定不路由；enforce 允许规则层消费。
+  # 默认 off，先离线/影子跑，避免模型不稳定影响收集主链。
+  gate_mode: off
+  gate_workers: 4
 
 # 分布式扫描节点。
 #   role=all    单机模式（默认）：Web + 本机扫描，本地持有 PostgreSQL

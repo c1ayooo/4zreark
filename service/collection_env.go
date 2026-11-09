@@ -19,14 +19,18 @@ type CollectionEnv struct {
 //   - 用户显式 full/staged 优先；
 //   - auto 下目标过大、关键工具缺失时切 staged；
 //   - 工具可用性读统一工具目录，与实际执行保持一致。
-func EvaluateCollectionEnv(targets int) CollectionEnv {
+func EvaluateCollectionEnv(targets int, modeOverride ...string) CollectionEnv {
 	cfg := config.GetConfig().Collection
 	env := CollectionEnv{Tools: make(map[string]bool)}
 	for _, name := range []string{"gogo", "naabu", "katana", "spray", "httpx", "nuclei"} {
 		env.Tools[name] = strings.TrimSpace(toolruntime.Default().ResolveToolPath(name)) != ""
 	}
 
-	switch cfg.Mode {
+	mode := cfg.Mode
+	if len(modeOverride) > 0 && strings.TrimSpace(modeOverride[0]) != "" {
+		mode = strings.TrimSpace(modeOverride[0])
+	}
+	switch mode {
 	case "full":
 		return env
 	case "staged":

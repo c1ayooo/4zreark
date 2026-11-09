@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/useragent"
 	"github.com/c1ayooo/4zreark/scanner/core"
 )
 
@@ -80,6 +82,8 @@ type NucleiScanConfig struct {
 	Concurrency     int           // 并发数
 	RateLimit       int           // 速率限制
 	Timeout         time.Duration // 超时时间
+	// UserAgent 由调用方按站点会话注入；为空时 buildArgs 按首个目标 host 派生。
+	UserAgent string
 }
 
 // NewNucleiCLIScanner 创建 Nuclei CLI 扫描器
@@ -225,7 +229,28 @@ func (s *NucleiCLIScanner) buildArgs(targets []string, config *NucleiScanConfig)
 		}
 	}
 
+	// 同站一致：调用方未显式指定 UA 时，按首个目标 host 派生站点会话。
+	// 批量跨站场景应在调用侧拆单，避免一个进程复用一个 UA。
+	ua := ""
+	if config != nil {
+		ua = strings.TrimSpace(config.UserAgent)
+	}
+	if ua == "" && len(targets) > 0 {
+		ua = useragent.ForSite("", nucleiSiteKey(targets[0])).UserAgent
+	}
+	if ua != "" {
+		args = append(args, "-H", "User-Agent: "+ua)
+	}
+
 	return args
+}
+
+// nucleiSiteKey 从目标 URL 取站点键；裸域名/IP 原样返回。
+func nucleiSiteKey(target string) string {
+	if u, err := url.Parse(target); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return target
 }
 
 // Scan 执行漏洞扫描

@@ -309,6 +309,39 @@ func main() {
 		}
 	}
 
+	// 启动并发预算：所有队列共享 pgxpool，超出时先降 Gate、再降通用队列、最后降探测。
+	budget := service.ComputeConcurrencyBudget(cfg)
+	for _, w := range budget.Warnings {
+		log.Printf("[Budget] %s", w)
+	}
+	log.Printf("[Budget] scan=%d gate=%d collect=%d judge=%d repro=%d task=%d probe=%d total=%d max_conns=%d",
+		budget.Scan, budget.Gate, budget.Collect, budget.Judge, budget.Repro,
+		budget.TaskQueue, budget.Probe, budget.Total, budget.MaxConns)
+
+	// 信息收集侧 AI Gate（影子）：独立 River 队列，默认 off。
+	// 只消费 raw 快照、写 ai_gate_verdicts，不参与扫描调度/重试/限流，不阻塞主链。
+	if cfg.Collection.GateMode == "shadow" || cfg.Collection.GateMode == "enforce" {
+		if gate := service.NewCollectionGate(cfg.LLM); gate != nil {
+			gateQueue, gerr := service.NewCollectionGateQueue(queueCtx, pg.Pool(), gate, budget.Gate, true)
+			if gerr != nil {
+				log.Printf("[CollectionGate] 初始化失败（Gate 不可用）: %v", gerr)
+			} else {
+				service.SetDefaultCollectionGateQueue(gateQueue)
+				if err := gateQueue.Start(queueCtx); err != nil {
+					log.Printf("[CollectionGate] 启动失败: %v", err)
+				} else {
+					log.Printf("[CollectionGate] 影子队列已启动（queue=%s workers=%d）",
+						service.CollectionGateQueueName, budget.Gate)
+					defer func() {
+						stopCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+						defer cancel()
+						_ = gateQueue.Stop(stopCtx)
+					}()
+				}
+			}
+		}
+	}
+
 	// 先停 River（不再拉新作业），再由 taskExecutor.Stop 取消本地流水线/派单。
 	defer func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
@@ -351,7 +384,7 @@ func main() {
 
 	// Start asset probe executor（批次执行单元 → 真实 HTTP 探测 → 写回站点连通性）
 	log.Println("Starting asset probe executor...")
-	probeExecutor := service.NewProbeExecutor(8)
+	probeExecutor := service.NewProbeExecutor(budget.Probe)
 	probeExecutor.Start()
 	log.Println("Asset probe executor started")
 	defer probeExecutor.Stop()

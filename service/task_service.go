@@ -85,7 +85,7 @@ func (s *TaskService) CreateTask(task *models.Task) error {
 	// 阶段子任务带 Stage，不会再次进入这个分支。
 	if task.Type == models.TaskTypeCollection && strings.TrimSpace(task.Stage) == "" &&
 		config.GetConfig().Collection.Enabled {
-		env := EvaluateCollectionEnv(len(task.Targets))
+		env := EvaluateCollectionEnv(len(task.Targets), task.Config.CollectionMode)
 		if env.Stage {
 			log.Printf("[Collection] 切分阶段执行: %v", env.Reasons)
 			return GetCollectionPlanService().CreatePlan(ctx, task)

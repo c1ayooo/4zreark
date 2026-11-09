@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c1ayooo/4zreark/config"
 	"github.com/c1ayooo/4zreark/models"
 
 	"github.com/jackc/pgx/v5"
@@ -201,7 +202,12 @@ func (q *ScanQueue) CancelTerminal(ctx context.Context) (int, error) {
 	rows.Close()
 
 	// JobCancel 对 running 只是标记取消，原 worker 已经退出时状态会永远停在 running。
-	// 对终态任务且 30 分钟没有推进的 running job 做强制清理；正常 worker 的作业不会被选中。
+	// 默认不再绕过 River 状态机强删，交给 River 的 RescueStuckJobsAfter 回收；
+	// 仅显式开启 force_clean_terminal_jobs 时才保留旧强删（运维兜底）。
+	if !config.GetConfig().Scanner.ForceCleanTerminalJobs {
+		return cancelled, nil
+	}
+	log.Printf("[ScanQueue] force_clean_terminal_jobs 已开启，执行终态任务僵尸 job 强删")
 	tag, err := q.pool.Exec(ctx, `
 		delete from river_job j
 		 using tasks t

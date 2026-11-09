@@ -37,17 +37,20 @@ type EvalOutcome struct {
 func NewSentinelEvaluator(cfg config.SentinelConfig, llmCfg config.LLMConfig) (*SentinelEvaluator, error) {
 	cfg.Normalize()
 	llmCfg.Normalize()
+	// 与生产判定一致：DB 里的系统设置优先，CLI 也跟随；无 DB 配置时回退启动配置。
+	live := EffectiveLLMConfig(context.Background(), llmCfg)
+	live.Normalize()
 
-	e := &SentinelEvaluator{model: cfg.JudgeModel, cfg: cfg}
+	e := &SentinelEvaluator{model: live.Model, cfg: cfg}
 	ctx := context.Background()
 
-	cm, err := llm.NewJSONChatModel(ctx, llmCfg)
+	cm, err := llm.NewJSONChatModel(ctx, live)
 	if err != nil && !isNoKey(err) {
 		return nil, fmt.Errorf("构建判定模型失败: %w", err)
 	}
 	if isNoKey(err) {
 		log.Printf("[Sentinel] 未配置 LLM 密钥（%s），判定降级为桩模型，结论标记 partial",
-			firstNonEmptyString(llmCfg.APIKeyEnv, "ZRE_LLM_API_KEY"))
+			firstNonEmptyString(live.APIKeyEnv, "ZRE_LLM_API_KEY"))
 		cm = llm.NewStubModel("未配置 LLM 密钥")
 		e.stub = true
 		e.model = "stub"

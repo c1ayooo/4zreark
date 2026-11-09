@@ -459,6 +459,32 @@ export default function TaskCreateForm({
         )}
       </div>
 
+      {/* 信息收集执行模式：仅页面入口展示；对话框变体保持旧行为 */}
+      {variant !== 'dialog' && (
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">执行模式</label>
+          <Select
+            className="w-full"
+            value={formData.config.collection_mode || 'off'}
+            onChange={(v) =>
+              setFormData((prev) => ({
+                ...prev,
+                config: { ...prev.config, collection_mode: v === 'off' ? '' : v },
+              }))
+            }
+            options={[
+              { value: 'auto', label: '自动（推荐）：环境好走单链，工具缺失/目标过大时切分阶段' },
+              { value: 'full', label: '单链：一次流水线跑完（默认全量，除漏洞验证）' },
+              { value: 'staged', label: '分阶段：域名 → 探活 → 爬虫/端口 → 尾部刻画' },
+              { value: 'off', label: '关闭信息收集预设：按下方勾选模块执行' },
+            ]}
+          />
+          <p className="text-xs text-muted-foreground">
+            信息收集默认开启子域、接管、探活、端口、指纹、爬虫、JS/接口、目录、敏感；漏洞验证默认关闭。
+          </p>
+        </div>
+      )}
+
       {/* 扫描类型 - checkbox 风格调选，含独立任务类型 */}
       <div className="space-y-1.5">
         <label className="text-sm font-medium">

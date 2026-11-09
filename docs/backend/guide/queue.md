@@ -1,78 +1,82 @@
-# 任务队列 (Task Queue)
+# 任务队列（River + PostgreSQL）
 
-4zreark 使用基于 Redis 的分布式任务队列来管理海量的扫描任务，确保系统的高并发和高可用。
+> 本文描述当前实现。旧版文档中的 Redis List/Stream、四类队列、`queue.redis` 配置均已废弃：
+> 当前存储只有 PostgreSQL 16，队列由 [River](https://riverqueue.com/) 在 `river_job` 表上实现。
 
-## 队列架构
+## 队列一览
 
-系统将不同类型的任务分配到不同的队列中，实现资源隔离和优先级控制。
+| 队列 | kind | 消费方 | 默认并发 | 超时 | 重试 |
+|---|---|---|---|---|---|
+| `scan` | `scan_task` | master 派单 / all 本地执行 | `node.max_tasks`（默认 5，硬顶 64） | 24h | 3 次 |
+| `sentinel_collect` | `sentinel_collect_repo` | 控制面采集 worker | 4 | 30m | 3 次 |
+| `sentinel_judge` | `sentinel_judge_commit` | 控制面判定 worker | 8 | 30m | 3 次 |
+| `sentinel_repro` | `sentinel_repro_finding` | 独立进程 `cmd/pocsmith` | 2 | 40m | 2 次 |
+| `collection_gate` | `collection_gate_raw` | 控制面 Gate worker（影子） | 4 | 30m | 3 次 |
 
-### 队列类型
+另有通用 `task_jobs`（`kind='job'`）队列，只服务 `/api/queue` 的演示/运维任务，与扫描和 AI 判定无关。
 
-1. **普通队列 (Normal Queue)**
-   - 处理常规的扫描任务。
-   - 默认优先级。
+## 重试与失败语义
 
-2. **高优先队列 (High Priority Queue)**
-   - 处理用户手动触发的紧急任务。
-   - 优先被 Worker 消费。
+- 重试次数：`scan` / `sentinel_*` / `collection_gate` 的 River 客户端默认 `MaxAttempts=3`，
+  每次入队也显式带 3；`sentinel_repro` 为 2。
+- 限流：`llm.ErrRateLimited` → `river.JobSnooze(5m)`；配置错误/永久错误 → `river.JobCancel`；
+  其它错误交回 River 默认退避。
+- 扫描任务落库为 `failed` 后主动 `JobCancel`，避免 River 反复重跑；人工重试会重新入队。
+- AI 判定失败状态机（`commit.judge_attempts/last_judge_error/next_judge_at`）：
+  - 永久错误/未配置密钥 → 终态 `failed`，不再自动重投；
+  - 限流 → 保留 `pending`，5 分钟后由调度器重投；
+  - 临时错误 → 30s 退避重投，最多 5 次，耗尽后转人工。
+- `collection_gate` 只写 `ai_gate_verdicts`，不参与扫描调度/重试/限流；影子模式默认关闭。
 
-3. **慢速队列 (Slow Queue)**
-   - 处理耗时较长的任务（如全端口扫描、深度爬虫）。
-   - 避免阻塞其他快速任务。
+## 去重与幂等
 
-4. **死信队列 (Dead Letter Queue)**
-   - 存储执行失败且重试次数耗尽的任务。
-   - 供管理员排查问题。
+- 入队使用 `UniqueOpts{ByArgs: true, ByState: 活跃态}`：
+  `scan` 按 `task_id`、`sentinel_collect` 按 `repo_id`、`sentinel_judge` 按 `commit_id`、
+  `collection_gate` 按 `raw_id`。
+- 扫描阶段计划使用 `(plan_id, stage)` 唯一键，重复推进不会重复建任务。
 
-## 队列管理功能
+## 失败终态与清理
 
-### 1. 队列监控
-实时查看各队列的状态：
-- **待处理任务数**: 当前排队等待执行的任务数量。
-- **处理中任务数**: 正在执行的任务数量。
-- **积压情况**: 监控队列是否出现严重积压。
+- River 的 `discarded` 终态保留在 `river_job` 表；队列页通过 `river_discarded` 计数展示。
+- 终态任务遗留的未完成 job 由 `ScanQueue.CancelTerminal` 走 `JobCancel`；
+  **默认不再 DELETE `river_job`**，长时间 `running` 的僵尸交给 River 的
+  `RescueStuckJobsAfter` 回收。
+- 仅当 `scanner.force_clean_terminal_jobs=true` 时保留旧强删（执行前写审计日志），
+  用于极端运维场景。
+- 通用 `task_jobs` 有完整死信：`status='dead'`，支持列表、重试与清空（`/api/queue/tasks/deadletter`）。
 
-### 2. 任务控制
-- **暂停/恢复**: 暂停某个队列的消费，用于系统维护或紧急避险。
-- **清空队列**: 清除队列中的所有积压任务。
-- **重试死信**: 将死信队列中的任务重新投入运行队列。
+## 并发预算
 
-### 3. 优先级调整
-- 支持动态调整任务的优先级，将重要任务插队执行。
+所有队列共享 `pgxpool`（`postgres.max_conns=50`，PG `max_connections=80`）。
+默认分配：scan 5、collection_gate 4、sentinel collect 4 / judge 8 / repro 2、
+通用队列 10、探测执行器 8。超出时优先降 Gate 与通用队列，不动扫描主链。
 
-## 技术实现
+## 迁移与启动自检
 
-- **Redis List/Stream**: 作为底层存储结构。
-- **原子操作**: 保证任务状态流转的一致性。
-- **ACK 机制**: 只有任务执行成功并确认后，才从队列中移除，防止任务丢失。
+1. 执行迁移（核心表 → `migration_*.sql` → 回填三段自动排序）：
+   ```bash
+   PGURL='postgres://user:pass@host:5432/db?sslmode=disable' bash docs/sql/apply_all.sh
+   ```
+2. 启动自检会检查 6 张新表：`collection_plans`、`collection_stages`、`raw_snapshots`、
+   `ai_gate_verdicts`、`ai_items`、`diff_jobs`。缺表直接退出（exit 2），避免带病运行。
+3. 验收 SQL：
+   ```sql
+   select column_name from information_schema.columns
+    where table_name='tasks' and column_name in ('plan_id','parent_id','stage','collection_mode');
+   select conname from pg_constraint where conname='tasks_type_chk';
+   select to_regclass('collection_plans'), to_regclass('collection_stages'),
+          to_regclass('raw_snapshots'), to_regclass('ai_gate_verdicts'),
+          to_regclass('ai_items'), to_regclass('diff_jobs');
+   ```
+4. 启动日志应出现
+   `[Budget] scan=... gate=... collect=... judge=... repro=... task=... probe=... total=... max_conns=...`；
+   超预算时会看到 `[Budget] ... 夹紧`。
 
-## 配置优化
+## 与旧文档的差异
 
-在 `config.yaml` 中可以调整队列相关的参数：
-
-```yaml
-queue:
-  redis:
-    host: "localhost"
-    port: 6379
-  
-  # 队列容量限制
-  max_size: 10000
-  
-  # 任务超时时间
-  task_timeout: 3600 # 秒
-  
-  # 最大重试次数
-  max_retries: 3
-```
-
-## 常见问题
-
-**Q: 队列积压严重怎么办？**
-A: 
-1. 增加 Worker 节点数量。
-2. 检查是否有异常耗时的任务阻塞了队列。
-3. 临时暂停非紧急任务的提交。
-
-**Q: 任务执行失败会怎样？**
-A: 系统会自动重试（默认 3 次）。如果依然失败，任务会被移动到死信队列，并记录错误日志。
+| 旧文档 | 当前实现 |
+|---|---|
+| Redis 分布式队列 / List/Stream | PostgreSQL `river_job` |
+| 普通/高优先/慢速/死信四类队列 | `scan` + sentinel 三队列 + `collection_gate` + `task_jobs` |
+| `queue.max_retries` 配置段 | 重试硬编码在队列客户端；通用队列用 `scanner.retry_count` |
+| 动态调整优先级 | 仅 `scan` 入队时按 0–255 映射 Priority 1–4 |

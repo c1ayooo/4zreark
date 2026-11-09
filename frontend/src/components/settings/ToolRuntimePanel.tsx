@@ -4,6 +4,7 @@ import { Button, Card, Input, Tag } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
 import { toolRuntimeApi, toolsApi, type ToolRuntimeStatus } from '@/api/tools'
 import RuntimeToolRow from '@/components/tools/RuntimeToolRow'
+import InstalledToolsCard from '@/components/tools/InstalledToolsCard'
 import { Loader2, RefreshCw, RotateCcw, Download, Gauge, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react'
 
 // 四态必须一眼可辨：之前 missing 落到 default 分支的灰色 Tag「未安装」，
@@ -98,7 +99,11 @@ function ToolRow({ tool }: { tool: ToolRuntimeStatus }) {
           </span>
         </span>
         <span>上游 <span className="text-foreground">{tool.latest_version || '—'}</span></span>
-        <span>{tool.managed ? '托管' : 'vendored/PATH'}{tool.path ? ` · ${tool.path}` : ''}</span>
+        <span>
+          {tool.in_project === false && <Tag color="orange">环境外部</Tag>}
+          {tool.managed ? '托管' : tool.source === 'system' ? '系统 PATH' : 'vendored/PATH'}
+          {tool.path ? ` · ${tool.path}` : ''}
+        </span>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <Button
@@ -247,21 +252,41 @@ export function ToolRuntimePanel() {
     onError: (e: Error) => toast({ title: '浏览器更新失败', description: e.message, variant: 'destructive' }),
   })
 
-  // 总览：哪几个没装直接点名，不用逐行对比
+  // 总览口径：受管注册表 6 个 + 独立运行的 nuclei + 自带浏览器共 8 行，
+  // 全部计入分母；同时区分「项目内部安装」与「系统 PATH 上的环境外部副本」。
   const tools = overview.data?.tools ?? []
-  const installedCount = tools.filter((t) => t.status !== 'missing').length
-  const missingNames = tools.filter((t) => t.status === 'missing').map((t) => t.name)
+  const nucleiWarnings: string[] = nucleiSt.Warnings ?? nucleiSt.warnings ?? []
+  const nucleiExternal = nucleiWarnings.some((w) => w.includes('binary_path'))
+  const browserRow = overview.data?.browser
+  const allTools = [
+    ...tools.map((t) => ({
+      name: t.name,
+      installed: t.status !== 'missing',
+      inProject: t.in_project !== false,
+    })),
+    { name: 'nuclei', installed: !!nucleiSt.binary_exists || !!nucleiSt.BinaryExists, inProject: !nucleiExternal },
+    ...(browserRow
+      ? [{ name: 'browser', installed: !!browserRow.installed, inProject: browserRow.source !== 'system' }]
+      : []),
+  ]
+  const totalCount = allTools.length
+  const installedCount = allTools.filter((t) => t.installed).length
+  const projectCount = allTools.filter((t) => t.installed && t.inProject).length
+  const externalCount = allTools.filter((t) => t.installed && !t.inProject).length
+  const missingNames = allTools.filter((t) => !t.installed).map((t) => t.name)
 
   return (
     <div className="space-y-6">
+      <InstalledToolsCard onChanged={refreshOverview} />
+
       <Card
         title={
           <div className="flex flex-col gap-1">
             <span>扫描工具运行时</span>
             <span className="text-xs font-normal leading-relaxed text-muted-foreground">
-              gogo / spray / katana / rem 的版本与更新管理：下载校验 checksums、换版前跑
-              flag 探针（上游改名会被拦下）、旧版本保留一键回滚。nuclei 由独立运行时自更新，状态一并列出。
-              更新永不阻断扫描：解析不到托管二进制时回退 vendored tools/ 与 PATH。
+              6 个受管工具（gogo / spray / katana / httpx / naabu / rem）的版本与更新管理：下载校验 checksums、换版前跑
+              flag 探针（上游改名会被拦下）、旧版本保留一键回滚。nuclei 与自带浏览器由独立运行时管理，也计入下方总数。
+              只有装进项目内部目录的二进制算平台自身工具；系统 PATH 上的副本标为「环境外部」，自动补装会下载到项目目录。
             </span>
           </div>
         }
@@ -280,11 +305,12 @@ export function ToolRuntimePanel() {
                 ) : (
                   <XCircle className="h-4 w-4 text-rose-600" />
                 )}
-                已安装 <span className="font-semibold text-foreground">{installedCount}</span> / {tools.length}
+                已安装 <span className="font-semibold text-foreground">{installedCount}</span> / {totalCount}
+                <span className="text-xs text-muted-foreground">（项目内 {projectCount} · 环境外部 {externalCount}）</span>
               </span>
               {missingNames.length > 0 ? (
                 <span className="text-xs text-rose-600">
-                  未安装：<span className="font-mono">{missingNames.join('、')}</span>（点对应行的「安装/更新」）
+                  未安装：<span className="font-mono">{missingNames.join('、')}</span>（受管工具点对应行「安装/更新」，nuclei / browser 点各自「更新」）
                 </span>
               ) : (
                 <span className="text-xs text-muted-foreground">全部就绪</span>

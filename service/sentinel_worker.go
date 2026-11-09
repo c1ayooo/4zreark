@@ -142,6 +142,7 @@ func NewSentinelQueue(ctx context.Context, pool *pgxpool.Pool, cfg config.Sentin
 		workers := river.NewWorkers()
 		river.AddWorker(workers, &sentinelCollectWorker{source: source})
 		river.AddWorker(workers, &sentinelJudgeWorker{judge: judge})
+		river.AddWorker(workers, &sentinelArtifactsWorker{judge: judge})
 		// repro worker 仅在 pocsmith 进程消费；主进程注册哑实现只为通过
 		// Insert 的 kind 注册校验（sentinel_repro 队列不在本进程 Queues 里，
 		// 永远不会被本进程拉取执行）。
@@ -149,8 +150,9 @@ func NewSentinelQueue(ctx context.Context, pool *pgxpool.Pool, cfg config.Sentin
 		river.AddWorker(workers, &sentinelPocVerifyWorker{})
 		riverCfg.Workers = workers
 		riverCfg.Queues = map[string]river.QueueConfig{
-			SentinelCollectQueueName: {MaxWorkers: cfg.CollectWorkers},
-			SentinelJudgeQueueName:   {MaxWorkers: cfg.JudgeWorkers},
+			SentinelCollectQueueName:   {MaxWorkers: cfg.CollectWorkers},
+			SentinelJudgeQueueName:     {MaxWorkers: cfg.JudgeWorkers},
+			SentinelArtifactsQueueName: {MaxWorkers: 1}, // LLM 产物流水线串行，控制成本与速率
 		}
 	}
 
@@ -169,8 +171,20 @@ func (q *SentinelQueue) Start(ctx context.Context) error {
 	if err := q.client.Start(ctx); err != nil {
 		return fmt.Errorf("启动提交哨兵 River 客户端失败: %w", err)
 	}
-	log.Printf("[Sentinel] River 已启动（queues=%s,%s collect=%d judge=%d）",
-		SentinelCollectQueueName, SentinelJudgeQueueName, q.cfg.CollectWorkers, q.cfg.JudgeWorkers)
+	log.Printf("[Sentinel] River 已启动（queues=%s,%s,%s collect=%d judge=%d artifacts=1）",
+		SentinelCollectQueueName, SentinelJudgeQueueName, SentinelArtifactsQueueName, q.cfg.CollectWorkers, q.cfg.JudgeWorkers)
+
+	// 启动回填：产物流水线上线前的存量高危发现（判定命中时流水线还没实现，
+	// 不会自动补跑）在这里一次性入队。入队幂等（river unique + 深审产物缺失
+	// 判断），重复启动不会重复生成。
+	go func() {
+		ctx := context.Background()
+		if n, err := BackfillHighRiskArtifacts(ctx, 200); err != nil {
+			log.Printf("[Sentinel] 存量产物流水线回填失败: %v", err)
+		} else if n > 0 {
+			log.Printf("[Sentinel] 存量产物流水线回填：已入队 %d 条", n)
+		}
+	}()
 	return nil
 }
 

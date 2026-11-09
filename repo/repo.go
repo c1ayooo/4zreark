@@ -43,6 +43,9 @@ var requiredTables = []string{
 	// 提交哨兵域（schema_sentinel.sql）
 	"repo", "commit", "judgment", "finding", "artifact",
 	"conversation", "message", "run", "run_event", "attachment", "audit",
+	// 信息收集计划与 AI 数据面（migration_collection_*.sql）
+	"collection_plans", "collection_stages",
+	"raw_snapshots", "ai_gate_verdicts", "ai_items", "diff_jobs",
 }
 
 var defaultRepo *Repo

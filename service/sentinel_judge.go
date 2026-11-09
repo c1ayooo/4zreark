@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/c1ayooo/4zreark/config"
+	"github.com/c1ayooo/4zreark/internal/llm"
 	"github.com/c1ayooo/4zreark/repo"
 )
 
@@ -215,9 +216,31 @@ func (j *SentinelJudge) Judge(ctx context.Context, commitID int64) (judgment *re
 	})
 	// 出错路径统一在这里收尾批次；成功路径显式 finishRun，不会走到这里。
 	defer func() {
-		if err != nil {
-			emit("error", "judge_failed", err.Error(), nil)
-			finishRun("failed", 0, err.Error())
+		if err == nil {
+			return
+		}
+		emit("error", "judge_failed", err.Error(), nil)
+		finishRun("failed", 0, err.Error())
+
+		// 失败状态机：永久错误直接终态；限流/临时错误按退避重投，超上限转人工。
+		// 这样既不会「失败不改 status → 每轮无限重投」，也不会让可重试错误沉底。
+		classified := llm.Classify(err)
+		switch {
+		case errors.Is(classified, llm.ErrPermanent), errors.Is(classified, llm.ErrNoKey):
+			if jerr := j.store.MarkCommitJudgeTerminal(ctx, commit.ID, err.Error()); jerr != nil {
+				log.Printf("[Sentinel] 记录永久判定失败失败 commit=%d: %v", commit.ID, jerr)
+			}
+		case errors.Is(classified, llm.ErrRateLimited):
+			if _, jerr := j.store.MarkCommitJudgeRetry(ctx, commit.ID, err.Error(), 5, 5*time.Minute); jerr != nil {
+				log.Printf("[Sentinel] 记录限流失败失败 commit=%d: %v", commit.ID, jerr)
+			}
+		default:
+			exhausted, jerr := j.store.MarkCommitJudgeRetry(ctx, commit.ID, err.Error(), 5, 30*time.Second)
+			if jerr != nil {
+				log.Printf("[Sentinel] 记录判定失败失败 commit=%d: %v", commit.ID, jerr)
+			} else if exhausted {
+				log.Printf("[Sentinel] 判定重试耗尽，转人工 commit=%d", commit.ID)
+			}
 		}
 	}()
 
@@ -314,10 +337,12 @@ func (j *SentinelJudge) Judge(ctx context.Context, commitID int64) (judgment *re
 				(autoArtifactOn(func(c *config.SentinelAutoArtifactsConfig) *bool { return c.NucleiWeb }) &&
 					isWebVulnClass(verdict.VulnClass))
 			enrichFindingAsync(findingID, autoNuclei)
-			// Tier 2 高危产物流水线：深审 → python-poc → exploit-guide
-			// （不 clone、不起容器；容器复现仍是 Tier 3 人工闸门后的 pocsmith）。
+			// Tier 2 高危产物流水线：深审 → python-poc → exploit-guide。
+			// 持久化在 river 队列（重启不丢、存量可回填），worker 在主进程串行消费。
 			if verdict.Severity == "high" || verdict.Severity == "critical" || grade == "S" {
-				highRiskArtifactsAsync(j, findingID, commit.ID, verdict.VulnClass)
+				if err := EnqueueArtifactsOrDefault(ctx, findingID, commit.ID); err != nil {
+					log.Printf("[Sentinel] 产物流水线入队失败 finding=%d: %v", findingID, err)
+				}
 			}
 		}
 		// 命中即通知：级别随 severity，渠道侧可用 MinLevel 过滤降级噪音。

@@ -49,6 +49,10 @@ const transformTask = (task: Record<string, unknown>): Task => {
     targets: (task.targets as string[]) || [],
     targetType: task.target_type as string,
     nodeId: task.node_id as string,
+    planId: task.plan_id as string | undefined,
+    parentId: task.parent_id as string | undefined,
+    stage: task.stage as string | undefined,
+    collectionMode: task.collection_mode as string | undefined,
     scheduledAt: task.scheduled_at as string,
     startedAt: task.started_at as string,
     completedAt: task.completed_at as string,
@@ -78,6 +82,11 @@ export interface Task {
   targets: string[]      // 扫描目标列表
   targetType?: string    // 目标类型
   nodeId?: string
+  /** 信息收集计划：父任务/阶段子任务通过 plan_id + stage 关联 */
+  planId?: string
+  parentId?: string
+  stage?: string
+  collectionMode?: string
   scheduledAt?: string
   startedAt?: string
   completedAt?: string
@@ -137,8 +146,9 @@ export interface TaskConfig {
   // 爬虫保护：每站页数 / 深度上限（留空用引擎默认 100 页 / 3 层）
   max_pages?: number
   max_depth?: number
-  // 信息收集执行模式：auto 由后端按环境判定，full 单链，staged 分阶段。
-  collection_mode?: 'auto' | 'full' | 'staged'
+  // 信息收集执行模式：auto 由后端按环境判定，full 单链，staged 分阶段；
+  // 空串/off 表示关闭信息收集预设，按勾选模块执行。
+  collection_mode?: string
   // 任务级 UA 会话种子（master 物化下发；前端只做兼容透传）
   ua_seed?: string
 }

@@ -879,6 +879,42 @@ func (s *Sentinel) ListFindings(ctx context.Context, f FindingFilter) ([]*Findin
 	return items, total, nil
 }
 
+// FindingRef 是回填用的发现最小引用。
+type FindingRef struct {
+	FindingID int64
+	CommitID  int64
+}
+
+// ListHighRiskFindingsMissingArtifacts 取高危且从未生成过深审产物的发现（存量回填用）。
+// 「缺产物」= 不存在 kind=report、title=deep-analysis 的任何状态产物。
+func (s *Sentinel) ListHighRiskFindingsMissingArtifacts(ctx context.Context, limit int) ([]*FindingRef, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	rows, err := s.pool().Query(ctx, `
+		select f.id, f.commit_id
+		  from finding f
+		 where f.severity in ('high', 'critical')
+		   and not exists (
+		       select 1 from artifact a
+		        where a.finding_id = f.id and a.kind = 'report' and a.title = 'deep-analysis')
+		 order by f.id
+		 limit $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	refs := make([]*FindingRef, 0, limit)
+	for rows.Next() {
+		var r FindingRef
+		if err := rows.Scan(&r.FindingID, &r.CommitID); err != nil {
+			return nil, err
+		}
+		refs = append(refs, &r)
+	}
+	return refs, rows.Err()
+}
+
 // FindingsSummary 是发现域统计（高危漏洞工作台首页卡片）。
 type FindingsSummary struct {
 	HighRisk   int64 `json:"high_risk"`   // severity in (high, critical)

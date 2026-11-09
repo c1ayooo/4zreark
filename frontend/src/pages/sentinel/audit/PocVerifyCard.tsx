@@ -71,16 +71,22 @@ export default function PocVerifyCard({ findingId }: { findingId: number }) {
         <span className="text-[12px] font-semibold text-foreground">靶场验证</span>
         {status?.running && <Tag color="processing">执行中</Tag>}
         {status?.verified && (
-          <Tooltip title="靶场验证通过，finding 已自动 MarkFindingVerified">
+          <Tooltip
+            title={
+              status.has_poc
+                ? '靶场验证通过，finding 已自动 MarkFindingVerified'
+                : '该发现通过差分复现（Tier 3a）完成机器验证：差分复现验证的是修复有效性（预构建镜像 vuln/fix 对比），不依赖 python-poc，因此靶场验证对其不适用'
+            }
+          >
             <Tag color="success">
               <ShieldCheck size={10} className="mr-0.5 inline" />
-              已机器验证
+              已机器验证{!status.has_poc && '（差分复现）'}
             </Tag>
           </Tooltip>
         )}
         <span className="ml-auto flex items-center gap-1.5">
-          {!status?.has_poc && (
-            <Tooltip title="需要一份 verified 的 kind=poc、title=python-poc 产物（高危命中会自动草拟，到「分析产物」审核）">
+          {!status?.has_poc && !status?.verified && (
+            <Tooltip title="需要一份 verified 的 kind=poc、title=python-poc 产物（高危命中后 LLM 自动草拟，到「分析产物」审核 verified 后可发起靶场验证）">
               <span className="text-[11px] text-muted-foreground">缺少 verified python-poc，暂不可验证</span>
             </Tooltip>
           )}

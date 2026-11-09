@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { Link, useParams, useNavigate } from 'react-router-dom'
 import {keepPreviousData, useQuery, useMutation, useQueryClient} from '@tanstack/react-query'
 import {
   Button,
@@ -11,6 +11,7 @@ import {
   Tag,
 } from 'antd'
 import { taskApi, type Task } from '@/api/tasks'
+import { collectionApi, type CollectionStage } from '@/api/collection'
 import { resultApi, type ResultType } from '@/api/results'
 import TaskTopologyView from '@/components/tasks/TaskTopologyView'
 import TaskAssetsView from '@/components/tasks/TaskAssetsView'
@@ -90,6 +91,16 @@ export default function TaskDetailPage() {
 
   // 任务运行中时结果页签跟随刷新（此前运行期间结果是「死」的，只能切页签重挂刷新）
   const taskRunning = data?.data?.status === 'running'
+
+  // 信息收集阶段时间线：仅计划任务（父任务/阶段子任务）有 plan_id。
+  // 查询失败不影响任务主体展示。
+  const planId = data?.data?.planId
+  const { data: collectionData } = useQuery({
+    queryKey: ['collection-plan', planId],
+    queryFn: () => collectionApi.getPlan(planId!),
+    enabled: !!planId,
+    refetchInterval: taskRunning ? 5000 : false,
+  })
 
   // 获取结果统计
   const { data: statsData } = useQuery({
@@ -470,6 +481,10 @@ export default function TaskDetailPage() {
               )}
             </div>
           </div>
+
+          {collectionData?.data?.stages && (
+            <CollectionStages stages={collectionData.data.stages} />
+          )}
           
           {/* 操作按钮 */}
           <div className="flex items-center gap-2">
@@ -757,6 +772,51 @@ const moduleOrder = [
 
 // 模块明细进度条组：每个模块一行（名称 + 进度条 + 处理量/产出量）。
 // 失败的任务也显示——能看到死在哪个模块、跑到多少。
+const stageLabel: Record<string, string> = {
+  plan: '计划',
+  s1_domains: 'S1 域名收集',
+  s2_probe: 'S2 探活',
+  s3a_crawl: 'S3a 爬虫',
+  s3b_ports: 'S3b 端口',
+  s4_enrich: 'S4 尾部刻画',
+}
+
+function CollectionStages({ stages }: { stages: CollectionStage[] }) {
+  if (!stages.length) return null
+  const statusColor: Record<string, string> = {
+    completed: 'text-emerald-600',
+    running: 'text-blue-500',
+    failed: 'text-red-500',
+    skipped: 'text-amber-600',
+    pending: 'text-muted-foreground',
+  }
+  return (
+    <div className="mt-3 max-w-3xl">
+      <div className="mb-2 text-sm font-medium">信息收集阶段</div>
+      <div className="flex flex-wrap gap-2">
+        {stages.map((s) => (
+          <div key={s.stage} className="min-w-[190px] rounded border bg-background px-3 py-2 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-medium">{stageLabel[s.stage] || s.stage}</span>
+              <span className={cn('font-medium', statusColor[s.status] || 'text-muted-foreground')}>
+                {s.status}
+              </span>
+            </div>
+            {s.task_name && <div className="text-muted-foreground mt-1 truncate">{s.task_name}</div>}
+            {s.skip_reason && <div className="mt-1 text-amber-600">跳过：{s.skip_reason}</div>}
+            <div className="text-muted-foreground mt-1">进度 {s.task_progress ?? 0}%</div>
+            {s.task_id && (
+              <Link className="mt-1 inline-block text-primary hover:underline" to={`/tasks/${s.task_id}`}>
+                查看子任务
+              </Link>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function ModuleProgressBars({
   details,
 }: {

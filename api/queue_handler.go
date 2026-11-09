@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/service/queue"
 	"github.com/c1ayooo/4zreark/utils"
 	"strconv"
@@ -108,6 +109,16 @@ func (h *QueueHandler) GetStats(c *gin.Context) {
 	if err != nil {
 		utils.InternalError(c, "获取统计失败: "+err.Error())
 		return
+	}
+
+	// River 的失败终态（discarded）不在 task_jobs 里，单独补一个计数，
+	// 队列页才能看到「重试耗尽」的扫描/AI 判定作业，而不是只看到通用队列死信。
+	if r := repo.Default(); r != nil && r.Pool() != nil {
+		var discarded int
+		if qerr := r.Pool().QueryRow(ctx,
+			`select count(*) from river_job where state = 'discarded'`).Scan(&discarded); qerr == nil {
+			stats["river_discarded"] = discarded
+		}
 	}
 
 	utils.Success(c, stats)

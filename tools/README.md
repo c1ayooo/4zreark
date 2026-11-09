@@ -17,7 +17,13 @@
 | `gogo` | 端口 / 协议 / 内置 poc | chainreactors/gogo releases（checksums 校验 + flag 探针门） |
 | `spray` | 目录扫描 / 1000 词爆破 | chainreactors/spray releases |
 | `katana` | 爬虫 | projectdiscovery/katana releases |
+| `httpx` | HTTP 探活（S2） | projectdiscovery/httpx releases |
+| `naabu` | 端口发现（connect，无需 root） | projectdiscovery/naabu releases |
 | `rem` | 节点部署反向隧道 | **必须用本仓 fork 构建**（~/rem，官方 v0.3.0 反向转发不通） |
+
+> **UA 注入缺口**：`spray` 目前没有注入同站 UA。本环境 `tools/linux` 无二进制，
+> 无法用 `spray -h` 确认其 header 参数；待二进制可用后确认再接入，不猜测参数。
+> `gogo`/`naabu` 属 L4 探测，不携带 HTTP UA，不在此约束内。
 
 状态/更新/回滚：Web 设置页「工具运行时」，或
 `GET|POST /api/tools[/{name}/check|update|rollback]`。

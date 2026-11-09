@@ -39,6 +39,9 @@ type CollectionConfig struct {
 	MaxFailRate       float64  `mapstructure:"max_fail_rate"`
 	StageTimeoutMin   int      `mapstructure:"stage_timeout_minutes"`
 	SiteScope         string   `mapstructure:"site_scope"` // host | registrable_domain | project
+	// GateMode：off 关闭；shadow 只判定不路由；enforce 允许规则层消费判定结果。
+	GateMode    string `mapstructure:"gate_mode"`
+	GateWorkers int    `mapstructure:"gate_workers"`
 }
 
 // Normalize 补齐信息收集默认值，避免各处重复判空。
@@ -74,6 +77,14 @@ func (c *CollectionConfig) Normalize() {
 	}
 	if c.SiteScope == "" {
 		c.SiteScope = "host"
+	}
+	switch c.GateMode {
+	case "shadow", "enforce":
+	default:
+		c.GateMode = "off"
+	}
+	if c.GateWorkers <= 0 {
+		c.GateWorkers = 4
 	}
 }
 
@@ -290,6 +301,9 @@ type ScannerConfig struct {
 	WorkerCount int `mapstructure:"worker_count"`
 	Timeout     int `mapstructure:"timeout"`
 	RetryCount  int `mapstructure:"retry_count"`
+	// ForceCleanTerminalJobs 默认 false：终态任务的僵尸 River job 只 JobCancel，
+	// 由 River 的 RescueStuckJobsAfter 回收；显式开启才保留旧强删（运维兜底）。
+	ForceCleanTerminalJobs bool `mapstructure:"force_clean_terminal_jobs"`
 }
 
 // 节点角色。all 是单机默认值：控制面 + 本机扫描 worker。

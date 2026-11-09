@@ -11,6 +11,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -59,7 +60,55 @@ func newChatModel(ctx context.Context, cfg config.LLMConfig, jsonMode bool) (mod
 	if err != nil {
 		return nil, ErrPermanent
 	}
+	// 重试仍在 eino 抽象内：包装的是 model.BaseChatModel，图外无需感知。
+	if cfg.MaxRetries > 0 {
+		return &retryModel{base: cm, maxRetries: cfg.MaxRetries, baseDelay: 200 * time.Millisecond}, nil
+	}
 	return cm, nil
+}
+
+// retryModel 只对可重试错误（限流/5xx/网络）做指数退避。
+// 永久错误与未配置密钥直接返回；Stream 一旦开始输出就不再重试。
+type retryModel struct {
+	base       model.BaseChatModel
+	maxRetries int
+	baseDelay  time.Duration
+}
+
+func (m *retryModel) Generate(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.Message, error) {
+	var lastErr error
+	for attempt := 0; attempt <= m.maxRetries; attempt++ {
+		msg, err := m.base.Generate(ctx, input, opts...)
+		if err == nil {
+			return msg, nil
+		}
+		lastErr = err
+		if !retryableLLMError(err) {
+			return nil, err
+		}
+		if attempt == m.maxRetries {
+			break
+		}
+		delay := m.baseDelay << attempt
+		if delay > 5*time.Second {
+			delay = 5 * time.Second
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	return nil, lastErr
+}
+
+func (m *retryModel) Stream(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	return m.base.Stream(ctx, input, opts...)
+}
+
+func retryableLLMError(err error) bool {
+	classified := Classify(err)
+	return errors.Is(classified, ErrTransient) || errors.Is(classified, ErrRateLimited)
 }
 
 // StubModel 是未配置密钥时的替身模型：实现 model.BaseChatModel，
