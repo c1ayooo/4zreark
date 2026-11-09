@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -947,9 +948,9 @@ func (s *Sentinel) ListPocVerifyEvents(ctx context.Context, findingID int64, lim
 	}
 	rows, err := s.pool().Query(ctx, `
 		select id, run_id, seq, level, kind, message, payload, created_at
-		  from sentinel_run_event
+		  from run_event
 		 where kind like 'poc_verify%' and payload->>'finding_id' = $1
-		 order by id desc limit $2`, findingID, limit)
+		 order by id desc limit $2`, strconv.FormatInt(findingID, 10), limit)
 	if err != nil {
 		return nil, err
 	}
