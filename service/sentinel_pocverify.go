@@ -234,14 +234,21 @@ func (s *PocVerifyService) Verify(ctx context.Context, findingID int64, force bo
 	var res *sentinelsandbox.ExecResult
 	var verdict *PocVerifyVerdict
 	if engine == "nuclei" {
+		// nuclei 用项目内部二进制（只读挂载进网络内容器），目标环境才是 docker。
+		nucleiBin, err := s.sandbox.EnsureNucleiBinary(sentinelsandbox.FindNucleiBinary())
+		if err != nil {
+			emit("error", "poc_verify_failed", err.Error(), nil)
+			finishRun("failed", err.Error())
+			return errSentinelPocVerifyInput
+		}
 		if err := s.sandbox.WritePoc("poc_verify.yaml", pocInput); err != nil {
 			emit("error", "poc_verify_failed", "写入模板失败: "+err.Error(), nil)
 			finishRun("failed", err.Error())
 			return errSentinelPocVerifyInput
 		}
-		emit("info", "poc_verify_run", "执行 nuclei: -t /poc/poc_verify.yaml -u "+plan.TargetURL, nil)
-		res, err = s.sandbox.RunPoC(ctx, network, cfg.NucleiImage,
-			[]string{"nuclei", "-u", plan.TargetURL, "-t", "/poc/poc_verify.yaml", "-json", "-silent"},
+		emit("info", "poc_verify_run", "执行 nuclei（项目内部二进制）: -t /poc/poc_verify.yaml -u "+plan.TargetURL, nil)
+		res, err = s.sandbox.RunPoC(ctx, network, cfg.PythonImage,
+			[]string{nucleiBin, "-u", plan.TargetURL, "-t", "/poc/poc_verify.yaml", "-json", "-silent", "-duc"},
 			[]string{"TARGET=" + plan.TargetURL})
 		if err != nil {
 			emit("error", "poc_verify_failed", err.Error(), nil)

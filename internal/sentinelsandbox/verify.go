@@ -15,7 +15,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -36,6 +39,59 @@ func (s *VerifySandbox) WritePoc(name, content string) error {
 		return errors.New("PoC 文件名非法")
 	}
 	return osWriteFile(s.Workdir+"/"+name, []byte(content), 0o600)
+}
+
+// FindNucleiBinary 定位宿主上的 nuclei 二进制：PATH → 项目内 data/nuclei/bin
+// （vulnscan 运行时自动下载位置）→ 用户目录常见安装位。找不到返回空串。
+func FindNucleiBinary() string {
+	if p, err := exec.LookPath("nuclei"); err == nil {
+		return p
+	}
+	if st, err := os.Stat("data/nuclei/bin/nuclei"); err == nil && !st.IsDir() {
+		return "data/nuclei/bin/nuclei"
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		for _, p := range []string{
+			filepath.Join(home, "go", "bin", "nuclei"),
+			filepath.Join(home, ".local", "bin", "nuclei"),
+			"/usr/local/bin/nuclei",
+		} {
+			if st, err := os.Stat(p); err == nil && !st.IsDir() {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
+// EnsureNucleiBinary 把项目内部 nuclei 二进制复制进沙箱 workdir（容器内
+// /poc/nuclei 只读可见、宿主侧已 chmod 可执行）。安全模型不变：nuclei 与
+// PoC 同处只读 /poc，目标只有同内网的靶场容器；不为此拉取任何第三方镜像。
+func (s *VerifySandbox) EnsureNucleiBinary(src string) (string, error) {
+	if src == "" {
+		return "", errors.New("未找到 nuclei 二进制（PATH 或 data/nuclei/bin/nuclei，可先运行一次 nuclei 扫描触发自动下载）")
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return "", fmt.Errorf("读取 nuclei 二进制失败: %w", err)
+	}
+	defer in.Close()
+	dst := s.Workdir + "/nuclei"
+	out, err := os.Create(dst)
+	if err != nil {
+		return "", fmt.Errorf("写入沙箱 nuclei 失败: %w", err)
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return "", fmt.Errorf("复制 nuclei 二进制失败: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(dst, 0o755); err != nil {
+		return "", err
+	}
+	return "/poc/nuclei", nil
 }
 
 // Pull 拉取靶场镜像。镜像名合法性（白名单）由调用方校验。
