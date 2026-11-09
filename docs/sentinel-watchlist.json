@@ -1,0 +1,72 @@
+{
+  "version": "1.0",
+  "description": "Web 层开源项目监控池种子文件，用于开源情报/commit diff 监控模块导入",
+  "updated_at": "2026-11-09",
+  "priority_order": ["P0", "P1", "P2"],
+  "pools": [
+    {"priority": "P0", "category": "web_framework_go", "repos": [
+      {"owner": "gin-gonic", "name": "gin"}, {"owner": "labstack", "name": "echo"},
+      {"owner": "gofiber", "name": "fiber"}, {"owner": "valyala", "name": "fasthttp"},
+      {"owner": "gorilla", "name": "mux"}, {"owner": "go-chi", "name": "chi"},
+      {"owner": "beego", "name": "beego"}, {"owner": "kratosgo", "name": "kratos"}]},
+    {"priority": "P0", "category": "web_framework_node_ts", "repos": [
+      {"owner": "vercel", "name": "next.js"}, {"owner": "nuxt", "name": "nuxt"},
+      {"owner": "sveltejs", "name": "kit", "alias": "sveltekit"}, {"owner": "withastro", "name": "astro"},
+      {"owner": "expressjs", "name": "express"}, {"owner": "expressjs", "name": "body-parser"},
+      {"owner": "fastify", "name": "fastify"}, {"owner": "nestjs", "name": "nest"},
+      {"owner": "honojs", "name": "hono"}, {"owner": "elysiajs", "name": "elysia"}]},
+    {"priority": "P0", "category": "web_framework_python", "repos": [
+      {"owner": "django", "name": "django"}, {"owner": "pallets", "name": "flask"},
+      {"owner": "tiangolo", "name": "fastapi"}, {"owner": "tornadoweb", "name": "tornado"},
+      {"owner": "bottlepy", "name": "bottle"}]},
+    {"priority": "P0", "category": "web_framework_other", "repos": [
+      {"owner": "spring-projects", "name": "spring-framework"}, {"owner": "spring-projects", "name": "spring-security"},
+      {"owner": "spring-projects", "name": "spring-boot"}, {"owner": "rails", "name": "rails"},
+      {"owner": "laravel", "name": "laravel"}, {"owner": "symfony", "name": "symfony"},
+      {"owner": "cakephp", "name": "cakephp"}]},
+    {"priority": "P0", "category": "auth_identity_templating", "repos": [
+      {"owner": "lepture", "name": "authlib"}, {"owner": "jpadilla", "name": "pyjwt"},
+      {"owner": "auth0", "name": "node-jsonwebtoken"}, {"owner": "keycloak", "name": "keycloak"},
+      {"owner": "nextauthjs", "name": "next-auth"}, {"owner": "twigphp", "name": "Twig"},
+      {"owner": "pallets", "name": "jinja"}, {"owner": "handlebars-lang", "name": "handlebars.js"},
+      {"owner": "vuejs", "name": "core"}, {"owner": "angular", "name": "angular"}]},
+    {"priority": "P0", "category": "parser_deserialize_upload", "repos": [
+      {"owner": "yaml", "name": "pyyaml"}, {"owner": "FasterXML", "name": "jackson-databind"},
+      {"owner": "msgpack", "name": "msgpack-python"}, {"owner": "uiri", "name": "toml"},
+      {"owner": "BurntSushi", "name": "toml"}, {"owner": "protocolbuffers", "name": "protobuf"},
+      {"owner": "ImageMagick", "name": "ImageMagick"}, {"owner": "lovell", "name": "sharp"},
+      {"owner": "gabrielbull", "name": "ups"}]},
+    {"priority": "P1", "category": "web_apps_cms", "repos": [
+      {"owner": "nextcloud", "name": "server"}, {"owner": "grafana", "name": "grafana"},
+      {"owner": "discourse", "name": "discourse"}, {"owner": "matomo-org", "name": "matomo"},
+      {"owner": "moodle", "name": "moodle"}, {"owner": "owncloud", "name": "core"},
+      {"owner": "snipe", "name": "snipe-it"}, {"owner": "librenms", "name": "librenms"},
+      {"owner": "mantisbt", "name": "mantisbt"}, {"owner": "WordPress", "name": "WordPress"}]},
+    {"priority": "P1", "category": "middleware_gateway_runtime", "repos": [
+      {"owner": "nginx", "name": "nginx"}, {"owner": "apache", "name": "httpd"},
+      {"owner": "apache", "name": "tomcat"}, {"owner": "apache", "name": "activemq"},
+      {"owner": "apache", "name": "solr"}, {"owner": "apache", "name": "flink"},
+      {"owner": "redis", "name": "redis"}, {"owner": "elastic", "name": "elasticsearch"},
+      {"owner": "envoyproxy", "name": "envoy"}, {"owner": "caddyserver", "name": "caddy"},
+      {"owner": "openresty", "name": "openresty"}, {"owner": "nodejs", "name": "node"}]},
+    {"priority": "P1", "category": "ai_agent_mcp", "repos": [
+      {"owner": "modelcontextprotocol", "name": "servers"}, {"owner": "langgenius", "name": "dify"},
+      {"owner": "n8n-io", "name": "n8n"}, {"owner": "langchain-ai", "name": "langchain"},
+      {"owner": "vanna-ai", "name": "vanna"}, {"owner": "run-llama", "name": "LlamaIndex"}]},
+    {"priority": "P2", "category": "security_tools_self", "repos": [
+      {"owner": "projectdiscovery", "name": "nuclei"}, {"owner": "projectdiscovery", "name": "httpx"},
+      {"owner": "wpscanteam", "name": "wpscan"}, {"owner": "zaproxy", "name": "zaproxy"},
+      {"owner": "trufflesecurity", "name": "trufflehog"}, {"owner": "gitleaks", "name": "gitleaks"},
+      {"owner": "semgrep", "name": "semgrep"}]}
+  ],
+  "commit_keywords": {
+    "high_signal": ["auth bypass", "privilege escalation", "ssrf", "rce", "deserializ", "ssti", "prototype pollution", "path traversal", "arbitrary file", "jwt", "alg:none", "signature", "csrf", "idor", "acl", "rbac", "sanitiz", "escape", "xss", "sqli", "command injection", "eval(", "unserialize", "pickle", "yaml.load", "os.exec", "shell=True", "header spoof", "x-forwarded", "trust proxy", "open redirect"],
+    "downgrade": ["refactor", "typo", "lint", "test", "doc", "ci", "chore", "i18n", "translation", "style", "format", "deps bump"]
+  },
+  "grading": [
+    {"level": "S", "criteria": "未公开 CVE + RCE/SSRF + 有可达 sink", "action": "自动拉镜像 + 生成 POC 进队列"},
+    {"level": "A", "criteria": "权限绕过/反序列化/上传", "action": "自动起环境，等人工确认"},
+    {"level": "B", "criteria": "单点 XSS/信息泄露", "action": "入库，周报汇总"},
+    {"level": "C", "criteria": "依赖 bump/模糊测试改进", "action": "仅记录，不触发复现"}
+  ]
+}
