@@ -46,6 +46,14 @@ scanner:
   # 默认 false：终态任务的僵尸 River job 只 JobCancel，交给 River 回收；
   # 只有极端运维场景才显式开启强删（会写审计日志）。
   force_clean_terminal_jobs: false
+  # 全局禁扫黑名单：与任务级授权边界（项目种子 scope）叠加，命中即拒绝。
+  # 域名后缀匹配后缀本身及所有子域；CIDR 用无类别域间路由格式。
+  # 默认保护 gov.cn；显式写空列表（[]）可整体关闭某一维。
+  deny_domain_suffixes: ["gov.cn"]
+  deny_cidrs: []
+  # nuclei 误报黑名单：按 template-id 永久排除（对应 nuclei -eid）。
+  # 单个任务的 config.deny_template_ids 盖章值优先于这里的兜底值。
+  nuclei_deny_template_ids: []
 
 # 信息收集预设与阶段编排。
 # enabled=false 时保持旧行为（按任务类型硬编码模块集），用于一键回滚。
@@ -69,6 +77,8 @@ collection:
     - bruteforce
     - gogo_poc
   max_targets_for_full: 500
+  # 单站开放端口超过该值时做纯 Go TCP 二次复核；复核后仍超阈值只保留常见端口。
+  max_ports_per_host: 200
   min_online_nodes: 1
   max_fail_rate: 0.3
   stage_timeout_minutes: 360
@@ -147,8 +157,8 @@ sentinel:
   clone_hosts:
     - github.com
   collect_interval_minutes: 60
-  collect_workers: 4
-  judge_workers: 8
+  collect_workers: 2
+  judge_workers: 3
   max_commits_per_run: 50
   token_budget: 10000
   max_hunk_lines: 40
