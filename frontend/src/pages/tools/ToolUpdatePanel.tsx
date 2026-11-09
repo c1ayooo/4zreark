@@ -13,6 +13,7 @@ import {
   type BrowserRuntimeStatus,
 } from '@/api/tools'
 import RuntimeToolRow from '@/components/tools/RuntimeToolRow'
+import InstalledToolsCard from '@/components/tools/InstalledToolsCard'
 
 // 更新策略面板：gogo/spray/katana/rem 托管工具 + nuclei 运行时的
 // 自动更新开关 / 检查间隔 / 版本锁定，以及检查/更新/回滚/历史操作。
@@ -207,7 +208,16 @@ export default function ToolUpdatePanel() {
       width: 100,
       render: (_: unknown, t: ToolRuntimeStatus) => {
         const meta = STATUS_META[t.status] || { color: 'default', label: t.status }
-        return <Tooltip title={t.status_note}><Tag color={meta.color}>{meta.label}</Tag></Tooltip>
+        return (
+          <Space size={4} wrap>
+            <Tooltip title={t.status_note}><Tag color={meta.color}>{meta.label}</Tag></Tooltip>
+            {t.in_project === false && (
+              <Tooltip title="当前使用环境外部工具，平台项目内未安装；自动补装会装到项目目录">
+                <Tag color="orange">外部</Tag>
+              </Tooltip>
+            )}
+          </Space>
+        )
       },
     },
     {

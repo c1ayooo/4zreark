@@ -119,6 +119,26 @@ sentinel:
   token_budget: 10000
   max_hunk_lines: 40
   judge_model: "deepseek-v4.1-flash"
+  # 高危（high/critical）命中后自动二轮深审：从本地 mirror 读变更文件全文细查一次，
+  # 落 deep-analysis 草稿产物。每个高危发现多一次 LLM 调用；false 关闭。
+  deep_analysis: true
+  # 高危发现自动追加的验证产物（全部落 draft，人工 verified 才发布/复现）。
+  # 依次为：Python 验证脚本（web 类）、利用文档（web 类）、nuclei 模板
+  # （web 漏洞类自动草拟；S 级不受此项限制始终草拟）。每项默认开启。
+  auto_artifacts:
+    python_poc: true
+    exploit_guide: true
+    nuclei_web: true
+  # POC 靶场验证（Tier 3b）：python-poc 人工 verified 后自动入队——docker 拉公开
+  # 靶场镜像（AI 出环境方案，受 image_allow 白名单约束）起 --internal 隔离内网
+  # 靶场，PoC 在网络内打靶场判定可行性；无外网出口。worker 在 pocsmith 进程。
+  poc_verify:
+    enabled: true
+    python_image: "python:3.11-slim"
+    image_allow:
+      - "vulhub/"
+      - "ghcr.io/"
+    max_wait_seconds: 120
   enable_audit_queue: false
   queue_poll_seconds: 30
 

@@ -59,14 +59,15 @@ func main() {
 	defer pool.Close()
 
 	repro := service.NewReproService(*workdir, *timeout)
-	client, err := service.NewSentinelReproClient(ctx, pool.Pool(), repro)
+	verify := service.NewPocVerifyService(*workdir)
+	client, err := service.NewSentinelReproClient(ctx, pool.Pool(), repro, verify)
 	if err != nil {
 		log.Fatalf("[pocsmith] %v", err)
 	}
 	if err := client.Start(ctx); err != nil {
 		log.Fatalf("[pocsmith] 启动 worker 失败: %v", err)
 	}
-	log.Printf("[pocsmith] 已启动（queue=sentinel_repro workdir=%s timeout=%ds）——等待复现任务", *workdir, *timeout)
+	log.Printf("[pocsmith] 已启动（queue=sentinel_repro,sentinel_poc_verify workdir=%s timeout=%ds）——等待复现/靶场验证任务", *workdir, *timeout)
 
 	<-ctx.Done()
 	log.Println("[pocsmith] 收到退出信号，等待在跑任务收尾…")

@@ -113,6 +113,7 @@ const menuGroups: MenuGroup[] = [
       { path: '/digital-assets', icon: Smartphone, label: '数字资产', roles: OPS },
       { path: '/enterprise', icon: Building2, label: '企业身份', roles: OPS },
       { path: '/local-documents', icon: FileText, label: '本地文档', roles: OPS },
+      { path: '/github-leaks', icon: ShieldAlert, label: '敏感信息监控', roles: OPS },
     ],
   },
   {

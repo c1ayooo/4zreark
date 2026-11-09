@@ -41,6 +41,56 @@ type SentinelConfig struct {
 	JudgeModel          string   `mapstructure:"judge_model"`
 	EnableAuditQueue    bool     `mapstructure:"enable_audit_queue"`
 	QueuePollIntervalSy int      `mapstructure:"queue_poll_seconds"`
+	// DeepAnalysis 高危发现二轮深审开关（Tier 2）：high/critical 命中后从本地
+	// mirror 读变更文件全文做一次 LLM 细查，落 deep-analysis 草稿产物。
+	// 未配置默认开启；会为每个高危发现多消耗一次 LLM 调用。
+	DeepAnalysis *bool `mapstructure:"deep_analysis"`
+	// AutoArtifacts 高危发现的自动验证产物配置：哪些产物在命中后自动草拟。
+	// 全部落 draft，人工 verified 闸门不变；每项未配置默认开启。
+	AutoArtifacts SentinelAutoArtifactsConfig `mapstructure:"auto_artifacts"`
+	// PocVerify POC 靶场验证（Tier 3b）：docker 拉公开靶场镜像起隔离内网环境，
+	// 在靶场上执行 verified 的 python-poc 判定可行性。worker 在 pocsmith 进程。
+	PocVerify SentinelPocVerifyConfig `mapstructure:"poc_verify"`
+}
+
+// SentinelPocVerifyConfig 是 POC 靶场验证的参数。
+type SentinelPocVerifyConfig struct {
+	// Enabled 总开关；未配置默认开启。关闭时 verified python-poc 不自动入队验证。
+	Enabled *bool `mapstructure:"enabled"`
+	// PythonImage 执行 PoC 与就绪探测用的 Python 镜像。
+	PythonImage string `mapstructure:"python_image"`
+	// ImageAllow 靶场镜像白名单前缀（AI 选的镜像必须命中其一）。
+	// 默认 vulhub/ 与 ghcr.io/。
+	ImageAllow []string `mapstructure:"image_allow"`
+	// MaxWaitSeconds 靶场就绪探测上限（默认 120，封顶 300）。
+	MaxWaitSeconds int `mapstructure:"max_wait_seconds"`
+}
+
+// Normalize 补齐 PocVerify 安全默认值。
+func (p *SentinelPocVerifyConfig) Normalize() {
+	if p.PythonImage == "" {
+		p.PythonImage = "python:3.11-slim"
+	}
+	if len(p.ImageAllow) == 0 {
+		p.ImageAllow = []string{"vulhub/", "ghcr.io/"}
+	}
+	if p.MaxWaitSeconds <= 0 {
+		p.MaxWaitSeconds = 120
+	}
+	if p.MaxWaitSeconds > 300 {
+		p.MaxWaitSeconds = 300
+	}
+}
+
+// SentinelAutoArtifactsConfig 控制高危（high/critical/S 级）发现自动追加的
+// 验证产物类型：python_poc=Python 验证脚本（kind=poc）、exploit_guide=利用文档
+// （kind=report）、nuclei_web=web 漏洞类自动草拟 nuclei 模板（原仅 S 级）。
+// 产物生成顺序：深审结论 → python-poc / exploit-guide / nuclei，均以深审
+// 结论为输入（质量更高），深审不可用时退化为仅 diff 输入。
+type SentinelAutoArtifactsConfig struct {
+	PythonPOC    *bool `mapstructure:"python_poc"`
+	ExploitGuide *bool `mapstructure:"exploit_guide"`
+	NucleiWeb    *bool `mapstructure:"nuclei_web"`
 }
 
 // LLMConfig 是 OpenAI 兼容端点的接入参数。

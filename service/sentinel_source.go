@@ -126,6 +126,27 @@ func (s *SentinelSource) MirrorPath(repoID string) string {
 	return filepath.Join(s.cfg.MirrorDir, repoID+".git")
 }
 
+// ReadCommitFile 从本地 bare mirror 读某提交下的单个文件内容（高危深审用）。
+// 只做本地 git show，不 checkout 工作区、不联网；limit 字节截断防超大文件。
+// path 来自已落库 diff 的文件路径，仍拒绝绝对路径与 .. 以防意外。
+func (s *SentinelSource) ReadCommitFile(ctx context.Context, repoID, sha, path string, limit int64) (string, error) {
+	if path == "" || strings.HasPrefix(path, "/") || strings.Contains(path, "..") {
+		return "", fmt.Errorf("非法文件路径: %q", path)
+	}
+	mirror := s.MirrorPath(repoID)
+	if _, err := os.Stat(mirror); err != nil {
+		return "", fmt.Errorf("mirror 不存在（仓库未采集或已清理）: %w", err)
+	}
+	out, err := runGit(ctx, mirror, "show", sha+":"+path)
+	if err != nil {
+		return "", err
+	}
+	if limit > 0 && int64(len(out)) > limit {
+		out = out[:limit] + "\n…（深审读取截断）"
+	}
+	return out, nil
+}
+
 // Collect 同步单个仓库并落库新提交。
 func (s *SentinelSource) Collect(ctx context.Context, repoID string) (*CollectResult, error) {
 	started := time.Now()

@@ -759,6 +759,8 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 			toolsGroup := protected.Group("/tools")
 			{
 				toolsGroup.GET("", toolHandler.List)
+				toolsGroup.GET("/installed", toolHandler.Installed)
+				toolsGroup.POST("/ensure-installed", middleware.AdminMiddleware(), toolHandler.Ensure)
 				toolsGroup.POST("/:name/check", middleware.AdminMiddleware(), toolHandler.Check)
 				toolsGroup.POST("/:name/update", middleware.AdminMiddleware(), toolHandler.Update)
 				toolsGroup.POST("/:name/rollback", middleware.AdminMiddleware(), toolHandler.Rollback)

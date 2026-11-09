@@ -333,6 +333,14 @@ func (s *MCPService) initialize(params json.RawMessage) map[string]any {
 			"evidence 必须逐字复制 diff 中真实 hunk 头，evidence_snippets 摘录的代码行必须在 diff 中逐字存在，" +
 			"对不上会被降权。" +
 			"sentinel_get_finding 返回的 artifacts 中，kind=report 且 title=repro-guide 是自动生成的分步复现指南" +
+			"（含攻击路径/前置条件/复现步骤/POC 命中），可直接消费；kind=report 且 title=deep-analysis 是" +
+			"高危发现的二轮深审报告（基于变更文件全文复核，结论为确认/降级/证伪/需更多信息），应优先于一级判定理由采信；" +
+			"kind=poc 且 title=python-poc 是自动草拟的 Python 验证脚本（目标从 TARGET 参数读取，授权环境直接执行）；" +
+			"kind=report 且 title=exploit-guide 是利用文档（前置条件/利用步骤/影响评估/修复确认）；" +
+			"kind=repro_log 且 title=poc-verify 是靶场验证结论（AI 选 vulhub 等公开靶场镜像 → docker 起 --internal 隔离内网靶场 → " +
+			"在靶场上执行 verified 的 python-poc → verdict=vulnerable/not_vulnerable/error）；" +
+			"端到端验证工作流：sentinel_get_finding 取 python-poc → 人工 verified（或由审核方确认）→ sentinel_verify_poc 入队 → " +
+			"sentinel_wait_poc_verify 等结论 → vulnerable 时 finding 自动 MarkFindingVerified；" +
 			"（含攻击路径/前置条件/复现步骤/POC 命中），可直接消费；kind=poc 的 draft 产物可能是 POC 库自动命中的模板。" +
 			"上传代码分析：sentinel_import_archive 上传 zip/tar.gz 压缩包（base64 ≤3MB），导入后采集与判定自动入队，" +
 			"用 sentinel_list_commits(repo_id) 查看新提交并按上述工作流分析。",

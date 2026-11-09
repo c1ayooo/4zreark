@@ -146,6 +146,7 @@ func NewSentinelQueue(ctx context.Context, pool *pgxpool.Pool, cfg config.Sentin
 		// Insert 的 kind 注册校验（sentinel_repro 队列不在本进程 Queues 里，
 		// 永远不会被本进程拉取执行）。
 		river.AddWorker(workers, &sentinelReproWorker{})
+		river.AddWorker(workers, &sentinelPocVerifyWorker{})
 		riverCfg.Workers = workers
 		riverCfg.Queues = map[string]river.QueueConfig{
 			SentinelCollectQueueName: {MaxWorkers: cfg.CollectWorkers},
@@ -197,14 +198,29 @@ func (q *SentinelQueue) EnqueueCollect(ctx context.Context, repoID string) error
 	return nil
 }
 
-// EnqueueJudge 把提交判定放进队列。
+// Sentinel 判定队列的 River 优先级分层（River：1 最高、4 最低，默认 1）。
+// 人等着的（手动重判/上传导入）排最高；预评分高的批量提交次之；
+// 大批量低分提交降到最低，避免淹没交互请求。
+const (
+	SentinelJudgePriorityManual = 1 // 手动重判 / 上传导入等人在等的
+	SentinelJudgePriorityHot    = 2 // 批量里预评分高的（疑似安全修复主题）
+	SentinelJudgePriorityBulk   = 4 // 批量低分提交，慢慢消化
+)
+
+// EnqueueJudge 把提交判定放进队列（人工触发路径，最高优先级）。
 func (q *SentinelQueue) EnqueueJudge(ctx context.Context, commitID int64) error {
+	return q.EnqueueJudgePriority(ctx, commitID, SentinelJudgePriorityManual)
+}
+
+// EnqueueJudgePriority 按优先级入队判定。
+func (q *SentinelQueue) EnqueueJudgePriority(ctx context.Context, commitID int64, priority int) error {
 	if q == nil || q.client == nil {
 		return errors.New("提交哨兵队列未初始化")
 	}
 	_, err := q.client.Insert(ctx, SentinelJudgeArgs{CommitID: commitID}, &river.InsertOpts{
 		Queue:       SentinelJudgeQueueName,
 		MaxAttempts: 3,
+		Priority:    priority,
 		UniqueOpts:  sentinelUniqueOpts(),
 	})
 	if err != nil {
@@ -270,7 +286,13 @@ func (q *SentinelQueue) scheduleOnce(ctx context.Context) {
 		return
 	}
 	for _, c := range pending {
-		if err := q.EnqueueJudge(ctx, c.ID); err != nil {
+		// 预评分高的提交（标题/路径像安全修复主题）排更高优先级，
+		// 让疑似高危的先判定；评分只是启发式，不据此丢弃任何提交。
+		priority := SentinelJudgePriorityBulk
+		if c.Score >= 5 {
+			priority = SentinelJudgePriorityHot
+		}
+		if err := q.EnqueueJudgePriority(ctx, c.ID, priority); err != nil {
 			log.Printf("[Sentinel] 提交 %d 入队失败: %v", c.ID, err)
 		}
 	}
@@ -312,14 +334,18 @@ func (w *sentinelReproWorker) Work(ctx context.Context, job *river.Job[SentinelR
 	return sentinelJobError(err)
 }
 
-// NewSentinelReproClient 是 pocsmith 专用的 River 客户端：只注册 repro worker，
-// 只消费 sentinel_repro 队列。与主进程的 SentinelQueue 共享 river_job 表，互不抢作业。
-func NewSentinelReproClient(ctx context.Context, pool *pgxpool.Pool, repro *ReproService) (*river.Client[pgx.Tx], error) {
+// NewSentinelReproClient 是 pocsmith 专用的 River 客户端：注册差分复现与
+// POC 靶场验证两个 worker，消费 sentinel_repro 与 sentinel_poc_verify 队列。
+// 与主进程的 SentinelQueue 共享 river_job 表，互不抢作业。
+func NewSentinelReproClient(ctx context.Context, pool *pgxpool.Pool, repro *ReproService, verify *PocVerifyService) (*river.Client[pgx.Tx], error) {
 	if pool == nil {
 		return nil, errors.New("pocsmith 缺少 PostgreSQL 连接池")
 	}
 	if repro == nil {
 		return nil, errors.New("pocsmith 缺少复现服务")
+	}
+	if verify == nil {
+		return nil, errors.New("pocsmith 缺少靶场验证服务")
 	}
 	driver := riverpgxv5.New(pool)
 	migrator, err := rivermigrate.New(driver, nil)
@@ -331,13 +357,15 @@ func NewSentinelReproClient(ctx context.Context, pool *pgxpool.Pool, repro *Repr
 	}
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &sentinelReproWorker{repro: repro})
+	river.AddWorker(workers, &sentinelPocVerifyWorker{verify: verify})
 	client, err := river.NewClient(driver, &river.Config{
 		MaxAttempts:          2,
 		JobTimeout:           40 * time.Minute,
 		RescueStuckJobsAfter: 90 * time.Minute,
 		Workers:              workers,
 		Queues: map[string]river.QueueConfig{
-			SentinelReproQueueName: {MaxWorkers: 2},
+			SentinelReproQueueName:     {MaxWorkers: 2},
+			SentinelPocVerifyQueueName: {MaxWorkers: 1}, // 容器编排重，串行执行
 		},
 	})
 	if err != nil {
@@ -358,6 +386,58 @@ func (q *SentinelQueue) EnqueueRepro(ctx context.Context, findingID int64) error
 	})
 	if err != nil {
 		return fmt.Errorf("复现任务入队失败: %w", err)
+	}
+	return nil
+}
+
+// ---- pocsmith POC 靶场验证（Tier 3b）----
+//
+// python-poc verified 后自动入队（或 MCP 手动触发）：拉公开靶场镜像起隔离
+// 内网靶场，PoC 打靶场判定可行性。worker 同样只在 pocsmith 进程消费。
+
+const (
+	SentinelPocVerifyQueueName = "sentinel_poc_verify"
+	SentinelPocVerifyJobKind   = "sentinel_poc_verify_finding"
+)
+
+// SentinelPocVerifyArgs 靶场验证一条发现；Force 忽略已有 poc-verify 产物重跑。
+type SentinelPocVerifyArgs struct {
+	FindingID int64 `json:"finding_id" river:"unique"`
+	Force     bool  `json:"force,omitempty"`
+}
+
+// Kind 实现 river.JobArgs。
+func (SentinelPocVerifyArgs) Kind() string { return SentinelPocVerifyJobKind }
+
+type sentinelPocVerifyWorker struct {
+	river.WorkerDefaults[SentinelPocVerifyArgs]
+	verify *PocVerifyService
+}
+
+func (w *sentinelPocVerifyWorker) Work(ctx context.Context, job *river.Job[SentinelPocVerifyArgs]) error {
+	if w.verify == nil {
+		// 主进程的哑 worker 防御：sentinel_poc_verify 队列不在其 Queues 里。
+		return errors.New("poc-verify worker 归属 pocsmith 进程，本进程不应执行该作业")
+	}
+	err := w.verify.Verify(ctx, job.Args.FindingID, job.Args.Force)
+	if errors.Is(err, errSentinelPocVerifyInput) {
+		return river.JobCancel(err)
+	}
+	return sentinelJobError(err)
+}
+
+// EnqueuePocVerify 把靶场验证放进队列（主进程控制面调用；worker 在 pocsmith）。
+func (q *SentinelQueue) EnqueuePocVerify(ctx context.Context, findingID int64, force bool) error {
+	if q == nil || q.client == nil {
+		return errors.New("提交哨兵队列未初始化")
+	}
+	_, err := q.client.Insert(ctx, SentinelPocVerifyArgs{FindingID: findingID, Force: force}, &river.InsertOpts{
+		Queue:       SentinelPocVerifyQueueName,
+		MaxAttempts: 2,
+		UniqueOpts:  sentinelUniqueOpts(),
+	})
+	if err != nil {
+		return fmt.Errorf("靶场验证任务入队失败: %w", err)
 	}
 	return nil
 }

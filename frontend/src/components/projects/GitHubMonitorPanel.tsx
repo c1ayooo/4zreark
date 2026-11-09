@@ -1,15 +1,9 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Badge, Button, Card, Input, Modal, Popconfirm, Progress, Select, Skeleton, Switch, Table, Tag, Tooltip } from 'antd'
+import { Badge, Button, Card, Input, Skeleton, Switch, Table, Tag, Tooltip } from 'antd'
 import type { TableProps } from 'antd'
-import { Github, Plus, RefreshCw, Shield, Zap } from 'lucide-react'
-import {
-  githubMonitorApi,
-  type GitHubCleanupReport,
-  type GitHubFinding,
-  type GitHubPoolToken,
-  type GitHubSuppression,
-} from '@/api/githubMonitor'
+import { Github, Plus } from 'lucide-react'
+import { githubMonitorApi, type GitHubFinding } from '@/api/githubMonitor'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate } from '@/lib/utils'
 
@@ -43,13 +37,6 @@ const STATUS_OPTIONS = [
   { value: 'confirmed', label: '已确认' },
   { value: 'ignored', label: '已忽略' },
   { value: 'resolved', label: '已处置' },
-]
-
-const SUPPRESSION_TYPE_OPTIONS = [
-  { value: 'repo', label: '仓库（owner/name）' },
-  { value: 'org', label: '组织/用户' },
-  { value: 'path_glob', label: '路径通配' },
-  { value: 'rule', label: '规则名' },
 ]
 
 export function GitHubMonitorPanel({ projectId }: { projectId: number }) {
@@ -119,122 +106,6 @@ export function GitHubMonitorPanel({ projectId }: { projectId: number }) {
     onError: (e: Error) => toast({ title: '更新失败', description: e.message, variant: 'destructive' }),
   })
 
-  // ---- 全局运维：立即巡查 / 补全明文 / 历史清理（两段式）/ 抑制 / Token 池 ----
-  const opsInvalidate = () => {
-    invalidate()
-    queryClient.invalidateQueries({ queryKey: ['github-leak-ops'] })
-  }
-
-  const opsMutation = useMutation({
-    mutationFn: async (action: 'run' | 'backfill' | 'refresh-tokens') => {
-      if (action === 'run') return githubMonitorApi.runNow()
-      if (action === 'backfill') return githubMonitorApi.backfill()
-      return githubMonitorApi.refreshAllTokens()
-    },
-    onSuccess: (res, action) => {
-      const msg =
-        action === 'run'
-          ? '已加入巡查队列'
-          : action === 'backfill'
-            ? `已补全 ${(res.data as { filled?: number } | undefined)?.filled ?? 0} 条明文`
-            : '全池配额已刷新'
-      toast({ title: msg })
-      opsInvalidate()
-    },
-    onError: (e: Error) => toast({ title: '操作失败', description: e.message, variant: 'destructive' }),
-  })
-
-  const tokensQuery = useQuery({
-    queryKey: ['github-leak-ops', 'tokens'],
-    queryFn: () => githubMonitorApi.tokens(),
-    refetchInterval: 120000,
-  })
-  const tokens = tokensQuery.data?.data ?? []
-
-  const suppressionsQuery = useQuery({
-    queryKey: ['github-leak-ops', 'suppressions'],
-    queryFn: () => githubMonitorApi.listSuppressions(),
-  })
-  const suppressions = suppressionsQuery.data?.data?.suppressions ?? []
-
-  const suppressionMutation = useMutation({
-    mutationFn: async (action: { type: 'add'; body: { pattern_type: string; pattern: string; note?: string } } | { type: 'delete'; id: string }) => {
-      if (action.type === 'delete') return githubMonitorApi.deleteSuppression(action.id)
-      return githubMonitorApi.addSuppression(action.body)
-    },
-    onSuccess: (res: { message?: string }) => {
-      toast({ title: res.message || '已保存' })
-      setSuppPattern('')
-      setSuppNote('')
-      queryClient.invalidateQueries({ queryKey: ['github-leak-ops'] })
-    },
-    onError: (e: Error) => toast({ title: '操作失败', description: e.message, variant: 'destructive' }),
-  })
-
-  const tokenMutation = useMutation({
-    mutationFn: async (action: { type: 'add'; token: string; label?: string } | { type: 'delete'; id: string } | { type: 'enable'; id: string; enabled: boolean }) => {
-      if (action.type === 'delete') return githubMonitorApi.deleteToken(action.id)
-      if (action.type === 'enable') return githubMonitorApi.setTokenEnabled(action.id, action.enabled)
-      return githubMonitorApi.addToken({ token: action.token, label: action.label })
-    },
-    onSuccess: (res: { message?: string }) => {
-      toast({ title: res.message || '已更新' })
-      setPoolTokenInput('')
-      setPoolLabelInput('')
-      queryClient.invalidateQueries({ queryKey: ['github-leak-ops'] })
-    },
-    onError: (e: Error) => toast({ title: '操作失败', description: e.message, variant: 'destructive' }),
-  })
-
-  const [suppPattern, setSuppPattern] = useState('')
-  const [suppType, setSuppType] = useState('repo')
-  const [suppNote, setSuppNote] = useState('')
-  const [poolTokenInput, setPoolTokenInput] = useState('')
-  const [poolLabelInput, setPoolLabelInput] = useState('')
-
-  /** 历史清理两段式：先预览拿报告，用户确认后才真正删除 */
-  const cleanupPreview = useMutation({
-    mutationFn: () => githubMonitorApi.cleanupPreview(),
-    onSuccess: (res) => {
-      const report = res.data as GitHubCleanupReport
-      Modal.confirm({
-        title: '确认清理历史噪音命中？',
-        width: 560,
-        content: (
-          <div className="text-sm">
-            <p>
-              扫描 <b>{report.total}</b> 条历史命中，匹配噪音特征 <b className="text-destructive">{report.matched}</b> 条，
-              执行后不可恢复。
-            </p>
-            {Object.keys(report.by_status ?? {}).length > 0 && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                按状态：{Object.entries(report.by_status).map(([k, v]) => `${k}=${v}`).join('，')}
-              </p>
-            )}
-            {Object.keys(report.by_type ?? {}).length > 0 && (
-              <p className="text-xs text-muted-foreground">
-                按类型：{Object.entries(report.by_type).map(([k, v]) => `${k}=${v}`).join('，')}
-              </p>
-            )}
-          </div>
-        ),
-        okText: `删除 ${report.matched} 条`,
-        okType: 'danger',
-        cancelText: '取消',
-        onOk: async () => {
-          try {
-            const r2 = await githubMonitorApi.cleanupApply()
-            toast({ title: `已删除 ${r2.data?.deleted ?? 0} 条` })
-            opsInvalidate()
-          } catch (e) {
-            toast({ title: '清理失败', description: (e as Error).message, variant: 'destructive' })
-          }
-        },
-      })
-    },
-    onError: (e: Error) => toast({ title: '预览失败', description: e.message, variant: 'destructive' }),
-  })
-
   const addKeyword = () => {
     const kws = ruleInput
       .split(/[,，\s]+/)
@@ -295,7 +166,7 @@ export function GitHubMonitorPanel({ projectId }: { projectId: number }) {
       width: 150,
       render: (_, f) => (
         <span className="text-muted-foreground whitespace-nowrap text-xs">
-          {f.first_seen ? formatDate(f.first_seen) : '—'}
+          {f.first_seen_at || f.first_seen ? formatDate(f.first_seen_at || f.first_seen || '') : '—'}
         </span>
       ),
     },
@@ -424,221 +295,7 @@ export function GitHubMonitorPanel({ projectId }: { projectId: number }) {
             </div>
           </div>
 
-          {/* 全局运维：巡查/补全/清理/配额 */}
-          <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
-            <span className="flex items-center gap-1 text-xs text-muted-foreground">
-              <Zap className="size-3.5" /> 全局运维：
-            </span>
-            <Button
-              size="small"
-              icon={<RefreshCw className="size-3.5" />}
-              loading={opsMutation.isPending && opsMutation.variables === 'run'}
-              onClick={() => opsMutation.mutate('run')}
-            >
-              立即巡查
-            </Button>
-            <Button
-              size="small"
-              loading={opsMutation.isPending && opsMutation.variables === 'backfill'}
-              onClick={() => opsMutation.mutate('backfill')}
-            >
-              补全明文（≤50）
-            </Button>
-            <Button size="small" loading={cleanupPreview.isPending} onClick={() => cleanupPreview.mutate()}>
-              历史噪音清理
-            </Button>
-            <Button
-              size="small"
-              loading={opsMutation.isPending && opsMutation.variables === 'refresh-tokens'}
-              onClick={() => opsMutation.mutate('refresh-tokens')}
-            >
-              刷新全部配额
-            </Button>
-          </div>
-
-          {/* Token 池：多账号轮换，配额展示 */}
-          <div className="rounded-lg border border-border p-3">
-            <div className="mb-2 flex flex-wrap items-center gap-2">
-              <span className="flex items-center gap-1 text-xs font-medium">
-                <Shield className="size-3.5" /> Token 池（多账号轮换，按剩余配额选号）
-              </span>
-              <span className="text-xs text-muted-foreground">
-                池为空时使用上方项目 Token；同号重复入池会被拒绝
-              </span>
-            </div>
-            <div className="mb-2 flex flex-wrap gap-2">
-              <Input
-                size="small"
-                className="w-56"
-                placeholder="备注名（可选，缺省用掩码）"
-                value={poolLabelInput}
-                onChange={(e) => setPoolLabelInput(e.target.value)}
-              />
-              <Input.Password
-                size="small"
-                className="w-80"
-                placeholder="ghp_… 开头的 Personal Access Token"
-                value={poolTokenInput}
-                onChange={(e) => setPoolTokenInput(e.target.value)}
-              />
-              <Button
-                size="small"
-                icon={<Plus className="size-3.5" />}
-                disabled={!poolTokenInput.trim()}
-                loading={tokenMutation.isPending}
-                onClick={() => tokenMutation.mutate({ type: 'add', token: poolTokenInput.trim(), label: poolLabelInput.trim() || undefined })}
-              >
-                入池
-              </Button>
-            </div>
-            {tokens.length > 0 && (
-              <Table<GitHubPoolToken>
-                rowKey="id"
-                size="small"
-                dataSource={tokens}
-                pagination={false}
-                locale={{ emptyText: '池为空' }}
-                columns={[
-                  {
-                    title: '账号',
-                    key: 'label',
-                    render: (_, t) => (
-                      <div className="text-xs">
-                        <div className="font-medium">{t.label}</div>
-                        <div className="font-mono text-[10px] text-muted-foreground">{t.masked}</div>
-                      </div>
-                    ),
-                  },
-                  {
-                    title: '剩余配额',
-                    key: 'rate',
-                    width: 180,
-                    render: (_, t) =>
-                      t.rate_remaining < 0 ? (
-                        <span className="text-xs text-muted-foreground">未采集</span>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <Progress
-                            percent={t.rate_limit ? Math.round((t.rate_remaining / t.rate_limit) * 100) : 0}
-                            size="small"
-                            className="w-24 [&_.ant-progress-text]:text-[10px]"
-                            strokeColor={t.rate_remaining <= 0 ? '#ef4444' : undefined}
-                          />
-                          <span className="font-mono text-[10px] text-muted-foreground">
-                            {t.rate_remaining}/{t.rate_limit}
-                          </span>
-                        </div>
-                      ),
-                  },
-                  {
-                    title: '重置时间',
-                    key: 'reset',
-                    width: 140,
-                    render: (_, t) => (
-                      <span className="text-[10px] text-muted-foreground">
-                        {t.rate_reset_at ? formatDate(t.rate_reset_at) : '—'}
-                      </span>
-                    ),
-                  },
-                  {
-                    title: '启用',
-                    key: 'enabled',
-                    width: 70,
-                    render: (_, t) => (
-                      <Switch
-                        size="small"
-                        checked={t.enabled}
-                        onChange={(enabled) => tokenMutation.mutate({ type: 'enable', id: t.id, enabled })}
-                      />
-                    ),
-                  },
-                  {
-                    title: '操作',
-                    key: 'ops',
-                    width: 120,
-                    render: (_, t) => (
-                      <div className="flex gap-2">
-                        <Button
-                          type="link"
-                          size="small"
-                          className="h-auto p-0 text-xs"
-                          onClick={() => githubMonitorApi.refreshToken(t.id).then(() => {
-                            toast({ title: `${t.label} 已刷新` })
-                            queryClient.invalidateQueries({ queryKey: ['github-leak-ops'] })
-                          })}
-                        >
-                          刷新
-                        </Button>
-                        <Popconfirm title="删除该 Token？" onConfirm={() => tokenMutation.mutate({ type: 'delete', id: t.id })}>
-                          <Button type="link" size="small" className="h-auto p-0 text-xs text-destructive">
-                            删除
-                          </Button>
-                        </Popconfirm>
-                      </div>
-                    ),
-                  },
-                ]}
-              />
-            )}
-          </div>
-
-          {/* 误报抑制管理 */}
-          <div className="rounded-lg border border-border p-3">
-            <div className="mb-2 flex flex-wrap items-center gap-2">
-              <span className="text-xs font-medium">误报抑制（命中不再入库）</span>
-              <span className="text-xs text-muted-foreground">标记误报时也会自动按指纹静默</span>
-            </div>
-            <div className="mb-2 flex flex-wrap gap-2">
-              <Select
-                size="small"
-                className="w-40"
-                value={suppType}
-                onChange={setSuppType}
-                options={SUPPRESSION_TYPE_OPTIONS}
-              />
-              <Input
-                size="small"
-                className="w-72"
-                placeholder="匹配值（如 owner/repo、*.example.com/*）"
-                value={suppPattern}
-                onChange={(e) => setSuppPattern(e.target.value)}
-              />
-              <Input
-                size="small"
-                className="w-48"
-                placeholder="备注（可选）"
-                value={suppNote}
-                onChange={(e) => setSuppNote(e.target.value)}
-              />
-              <Button
-                size="small"
-                icon={<Plus className="size-3.5" />}
-                disabled={!suppPattern.trim()}
-                loading={suppressionMutation.isPending}
-                onClick={() => suppressionMutation.mutate({ type: 'add', body: { pattern_type: suppType, pattern: suppPattern.trim(), note: suppNote.trim() || undefined } })}
-              >
-                加抑制
-              </Button>
-            </div>
-            {suppressions.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {suppressions.map((s: GitHubSuppression) => (
-                  <Tag
-                    key={s.id}
-                    closable
-                    onClose={(e) => {
-                      e.preventDefault()
-                      suppressionMutation.mutate({ type: 'delete', id: s.id })
-                    }}
-                    className="max-w-[420px]"
-                  >
-                    <span className="font-mono text-[10px] text-muted-foreground">[{s.pattern_type}]</span> {s.pattern}
-                    {s.note && <span className="ml-1 text-[10px] text-muted-foreground">· {s.note}</span>}
-                  </Tag>
-                ))}
-              </div>
-            )}
-          </div>
+          {/* 全局运维 / Token 池 / 抑制管理已迁往独立「敏感信息监控」页（/github-leaks） */}
 
           {/* 命中列表 */}
           <Table<GitHubFinding>

@@ -242,6 +242,9 @@ export interface ToolRuntimeStatus {
   status_note: string
   path: string
   managed: boolean
+  in_project?: boolean
+  source?: string
+  size_bytes?: number
   disk_version: string
   update_available: boolean
 }
@@ -266,6 +269,37 @@ export interface ToolsRuntimeOverview {
   browser?: BrowserRuntimeStatus | null
 }
 
+/** 平台项目内部已安装工具的统一检索条目 */
+export interface InstalledTool {
+  name: string
+  description?: string
+  path: string
+  source: string
+  in_project: boolean
+  managed: boolean
+  version?: string
+  size_bytes: number
+  executable: boolean
+  mod_time?: string
+  note?: string
+}
+
+export interface InstalledToolsResult {
+  items: InstalledTool[]
+  total: number
+  roots: string[]
+  external: InstalledTool[]
+  external_count: number
+}
+
+export interface InstalledToolsQuery {
+  q?: string
+  source?: string
+  in_project?: boolean
+  managed?: boolean
+  include_external?: boolean
+}
+
 export interface ToolUpdateRecord {
   tool: string
   from_version: string
@@ -287,6 +321,14 @@ export const toolRuntimeApi = {
   async list(): Promise<ToolsRuntimeOverview> {
     const raw = (await api.get('/tools')) as unknown as ApiResponse<ToolsRuntimeOverview>
     return raw.data
+  },
+  async installed(query: InstalledToolsQuery = {}): Promise<InstalledToolsResult> {
+    const raw = (await api.get('/tools/installed', { params: query })) as unknown as ApiResponse<InstalledToolsResult>
+    return raw.data
+  },
+  async ensureInstalled(): Promise<Record<string, string>> {
+    const raw = (await api.post('/tools/ensure-installed', {}, { timeout: 660000 })) as unknown as ApiResponse<Record<string, string>>
+    return raw.data ?? {}
   },
   async check(name: string): Promise<ToolRuntimeStatus> {
     const raw = (await api.post(`/tools/${name}/check`, {}, { timeout: 60000 })) as unknown as ApiResponse<ToolRuntimeStatus>

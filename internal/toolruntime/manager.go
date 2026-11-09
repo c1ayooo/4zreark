@@ -179,6 +179,44 @@ func (m *Manager) ResolveToolPath(name string) string {
 	return ""
 }
 
+// ProjectToolPath 只检测平台自身（项目内部）的工具安装：
+//  1. 托管目录 <root>/<os>/<name>（自动安装的落点）
+//  2. vendored tools/<os>/<name>（手工放进项目的副本）
+//
+// ZRE_TOOL_<NAME>_PATH 覆盖与系统 PATH 都不算「平台已安装」：环境里能
+// 找到但项目内没有时，EnsureInstalled 仍会把工具装进项目目录。
+func (m *Manager) ProjectToolPath(name string) string {
+	if p := m.BinaryPath(name); fileExists(p) {
+		return p
+	}
+	for _, dir := range legacyToolDirs() {
+		p := filepath.Join(dir, OSDir(runtime.GOOS), exeName(name))
+		if fileExists(p) {
+			return p
+		}
+	}
+	return ""
+}
+
+// ToolSource 返回当前解析路径的来源（override/managed/vendored/system）。
+func (m *Manager) ToolSource(name, path string) string {
+	if path == "" {
+		return ""
+	}
+	if p := strings.TrimSpace(os.Getenv("ZRE_TOOL_" + strings.ToUpper(name) + "_PATH")); p != "" && samePath(p, path) {
+		return SourceOverride
+	}
+	if samePath(path, m.BinaryPath(name)) {
+		return SourceManaged
+	}
+	for _, dir := range legacyToolDirs() {
+		if samePath(path, filepath.Join(dir, OSDir(runtime.GOOS), exeName(name))) {
+			return SourceVendored
+		}
+	}
+	return SourceSystem
+}
+
 // legacyToolDirs 返回 vendored tools 目录的候选（与旧版 getToolsDir 语义一致）。
 func legacyToolDirs() []string {
 	var dirs []string
@@ -398,6 +436,9 @@ type ToolStatus struct {
 	ToolState
 	Path            string `json:"path"`
 	Managed         bool   `json:"managed"`      // 路径来自托管目录
+	InProject       bool   `json:"in_project"`   // 项目内部是否有平台安装副本
+	Source          string `json:"source"`       // 当前解析路径来源
+	SizeBytes       int64  `json:"size_bytes"`
 	DiskVersion     string `json:"disk_version"` // 二进制自报版本（尽力而为）
 	DiskSHA256      string `json:"disk_sha256"`
 	UpdateAvailable bool   `json:"update_available"`
@@ -411,7 +452,12 @@ func (m *Manager) Status(ctx context.Context) []ToolStatus {
 		status := ToolStatus{ToolState: *st}
 		status.Path = m.ResolveToolPath(spec.Name)
 		status.Managed = status.Path != "" && samePath(status.Path, m.BinaryPath(spec.Name))
+		status.Source = m.ToolSource(spec.Name, status.Path)
+		status.InProject = m.ProjectToolPath(spec.Name) != ""
 		if status.Path != "" {
+			if fi, err := os.Stat(status.Path); err == nil {
+				status.SizeBytes = fi.Size()
+			}
 			status.DiskSHA256, _ = fileSHA256(status.Path)
 			status.DiskVersion = m.probeVersion(ctx, spec.Name, status.Path)
 			if status.InstalledVersion == "" && status.DiskVersion != "" {
@@ -429,6 +475,9 @@ func (m *Manager) Status(ctx context.Context) []ToolStatus {
 			status.Status = statusOK
 		}
 		status.UpdateAvailable = m.newerAvailable(st) && st.PinnedVersion == ""
+		if !status.InProject && status.Path != "" && status.StatusNote == "" {
+			status.StatusNote = "当前使用环境外部工具（PATH/覆盖）；平台项目内未安装，自动补装会装到项目目录"
+		}
 		out = append(out, status)
 	}
 	return out
@@ -520,15 +569,20 @@ func (m *Manager) checkDueForState(st *ToolState) bool {
 		time.Since(st.LatestCheckedAt) > time.Duration(st.CheckIntervalHours)*time.Hour
 }
 
-// EnsureInstalled 确保工具可用：本地任何位置都没有且 auto_update 开启时，
-// 安装 DefaultVersion。供服务启动/部署流调用；扫描路径不调它（不阻断扫描）。
+// EnsureInstalled 确保工具装进平台自己的项目目录：项目内检测不到且
+// auto_update 开启时，下载 DefaultVersion 到 <root>/<os>/。
+// 系统 PATH 上的同名工具不算平台安装，不会阻止自动安装；运行时仍保留
+// ResolveToolPath 的 PATH 兜底，自动安装完成前扫描不被阻断。
 func (m *Manager) EnsureInstalled(ctx context.Context, name string) (string, error) {
-	if p := m.ResolveToolPath(name); p != "" {
+	if p := m.ProjectToolPath(name); p != "" {
 		return p, nil
+	}
+	if _, ok := Spec(name); !ok {
+		return "", fmt.Errorf("未知工具: %s", name)
 	}
 	st := m.loadState(ctx, name)
 	if !st.AutoUpdate {
-		return "", fmt.Errorf("%s 未安装且 auto_update 关闭", name)
+		return "", fmt.Errorf("%s 未安装到项目内且 auto_update 关闭", name)
 	}
 	if _, err := m.install(ctx, name, st.PinnedVersion, false); err != nil {
 		return "", err

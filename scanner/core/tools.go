@@ -3,7 +3,6 @@ package core
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 
 	"github.com/c1ayooo/4zreark/internal/toolruntime"
 )
@@ -66,31 +65,13 @@ func (t *ToolsManager) IsToolAvailable(toolName string) bool {
 	return t.GetToolPath(toolName) != ""
 }
 
-// ListAvailableTools 列出可用工具
+// ListAvailableTools 列出平台项目内部已安装的工具（托管目录 + vendored 目录）。
+// 系统 PATH 上的工具不算平台自身安装，统一走 toolruntime 的发现逻辑。
 func (t *ToolsManager) ListAvailableTools() []string {
-	var tools []string
-	var osDir string
-	switch runtime.GOOS {
-	case "darwin":
-		osDir = "darwin"
-	case "linux":
-		osDir = "linux"
-	case "windows":
-		osDir = "win"
-	default:
-		return tools
-	}
-
-	toolsPath := filepath.Join(t.ToolsDir, osDir)
-	entries, err := os.ReadDir(toolsPath)
-	if err != nil {
-		return tools
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			tools = append(tools, entry.Name())
-		}
+	res := toolruntime.DiscoverInstalled(toolruntime.DefaultDiscoverOptions())
+	tools := make([]string, 0, len(res.Items))
+	for _, it := range res.Items {
+		tools = append(tools, it.Name)
 	}
 	return tools
 }

@@ -308,7 +308,17 @@ func (j *SentinelJudge) Judge(ctx context.Context, commitID int64) (judgment *re
 		//   - S 级自动草拟 nuclei 候选落 draft——人工 verified 才可发布/复现，
 		//     铁律不自动越过；确认（confirmed）时所有等级都会补齐 nuclei。
 		if err == nil {
-			enrichFindingAsync(findingID, grade == "S")
+			// 自动 nuclei 草拟：S 级始终；web 类漏洞按 sentinel.auto_artifacts.
+			// nuclei_web 开关扩展（内存破坏类没有 HTTP 验证面，不适合 nuclei）。
+			autoNuclei := grade == "S" ||
+				(autoArtifactOn(func(c *config.SentinelAutoArtifactsConfig) *bool { return c.NucleiWeb }) &&
+					isWebVulnClass(verdict.VulnClass))
+			enrichFindingAsync(findingID, autoNuclei)
+			// Tier 2 高危产物流水线：深审 → python-poc → exploit-guide
+			// （不 clone、不起容器；容器复现仍是 Tier 3 人工闸门后的 pocsmith）。
+			if verdict.Severity == "high" || verdict.Severity == "critical" || grade == "S" {
+				highRiskArtifactsAsync(j, findingID, commit.ID, verdict.VulnClass)
+			}
 		}
 		// 命中即通知：级别随 severity，渠道侧可用 MinLevel 过滤降级噪音。
 		notifyJudgeHit(commit, verdict, judgment.ID)

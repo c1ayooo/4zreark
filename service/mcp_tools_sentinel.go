@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -335,6 +336,43 @@ func (s *MCPService) sentinelTools() []mcpToolHandler {
 			Scopes: []string{ScopeSentinelWrite},
 			Run: func(ctx context.Context, key *repo.APIKey, args json.RawMessage) *mcpToolResult {
 				return s.sentinelRequestRepro(ctx, key, args)
+			},
+		},
+		{
+			Tool: mcpTool{
+				Name:  "sentinel_verify_poc",
+				Title: "请求 POC 靶场验证",
+				Description: "把发现排入 pocsmith 靶场验证队列：AI 选公开靶场镜像（vulhub 等，白名单约束）→ docker 起" +
+					"隔离内网靶场（--internal 无外网出口）→ 在靶场上执行 verified 的 python-poc → 按 VULNERABLE/NOT " +
+					"VULNERABLE 判定可行性。前置材料：已人工 verified 的 kind=poc、title=python-poc 产物。" +
+					"force=true 忽略已有 poc-verify 产物重跑。入队后用 sentinel_wait_poc_verify 等结论。写操作。仅「全部项目」的 key 可用。",
+				InputSchema: inputSchema(map[string]any{
+					"finding_id": map[string]any{"type": "integer", "minimum": 1},
+					"force":      map[string]any{"type": "boolean", "description": "忽略已有 poc-verify 产物强制重跑（默认 false）"},
+				}, "finding_id"),
+				Annotations: writeAnnotations(false),
+			},
+			Scopes: []string{ScopeSentinelWrite},
+			Run: func(ctx context.Context, key *repo.APIKey, args json.RawMessage) *mcpToolResult {
+				return s.sentinelVerifyPoc(ctx, key, args)
+			},
+		},
+		{
+			Tool: mcpTool{
+				Name:  "sentinel_wait_poc_verify",
+				Title: "等待 POC 靶场验证结论",
+				Description: "轮询发现下 title=poc-verify 的验证产物并返回结构化结论" +
+					"（verdict=vulnerable/not_vulnerable/error、镜像与环境、执行日志位置）。只读操作。",
+				InputSchema: inputSchema(map[string]any{
+					"finding_id":       map[string]any{"type": "integer", "minimum": 1},
+					"timeout_seconds":  map[string]any{"type": "integer", "description": "最长等待秒数（默认 240）"},
+					"interval_seconds": map[string]any{"type": "integer", "description": "轮询间隔秒数（默认 5）"},
+				}, "finding_id"),
+				Annotations: readOnlyAnnotations(),
+			},
+			Scopes: []string{ScopeSentinelRead},
+			Run: func(ctx context.Context, key *repo.APIKey, args json.RawMessage) *mcpToolResult {
+				return s.sentinelWaitPocVerify(ctx, key, args)
 			},
 		},
 		{
@@ -749,6 +787,134 @@ func (s *MCPService) sentinelWaitJudge(ctx context.Context, key *repo.APIKey, ra
 		case <-time.After(time.Duration(args.PollIntervalSecond) * time.Second):
 		}
 	}
+}
+
+// sentinelVerifyPoc 把发现排入 pocsmith 靶场验证队列（Tier 3b）。
+func (s *MCPService) sentinelVerifyPoc(ctx context.Context, key *repo.APIKey, raw json.RawMessage) *mcpToolResult {
+	if err := requireGlobalKey(key); err != nil {
+		return toolError(err.Error())
+	}
+	var args struct {
+		FindingID int64 `json:"finding_id"`
+		Force     bool  `json:"force"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return toolError(err.Error())
+	}
+	if args.FindingID <= 0 {
+		return toolError("finding_id 必填")
+	}
+	if !pocVerifyEnabled() {
+		return toolError("靶场验证未开启（sentinel.poc_verify.enabled=false）")
+	}
+	q := DefaultSentinelQueue()
+	if q == nil {
+		return toolError("提交哨兵未启用（sentinel.enabled=false）")
+	}
+	store, err := sentinelStore()
+	if err != nil {
+		return toolError(err.Error())
+	}
+	if _, err := store.GetFinding(ctx, args.FindingID); err != nil {
+		return toolError("发现不存在: " + err.Error())
+	}
+	if err := q.EnqueuePocVerify(ctx, args.FindingID, args.Force); err != nil {
+		return toolError(err.Error())
+	}
+	return toolOK(map[string]any{
+		"finding_id": args.FindingID, "queued": true,
+		"note": "已入队（worker 在 pocsmith 进程，串行执行）：AI 选靶场镜像 → docker 起 --internal 隔离内网靶场 → 执行 verified 的 python-poc → 判定",
+		"next": "用 sentinel_wait_poc_verify 轮询结论；产物 title=poc-verify（kind=repro_log，status=verified）",
+	})
+}
+
+// sentinelWaitPocVerify 轮询 title=poc-verify 的验证产物并返回结构化结论。
+// 拉镜像/起靶场可能要几分钟，超时上限放宽到 600s（不走 90s 的通用 wait 钳制）。
+func (s *MCPService) sentinelWaitPocVerify(ctx context.Context, key *repo.APIKey, raw json.RawMessage) *mcpToolResult {
+	if err := requireGlobalKey(key); err != nil {
+		return toolError(err.Error())
+	}
+	var args struct {
+		FindingID     int `json:"finding_id"`
+		TimeoutSecond int `json:"timeout_seconds"`
+		PollInterval  int `json:"interval_seconds"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return toolError(err.Error())
+	}
+	if args.FindingID <= 0 {
+		return toolError("finding_id 必填")
+	}
+	if args.TimeoutSecond <= 0 {
+		args.TimeoutSecond = 240
+	}
+	if args.TimeoutSecond > 600 {
+		args.TimeoutSecond = 600
+	}
+	if args.PollInterval <= 0 {
+		args.PollInterval = 5
+	}
+	if args.PollInterval > 30 {
+		args.PollInterval = 30
+	}
+	store, err := sentinelStore()
+	if err != nil {
+		return toolError(err.Error())
+	}
+	deadline := time.Now().Add(time.Duration(args.TimeoutSecond) * time.Second)
+	started := time.Now()
+	for {
+		if f, err := store.GetFinding(ctx, int64(args.FindingID)); err == nil && f.VerifiedAt != nil {
+			return toolOK(map[string]any{
+				"finding_id": args.FindingID, "finished": true,
+				"verdict":        "passed（finding 已机器验证 verified_at 非空）",
+				"waited_seconds": int(time.Since(started).Seconds()),
+			})
+		}
+		arts, _ := store.ListArtifacts(ctx, int64(args.FindingID))
+		for _, a := range arts {
+			if a.Kind == "repro_log" && a.Title == pocVerifyTitle {
+				out := map[string]any{
+					"finding_id": args.FindingID, "finished": true,
+					"artifact_id": a.ID, "artifact_status": a.Status,
+					"waited_seconds": int(time.Since(started).Seconds()),
+				}
+				if v, err := parsePocVerifyContent(a.Content); err == nil {
+					out["verdict"] = v.Verdict
+					out["passed"] = v.Passed
+					out["reason"] = v.Reason
+					out["env"] = v.Env
+				}
+				return toolOK(out)
+			}
+		}
+		if time.Now().After(deadline) {
+			return toolOK(map[string]any{
+				"finding_id": args.FindingID, "finished": false,
+				"note": "等待超时：任务可能仍在排队（靶场验证串行执行、拉镜像耗时）",
+				"next": "稍后重试 sentinel_wait_poc_verify，或查看巡检批次的 poc_verify 事件流",
+			})
+		}
+		select {
+		case <-ctx.Done():
+			return toolError("调用方取消")
+		case <-time.After(time.Duration(args.PollInterval) * time.Second):
+		}
+	}
+}
+
+// parsePocVerifyContent 从 poc-verify 产物内容头部解析结构化结论。
+func parsePocVerifyContent(content string) (*PocVerifyVerdict, error) {
+	i := strings.IndexByte(content, '{')
+	j := strings.LastIndexByte(content, '}')
+	if i < 0 || j <= i {
+		return nil, errors.New("产物内容不是有效 JSON")
+	}
+	var v PocVerifyVerdict
+	if err := json.Unmarshal([]byte(content[i:j+1]), &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
 }
 
 func (s *MCPService) sentinelWaitRepro(ctx context.Context, key *repo.APIKey, raw json.RawMessage) *mcpToolResult {

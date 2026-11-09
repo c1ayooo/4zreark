@@ -139,7 +139,7 @@ func (s *SentinelSource) ImportArchive(ctx context.Context, name, filename strin
 		pending, perr := s.store.ListPendingCommits(ctx, r.ID, uploadMaxJudge)
 		if perr == nil {
 			for _, cm := range pending {
-				if q.EnqueueJudge(ctx, cm.ID) == nil {
+				if q.EnqueueJudgePriority(ctx, cm.ID, SentinelJudgePriorityManual) == nil {
 					res.EnqueuedJudge++
 				}
 			}

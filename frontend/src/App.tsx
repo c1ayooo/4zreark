@@ -24,6 +24,7 @@ const VulnerabilitiesPage = lazy(() => import('@/pages/vulnerabilities/Vulnerabi
 const VulnerabilityDetailPage = lazy(() => import('@/pages/vulnerabilities/VulnerabilityDetailPage'))
 const POCsPage = lazy(() => import('@/pages/pocs/POCsPage'))
 const ToolkitPage = lazy(() => import('@/pages/tools/ToolkitPage'))
+const GitHubLeakMonitorPage = lazy(() => import('@/pages/github-leak/GitHubLeakMonitorPage'))
 const NodesPage = lazy(() => import('@/pages/nodes/NodesPage'))
 const PluginsPage = lazy(() => import('@/pages/plugins/PluginsPage'))
 const UsersPage = lazy(() => import('@/pages/users/UsersPage'))
@@ -184,6 +185,7 @@ function App() {
             <Route path="/vulnerabilities/:id" element={<VulnerabilityDetailPage />} />
             <Route path="/pocs" element={<POCsPage />} />
             <Route path="/tools" element={<ToolkitPage />} />
+            <Route path="/github-leaks" element={<GitHubLeakMonitorPage />} />
             <Route path="/takeover" element={<TakeoverPage />} />
             <Route path="/monitor" element={<MonitorPage />} />
             <Route path="/sentinel" element={<SentinelOverviewPage />} />

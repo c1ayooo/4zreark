@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"strings"
+	"time"
 
 	"github.com/c1ayooo/4zreark/internal/toolruntime"
 	"github.com/c1ayooo/4zreark/service"
@@ -23,6 +25,31 @@ func NewToolRuntimeHandler() *ToolRuntimeHandler {
 // @Router /api/tools [get]
 func (h *ToolRuntimeHandler) List(c *gin.Context) {
 	utils.Success(c, h.svc.Status(c.Request.Context()))
+}
+
+// Installed 检索平台项目内部已安装的工具（支持 q/source/in_project/managed）。
+// include_external=1 时把系统 PATH 等外部候选并入结果，默认单列在 external 字段。
+// @Router /api/tools/installed [get]
+func (h *ToolRuntimeHandler) Installed(c *gin.Context) {
+	f := toolruntime.InstalledFilter{
+		Query:     strings.TrimSpace(c.Query("q")),
+		Source:    strings.TrimSpace(c.Query("source")),
+		InProject: queryBool(c, "in_project"),
+		Managed:   queryBool(c, "managed"),
+	}
+	includeExternal := false
+	if v := queryBool(c, "include_external"); v != nil {
+		includeExternal = *v
+	}
+	utils.Success(c, h.svc.InstalledTools(c.Request.Context(), f, includeExternal))
+}
+
+// Ensure 立即检测并补装项目内缺失的工具。
+// @Router /api/tools/ensure-installed [post]
+func (h *ToolRuntimeHandler) Ensure(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
+	defer cancel()
+	utils.SuccessWithMessage(c, "已巡检项目内工具", h.svc.EnsureMissing(ctx))
 }
 
 // Check 查询单个工具上游最新版本
@@ -120,4 +147,13 @@ func (h *ToolRuntimeHandler) UpdateSettings(c *gin.Context) {
 		return
 	}
 	utils.SuccessWithMessage(c, "设置已保存", st)
+}
+
+func queryBool(c *gin.Context, key string) *bool {
+	raw := strings.TrimSpace(c.Query(key))
+	if raw == "" {
+		return nil
+	}
+	v := raw == "1" || strings.EqualFold(raw, "true") || strings.EqualFold(raw, "yes")
+	return &v
 }
