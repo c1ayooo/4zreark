@@ -3,6 +3,7 @@ frontend/node_modules/
 frontend/dist/
 /4zreark
 /fpmine
+/score-backfill
 *.exe
 *.tsbuildinfo
 
