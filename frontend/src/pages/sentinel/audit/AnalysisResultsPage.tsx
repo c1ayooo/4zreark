@@ -427,6 +427,7 @@ export default function AnalysisResultsPage() {
           <Table
             rowKey={(r) => r.id}
             size="middle"
+            tableLayout="fixed"
             loading={commitsQuery.isLoading}
             columns={columns}
             dataSource={items}
