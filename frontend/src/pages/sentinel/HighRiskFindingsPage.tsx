@@ -10,7 +10,7 @@
  *   GET /api/sentinel/findings/summary              → 统计卡
  *   GET /api/sentinel/findings?min_severity=high&…  → 列表（含产物摘要）
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Table, Tooltip } from 'antd'
 import type { TableProps } from 'antd'
@@ -59,7 +59,11 @@ const TRACKED_ARTIFACTS: { key: string; label: string; match: (a: ArtifactSummar
 function ArtifactCell({ finding }: { finding: SentinelFinding }) {
   const arts = finding.artifacts ?? []
   if (!arts.length) {
-    return <span className="text-[11px] text-muted-foreground">产物链生成中…</span>
+    return (
+      <Tooltip title="该发现还没有验证产物。高危命中后会自动草拟 python-poc / nuclei（旧数据早于产物流水线，可到发现详情手动触发）。">
+        <span className="text-[11px] text-muted-foreground">未生成</span>
+      </Tooltip>
+    )
   }
   return (
     <div className="flex flex-wrap gap-1">
@@ -90,9 +94,19 @@ export default function HighRiskFindingsPage() {
   })
   const sum = summaryQuery.data
 
+  /** 统计卡即筛选：all=全部，verified=已机器验证，pending=未验证，confirmed=人工确认 */
+  const [filter, setFilter] = useState<'all' | 'verified' | 'pending' | 'confirmed'>('all')
+  const filterParams = {
+    min_severity: 'high',
+    verified: filter === 'verified' ? 'true' : filter === 'pending' ? 'false' : undefined,
+    status: filter === 'confirmed' ? 'confirmed' : undefined,
+  }
+
+  useEffect(() => setPage(1), [filter])
+
   const findingsQuery = useQuery({
-    queryKey: ['sentinel', 'findings', { min_severity: 'high', page, size }],
-    queryFn: () => sentinelApi.findings({ min_severity: 'high', page, size }),
+    queryKey: ['sentinel', 'findings', { ...filterParams, page, size }],
+    queryFn: () => sentinelApi.findings({ ...filterParams, page, size }),
     refetchInterval: 30_000,
   })
   const items = findingsQuery.data?.list ?? []
@@ -100,10 +114,10 @@ export default function HighRiskFindingsPage() {
 
   const cards = useMemo(
     () => [
-      { key: 'high', title: '高危发现', value: sum?.high_risk, icon: Flame, hint: 'severity ∈ {high, critical}', tone: 'text-destructive' },
-      { key: 'verified', title: '已机器验证', value: sum?.verified, icon: ShieldCheck, hint: '靶场验证 / 差分复现通过', tone: 'text-primary' },
-      { key: 'pending', title: '待验证', value: sum?.pending_poc, icon: ListChecks, hint: '尚未机器确认（产物链进行中）', tone: 'text-orange-500' },
-      { key: 'confirmed', title: '人工确认', value: sum?.confirmed, icon: CheckCircle2, hint: 'status = confirmed', tone: 'text-blue-500' },
+      { key: 'all', title: '高危发现', value: sum?.high_risk, icon: Flame, hint: 'severity ∈ {high, critical}，点击查看全部', tone: 'text-destructive' },
+      { key: 'verified', title: '已机器验证', value: sum?.verified, icon: ShieldCheck, hint: '靶场验证 / 差分复现通过，点击筛选', tone: 'text-primary' },
+      { key: 'pending', title: '待验证', value: sum?.pending_poc, icon: ListChecks, hint: '尚未机器确认，点击筛选', tone: 'text-orange-500' },
+      { key: 'confirmed', title: '人工确认', value: sum?.confirmed, icon: CheckCircle2, hint: 'status = confirmed，点击筛选', tone: 'text-blue-500' },
     ],
     [sum],
   )
@@ -166,7 +180,7 @@ export default function HighRiskFindingsPage() {
             通过
           </span>
         ) : (
-          <span className="text-[11px] text-muted-foreground">验证链进行中</span>
+          <span className="text-[11px] text-muted-foreground" title="尚未通过靶场验证 / 差分复现确认">未验证</span>
         ),
     },
     {
@@ -197,16 +211,27 @@ export default function HighRiskFindingsPage() {
       />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {cards.map((c) => (
-          <div key={c.key} className="rounded-2xl border border-border bg-card px-5 py-4">
-            <div className="mb-1 flex items-center gap-2 text-[12px] text-muted-foreground">
-              <c.icon size={14} className={c.tone} />
-              {c.title}
-            </div>
-            <div className="text-2xl font-bold tracking-tight">{fmtNumber(c.value)}</div>
-            <div className="mt-0.5 text-[10.5px] text-muted-foreground/80">{c.hint}</div>
-          </div>
-        ))}
+        {cards.map((c) => {
+          const active = filter === c.key
+          return (
+            <button
+              key={c.key}
+              type="button"
+              onClick={() => setFilter(c.key as typeof filter)}
+              className={`rounded-2xl border bg-card px-5 py-4 text-left transition-colors ${
+                active ? 'border-primary ring-1 ring-primary' : 'border-border hover:border-primary/40'
+              }`}
+            >
+              <div className="mb-1 flex items-center gap-2 text-[12px] text-muted-foreground">
+                <c.icon size={14} className={c.tone} />
+                {c.title}
+                {active && <span className="ml-auto text-[10px] text-primary">筛选中</span>}
+              </div>
+              <div className="text-2xl font-bold tracking-tight">{fmtNumber(c.value)}</div>
+              <div className="mt-0.5 text-[10.5px] text-muted-foreground/80">{c.hint}</div>
+            </button>
+          )
+        })}
       </div>
 
       <Table<SentinelFinding>

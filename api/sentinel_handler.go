@@ -427,6 +427,7 @@ func (h *SentinelHandler) ListFindings(c *gin.Context) {
 		VulnClasses: parseVulnClasses(c.Query("vuln_class")),
 		MinSeverity: strings.TrimSpace(c.Query("min_severity")),
 		RepoID:      strings.TrimSpace(c.Query("repo_id")),
+		Verified:    strings.TrimSpace(c.Query("verified")),
 		Page:        page,
 		Size:        size,
 	})

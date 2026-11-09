@@ -252,6 +252,8 @@ export interface FindingQuery {
   vuln_class?: string
   min_severity?: string
   repo_id?: string
+  /** 机器验证过滤："true"=已验证，"false"=未验证（高危工作台统计卡筛选） */
+  verified?: string
   page?: number
   size?: number
 }

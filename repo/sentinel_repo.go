@@ -64,7 +64,12 @@ type GitCommit struct {
 	Status       string    `json:"status"`
 	Score        int       `json:"score"`
 	SkipReason   string    `json:"skip_reason"`
-	CreatedAt    time.Time `json:"created_at"`
+	// 判定失败状态机：attempts 用于上限，next_judge_at 用于退避，
+	// last_judge_error 保留最近一次原因供排查。
+	JudgeAttempts  int        `json:"judge_attempts"`
+	NextJudgeAt    *time.Time `json:"next_judge_at,omitempty"`
+	LastJudgeError string     `json:"last_judge_error,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
 }
 
 // CommitListItem 是提交列表行：不含 diff，附最新判定的摘要。
@@ -510,9 +515,12 @@ func (s *Sentinel) ListPendingCommits(ctx context.Context, repoID string, limit 
 		limit = 50
 	}
 	rows, err := s.pool().Query(ctx, `
-		select c.id, c.repo_id, c.sha, c.committed_at, c.subject, c.diff, c.status
+		select c.id, c.repo_id, c.sha, c.committed_at, c.subject, c.diff, c.status,
+		       c.judge_attempts, c.next_judge_at, c.last_judge_error
 		  from commit c
-		 where c.status = 'pending'
+		 where c.judge_attempts < 5
+		   and (c.status = 'pending' or (c.status = 'failed' and c.next_judge_at is not null))
+		   and (c.next_judge_at is null or c.next_judge_at <= now())
 		   and ($1 = '' or c.repo_id = $1)
 		 order by c.score desc, c.committed_at desc, c.id desc
 		 limit $2`, repoID, limit)
@@ -524,7 +532,8 @@ func (s *Sentinel) ListPendingCommits(ctx context.Context, repoID string, limit 
 	items := make([]*GitCommit, 0, limit)
 	for rows.Next() {
 		var c GitCommit
-		if err := rows.Scan(&c.ID, &c.RepoID, &c.SHA, &c.CommittedAt, &c.Subject, &c.Diff, &c.Status); err != nil {
+		if err := rows.Scan(&c.ID, &c.RepoID, &c.SHA, &c.CommittedAt, &c.Subject, &c.Diff, &c.Status,
+			&c.JudgeAttempts, &c.NextJudgeAt, &c.LastJudgeError); err != nil {
 			return nil, err
 		}
 		items = append(items, &c)
@@ -535,7 +544,43 @@ func (s *Sentinel) ListPendingCommits(ctx context.Context, repoID string, limit 
 // MarkCommitStatus 更新提交处理状态（pending/skipped/judged/failed）。
 func (s *Sentinel) MarkCommitStatus(ctx context.Context, id int64, status, reason string) error {
 	_, err := s.pool().Exec(ctx,
-		`update commit set status = $2, skip_reason = $3 where id = $1`, id, status, reason)
+		`update commit
+		    set status = $2, skip_reason = $3,
+		        next_judge_at = null, last_judge_error = ''
+		  where id = $1`, id, status, reason)
+	return err
+}
+
+// MarkCommitJudgeRetry 记录一次可重试失败：attempts+1，按 backoff 设置下次时间；
+// 达到上限时置 failed 且清空 next_judge_at（不再被调度器捡起）。
+// 返回是否已耗尽。
+func (s *Sentinel) MarkCommitJudgeRetry(ctx context.Context, id int64, errMsg string, maxAttempts int, backoff time.Duration) (bool, error) {
+	if maxAttempts <= 0 {
+		maxAttempts = 5
+	}
+	secs := int(backoff.Seconds())
+	if secs <= 0 {
+		secs = 30
+	}
+	var attempts int
+	err := s.pool().QueryRow(ctx, `
+		update commit
+		   set judge_attempts = judge_attempts + 1,
+		       last_judge_error = $2,
+		       next_judge_at = case when judge_attempts + 1 >= $3 then null
+		                            else now() + ($4::int * interval '1 second') end,
+		       status = case when judge_attempts + 1 >= $3 then 'failed' else 'pending' end
+		 where id = $1
+		 returning judge_attempts`, id, errMsg, maxAttempts, secs).Scan(&attempts)
+	return attempts >= maxAttempts, err
+}
+
+// MarkCommitJudgeTerminal 标记永久失败：不再自动重投，保留错误供人工处理。
+func (s *Sentinel) MarkCommitJudgeTerminal(ctx context.Context, id int64, errMsg string) error {
+	_, err := s.pool().Exec(ctx,
+		`update commit
+		    set status = 'failed', last_judge_error = $2, next_judge_at = null
+		  where id = $1`, id, errMsg)
 	return err
 }
 
@@ -687,8 +732,10 @@ type FindingFilter struct {
 	VulnClasses []string
 	MinSeverity string
 	RepoID      string
-	Page        int
-	Size        int
+	// Verified 按机器验证过滤："true"=已验证（verified_at 非空），"false"=未验证，空=不过滤。
+	Verified string
+	Page     int
+	Size     int
 }
 
 // FindingListItem 是发现列表行：带上来源提交与仓库，便于从产物回溯到改动。
@@ -769,6 +816,11 @@ func (s *Sentinel) ListFindings(ctx context.Context, f FindingFilter) ([]*Findin
 	if f.RepoID != "" {
 		args = append(args, f.RepoID)
 		conds = append(conds, fmt.Sprintf("c.repo_id = $%d", len(args)))
+	}
+	if f.Verified == "true" {
+		conds = append(conds, "f.verified_at is not null")
+	} else if f.Verified == "false" {
+		conds = append(conds, "f.verified_at is null")
 	}
 	where := ""
 	if len(conds) > 0 {
