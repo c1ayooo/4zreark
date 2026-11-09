@@ -11,14 +11,6 @@ export interface GitHubMonitorRule {
   created_at: string
 }
 
-export interface GitHubMonitorSettings {
-  project_id: number
-  enabled: boolean
-  token_configured: boolean
-  interval_seconds?: number
-  updated?: string
-}
-
 export interface GitHubFinding {
   id: string
   status: string
@@ -30,11 +22,27 @@ export interface GitHubFinding {
   secret_type: string
   confidence: string
   severity: string
+  /** H4 加固：API 不返回明文，只有脱敏摘录与首末锚点 */
   masked_excerpt: string
   html_url: string
+  fingerprint?: string
+  secret_key?: string
   verify_status?: string
+  verify_evidence?: string
+  source_updated_at?: string
+  first_seen_at: string
+  last_seen_at: string
+  /** 兼容旧字段（历史响应） */
   first_seen?: string
   last_seen?: string
+}
+
+export interface GitHubFindingListParams {
+  status?: string
+  keyword?: string
+  q?: string
+  page?: number
+  page_size?: number
 }
 
 export interface GitHubFindingsPage {
@@ -115,6 +123,43 @@ export interface GitHubCleanupReport {
   samples?: Array<Record<string, unknown>>
 }
 
+/** 命中分状态统计（全局页概览卡） */
+export interface GitHubLeakStats {
+  total: number
+  new: number
+  triaged: number
+  false_positive: number
+  resolved: number
+  likely: number
+  suspected: number
+}
+
+/** 监控运行态（/github-monitor/runtime） */
+export interface GitHubRuntimeStatus {
+  enabled: boolean
+  configured: boolean
+  running: boolean
+  last_run_at?: string
+  next_run_at?: string
+  last_status: string
+  last_error: string
+  last_warning: string
+  rate_remaining: number
+  rate_reset_at?: string
+  interval_seconds: number
+  request_interval_seconds: number
+  request_timeout_seconds: number
+  keywords: string[]
+  query: string
+  repo_max_age_days: number
+  lookback_days: number
+  rules?: Array<Record<string, unknown>>
+  last_requests: number
+  last_processed: number
+  last_detected: number
+  notify_enabled: boolean
+}
+
 export const githubMonitorApi = {
   overview: (projectId: number) =>
     api.get<unknown, ApiResponse<GitHubMonitorOverview>>(`/projects/${projectId}/github-monitor`),
@@ -138,7 +183,7 @@ export const githubMonitorApi = {
     api.post<unknown, ApiResponse<GitHubMonitorRule>>(`/projects/${projectId}/github-monitor/rules`, body),
   deleteRule: (projectId: number, ruleId: number) =>
     api.delete<unknown, ApiResponse<null>>(`/projects/${projectId}/github-monitor/rules/${ruleId}`),
-  findings: (projectId: number, params: { status?: string; q?: string; page?: number; page_size?: number } = {}) =>
+  findings: (projectId: number, params: GitHubFindingListParams = {}) =>
     api.get<unknown, ApiResponse<GitHubFindingsPage>>(`/projects/${projectId}/github-monitor/findings`, { params }),
   updateFindingStatus: (projectId: number, findingId: string, status: string) =>
     api.put<unknown, ApiResponse<GitHubFinding>>(
@@ -148,7 +193,20 @@ export const githubMonitorApi = {
 
   // ---- 全局运维（Run/Backfill/抑制/水线/规则精度/自动建规则/清理）----
 
-  runtime: () => api.get<unknown, ApiResponse<Record<string, unknown>>>('/github-monitor/runtime'),
+  runtime: () => api.get<unknown, ApiResponse<GitHubRuntimeStatus>>('/github-monitor/runtime'),
+  stats: () => api.get<unknown, ApiResponse<GitHubLeakStats>>('/github-monitor/stats'),
+
+  // 全局命中（不带项目过滤）
+  globalFindings: (params: GitHubFindingListParams = {}) =>
+    api.get<unknown, ApiResponse<GitHubFindingsPage>>('/github-monitor/findings', { params }),
+  globalUpdateFindingStatus: (findingId: string, status: string) =>
+    api.put<unknown, ApiResponse<GitHubFinding>>(`/github-monitor/findings/${findingId}/status`, { status }),
+  globalRecordVerifyResult: (findingId: string, body: { verify_status: string; verify_evidence?: string }) =>
+    api.post<unknown, ApiResponse<{ verify_status: string }>>(
+      `/github-monitor/findings/${findingId}/verify-result`,
+      body,
+    ),
+
   runNow: () => api.post<unknown, ApiResponse<{ accepted: boolean; busy?: boolean }>>('/github-monitor/run'),
   backfill: () => api.post<unknown, ApiResponse<{ filled: number }>>('/github-monitor/backfill'),
   listSuppressions: () =>
