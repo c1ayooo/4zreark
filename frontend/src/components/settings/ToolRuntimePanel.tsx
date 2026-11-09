@@ -4,18 +4,38 @@ import { Button, Card, Input, Tag } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
 import { toolRuntimeApi, toolsApi, type ToolRuntimeStatus } from '@/api/tools'
 import RuntimeToolRow from '@/components/tools/RuntimeToolRow'
-import { Loader2, RefreshCw, RotateCcw, Download, Gauge } from 'lucide-react'
+import { Loader2, RefreshCw, RotateCcw, Download, Gauge, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react'
 
+// 四态必须一眼可辨：之前 missing 落到 default 分支的灰色 Tag「未安装」，
+// 和正文灰色小字混在一起，看不出到底装没装。
 const statusBadge = (st: ToolRuntimeStatus['status']) => {
   switch (st) {
     case 'ok':
-      return <Tag className="border-transparent bg-emerald-600 text-white">正常</Tag>
+      return (
+        <Tag className="inline-flex items-center gap-1 border-transparent bg-emerald-600 text-white">
+          <CheckCircle2 className="h-3 w-3" /> 已安装
+        </Tag>
+      )
     case 'stale':
-      return <Tag className="border-transparent bg-amber-600 text-white">有新版本</Tag>
+      return (
+        <Tag className="inline-flex items-center gap-1 border-transparent bg-amber-600 text-white">
+          <AlertTriangle className="h-3 w-3" /> 已安装 · 有新版本
+        </Tag>
+      )
+    case 'missing':
+      return (
+        <Tag className="inline-flex items-center gap-1 border-transparent bg-rose-600 text-white">
+          <XCircle className="h-3 w-3" /> 未安装
+        </Tag>
+      )
     case 'needs_review':
-      return <Tag color="error">需人工确认</Tag>
+      return (
+        <Tag className="inline-flex items-center gap-1 border-transparent bg-orange-600 text-white">
+          <AlertTriangle className="h-3 w-3" /> 需人工确认
+        </Tag>
+      )
     default:
-      return <Tag>未安装</Tag>
+      return <Tag>状态未知</Tag>
   }
 }
 
@@ -71,7 +91,12 @@ function ToolRow({ tool }: { tool: ToolRuntimeStatus }) {
         )}
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        <span>已装 <span className="text-foreground">{tool.installed_version || tool.disk_version || '—'}</span></span>
+        <span>
+          已装{' '}
+          <span className={tool.installed_version || tool.disk_version ? 'text-foreground' : 'font-medium text-rose-600'}>
+            {tool.installed_version || tool.disk_version || '未安装'}
+          </span>
+        </span>
         <span>上游 <span className="text-foreground">{tool.latest_version || '—'}</span></span>
         <span>{tool.managed ? '托管' : 'vendored/PATH'}{tool.path ? ` · ${tool.path}` : ''}</span>
       </div>
@@ -222,6 +247,11 @@ export function ToolRuntimePanel() {
     onError: (e: Error) => toast({ title: '浏览器更新失败', description: e.message, variant: 'destructive' }),
   })
 
+  // 总览：哪几个没装直接点名，不用逐行对比
+  const tools = overview.data?.tools ?? []
+  const installedCount = tools.filter((t) => t.status !== 'missing').length
+  const missingNames = tools.filter((t) => t.status === 'missing').map((t) => t.name)
+
   return (
     <div className="space-y-6">
       <Card
@@ -241,6 +271,25 @@ export function ToolRuntimePanel() {
             <p className="text-sm text-muted-foreground flex items-center gap-2">
               <Loader2 className="h-3 w-3 animate-spin" /> 加载工具状态…
             </p>
+          )}
+          {tools.length > 0 && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border bg-muted/40 px-3 py-2 text-sm">
+              <span className="flex items-center gap-1.5">
+                {missingNames.length === 0 ? (
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                ) : (
+                  <XCircle className="h-4 w-4 text-rose-600" />
+                )}
+                已安装 <span className="font-semibold text-foreground">{installedCount}</span> / {tools.length}
+              </span>
+              {missingNames.length > 0 ? (
+                <span className="text-xs text-rose-600">
+                  未安装：<span className="font-mono">{missingNames.join('、')}</span>（点对应行的「安装/更新」）
+                </span>
+              ) : (
+                <span className="text-xs text-muted-foreground">全部就绪</span>
+              )}
+            </div>
           )}
           {overview.data?.tools?.map((t) => <ToolRow key={t.name} tool={t} />)}
           <RuntimeToolRow

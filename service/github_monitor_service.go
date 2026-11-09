@@ -112,10 +112,12 @@ func (g *GitHubMonitorService) syncOnce(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	token, err := g.repo.FirstToken(ctx)
+	// 出网设置：token（已解密）+ 项目配置的轮询间隔。
+	active, err := g.repo.FirstActiveSettings(ctx)
 	if err != nil {
 		return false, err
 	}
+	token := active.Token
 
 	// 规则指纹：名字+关键词串接（项目名已带前缀）
 	key := make([]string, 0, len(rules))
@@ -144,6 +146,11 @@ func (g *GitHubMonitorService) syncOnce(ctx context.Context) (bool, error) {
 		Keywords:        keywords,
 		Rules:           glRules,
 		IntervalSeconds: githubleak.DefaultIntervalSeconds,
+	}
+	// 项目里配的 interval_seconds 语义是「多久搜一轮」，映射到 poll 间隔；
+	// 请求间隔仍固定 60s，由 githubleak 的 31s 下限兜底，避免打爆 search 配额。
+	if active.IntervalSeconds > 0 {
+		settings.PollIntervalSeconds = active.IntervalSeconds
 	}
 	if err := g.svc.UpdateSettings(settings); err != nil {
 		return false, fmt.Errorf("热更设置失败: %w", err)

@@ -27,6 +27,8 @@ type UserRepo interface {
 	Delete(ctx context.Context, id string) error
 	TouchLastLogin(ctx context.Context, id string) error
 	EnsureAdmin(ctx context.Context, u *models.User) (bool, error)
+	Count(ctx context.Context) (int64, error)
+	CreateFirstAdmin(ctx context.Context, u *models.User) (bool, error)
 	BlacklistToken(ctx context.Context, tokenHash, userID string, expiresAt time.Time) error
 	IsTokenRevoked(ctx context.Context, tokenHash, userID string, ver int) (bool, error)
 }
@@ -287,6 +289,57 @@ func (r *userRepo) EnsureAdmin(ctx context.Context, u *models.User) (bool, error
 		return false, err
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+// Count 返回用户总数，用于判断系统是否已完成首次初始化。
+func (r *userRepo) Count(ctx context.Context) (int64, error) {
+	var n int64
+	err := r.r.pool.QueryRow(ctx, `select count(*) from users`).Scan(&n)
+	return n, err
+}
+
+// bootstrapLockKey 是首次初始化专用的 advisory lock 键（仅此用途）。
+const bootstrapLockKey int64 = 0x5A524541524B
+
+// CreateFirstAdmin 仅在库里没有任何用户时创建首个管理员，返回是否创建成功。
+// 存在性判断与插入在同一事务内并持有事务级 advisory lock：并发初始化只有一个请求
+// 能成功，其余返回 false；初始化完成后该入口永久失效。
+func (r *userRepo) CreateFirstAdmin(ctx context.Context, u *models.User) (bool, error) {
+	tx, err := r.r.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `select pg_advisory_xact_lock($1)`, bootstrapLockKey); err != nil {
+		return false, err
+	}
+
+	var exists bool
+	if err := tx.QueryRow(ctx, `select exists (select 1 from users)`).Scan(&exists); err != nil {
+		return false, err
+	}
+	if exists {
+		return false, nil
+	}
+
+	_, err = tx.Exec(ctx,
+		`insert into users (id, username, password, email, phone, nickname, avatar,
+		                    role, status, must_change_password, token_version, last_login, created_at, updated_at)
+		 values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+		u.ID.Hex(), u.Username, u.Password, u.Email, u.Phone, u.Nickname, u.Avatar,
+		u.Role, u.Status, u.MustChangePassword, u.TokenVersion, timeToPG(u.LastLogin),
+		timeToPG(u.CreatedAt), timeToPG(u.UpdatedAt))
+	if err != nil {
+		if isUniqueViolation(err) {
+			return false, fmt.Errorf("唯一约束冲突: %w", err)
+		}
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (r *userRepo) BlacklistToken(ctx context.Context, tokenHash, userID string, expiresAt time.Time) error {

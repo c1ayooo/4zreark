@@ -2,12 +2,10 @@ package service
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"log"
-	"os"
 	"strings"
 	"time"
 
@@ -295,81 +293,78 @@ func (s *UserService) SetUserStatus(userID string, status int) error {
 	return nil
 }
 
-// InitAdmin creates default admin user if not exists.
-// 安全基线（审计 H2）：不再使用固定的公开默认口令。新建管理员时生成随机口令，
-// 仅在创建那一次打印到 stdout（配合 MustChangePassword 强制首登改密）；
-// 自动化部署可用 ZRE_ADMIN_PASSWORD 显式注入初始口令。存量库不受影响，
-// 仍在用旧默认口令 admin123 的账户会被补强制改密标记。
-func (s *UserService) InitAdmin() error {
+// ErrAlreadyInitialized 表示系统已经有账号，首次初始化入口已关闭。
+var ErrAlreadyInitialized = errors.New("系统已完成初始化，初始化入口已关闭")
+
+// NeedsBootstrap 判断是否需要首次初始化：库里还没有任何用户时为 true。
+// 前端据此把访问者引导到初始化页，而不是登录页。
+func (s *UserService) NeedsBootstrap() (bool, error) {
 	ctx, cancel := dbCtx()
 	defer cancel()
 
 	ur, err := s.users()
 	if err != nil {
-		return err
+		return false, err
 	}
-
-	initialPassword, err := generateAdminPassword()
+	n, err := ur.Count(ctx)
 	if err != nil {
-		return err
+		return false, errors.New("查询账号数量失败")
 	}
-	hashedPassword, err := utils.HashPassword(initialPassword)
-	if err != nil {
-		return err
-	}
-
-	created, err := ur.EnsureAdmin(ctx, &models.User{
-		ID:       oid.NewObjectID(),
-		Username: "admin",
-		Password: hashedPassword,
-		Email:    "admin@localhost",
-		Role:     "admin",
-		Status:   1,
-		// 初始口令只出现这一次：置强制改密标记，登录后只能改密直到完成。
-		MustChangePassword: true,
-	})
-	if err != nil {
-		return errors.New("创建管理员账户失败")
-	}
-	if created {
-		log.Printf("[InitAdmin] Admin user created successfully")
-		log.Printf("[InitAdmin] ===== admin 初始口令（仅此一次显示，请立即登录修改）: %s =====", initialPassword)
-	} else {
-		log.Printf("[InitAdmin] Admin user already exists")
-		// 存量部署：默认口令未改则补上强制改密标记（迁移加列后这里兜底补数据）。
-		if admin, gerr := ur.GetByUsername(ctx, "admin"); gerr == nil && admin != nil &&
-			utils.CheckPassword("admin123", admin.Password) {
-			log.Printf("[InitAdmin] 警告：admin 账户仍在使用旧默认口令，已置强制改密标记，请立即修改。")
-			if !admin.MustChangePassword {
-				if uerr := ur.UpdateFields(ctx, admin.ID.Hex(),
-					map[string]any{"must_change_password": true}); uerr != nil {
-					log.Printf("[InitAdmin] 置强制改密标记失败: %v", uerr)
-				}
-			}
-		}
-	}
-	return nil
+	return n == 0, nil
 }
 
-// generateAdminPassword 生成初始管理员口令：env 显式注入优先（自动化部署），
-// 否则 crypto/rand 生成 20 位无歧义字符随机串（去掉 0O1lI 等易混字符）。
-func generateAdminPassword() (string, error) {
-	if v := strings.TrimSpace(os.Getenv("ZRE_ADMIN_PASSWORD")); v != "" {
-		if len(v) < 12 {
-			return "", errors.New("ZRE_ADMIN_PASSWORD 至少 12 位")
-		}
-		return v, nil
+// BootstrapAdmin 创建首个管理员账号（首次初始化）。
+//
+// 只在库里没有任何用户时生效：存在性判断与写入在同一事务内并持有 advisory lock，
+// 并发/重复提交只会有一次成功；账号建好后初始化入口永久失效。
+func (s *UserService) BootstrapAdmin(username, password, email string) (*models.User, error) {
+	username = strings.TrimSpace(username)
+	email = strings.TrimSpace(email)
+	if len([]rune(username)) < 3 || len([]rune(username)) > 32 {
+		return nil, errors.New("用户名长度需为 3-32 个字符")
 	}
-	const alphabet = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-	out := make([]byte, 20)
-	buf := make([]byte, 20)
-	if _, err := rand.Read(buf); err != nil {
-		return "", errors.New("生成随机口令失败: " + err.Error())
+	if len([]rune(password)) < 8 || len([]rune(password)) > 64 {
+		return nil, errors.New("密码长度需为 8-64 个字符")
 	}
-	for i, b := range buf {
-		out[i] = alphabet[int(b)%len(alphabet)]
+	if email == "" {
+		email = username + "@localhost"
 	}
-	return string(out), nil
+
+	ctx, cancel := dbCtx()
+	defer cancel()
+
+	ur, err := s.users()
+	if err != nil {
+		return nil, err
+	}
+
+	hashedPassword, err := utils.HashPassword(password)
+	if err != nil {
+		return nil, errors.New("密码加密失败")
+	}
+
+	now := time.Now()
+	user := &models.User{
+		ID:       oid.NewObjectID(),
+		Username: username,
+		Password: hashedPassword,
+		Email:    email,
+		Role:     "admin",
+		Status:   1,
+		// 口令由部署者本人设定，无需强制修改。
+		MustChangePassword: false,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+	created, err := ur.CreateFirstAdmin(ctx, user)
+	if err != nil {
+		return nil, errors.New("创建管理员账户失败")
+	}
+	if !created {
+		return nil, ErrAlreadyInitialized
+	}
+	log.Printf("[Bootstrap] 首个管理员账号已创建：%s", user.Username)
+	return user, nil
 }
 
 // hashToken 只存摘要：库里不出现令牌原文。

@@ -138,6 +138,17 @@ func main() {
 	defer pg.Close()
 	log.Println("PostgreSQL 就绪，启动自检通过")
 
+	// 对话工作台：conversation/message 是既有表，这里只补 skill/model/事件列与新表。
+	if err := repo.Default().Chat().EnsureChatSchema(context.Background()); err != nil {
+		log.Printf("[FATAL] 对话表结构初始化失败: %v", err)
+		os.Exit(2)
+	}
+	if n, err := service.SeedSentinelSkills(context.Background()); err != nil {
+		log.Printf("[WARN] 内置审计技能写入失败（界面将回退到内置清单）: %v", err)
+	} else if n > 0 {
+		log.Printf("[Sentinel] 已写入 %d 个内置审计技能", n)
+	}
+
 	// 出网代理解析的数据源：规则同步/工具下载/情报等出网点从这里取代理设置。
 	outbound.SetStore(repo.Default().Settings())
 
@@ -158,11 +169,8 @@ func main() {
 				"如 $(openssl rand -hex 32)）；确要带默认密钥运行请显式设置 ZRE_ALLOW_DEFAULT_SECRET=1")
 		}
 
-		// Initialize default admin user
-		userService := service.NewUserService()
-		if err := userService.InitAdmin(); err != nil {
-			log.Printf("Warning: Failed to initialize admin user: %v", err)
-		}
+		// 不再自动生成默认管理员：首次部署由前端引导到初始化页，
+		// 由使用者自行创建第一个管理员账号（见 /api/auth/bootstrap）。
 
 		// Scan POC directory for auto-import
 		log.Println("Scanning POC directory...")
@@ -224,12 +232,13 @@ func main() {
 	gatewayRouter := router.SetupNodeGatewayRouter(nodeHub, nodeBinaryHandler)
 	// 网关挂了（起不来/监听器死亡）不能 log.Fatalf：那会绕过全部 defer 直接退进程，
 	// 在跑的扫描收不了尾。把错误送回主 goroutine，走统一的优雅关停链。
-	gatewayErr := make(chan error, 1)
+	// 主 Web 监听器同样投递到这里，两条监听链共用一条收尾路径。
+	fatalCh := make(chan error, 3)
 	go func() {
 		addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Node.GatewayPort)
 		log.Printf("[NodeGateway] HTTPS listening on %s", addr)
 		if err := gatewayRouter.RunTLS(addr, gatewayTLS.CertFile, gatewayTLS.KeyFile); err != nil {
-			gatewayErr <- fmt.Errorf("节点网关停止/失败: %w", err)
+			fatalCh <- fmt.Errorf("节点网关停止/失败: %w", err)
 		}
 	}()
 
@@ -271,6 +280,32 @@ func main() {
 	}
 	// 僵尸任务回收：节点离线或长时间无进展的 running 任务自动置失败并取消 River job。
 	service.StartStaleTaskReaper(queueCtx)
+
+	// 提交哨兵：采集（collect）/ 判定（judge）两个 River 队列。
+	// 与 ScanQueue 各自持有 river.Client，共用同一连接池与 river_job 表，
+	// 队列集合互不重叠，因此不会抢对方的作业。
+	if cfg.Sentinel.Enabled {
+		sentinelSource := service.NewSentinelSource(cfg.Sentinel)
+		sentinelJudge := service.NewSentinelJudge(cfg.Sentinel, cfg.LLM)
+		sentinelQueue, sErr := service.NewSentinelQueue(queueCtx, pg.Pool(), cfg.Sentinel, sentinelSource, sentinelJudge, true)
+		if sErr != nil {
+			log.Printf("[Sentinel] 初始化提交哨兵队列失败（功能降级为不可用）: %v", sErr)
+		} else {
+			service.SetDefaultSentinelQueue(sentinelQueue)
+			if err := sentinelQueue.Start(queueCtx); err != nil {
+				log.Printf("[Sentinel] 启动提交哨兵队列失败: %v", err)
+			} else {
+				service.GoSafe("sentinel-scheduler", func() { sentinelQueue.RunScheduler(queueCtx) })
+			}
+			defer func() {
+				stopCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				defer cancel()
+				if err := sentinelQueue.Stop(stopCtx); err != nil {
+					log.Printf("[Sentinel] 停止提交哨兵队列失败: %v", err)
+				}
+			}()
+		}
+	}
 
 	// 先停 River（不再拉新作业），再由 taskExecutor.Stop 取消本地流水线/派单。
 	defer func() {
@@ -431,6 +466,9 @@ func main() {
 	// Initialize WebSocket hub for real-time data
 	log.Println("Initializing WebSocket hub...")
 	wsHub := api.NewHub()
+	// Hub.Stop 必须在 HTTP 关停前后都能终止广播与监控 goroutine，否则
+	// 进程退出时会残留向无人消费 channel 发送的协程。
+	defer wsHub.Stop()
 	go wsHub.Run()
 	go wsHub.StartMonitorTask()
 
@@ -463,8 +501,8 @@ func main() {
 		log.Printf("Server starting on %s (TLS, 强制 HTTPS)", addr)
 		go func() {
 			if err := srv.ListenAndServeTLS(cfg.Server.TLSCert, cfg.Server.TLSKey); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				log.Printf("[FATAL] Failed to start TLS server: %v", err)
-				os.Exit(1)
+				// 不能在这里 os.Exit：那会绕过 defer 收尾链，正在跑的扫描无法落库。
+				fatalCh <- fmt.Errorf("主 HTTPS 服务停止/失败: %w", err)
 			}
 		}()
 	} else {
@@ -475,13 +513,12 @@ func main() {
 		}
 		go func() {
 			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				log.Printf("[FATAL] Failed to start server: %v", err)
-				os.Exit(1)
+				fatalCh <- fmt.Errorf("主 HTTP 服务停止/失败: %w", err)
 			}
 		}()
 	}
 
-	waitForShutdown("server", gatewayErr)
+	waitForShutdown("server", fatalCh)
 
 	// 先给在跑的 HTTP 请求（建任务/写结果）最多 30 秒收尾，再进 defer 链
 	// 停队列/执行器/调度器/DB。

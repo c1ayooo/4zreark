@@ -211,6 +211,57 @@ func (n *FeishuNotifier) Send(ctx context.Context, msg *NotifyMessage) error {
 
 // buildFeishuCard 组装飞书交互卡片；webhook 与企业应用机器人共用同一份内容。
 func buildFeishuCard(msg *NotifyMessage) map[string]interface{} {
+	elements := []map[string]interface{}{
+		{
+			"tag": "div",
+			"fields": []map[string]interface{}{
+				{
+					"is_short": true,
+					"text": map[string]string{
+						"tag":     "lark_md",
+						"content": fmt.Sprintf("**级别**\n%s", msg.Level),
+					},
+				},
+				{
+					"is_short": true,
+					"text": map[string]string{
+						"tag":     "lark_md",
+						"content": fmt.Sprintf("**来源**\n%s", msg.Source),
+					},
+				},
+			},
+		},
+		{
+			"tag": "div",
+			"text": map[string]string{
+				"tag":     "lark_md",
+				"content": msg.Content,
+			},
+		},
+	}
+	// Extra.link 为绝对地址时渲染「前往处置」按钮；站内相对路径只给站内通知用。
+	if link, _ := msg.Extra["link"].(string); strings.HasPrefix(link, "http") {
+		elements = append(elements, map[string]interface{}{
+			"tag": "action",
+			"actions": []map[string]interface{}{
+				{
+					"tag":  "button",
+					"text": map[string]string{"tag": "plain_text", "content": "前往处置"},
+					"type": "primary",
+					"url":  link,
+				},
+			},
+		})
+	}
+	elements = append(elements, map[string]interface{}{
+		"tag": "note",
+		"elements": []map[string]string{
+			{
+				"tag":     "plain_text",
+				"content": msg.Timestamp.Format("2006-01-02 15:04:05"),
+			},
+		},
+	})
 	return map[string]interface{}{
 		"msg_type": "interactive",
 		"card": map[string]interface{}{
@@ -221,43 +272,7 @@ func buildFeishuCard(msg *NotifyMessage) map[string]interface{} {
 				},
 				"template": feishuColorByLevel(msg.Level),
 			},
-			"elements": []map[string]interface{}{
-				{
-					"tag": "div",
-					"fields": []map[string]interface{}{
-						{
-							"is_short": true,
-							"text": map[string]string{
-								"tag":     "lark_md",
-								"content": fmt.Sprintf("**级别**\n%s", msg.Level),
-							},
-						},
-						{
-							"is_short": true,
-							"text": map[string]string{
-								"tag":     "lark_md",
-								"content": fmt.Sprintf("**来源**\n%s", msg.Source),
-							},
-						},
-					},
-				},
-				{
-					"tag": "div",
-					"text": map[string]string{
-						"tag":     "lark_md",
-						"content": msg.Content,
-					},
-				},
-				{
-					"tag": "note",
-					"elements": []map[string]string{
-						{
-							"tag":     "plain_text",
-							"content": msg.Timestamp.Format("2006-01-02 15:04:05"),
-						},
-					},
-				},
-			},
+			"elements": elements,
 		},
 	}
 }
@@ -587,7 +602,7 @@ func (n *WebhookNotifier) Send(ctx context.Context, msg *NotifyMessage) error {
 }
 
 // TelegramNotifier Telegram Bot 通知：sendMessage API，纯文本推送
-//（不声明 parse_mode，内容里的 markdown 片段按字面展示，避免转义陷阱）。
+// （不声明 parse_mode，内容里的 markdown 片段按字面展示，避免转义陷阱）。
 type TelegramNotifier struct {
 	botToken string
 	chatID   string

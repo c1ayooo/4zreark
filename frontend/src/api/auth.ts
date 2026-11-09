@@ -11,9 +11,28 @@ export interface LoginResponse {
   user: User
 }
 
+export interface BootstrapStatusResponse {
+  needs_bootstrap: boolean
+}
+
+export interface BootstrapRequest {
+  username: string
+  password: string
+  email?: string
+}
+
 export const authApi = {
   login: (data: LoginRequest): Promise<ApiResponse<LoginResponse>> =>
     api.post('/auth/login', data),
+
+  // 首次初始化状态：needs_bootstrap=true 表示库里还没有任何账号，
+  // 前端应把访问者引导到 /setup，而不是登录页。
+  bootstrapStatus: (): Promise<ApiResponse<BootstrapStatusResponse>> =>
+    api.get('/auth/bootstrap'),
+
+  // 创建第一个管理员账号：仅在系统未初始化时有效，成功后该入口自动关闭。
+  bootstrap: (data: BootstrapRequest): Promise<ApiResponse<LoginResponse>> =>
+    api.post('/auth/bootstrap', data),
 
   logout: (): Promise<ApiResponse<null>> =>
     api.post('/auth/logout'),

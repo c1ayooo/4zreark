@@ -53,6 +53,10 @@ type Client struct {
 	clientID    string
 	userID      string
 	workspaceID string
+
+	// closed 标记 send 是否已关闭，由 Hub.mu 独占保护。
+	// 广播路径与 unregister 路径都会剔除客户端，用该标记保证 close 只发生一次。
+	closed bool
 }
 
 // Hub maintains the active clients and broadcasts messages
@@ -62,6 +66,13 @@ type Hub struct {
 	register   chan *Client
 	unregister chan *Client
 	mu         sync.RWMutex
+
+	// stopCh 关闭后 Run/StartMonitorTask/各连接 goroutine 依次退出，
+	// 避免进程关停时仍向无人消费的 channel 发送。
+	stopCh   chan struct{}
+	stopOnce sync.Once
+	// done 在 Run 退出后关闭，供关停流程与测试等待事件循环收口。
+	done chan struct{}
 }
 
 // NewHub creates a new Hub
@@ -71,13 +82,27 @@ func NewHub() *Hub {
 		broadcast:  make(chan []byte),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
+		stopCh:     make(chan struct{}),
+		done:       make(chan struct{}),
 	}
+}
+
+// Stop 通知 Hub 与其上所有连接退出；可重复调用。
+func (h *Hub) Stop() {
+	h.stopOnce.Do(func() { close(h.stopCh) })
 }
 
 // Run starts the Hub
 func (h *Hub) Run() {
+	if h.done != nil {
+		defer close(h.done)
+	}
 	for {
 		select {
+		case <-h.stopCh:
+			h.closeAll()
+			return
+
 		case client := <-h.register:
 			h.mu.Lock()
 			h.clients[client] = true
@@ -85,24 +110,60 @@ func (h *Hub) Run() {
 
 		case client := <-h.unregister:
 			h.mu.Lock()
-			if _, ok := h.clients[client]; ok {
-				delete(h.clients, client)
-				close(client.send)
-			}
+			h.dropClientLocked(client)
 			h.mu.Unlock()
 
 		case message := <-h.broadcast:
-			h.mu.RLock()
+			// 广播本身持写锁：剔除客户端与关闭 send 都是写操作，
+			// 在读锁下执行会触发 concurrent map writes / close of closed channel。
+			// 发送用 select+default 不阻塞，锁持有时间只与客户端数量相关。
+			h.mu.Lock()
 			for client := range h.clients {
 				select {
 				case client.send <- message:
 				default:
-					close(client.send)
-					delete(h.clients, client)
+					h.dropClientLocked(client)
 				}
 			}
-			h.mu.RUnlock()
+			h.mu.Unlock()
 		}
+	}
+}
+
+// dropClientLocked 把客户端移出广播表并关闭 send（幂等）。调用方必须持写锁。
+func (h *Hub) dropClientLocked(client *Client) {
+	if client.closed {
+		return
+	}
+	client.closed = true
+	if _, ok := h.clients[client]; ok {
+		delete(h.clients, client)
+	}
+	close(client.send)
+}
+
+// closeAll 关停时断开所有客户端，让 writePump 自然退出。
+func (h *Hub) closeAll() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for client := range h.clients {
+		h.dropClientLocked(client)
+	}
+}
+
+// enqueue 向客户端非阻塞投递一条消息。客户端已关闭或缓冲区满时返回 false，
+// 保证不会向已关闭的 channel 发送（慢客户端由广播路径负责剔除）。
+func (h *Hub) enqueue(client *Client, payload []byte) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if client.closed {
+		return false
+	}
+	select {
+	case client.send <- payload:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -116,10 +177,21 @@ func (h *Hub) StartMonitorTask() {
 
 	for {
 		select {
+		case <-h.stopCh:
+			return
 		case <-ticker.C:
 			monitorData := h.getMonitorData(sysService, nodeService)
-			data, _ := json.Marshal(monitorData)
-			h.broadcast <- data
+			data, err := json.Marshal(monitorData)
+			if err != nil {
+				log.Printf("WebSocket monitor marshal error: %v", err)
+				continue
+			}
+			// Hub.Run 退出后 broadcast 无人消费，这里必须能被 stopCh 打断。
+			select {
+			case h.broadcast <- data:
+			case <-h.stopCh:
+				return
+			}
 		}
 	}
 }
@@ -197,7 +269,13 @@ func (h *Hub) WebSocketHandler(c *gin.Context) {
 		workspaceID: c.Query("workspace_id"),
 	}
 
-	client.hub.register <- client
+	// Hub 已停止时直接断开，避免向无人消费的 register 发送造成 goroutine 泄漏。
+	select {
+	case client.hub.register <- client:
+	case <-h.stopCh:
+		_ = conn.Close()
+		return
+	}
 
 	go client.writePump()
 	client.readPump()
@@ -205,7 +283,10 @@ func (h *Hub) WebSocketHandler(c *gin.Context) {
 
 func (c *Client) readPump() {
 	defer func() {
-		c.hub.unregister <- c
+		select {
+		case c.hub.unregister <- c:
+		case <-c.hub.stopCh:
+		}
 		c.conn.Close()
 	}()
 
@@ -229,7 +310,8 @@ func (c *Client) readPump() {
 		var msg map[string]string
 		if err := json.Unmarshal(message, &msg); err == nil {
 			if msg["type"] == "ping" {
-				c.send <- []byte(`{"type":"pong"}`)
+				// 连接可能已被广播路径剔除，直接写 channel 会 panic。
+				c.hub.enqueue(c, []byte(`{"type":"pong"}`))
 			}
 		}
 

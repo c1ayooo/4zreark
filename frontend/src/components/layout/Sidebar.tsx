@@ -37,6 +37,14 @@ import {
   Sprout,
   PieChart,
   Gauge,
+  GitBranch,
+  GitCommitHorizontal,
+  ShieldAlert,
+  MessagesSquare,
+  ListChecks,
+  Sparkles,
+  ClipboardCheck,
+  Package,
   X,
 } from 'lucide-react'
 
@@ -57,8 +65,27 @@ interface MenuGroup {
   items: MenuItem[]
 }
 
-// 27 个入口按使用场景拆成 10 组，组标题可点击收起，当前路由所在分组自动展开。
+// 侧栏按使用场景分组，组标题可点击收起，当前路由所在分组自动展开。
+// 对话工作台固定在最上方：它是所有分析动作的入口，不属于任何一个业务域。
 const menuGroups: MenuGroup[] = [
+  {
+    id: 'workbench',
+    label: '工作台',
+    items: [{ path: '/sentinel/chat', icon: MessagesSquare, label: '对话', roles: ALL }],
+  },
+  {
+    id: 'codeaudit',
+    label: '代码审计',
+    items: [
+      { path: '/sentinel', icon: ShieldAlert, label: '哨兵总览', roles: ALL },
+      { path: '/sentinel/audit/tasks', icon: ListChecks, label: '分析任务', roles: ALL },
+      { path: '/sentinel/audit/results', icon: ClipboardCheck, label: '分析结果', roles: ALL },
+      { path: '/sentinel/audit/artifacts', icon: Package, label: '分析产物', roles: ALL },
+      { path: '/sentinel/repos', icon: GitBranch, label: '仓库', roles: OPS },
+      { path: '/sentinel/commits', icon: GitCommitHorizontal, label: '提交', roles: ALL },
+      { path: '/sentinel/skills', icon: Sparkles, label: '技能库', roles: ALL },
+    ],
+  },
   {
     id: 'overview',
     label: '概览',
@@ -196,32 +223,35 @@ export default function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps
   const activeGroupId = groups.find((group) => group.items.some((i) => i.path === activePath))?.id
 
   // 只在「切换到另一个分组」时自动展开，避免用户手动收起当前组后被立刻弹开。
+  // 工作台是顶层直挂项，不参与分组展开逻辑。
   const lastActiveGroupRef = useRef<string | undefined>(undefined)
   useEffect(() => {
-    if (activeGroupId && activeGroupId !== lastActiveGroupRef.current) {
+    if (activeGroupId && activeGroupId !== 'workbench' && activeGroupId !== lastActiveGroupRef.current) {
       setGroupExpanded(activeGroupId, true)
       lastActiveGroupRef.current = activeGroupId
     }
   }, [activeGroupId, setGroupExpanded])
 
-  // antd Menu items：分组 → SubMenu；收起态由 inlineCollapsed 承担（自带悬浮 tooltip）
+  const renderItem = (item: MenuItem) => ({
+    key: item.path,
+    icon: <item.icon className="h-[17px] w-[17px]" style={{ fontSize: 0 }} />,
+    label: item.label,
+  })
+
+  // antd Menu items：分组 → SubMenu；收起态由 inlineCollapsed 承担（自带悬浮 tooltip）。
+  // 「对话」固定在最上方且不放进 SubMenu —— 它是所有分析动作的入口，
+  // 一旦被分组折叠，用户就找不到入口了。
   const items: MenuProps['items'] = collapsed
-    ? groups.flatMap((group) =>
-        group.items.map((item) => ({
-          key: item.path,
-          icon: <item.icon className="h-[17px] w-[17px]" style={{ fontSize: 0 }} />,
-          label: item.label,
-        })),
+    ? groups.flatMap((group) => group.items.map(renderItem))
+    : groups.map((group) =>
+        group.id === 'workbench'
+          ? renderItem(group.items[0])
+          : {
+              key: group.id,
+              label: group.label,
+              children: group.items.map(renderItem),
+            },
       )
-    : groups.map((group) => ({
-        key: group.id,
-        label: group.label,
-        children: group.items.map((item) => ({
-          key: item.path,
-          icon: <item.icon className="h-[17px] w-[17px]" style={{ fontSize: 0 }} />,
-          label: item.label,
-        })),
-      }))
 
   const onMenuClick: MenuProps['onClick'] = ({ key }) => {
     navigate(String(key))

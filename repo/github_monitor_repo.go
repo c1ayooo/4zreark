@@ -44,7 +44,10 @@ type GitHubMonitorRepo interface {
 	ListAllEnabledRules(ctx context.Context) ([]GitHubMonitorRule, error)
 	GetSettings(ctx context.Context, projectID int64) (*GitHubMonitorSettings, error)
 	UpsertSettings(ctx context.Context, s *GitHubMonitorSettings) error
-	// FirstToken 任一项目配过的 GitHub Token（监控循环出网用；token 池化是后续事）。
+	// FirstActiveSettings 任一已启用项目的监控设置（token 已解密）。
+	// 监控循环出网用它取 token 与轮询间隔；token 池化是后续事。
+	FirstActiveSettings(ctx context.Context) (*GitHubMonitorSettings, error)
+	// FirstToken 任一项目配过的 GitHub Token（FirstActiveSettings 的便捷包装）。
 	FirstToken(ctx context.Context) (string, error)
 	ProjectName(ctx context.Context, projectID int64) (string, error)
 }
@@ -203,18 +206,42 @@ on conflict (project_id) do update set
 	return err
 }
 
-func (g *githubMonitorRepo) FirstToken(ctx context.Context) (string, error) {
+// FirstActiveSettings 取第一个「已启用且有 token」项目的设置，token 走与
+// GetSettings 相同的解密路径——此前这里直接返回 enc:v1 密文，导致监控循环
+// 拿密文当 Bearer，GitHub 一律 401。
+func (g *githubMonitorRepo) FirstActiveSettings(ctx context.Context) (*GitHubMonitorSettings, error) {
 	if err := g.ensureSchema(ctx); err != nil {
+		return nil, err
+	}
+	s := &GitHubMonitorSettings{}
+	var token string
+	err := g.r.pool.QueryRow(ctx, `
+select project_id, enabled, token, interval_seconds
+from github_monitor_settings
+where token != '' and enabled
+order by project_id limit 1`).
+		Scan(&s.ProjectID, &s.Enabled, &token, &s.IntervalSeconds)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return s, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	plain, derr := secretbox.DecryptText(token)
+	if derr != nil {
+		return nil, fmt.Errorf("解密监控 token 失败: %w", derr)
+	}
+	s.Token = plain
+	s.TokenConfigured = plain != ""
+	return s, nil
+}
+
+func (g *githubMonitorRepo) FirstToken(ctx context.Context) (string, error) {
+	s, err := g.FirstActiveSettings(ctx)
+	if err != nil {
 		return "", err
 	}
-	var token string
-	err := g.r.pool.QueryRow(ctx,
-		`select token from github_monitor_settings where token != '' and enabled order by project_id limit 1`).
-		Scan(&token)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil
-	}
-	return token, err
+	return s.Token, nil
 }
 
 func (g *githubMonitorRepo) ProjectName(ctx context.Context, projectID int64) (string, error) {

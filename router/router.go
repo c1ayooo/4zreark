@@ -72,6 +72,9 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 		{
 			authGroup.POST("/login", authHandler.Login)
 			authGroup.POST("/register", authHandler.Register)
+			// 首次初始化：仅在没有账号时可用，建号后自动关闭。
+			authGroup.GET("/bootstrap", authHandler.BootstrapStatus)
+			authGroup.POST("/bootstrap", authHandler.Bootstrap)
 			authGroup.POST("/refresh", authHandler.RefreshToken)
 
 			// 图标按内容哈希寻址，公开可取：<img> 标签带不了 Authorization
@@ -142,6 +145,12 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				protected.GET("/task-logs/settings", middleware.RequirePermission("task:read"), api.NewTaskLogHandler().GetSettings)
 				protected.PUT("/task-logs/settings", middleware.RequirePermission("settings:write"), api.NewTaskLogHandler().UpdateSettings)
 				protected.POST("/task-logs/purge", middleware.RequirePermission("settings:write"), api.NewTaskLogHandler().Purge)
+
+				// 模型接入（LLM）：判定与对话共用同一份配置，密钥加密落库，保存即生效
+				llmSettingsHandler := api.NewLLMSettingsHandler()
+				protected.GET("/llm/settings", middleware.RequirePermission("settings:write"), llmSettingsHandler.Get)
+				protected.PUT("/llm/settings", middleware.RequirePermission("settings:write"), llmSettingsHandler.Save)
+				protected.POST("/llm/settings/test", middleware.RequirePermission("settings:write"), llmSettingsHandler.Test)
 				protected.POST("/system/update", middleware.RequirePermission("settings:write"), api.NewSystemUpdateHandler().StartUpdate)
 				protected.DELETE("/projects/:id", middleware.RequirePermission("project:delete"), projectOpsHandler.DeleteProject)
 				protected.GET("/assets", middleware.RequirePermission("asset:read"), assetHandler.ListAssets)
@@ -737,6 +746,52 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 
 				// 变化历史
 				monitorGroup.GET("/changes", monitorHandler.GetChanges)
+			}
+
+			// 提交哨兵（CommitSentinel）：采集公开仓库提交，判定是否为安全修复
+			sentinelHandler := api.NewSentinelHandler()
+			sentinelGroup := protected.Group("/sentinel")
+			{
+				sentinelGroup.GET("/overview", middleware.RequirePermission("sentinel:read"), sentinelHandler.Overview)
+
+				sentinelGroup.GET("/repos", middleware.RequirePermission("sentinel:read"), sentinelHandler.ListRepos)
+				sentinelGroup.POST("/repos", middleware.RequirePermission("sentinel:write"), sentinelHandler.CreateRepo)
+				sentinelGroup.PUT("/repos/:id", middleware.RequirePermission("sentinel:write"), sentinelHandler.UpdateRepo)
+				sentinelGroup.DELETE("/repos/:id", middleware.RequirePermission("sentinel:write"), sentinelHandler.DeleteRepo)
+				sentinelGroup.POST("/repos/:id/collect", middleware.RequirePermission("sentinel:write"), sentinelHandler.CollectRepo)
+
+				sentinelGroup.GET("/commits", middleware.RequirePermission("sentinel:read"), sentinelHandler.ListCommits)
+				sentinelGroup.GET("/commits/:id", middleware.RequirePermission("sentinel:read"), sentinelHandler.GetCommit)
+				sentinelGroup.POST("/commits/:id/judge", middleware.RequirePermission("sentinel:write"), sentinelHandler.JudgeCommit)
+
+				// 产物：判定命中后落地的发现（跨仓库分页）
+				sentinelGroup.GET("/findings", middleware.RequirePermission("sentinel:read"), sentinelHandler.ListFindings)
+
+				sentinelGroup.GET("/runs", middleware.RequirePermission("sentinel:read"), sentinelHandler.ListRuns)
+				sentinelGroup.GET("/runs/:id/events", middleware.RequirePermission("sentinel:read"), sentinelHandler.ListRunEvents)
+
+				// 对话工作台：会话持久化 + SSE 流式回答 + 附件解析 + 技能库
+				sentinelChatHandler := api.NewSentinelChatHandler()
+				chatHandler := api.NewChatHandler()
+
+				sentinelGroup.GET("/skills", middleware.RequirePermission("sentinel:read"), sentinelChatHandler.Skills)
+				sentinelGroup.GET("/skills/manage", middleware.RequirePermission("sentinel:read"), chatHandler.ListSkills)
+				sentinelGroup.GET("/skills/usage", middleware.RequirePermission("sentinel:read"), chatHandler.SkillUsage)
+				sentinelGroup.POST("/skills/import", middleware.RequirePermission("sentinel:write"), chatHandler.ImportSkill)
+				sentinelGroup.POST("/skills", middleware.RequirePermission("sentinel:write"), chatHandler.SaveSkill)
+				sentinelGroup.POST("/skills/default", middleware.RequirePermission("sentinel:write"), sentinelChatHandler.SetDefaultSkill)
+				sentinelGroup.DELETE("/skills/:id", middleware.RequirePermission("sentinel:write"), chatHandler.DeleteSkill)
+
+				sentinelGroup.GET("/conversations", middleware.RequirePermission("sentinel:read"), chatHandler.ListConversations)
+				sentinelGroup.POST("/conversations", middleware.RequirePermission("sentinel:write"), chatHandler.CreateConversation)
+				sentinelGroup.GET("/conversations/:id", middleware.RequirePermission("sentinel:read"), chatHandler.GetConversation)
+				sentinelGroup.PATCH("/conversations/:id", middleware.RequirePermission("sentinel:write"), chatHandler.PatchConversation)
+				sentinelGroup.DELETE("/conversations/:id", middleware.RequirePermission("sentinel:write"), chatHandler.DeleteConversation)
+				sentinelGroup.POST("/conversations/:id/messages", middleware.RequirePermission("sentinel:write"), chatHandler.StreamMessage)
+				sentinelGroup.POST("/uploads", middleware.RequirePermission("sentinel:write"), chatHandler.Upload)
+
+				// 兼容旧版单轮调用与脚本
+				sentinelGroup.POST("/chat", middleware.RequirePermission("sentinel:write"), sentinelChatHandler.Chat)
 			}
 
 			// 自动化巡航任务

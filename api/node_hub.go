@@ -223,9 +223,9 @@ func (h *NodeHub) Dispatch(ctx context.Context, taskID string) error {
 }
 
 func (h *NodeHub) pick(capability string, preferNodeID string) (*nodeConn, error) {
+	// 锁内只做内存快照：GetNodeByID 是数据库查询，放在读锁里会让 Dispatch /
+	// register / unregister 全部排队，节点越多锁持有时间越长。
 	h.mu.RLock()
-	defer h.mu.RUnlock()
-
 	candidates := make([]*nodeConn, 0, len(h.conns))
 	for _, c := range h.conns {
 		if !c.available() {
@@ -236,6 +236,8 @@ func (h *NodeHub) pick(capability string, preferNodeID string) (*nodeConn, error
 		}
 		candidates = append(candidates, c)
 	}
+	h.mu.RUnlock()
+
 	// 指定节点优先：调用方给了 node_id，就只在这台节点上跑。
 	// 它不在线/满载时直接返回「无可用节点」，任务留在队列里等，不再悄悄换到别的节点
 	// —— 换到未授权节点会把流量打到第三方主机上。
@@ -244,9 +246,7 @@ func (h *NodeHub) pick(capability string, preferNodeID string) (*nodeConn, error
 			if c.nodeID != preferNodeID {
 				continue
 			}
-			if node, err := h.nodes.GetNodeByID(c.nodeID); err == nil &&
-				node.Status != models.NodeStatusDisabled && node.Status != models.NodeStatusOffline &&
-				node.TokenHash != "" && node.RevokedAt == nil {
+			if h.nodeUsable(c.nodeID) {
 				return c, nil
 			}
 		}
@@ -258,14 +258,24 @@ func (h *NodeHub) pick(capability string, preferNodeID string) (*nodeConn, error
 		return candidates[i].load() < candidates[j].load()
 	})
 	for _, c := range candidates {
-		node, err := h.nodes.GetNodeByID(c.nodeID)
-		if err != nil || node.Status == models.NodeStatusDisabled || node.Status == models.NodeStatusOffline ||
-			node.TokenHash == "" || node.RevokedAt != nil {
-			continue
+		if h.nodeUsable(c.nodeID) {
+			return c, nil
 		}
-		return c, nil
 	}
 	return nil, service.ErrNoNodeAvailable
+}
+
+// nodeUsable 校验节点在库里仍处于可派单状态（未停用、未离线、密钥有效且未吊销）。
+// 该函数会在锁外调用，内部只做数据库查询，不访问 Hub 的内存状态。
+func (h *NodeHub) nodeUsable(nodeID string) bool {
+	node, err := h.nodes.GetNodeByID(nodeID)
+	if err != nil || node == nil {
+		return false
+	}
+	return node.Status != models.NodeStatusDisabled &&
+		node.Status != models.NodeStatusOffline &&
+		node.TokenHash != "" &&
+		node.RevokedAt == nil
 }
 
 // Serve 接管一条已通过 token 鉴权的节点连接。

@@ -1,5 +1,5 @@
 import { Button, Tag } from 'antd'
-import { Download, RefreshCw } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Download, RefreshCw, XCircle } from 'lucide-react'
 
 // RuntimeToolRow 与 toolruntime 的 ToolRow 同款视觉：nuclei（独立运行时）
 // 与自带浏览器（rod 托管）用这行渲染进工具列表，不再是样式各异的摘要行。
@@ -30,11 +30,17 @@ export default function RuntimeToolRow({
   note,
 }: RuntimeToolRowProps) {
   const badge = !installed ? (
-    <Tag>未安装</Tag>
+    <Tag className="inline-flex items-center gap-1 border-transparent bg-rose-600 text-white">
+      <XCircle className="h-3 w-3" /> 未安装
+    </Tag>
   ) : updateAvailable ? (
-    <Tag className="border-transparent bg-amber-600 text-white">有新版本</Tag>
+    <Tag className="inline-flex items-center gap-1 border-transparent bg-amber-600 text-white">
+      <AlertTriangle className="h-3 w-3" /> 已安装 · 有新版本
+    </Tag>
   ) : (
-    <Tag className="border-transparent bg-emerald-600 text-white">正常</Tag>
+    <Tag className="inline-flex items-center gap-1 border-transparent bg-emerald-600 text-white">
+      <CheckCircle2 className="h-3 w-3" /> 已安装
+    </Tag>
   )
   return (
     <div className="grid gap-2 rounded-md border p-3">
@@ -45,7 +51,10 @@ export default function RuntimeToolRow({
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
         <span>
-          已装 <span className="text-foreground">{installed ? version || '已安装' : '—'}</span>
+          已装{' '}
+          <span className={installed ? 'text-foreground' : 'font-medium text-rose-600'}>
+            {installed ? version || '已安装' : '未安装'}
+          </span>
         </span>
         {detail && <span>{detail}</span>}
       </div>

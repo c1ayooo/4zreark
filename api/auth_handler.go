@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"strings"
 	"time"
 
@@ -20,6 +21,60 @@ func NewAuthHandler() *AuthHandler {
 	return &AuthHandler{
 		userService: service.NewUserService(),
 	}
+}
+
+// BootstrapStatus 查询系统是否需要首次初始化：库中没有任何账号时为 true。
+// GET /api/auth/bootstrap
+func (h *AuthHandler) BootstrapStatus(c *gin.Context) {
+	needs, err := h.userService.NeedsBootstrap()
+	if err != nil {
+		utils.Error(c, utils.ErrCodeInternalError, "查询系统初始化状态失败")
+		return
+	}
+	utils.Success(c, gin.H{"needs_bootstrap": needs})
+}
+
+// Bootstrap 首次初始化：创建第一个管理员账号并直接签发登录态。
+// 只在库中没有任何账号时有效；账号建好后该入口关闭（返回 403），不再用于建号。
+// POST /api/auth/bootstrap
+func (h *AuthHandler) Bootstrap(c *gin.Context) {
+	var req struct {
+		Username string `json:"username" binding:"required,min=3,max=32"`
+		Password string `json:"password" binding:"required,min=8,max=64"`
+		Email    string `json:"email" binding:"omitempty,email"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+
+	user, err := h.userService.BootstrapAdmin(req.Username, req.Password, req.Email)
+	if err != nil {
+		if errors.Is(err, service.ErrAlreadyInitialized) {
+			utils.Error(c, utils.ErrCodeForbidden, err.Error())
+			return
+		}
+		utils.BadRequest(c, err.Error())
+		return
+	}
+
+	// 创建成功后直接登录，免去再输一次口令。
+	token, logged, err := h.userService.Login(user.Username, req.Password)
+	if err != nil || logged == nil {
+		utils.SuccessWithMessage(c, "管理员账号已创建，请登录", gin.H{"username": user.Username})
+		return
+	}
+	utils.SuccessWithMessage(c, "初始化完成", gin.H{
+		"token": token,
+		"must_change_password": false,
+		"user": gin.H{
+			"id":       logged.ID.Hex(),
+			"username": logged.Username,
+			"email":    logged.Email,
+			"role":     logged.Role,
+			"avatar":   logged.Avatar,
+		},
+	})
 }
 
 // Register handles user registration

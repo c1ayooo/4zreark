@@ -15,8 +15,9 @@ import { MCPAccessPanel } from '@/components/settings/MCPAccessPanel'
 import { MCPGovernancePanel } from './components/MCPGovernancePanel'
 import { ToolRuntimePanel } from '@/components/settings/ToolRuntimePanel'
 import { ProxyPanel } from '@/components/settings/ProxyPanel'
+import { LLMSettingsPanel } from '@/components/settings/LLMSettingsPanel'
 import DatasourceSessionsTab from '@/components/settings/DatasourceSessionsTab'
-import { Moon, Sun, Monitor, Palette, User, Lock, Key, CheckCircle, XCircle, Plug, Database, Plus, Trash2, Gauge, Globe, ShieldCheck } from 'lucide-react'
+import { Moon, Sun, Monitor, Palette, User, Lock, Key, CheckCircle, XCircle, Plug, Database, Plus, Trash2, Gauge, Globe, ShieldCheck, Sparkles } from 'lucide-react'
 
 export default function SettingsPage() {
   const confirm = useConfirm()
@@ -229,7 +230,7 @@ export default function SettingsPage() {
       )}
 
       <Tabs
-        defaultActiveKey={mustChangePassword ? 'password' : 'appearance'}
+        defaultActiveKey={mustChangePassword ? 'password' : searchParams.get('tab') || 'appearance'}
         className="w-full"
         items={[
           {
@@ -685,6 +686,16 @@ export default function SettingsPage() {
                     </span>
                   ),
                   children: <MCPGovernancePanel />,
+                },
+                {
+                  key: 'llm',
+                  label: (
+                    <span className="flex items-center gap-2">
+                      <Sparkles className="h-4 w-4" />
+                      模型接入
+                    </span>
+                  ),
+                  children: <LLMSettingsPanel />,
                 },
                 {
                   key: 'tool-runtime',

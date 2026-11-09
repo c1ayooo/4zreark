@@ -23,6 +23,100 @@ type Config struct {
 	ThirdParty ThirdPartyConfig `mapstructure:"thirdparty"`
 	AutoVerify AutoVerifyConfig `mapstructure:"auto_verify"`
 	MCP        MCPConfig        `mapstructure:"mcp"`
+	Sentinel   SentinelConfig   `mapstructure:"sentinel"`
+	LLM        LLMConfig        `mapstructure:"llm"`
+}
+
+// SentinelConfig 是提交哨兵域的运行参数（v0.3 §8 / 附录 B）。
+// 密钥类配置不落在本结构里，LLM 的 key 统一从环境变量读取。
+type SentinelConfig struct {
+	Enabled             bool     `mapstructure:"enabled"`
+	MirrorDir           string   `mapstructure:"mirror_dir"`
+	CloneHosts          []string `mapstructure:"clone_hosts"`
+	CollectIntervalMin  int      `mapstructure:"collect_interval_minutes"`
+	CollectWorkers      int      `mapstructure:"collect_workers"`
+	JudgeWorkers        int      `mapstructure:"judge_workers"`
+	MaxCommitsPerRun    int      `mapstructure:"max_commits_per_run"`
+	TokenBudget         int      `mapstructure:"token_budget"`
+	MaxHunkLines        int      `mapstructure:"max_hunk_lines"`
+	JudgeModel          string   `mapstructure:"judge_model"`
+	EnableAuditQueue    bool     `mapstructure:"enable_audit_queue"`
+	QueuePollIntervalSy int      `mapstructure:"queue_poll_seconds"`
+}
+
+// LLMConfig 是 OpenAI 兼容端点的接入参数。
+// APIKey 不写在 yaml 里：由 APIKeyEnv 指定的变量名在启动时解析。
+type LLMConfig struct {
+	BaseURL             string  `mapstructure:"base_url"`
+	APIKey              string  `mapstructure:"api_key"`
+	APIKeyEnv           string  `mapstructure:"api_key_env"`
+	Model               string  `mapstructure:"model"`
+	TimeoutSeconds      int     `mapstructure:"timeout_seconds"`
+	MaxRetries          int     `mapstructure:"max_retries"`
+	Temperature         float64 `mapstructure:"temperature"`
+	MaxTokens           int     `mapstructure:"max_tokens"`
+	PromptCostPer1K     float64 `mapstructure:"prompt_cost_per_1k"`
+	CompletionCostPer1K float64 `mapstructure:"completion_cost_per_1k"`
+}
+
+// Normalize 补齐哨兵配置的默认值，避免各处重复判空。
+func (s *SentinelConfig) Normalize() {
+	if s.MirrorDir == "" {
+		s.MirrorDir = "data/sentinel-mirrors"
+	}
+	if s.CollectIntervalMin <= 0 {
+		s.CollectIntervalMin = 5
+	}
+	if s.CollectWorkers <= 0 {
+		s.CollectWorkers = 4
+	}
+	if s.JudgeWorkers <= 0 {
+		s.JudgeWorkers = 8
+	}
+	if s.MaxCommitsPerRun <= 0 {
+		s.MaxCommitsPerRun = 50
+	}
+	if s.TokenBudget <= 0 {
+		s.TokenBudget = 10000
+	}
+	if s.MaxHunkLines <= 0 {
+		s.MaxHunkLines = 40
+	}
+	if len(s.CloneHosts) == 0 {
+		s.CloneHosts = []string{"github.com"}
+	}
+	if s.JudgeModel == "" {
+		s.JudgeModel = "gpt-4o-mini"
+	}
+}
+
+// EffectiveAPIKey 先看 api_key_env 指向的变量，再退回直接配置的 api_key。
+func (l *LLMConfig) EffectiveAPIKey() string {
+	if l.APIKeyEnv != "" {
+		if v := os.Getenv(l.APIKeyEnv); v != "" {
+			return v
+		}
+	}
+	return l.APIKey
+}
+
+// Normalize 补齐 LLM 默认值。
+func (l *LLMConfig) Normalize() {
+	if l.BaseURL == "" {
+		l.BaseURL = "https://api.openai.com/v1"
+	}
+	if l.Model == "" {
+		l.Model = "gpt-4o-mini"
+	}
+	if l.TimeoutSeconds <= 0 {
+		l.TimeoutSeconds = 90
+	}
+	if l.MaxRetries < 0 {
+		l.MaxRetries = 0
+	}
+	if l.MaxTokens <= 0 {
+		l.MaxTokens = 2048
+	}
 }
 
 // MCPConfig 是 MCP 接入的治理参数。RateLimitPerMin 只约束 tools/call，
@@ -249,6 +343,8 @@ func LoadConfig(path string) *Config {
 		applyPostgresEnv(cfg)
 		applyNodeEnv(cfg)
 		applySecurityEnv(cfg)
+		applySentinelEnv(cfg)
+		applyLLMEnv(cfg)
 	})
 
 	return cfg
@@ -273,9 +369,71 @@ func LoadConfigRaw(raw []byte) *Config {
 		applyPostgresEnv(cfg)
 		applyNodeEnv(cfg)
 		applySecurityEnv(cfg)
+		applySentinelEnv(cfg)
+		applyLLMEnv(cfg)
 	})
 
 	return cfg
+}
+
+// applySentinelEnv 应用提交哨兵的环境变量覆盖（ZRE_SENTINEL_*）。
+func applySentinelEnv(c *Config) {
+	if v := os.Getenv("ZRE_SENTINEL_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			c.Sentinel.Enabled = b
+		}
+	}
+	if v := os.Getenv("ZRE_SENTINEL_MIRROR_DIR"); v != "" {
+		c.Sentinel.MirrorDir = v
+	}
+	if v := os.Getenv("ZRE_SENTINEL_COLLECT_WORKERS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Sentinel.CollectWorkers = n
+		}
+	}
+	if v := os.Getenv("ZRE_SENTINEL_JUDGE_WORKERS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Sentinel.JudgeWorkers = n
+		}
+	}
+	if v := os.Getenv("ZRE_SENTINEL_MAX_COMMITS_PER_RUN"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Sentinel.MaxCommitsPerRun = n
+		}
+	}
+	if v := os.Getenv("ZRE_SENTINEL_TOKEN_BUDGET"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Sentinel.TokenBudget = n
+		}
+	}
+	if v := os.Getenv("ZRE_SENTINEL_JUDGE_MODEL"); v != "" {
+		c.Sentinel.JudgeModel = v
+	}
+	c.Sentinel.Normalize()
+}
+
+// applyLLMEnv 应用 LLM 接入参数（ZRE_LLM_*）。密钥只从环境读，不写回配置文件。
+func applyLLMEnv(c *Config) {
+	if v := os.Getenv("ZRE_LLM_BASE_URL"); v != "" {
+		c.LLM.BaseURL = v
+	}
+	if v := os.Getenv("ZRE_LLM_API_KEY"); v != "" {
+		c.LLM.APIKey = v
+	}
+	if v := os.Getenv("ZRE_LLM_MODEL"); v != "" {
+		c.LLM.Model = v
+	}
+	if v := os.Getenv("ZRE_LLM_TIMEOUT_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.LLM.TimeoutSeconds = n
+		}
+	}
+	if v := os.Getenv("ZRE_LLM_MAX_RETRIES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.LLM.MaxRetries = n
+		}
+	}
+	c.LLM.Normalize()
 }
 
 // applyNodeEnv 让容器/多节点部署可以只靠环境变量区分节点身份。

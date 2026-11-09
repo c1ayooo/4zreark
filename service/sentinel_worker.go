@@ -1,0 +1,273 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"sync"
+	"time"
+
+	"github.com/c1ayooo/4zreark/config"
+	"github.com/c1ayooo/4zreark/internal/llm"
+	"github.com/c1ayooo/4zreark/repo"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivermigrate"
+	"github.com/riverqueue/river/rivertype"
+)
+
+// 提交哨兵的 River 队列（v0.3 §6）。
+const (
+	SentinelCollectQueueName = "sentinel_collect"
+	SentinelJudgeQueueName   = "sentinel_judge"
+	SentinelCollectJobKind   = "sentinel_collect_repo"
+	SentinelJudgeJobKind     = "sentinel_judge_commit"
+)
+
+// SentinelCollectArgs 采集一个仓库。
+type SentinelCollectArgs struct {
+	RepoID string `json:"repo_id" river:"unique"`
+}
+
+// Kind 实现 river.JobArgs。
+func (SentinelCollectArgs) Kind() string { return SentinelCollectJobKind }
+
+// SentinelJudgeArgs 判定一条提交。
+type SentinelJudgeArgs struct {
+	CommitID int64 `json:"commit_id" river:"unique"`
+}
+
+// Kind 实现 river.JobArgs。
+func (SentinelJudgeArgs) Kind() string { return SentinelJudgeJobKind }
+
+type sentinelCollectWorker struct {
+	river.WorkerDefaults[SentinelCollectArgs]
+	source *SentinelSource
+}
+
+func (w *sentinelCollectWorker) Work(ctx context.Context, job *river.Job[SentinelCollectArgs]) error {
+	_, err := w.source.Collect(ctx, job.Args.RepoID)
+	return sentinelJobError(err)
+}
+
+type sentinelJudgeWorker struct {
+	river.WorkerDefaults[SentinelJudgeArgs]
+	judge *SentinelJudge
+}
+
+func (w *sentinelJudgeWorker) Work(ctx context.Context, job *river.Job[SentinelJudgeArgs]) error {
+	_, err := w.judge.Judge(ctx, job.Args.CommitID)
+	return sentinelJobError(err)
+}
+
+// sentinelJobError 把业务错误映射为 River 的失败语义：
+//   - 限流 → 5 分钟后重试（JobSnooze）
+//   - 配置错误 / 模型永久错误 → 不再重试（JobCancel）
+//   - 其它 → River 默认退避
+func sentinelJobError(err error) error {
+	if err == nil {
+		return nil
+	}
+	switch {
+	case errors.Is(err, llm.ErrRateLimited):
+		return river.JobSnooze(5 * time.Minute)
+	case errors.Is(err, errSentinelConfig), errors.Is(err, llm.ErrPermanent):
+		return river.JobCancel(err)
+	default:
+		return err
+	}
+}
+
+var (
+	sentinelQueueMu sync.RWMutex
+	sentinelQueue   *SentinelQueue
+)
+
+// SetDefaultSentinelQueue 设置进程级提交哨兵队列，供 handler 触发采集/判定。
+func SetDefaultSentinelQueue(q *SentinelQueue) {
+	sentinelQueueMu.Lock()
+	sentinelQueue = q
+	sentinelQueueMu.Unlock()
+}
+
+// DefaultSentinelQueue 返回进程级队列；未初始化（功能关闭）时为 nil。
+func DefaultSentinelQueue() *SentinelQueue {
+	sentinelQueueMu.RLock()
+	defer sentinelQueueMu.RUnlock()
+	return sentinelQueue
+}
+
+// SentinelQueue 是提交哨兵的 River 客户端。
+//
+// 它与 ScanQueue 各自持有一个 *river.Client：两者的队列集合完全不同
+// （scan 与 sentinel_collect/sentinel_judge），共用同一张 river_job 表与同一个连接池，
+// 各自只轮询自己的队列，不会抢对方的作业；River 迁移重复执行是幂等的。
+type SentinelQueue struct {
+	client     *river.Client[pgx.Tx]
+	pool       *pgxpool.Pool
+	workerMode bool
+	cfg        config.SentinelConfig
+}
+
+// NewSentinelQueue 初始化 River 客户端；workerMode=false 时仅能入队（控制面只跑采集调度时用）。
+func NewSentinelQueue(ctx context.Context, pool *pgxpool.Pool, cfg config.SentinelConfig, source *SentinelSource, judge *SentinelJudge, workerMode bool) (*SentinelQueue, error) {
+	if pool == nil {
+		return nil, errors.New("提交哨兵队列缺少 PostgreSQL 连接池")
+	}
+	cfg.Normalize()
+
+	driver := riverpgxv5.New(pool)
+	migrator, err := rivermigrate.New(driver, nil)
+	if err != nil {
+		return nil, fmt.Errorf("初始化提交哨兵 River 迁移器失败: %w", err)
+	}
+	if _, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
+		return nil, fmt.Errorf("执行提交哨兵 River 迁移失败: %w", err)
+	}
+
+	riverCfg := &river.Config{
+		MaxAttempts:          3,
+		JobTimeout:           30 * time.Minute,
+		RescueStuckJobsAfter: 90 * time.Minute,
+		SoftStopTimeout:      30 * time.Second,
+	}
+	if workerMode {
+		if source == nil || judge == nil {
+			return nil, errors.New("worker 模式需要采集与判定服务")
+		}
+		workers := river.NewWorkers()
+		river.AddWorker(workers, &sentinelCollectWorker{source: source})
+		river.AddWorker(workers, &sentinelJudgeWorker{judge: judge})
+		riverCfg.Workers = workers
+		riverCfg.Queues = map[string]river.QueueConfig{
+			SentinelCollectQueueName: {MaxWorkers: cfg.CollectWorkers},
+			SentinelJudgeQueueName:   {MaxWorkers: cfg.JudgeWorkers},
+		}
+	}
+
+	client, err := river.NewClient(driver, riverCfg)
+	if err != nil {
+		return nil, fmt.Errorf("创建提交哨兵 River 客户端失败: %w", err)
+	}
+	return &SentinelQueue{client: client, pool: pool, workerMode: workerMode, cfg: cfg}, nil
+}
+
+// Start 启动 Work 循环（非 worker 模式为空操作）。
+func (q *SentinelQueue) Start(ctx context.Context) error {
+	if q == nil || !q.workerMode {
+		return nil
+	}
+	if err := q.client.Start(ctx); err != nil {
+		return fmt.Errorf("启动提交哨兵 River 客户端失败: %w", err)
+	}
+	log.Printf("[Sentinel] River 已启动（queues=%s,%s collect=%d judge=%d）",
+		SentinelCollectQueueName, SentinelJudgeQueueName, q.cfg.CollectWorkers, q.cfg.JudgeWorkers)
+	return nil
+}
+
+// Stop 停止拉取并等待在跑作业收尾。
+func (q *SentinelQueue) Stop(ctx context.Context) error {
+	if q == nil || !q.workerMode {
+		return nil
+	}
+	return q.client.Stop(ctx)
+}
+
+// EnqueueCollect 把仓库采集放进队列；同一仓库的活跃作业按参数去重。
+func (q *SentinelQueue) EnqueueCollect(ctx context.Context, repoID string) error {
+	if q == nil || q.client == nil {
+		return errors.New("提交哨兵队列未初始化")
+	}
+	_, err := q.client.Insert(ctx, SentinelCollectArgs{RepoID: repoID}, &river.InsertOpts{
+		Queue:       SentinelCollectQueueName,
+		MaxAttempts: 3,
+		UniqueOpts:  sentinelUniqueOpts(),
+	})
+	if err != nil {
+		return fmt.Errorf("采集任务入队失败: %w", err)
+	}
+	return nil
+}
+
+// EnqueueJudge 把提交判定放进队列。
+func (q *SentinelQueue) EnqueueJudge(ctx context.Context, commitID int64) error {
+	if q == nil || q.client == nil {
+		return errors.New("提交哨兵队列未初始化")
+	}
+	_, err := q.client.Insert(ctx, SentinelJudgeArgs{CommitID: commitID}, &river.InsertOpts{
+		Queue:       SentinelJudgeQueueName,
+		MaxAttempts: 3,
+		UniqueOpts:  sentinelUniqueOpts(),
+	})
+	if err != nil {
+		return fmt.Errorf("判定任务入队失败: %w", err)
+	}
+	return nil
+}
+
+func sentinelUniqueOpts() river.UniqueOpts {
+	return river.UniqueOpts{
+		ByArgs: true,
+		ByState: []rivertype.JobState{
+			rivertype.JobStateAvailable,
+			rivertype.JobStatePending,
+			rivertype.JobStateRetryable,
+			rivertype.JobStateRunning,
+			rivertype.JobStateScheduled,
+		},
+	}
+}
+
+// RunScheduler 周期调度：到点的仓库入采集队列，待判定的提交入判定队列。
+// ctx 取消即退出（main 关停链会取消）。
+func (q *SentinelQueue) RunScheduler(ctx context.Context) {
+	if q == nil {
+		return
+	}
+	interval := time.Duration(q.cfg.CollectIntervalMin) * time.Minute
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	q.scheduleOnce(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			q.scheduleOnce(ctx)
+		}
+	}
+}
+
+func (q *SentinelQueue) scheduleOnce(ctx context.Context) {
+	store := repo.Default().Sentinel()
+
+	due, err := store.ListDueRepos(ctx, 20)
+	if err != nil {
+		log.Printf("[Sentinel] 查询待采集仓库失败: %v", err)
+	} else {
+		for _, r := range due {
+			if err := q.EnqueueCollect(ctx, r.ID); err != nil {
+				log.Printf("[Sentinel] 仓库 %s 入队失败: %v", r.ID, err)
+			}
+		}
+	}
+
+	pending, err := store.ListPendingCommits(ctx, "", q.cfg.MaxCommitsPerRun)
+	if err != nil {
+		log.Printf("[Sentinel] 查询待判定提交失败: %v", err)
+		return
+	}
+	for _, c := range pending {
+		if err := q.EnqueueJudge(ctx, c.ID); err != nil {
+			log.Printf("[Sentinel] 提交 %d 入队失败: %v", c.ID, err)
+		}
+	}
+}

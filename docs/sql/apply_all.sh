@@ -66,6 +66,7 @@ CORE_FILES=(
     schema_notify.sql
     schema_poc_template_optional.sql
     schema_ops_finalize.sql
+    schema_sentinel.sql
 )
 
 MIGRATION_FILES=()
@@ -202,6 +203,8 @@ REQUIRED_TABLES=(
     seeds monitoring_plans runs run_targets site_endpoints
     icp_queries icp_filings
     fingerprint_rules
+    repo commit judgment finding artifact
+    conversation message run run_event attachment audit
 )
 CHECK_SQL="select t from unnest(array[$(printf "'%s'," "${REQUIRED_TABLES[@]}" | sed 's/,$//')]) as t
             where to_regclass(t) is null"

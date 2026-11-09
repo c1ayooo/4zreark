@@ -40,6 +40,9 @@ var requiredTables = []string{
 	"seeds", "monitoring_plans", "runs", "run_targets", "site_endpoints",
 	// ICP 与指纹域（migration_icp_queries.sql / schema_fingerprint.sql）
 	"icp_queries", "icp_filings", "fingerprint_rules",
+	// 提交哨兵域（schema_sentinel.sql）
+	"repo", "commit", "judgment", "finding", "artifact",
+	"conversation", "message", "run", "run_event", "attachment", "audit",
 }
 
 var defaultRepo *Repo

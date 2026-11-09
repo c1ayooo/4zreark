@@ -95,6 +95,11 @@ func (h *GitHubMonitorHandler) SaveSettings(c *gin.Context) {
 			return
 		}
 	}
+	// 轮询间隔下限 300s：GitHub search 桶 30 次/分钟，低于 5 分钟一轮纯属烧配额。
+	if req.IntervalSeconds != 0 && req.IntervalSeconds < 300 {
+		utils.BadRequest(c, "轮询间隔不能小于 300 秒（5 分钟）")
+		return
+	}
 	r := repo.Default().GitHubMonitor()
 	name, err := r.ProjectName(c.Request.Context(), projectID)
 	if err != nil {

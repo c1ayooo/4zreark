@@ -24,6 +24,7 @@ type PageMonitor struct {
 	pages          map[string]*MonitoredPage
 	mu             sync.RWMutex
 	stopCh         chan struct{}
+	stopOnce       sync.Once
 	changeCallback func(*PageChange)
 }
 
@@ -48,9 +49,10 @@ type MonitoredPage struct {
 	ErrorCount  int       `json:"error_count"`
 	LastError   string    `json:"last_error,omitempty"`
 
-	// 内部控制
-	ticker *time.Ticker  `json:"-"`
-	stopCh chan struct{} `json:"-"`
+	// 内部控制：stopCh 与 stopped 由 PageMonitor.mu 保护，stopped 保证只 close 一次。
+	// ticker 由 monitorPage 在协程内自建，不挂到结构体上（避免跨 goroutine 读写）。
+	stopCh  chan struct{} `json:"-"`
+	stopped bool          `json:"-"`
 }
 
 // MonitorType 监控类型
@@ -109,7 +111,18 @@ func NewPageMonitor() *PageMonitor {
 
 // SetChangeCallback 设置变化回调
 func (m *PageMonitor) SetChangeCallback(callback func(*PageChange)) {
+	m.mu.Lock()
 	m.changeCallback = callback
+	m.mu.Unlock()
+}
+
+// stopPageLocked 停止单个页面的监控协程，幂等。调用方必须持 m.mu 写锁。
+func (m *PageMonitor) stopPageLocked(page *MonitoredPage) {
+	if page.stopped {
+		return
+	}
+	page.stopped = true
+	close(page.stopCh)
 }
 
 // AddPage 添加监控页面
@@ -128,6 +141,15 @@ func (m *PageMonitor) AddPage(config MonitorConfig) (*MonitoredPage, error) {
 
 	id := generatePageID(config.URL)
 
+	// 同一 URL 重复添加时先停掉旧监控：否则旧协程仍按自己的 ticker 探测，
+	// 既重复请求又永远无人回收（goroutine + ticker 泄漏）。
+	m.mu.Lock()
+	if old, ok := m.pages[id]; ok {
+		m.stopPageLocked(old)
+		delete(m.pages, id)
+	}
+	m.mu.Unlock()
+
 	page := &MonitoredPage{
 		ID:          id,
 		URL:         config.URL,
@@ -141,20 +163,27 @@ func (m *PageMonitor) AddPage(config MonitorConfig) (*MonitoredPage, error) {
 		stopCh:      make(chan struct{}),
 	}
 
-	// 首次获取内容
+	// 首次获取内容（网络 IO，不持锁）
 	if err := m.fetchAndStore(page); err != nil {
+		m.mu.Lock()
 		page.LastError = err.Error()
 		page.ErrorCount++
+		m.mu.Unlock()
 	}
 
 	m.mu.Lock()
+	// 并发重复添加的兜底：后发布者覆盖前一个，并停掉它的协程。
+	if old, ok := m.pages[id]; ok {
+		m.stopPageLocked(old)
+	}
 	m.pages[id] = page
 	m.mu.Unlock()
 
 	// 启动监控
 	go m.monitorPage(page)
 
-	return page, nil
+	// 返回副本，避免调用方与监控协程共享可变字段。
+	return copyPage(page), nil
 }
 
 // RemovePage 移除监控页面
@@ -168,30 +197,51 @@ func (m *PageMonitor) RemovePage(id string) error {
 	}
 
 	// 停止监控
-	close(page.stopCh)
-	if page.ticker != nil {
-		page.ticker.Stop()
-	}
+	m.stopPageLocked(page)
 
 	delete(m.pages, id)
 	return nil
 }
 
-// GetPage 获取页面信息
+// copyPage 返回页面状态的浅拷贝（含 Headers/Keywords 的独立切片与 map），
+// 调用方读写副本不会与监控协程竞争。
+func copyPage(page *MonitoredPage) *MonitoredPage {
+	if page == nil {
+		return nil
+	}
+	cp := *page
+	cp.stopCh = nil
+	if page.Headers != nil {
+		cp.Headers = make(map[string]string, len(page.Headers))
+		for k, v := range page.Headers {
+			cp.Headers[k] = v
+		}
+	}
+	if page.Keywords != nil {
+		cp.Keywords = append([]string(nil), page.Keywords...)
+	}
+	return &cp
+}
+
+// GetPage 获取页面信息（返回副本）
 func (m *PageMonitor) GetPage(id string) (*MonitoredPage, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.pages[id], m.pages[id] != nil
+	page, ok := m.pages[id]
+	if !ok {
+		return nil, false
+	}
+	return copyPage(page), true
 }
 
-// GetAllPages 获取所有页面
+// GetAllPages 获取所有页面（返回副本）
 func (m *PageMonitor) GetAllPages() []*MonitoredPage {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	pages := make([]*MonitoredPage, 0, len(m.pages))
 	for _, p := range m.pages {
-		pages = append(pages, p)
+		pages = append(pages, copyPage(p))
 	}
 	return pages
 }
@@ -225,8 +275,9 @@ func (m *PageMonitor) CheckNow(id string) (*PageChange, error) {
 
 // monitorPage 监控页面循环
 func (m *PageMonitor) monitorPage(page *MonitoredPage) {
-	page.ticker = time.NewTicker(page.Interval)
-	defer page.ticker.Stop()
+	// ticker 只在本协程内可见：挂到 page 上会被 RemovePage/Stop 并发读写。
+	ticker := time.NewTicker(page.Interval)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -234,33 +285,50 @@ func (m *PageMonitor) monitorPage(page *MonitoredPage) {
 			return
 		case <-m.stopCh:
 			return
-		case <-page.ticker.C:
-			if !page.Enabled {
-				continue
-			}
+		case <-ticker.C:
+		}
 
-			change, err := m.checkPage(page)
-			if err != nil {
-				m.mu.Lock()
-				page.LastError = err.Error()
-				page.ErrorCount++
-				m.mu.Unlock()
-				continue
-			}
+		m.mu.RLock()
+		enabled := page.Enabled
+		callback := m.changeCallback
+		m.mu.RUnlock()
+		if !enabled {
+			continue
+		}
 
-			if change != nil && m.changeCallback != nil {
-				m.changeCallback(change)
-			}
+		change, err := m.checkPage(page)
+		if err != nil {
+			m.mu.Lock()
+			page.LastError = err.Error()
+			page.ErrorCount++
+			m.mu.Unlock()
+			continue
+		}
+
+		if change != nil && callback != nil {
+			callback(change)
 		}
 	}
 }
 
 // checkPage 检查页面变化
 func (m *PageMonitor) checkPage(page *MonitoredPage) (*PageChange, error) {
+	// 先取配置快照再发请求：HTTP 往返期间持有读锁会阻塞 EnablePage/RemovePage。
+	m.mu.RLock()
+	targetURL := page.URL
+	monitorType := page.MonitorType
+	selector := page.Selector
+	keywords := append([]string(nil), page.Keywords...)
+	headers := make(map[string]string, len(page.Headers))
+	for k, v := range page.Headers {
+		headers[k] = v
+	}
+	m.mu.RUnlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", page.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +337,7 @@ func (m *PageMonitor) checkPage(page *MonitoredPage) (*PageChange, error) {
 	req.Header.Set("User-Agent", useragent.Pick())
 
 	// 设置自定义请求头
-	for k, v := range page.Headers {
+	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
 
@@ -286,13 +354,13 @@ func (m *PageMonitor) checkPage(page *MonitoredPage) (*PageChange, error) {
 
 	var change *PageChange
 
-	switch page.MonitorType {
+	switch monitorType {
 	case MonitorTypeFullPage:
 		change = m.checkFullPage(page, body, resp.StatusCode)
 	case MonitorTypeSelector:
-		change = m.checkSelector(page, body, resp.StatusCode)
+		change = m.checkSelector(page, selector, body, resp.StatusCode)
 	case MonitorTypeKeyword:
-		change = m.checkKeywords(page, body, resp.StatusCode)
+		change = m.checkKeywords(page, keywords, body, resp.StatusCode)
 	case MonitorTypeStatus:
 		change = m.checkStatus(page, resp.StatusCode)
 	case MonitorTypeHash:
@@ -350,14 +418,14 @@ func (m *PageMonitor) checkFullPage(page *MonitoredPage, body []byte, status int
 }
 
 // checkSelector 检查选择器内容
-func (m *PageMonitor) checkSelector(page *MonitoredPage, body []byte, status int) *PageChange {
+func (m *PageMonitor) checkSelector(page *MonitoredPage, selector string, body []byte, status int) *PageChange {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(string(body)))
 	if err != nil {
 		return nil
 	}
 
 	var content strings.Builder
-	doc.Find(page.Selector).Each(func(i int, s *goquery.Selection) {
+	doc.Find(selector).Each(func(i int, s *goquery.Selection) {
 		content.WriteString(s.Text())
 		content.WriteString("\n")
 	})
@@ -397,11 +465,11 @@ func (m *PageMonitor) checkSelector(page *MonitoredPage, body []byte, status int
 }
 
 // checkKeywords 检查关键词
-func (m *PageMonitor) checkKeywords(page *MonitoredPage, body []byte, status int) *PageChange {
+func (m *PageMonitor) checkKeywords(page *MonitoredPage, keywords []string, body []byte, status int) *PageChange {
 	content := string(body)
 
 	var foundKeywords []string
-	for _, kw := range page.Keywords {
+	for _, kw := range keywords {
 		if strings.Contains(strings.ToLower(content), strings.ToLower(kw)) {
 			foundKeywords = append(foundKeywords, kw)
 		}
@@ -536,16 +604,29 @@ func (m *PageMonitor) checkTitle(page *MonitoredPage, body []byte, status int) *
 
 // fetchAndStore 获取并存储初始内容
 func (m *PageMonitor) fetchAndStore(page *MonitoredPage) error {
+	// 配置取快照，写回统一在锁内完成：该函数既被 AddPage 调用，也可能被
+	// 后续的「立即检查」路径复用，不能假设没有并发读者。
+	m.mu.RLock()
+	targetURL := page.URL
+	monitorType := page.MonitorType
+	selector := page.Selector
+	keywords := append([]string(nil), page.Keywords...)
+	headers := make(map[string]string, len(page.Headers))
+	for k, v := range page.Headers {
+		headers[k] = v
+	}
+	m.mu.RUnlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", page.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
 	if err != nil {
 		return err
 	}
 
 	req.Header.Set("User-Agent", useragent.Pick())
-	for k, v := range page.Headers {
+	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
 
@@ -560,51 +641,54 @@ func (m *PageMonitor) fetchAndStore(page *MonitoredPage) error {
 		return err
 	}
 
-	page.LastStatus = resp.StatusCode
-	page.LastCheck = time.Now()
-
-	switch page.MonitorType {
+	// 解析先在局部变量完成，再一次性写回，缩短持锁时间。
+	var lastHash, lastContent string
+	switch monitorType {
 	case MonitorTypeFullPage, MonitorTypeHash:
 		content := extractText(string(body))
-		page.LastHash = hashContent(content)
-		page.LastContent = truncate(content, 10000)
+		lastHash = hashContent(content)
+		lastContent = truncate(content, 10000)
 	case MonitorTypeSelector:
 		doc, _ := goquery.NewDocumentFromReader(strings.NewReader(string(body)))
 		var content strings.Builder
-		doc.Find(page.Selector).Each(func(i int, s *goquery.Selection) {
+		doc.Find(selector).Each(func(i int, s *goquery.Selection) {
 			content.WriteString(s.Text())
 		})
-		page.LastContent = content.String()
-		page.LastHash = hashContent(page.LastContent)
+		lastContent = content.String()
+		lastHash = hashContent(lastContent)
 	case MonitorTypeTitle:
 		doc, _ := goquery.NewDocumentFromReader(strings.NewReader(string(body)))
-		page.LastContent = doc.Find("title").Text()
+		lastContent = doc.Find("title").Text()
 	case MonitorTypeKeyword:
 		var found []string
-		for _, kw := range page.Keywords {
+		for _, kw := range keywords {
 			if strings.Contains(strings.ToLower(string(body)), strings.ToLower(kw)) {
 				found = append(found, kw)
 			}
 		}
-		page.LastContent = strings.Join(found, ",")
-		page.LastHash = hashContent(page.LastContent)
+		lastContent = strings.Join(found, ",")
+		lastHash = hashContent(lastContent)
 	}
+
+	m.mu.Lock()
+	page.LastStatus = resp.StatusCode
+	page.LastCheck = time.Now()
+	page.LastHash = lastHash
+	page.LastContent = lastContent
+	m.mu.Unlock()
 
 	return nil
 }
 
-// Stop 停止所有监控
+// Stop 停止所有监控（可重复调用）
 func (m *PageMonitor) Stop() {
-	close(m.stopCh)
+	m.stopOnce.Do(func() { close(m.stopCh) })
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	for _, page := range m.pages {
-		close(page.stopCh)
-		if page.ticker != nil {
-			page.ticker.Stop()
-		}
+		m.stopPageLocked(page)
 	}
 }
 
