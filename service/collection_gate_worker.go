@@ -90,7 +90,7 @@ func (g *CollectionGate) ensureGraph(ctx context.Context) (compose.Runnable[Gate
 	g.mu.RLock()
 	graph, cachedFingerprint, model := g.graph, g.fingerprint, g.modelName
 	g.mu.RUnlock()
-	if graph != nil && cachedFingerprint == fingerprint {
+	if cachedFingerprint != "" && cachedFingerprint == fingerprint {
 		return graph, model, nil
 	}
 

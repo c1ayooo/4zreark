@@ -196,6 +196,8 @@ func (s *SentinelConfig) Normalize() {
 	if len(s.CloneHosts) == 0 {
 		s.CloneHosts = []string{"github.com"}
 	}
+	// JudgeModel 是历史兼容字段：仅评测报告展示；实际判定模型由 LLM.Model /
+	// 系统设置「模型接入」决定，避免两处配置各说各话。
 	if s.JudgeModel == "" {
 		s.JudgeModel = "gpt-4o-mini"
 	}

@@ -59,25 +59,25 @@ type sampleResult struct {
 
 // evalReport 是整份评测报告。
 type evalReport struct {
-	Model            string         `json:"model"`
-	Stub             bool           `json:"stub"`
-	Note             string         `json:"note,omitempty"`
-	Samples          int            `json:"samples"`
-	Skipped          int            `json:"skipped"`
-	Judged           int            `json:"judged"`
-	Labeled          int            `json:"labeled"`
-	LabeledFixes     int            `json:"labeled_fixes"`
-	PredictedFixes   int            `json:"predicted_fixes"`
-	TruePositive     int            `json:"true_positive"`
-	FalsePositive    int            `json:"false_positive"`
-	FalseNegative    int            `json:"false_negative"`
-	Recall           float64        `json:"recall"`
-	Precision        float64        `json:"precision"`
-	FalsePositiveRate float64       `json:"false_positive_rate"`
-	ClassAccuracy    float64        `json:"class_accuracy"`
-	AvgPromptTokens  float64        `json:"avg_prompt_tokens"`
-	PartialCount     int            `json:"partial_count"`
-	Results          []sampleResult `json:"results"`
+	Model             string         `json:"model"`
+	Stub              bool           `json:"stub"`
+	Note              string         `json:"note,omitempty"`
+	Samples           int            `json:"samples"`
+	Skipped           int            `json:"skipped"`
+	Judged            int            `json:"judged"`
+	Labeled           int            `json:"labeled"`
+	LabeledFixes      int            `json:"labeled_fixes"`
+	PredictedFixes    int            `json:"predicted_fixes"`
+	TruePositive      int            `json:"true_positive"`
+	FalsePositive     int            `json:"false_positive"`
+	FalseNegative     int            `json:"false_negative"`
+	Recall            float64        `json:"recall"`
+	Precision         float64        `json:"precision"`
+	FalsePositiveRate float64        `json:"false_positive_rate"`
+	ClassAccuracy     float64        `json:"class_accuracy"`
+	AvgPromptTokens   float64        `json:"avg_prompt_tokens"`
+	PartialCount      int            `json:"partial_count"`
+	Results           []sampleResult `json:"results"`
 }
 
 func main() {
@@ -95,7 +95,8 @@ func main() {
 	}
 
 	cfg := loadConfig(*configPath)
-	evaluator, err := service.NewSentinelEvaluator(cfg.Sentinel, cfg.LLM)
+	evaluator, err := service.NewSentinelEvaluator(
+		cfg.Sentinel, service.EffectiveLLMConfig(context.Background(), cfg.LLM))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "初始化判定器失败: %v\n", err)
 		os.Exit(2)

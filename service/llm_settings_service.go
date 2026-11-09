@@ -90,8 +90,13 @@ func loadLLMRecord(ctx context.Context) (*llmSettingsRecord, bool, error) {
 	}
 	llmSettingsMu.Unlock()
 
+	// CLI/测试场景可能没有初始化数据层：此时直接回退启动配置，不能 panic。
+	r := repo.Default()
+	if r == nil {
+		return nil, false, nil
+	}
 	rec := &llmSettingsRecord{}
-	found, err := repo.Default().Settings().Get(ctx, llmSettingsKey, rec)
+	found, err := r.Settings().Get(ctx, llmSettingsKey, rec)
 	if err != nil {
 		return nil, false, err
 	}
