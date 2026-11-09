@@ -34,6 +34,7 @@ import {
   ARTIFACT_STATUS_LABELS,
   EmptyBlock,
   ErrorPanel,
+  FindingGradeTag,
   FindingStatusTag,
   PageHeader,
   SeverityTag,
@@ -352,7 +353,10 @@ export default function AnalysisArtifactsPage() {
       key: 'vuln_class',
       width: 130,
       render: (_, r) => (
-        <span className="font-mono text-[10.5px] text-muted-foreground">{r.vuln_class}</span>
+        <>
+          <span className="font-mono text-[10.5px] text-muted-foreground">{r.vuln_class}</span>
+          {r.grade ? <FindingGradeTag grade={r.grade} /> : null}
+        </>
       ),
     },
     { title: '严重度', key: 'severity', width: 90, render: (_, r) => <SeverityTag severity={r.severity} /> },

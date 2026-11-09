@@ -108,6 +108,7 @@ export interface SentinelFinding {
   status: string
   title: string
   detail: string
+  grade: string
   created_at: string
   updated_at: string
   repo_id: string
