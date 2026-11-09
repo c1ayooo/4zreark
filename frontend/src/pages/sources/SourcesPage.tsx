@@ -199,6 +199,9 @@ export default function SourcesPage() {
                 value={form.kind}
                 onChange={(v) => setForm({ ...form, kind: v })}
                 options={sourceKinds.map((k) => ({ value: k, label: k }))}
+                // 下拉面板按最长选项自适应宽度：触发器只有半列宽，
+                // 默认跟随触发器会把 securitytrails/wayback 这类长选项截断
+                popupMatchSelectWidth={false}
               />
             </div>
             <div className="space-y-1">

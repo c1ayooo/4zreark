@@ -51,6 +51,16 @@ export interface NotifyHistory {
   timestamp: string
 }
 
+// 通知对象（事件源开关）；资产变更带子开关
+export interface NotifySourceItem {
+  key: string
+  label: string
+  group: string
+  description: string
+  enabled: boolean
+  children?: NotifySourceItem[]
+}
+
 // 站内通知
 export interface InAppNotification {
   id: number
@@ -114,6 +124,13 @@ export const notifyApi = {
   // 获取支持的通知类型
   getTypes: (): Promise<ApiResponse<NotifyType[]>> =>
     api.get('/notify/types'),
+
+  // 通知对象（事件源开关）
+  listSources: (): Promise<ApiResponse<NotifySourceItem[]>> =>
+    api.get('/notify/sources'),
+
+  setSourceEnabled: (key: string, enabled: boolean): Promise<ApiResponse<null>> =>
+    api.post('/notify/sources', { key, enabled }),
 
   // 站内通知（铃铛）
   listNotifications: (params?: {

@@ -12,19 +12,18 @@ import (
 )
 
 type Config struct {
-	Server     ServerConfig     `mapstructure:"server"`
-	JWT        JWTConfig        `mapstructure:"jwt"`
-	Auth       AuthConfig       `mapstructure:"auth"`
-	Postgres   PostgresConfig   `mapstructure:"postgres"`
-	Scanner    ScannerConfig    `mapstructure:"scanner"`
-	Node       NodeConfig       `mapstructure:"node"`
-	Log        LogConfig        `mapstructure:"log"`
-	Alert      AlertConfig      `mapstructure:"alert"`
-	ThirdParty ThirdPartyConfig `mapstructure:"thirdparty"`
-	AutoVerify AutoVerifyConfig `mapstructure:"auto_verify"`
-	MCP        MCPConfig        `mapstructure:"mcp"`
-	Sentinel   SentinelConfig   `mapstructure:"sentinel"`
-	LLM        LLMConfig        `mapstructure:"llm"`
+	Server            ServerConfig       `mapstructure:"server"`
+	JWT               JWTConfig          `mapstructure:"jwt"`
+	Auth              AuthConfig         `mapstructure:"auth"`
+	Postgres          PostgresConfig     `mapstructure:"postgres"`
+	Scanner           ScannerConfig      `mapstructure:"scanner"`
+	Node              NodeConfig         `mapstructure:"node"`
+	ThirdParty        ThirdPartyConfig   `mapstructure:"thirdparty"`
+	SiteLiveness      SiteLivenessConfig `mapstructure:"site_liveness"`
+	FingerprintVerify AutoVerifyConfig   `mapstructure:"fingerprint_verify"`
+	MCP               MCPConfig          `mapstructure:"mcp"`
+	Sentinel          SentinelConfig     `mapstructure:"sentinel"`
+	LLM               LLMConfig          `mapstructure:"llm"`
 }
 
 // SentinelConfig 是提交哨兵域的运行参数（v0.3 §8 / 附录 B）。
@@ -131,13 +130,24 @@ type AuthConfig struct {
 	AllowPublicRegistration bool `mapstructure:"allow_public_registration"`
 }
 
-// AutoVerifyConfig 是指纹命中后的自动 nuclei 最小验证。
+// AutoVerifyConfig 是指纹命中后的自动 nuclei 最小验证（fingerprint_verify 段）。
 // 默认关闭：会在真实目标上发起请求，必须显式开启。
 type AutoVerifyConfig struct {
 	Enabled     bool `mapstructure:"enabled"`
 	RecheckDays int  `mapstructure:"recheck_days"`
 	Concurrency int  `mapstructure:"concurrency"`
 	RateLimit   int  `mapstructure:"rate_limit"`
+}
+
+// SiteLivenessConfig 是站点存活自动验证（site_liveness 段）：新扫描/导入的
+// pending 站点后台按批次真实探测。Enabled 为 nil（未配置）时默认开启；
+// 显式 false 关闭。ZRE_AUTOVERIFY_* 环境变量仍可单项覆盖（临时降载用）。
+type SiteLivenessConfig struct {
+	Enabled     *bool `mapstructure:"enabled"`
+	Parallel    int   `mapstructure:"parallel"`
+	BatchLimit  int   `mapstructure:"batch_limit"`
+	IntervalSec int   `mapstructure:"interval_sec"`
+	DelayMS     int   `mapstructure:"delay_ms"`
 }
 
 type ServerConfig struct {
@@ -179,7 +189,6 @@ type ScannerConfig struct {
 	WorkerCount int `mapstructure:"worker_count"`
 	Timeout     int `mapstructure:"timeout"`
 	RetryCount  int `mapstructure:"retry_count"`
-	RetryDelay  int `mapstructure:"retry_delay"`
 }
 
 // 节点角色。all 是单机默认值：控制面 + 本机扫描 worker。
@@ -262,18 +271,9 @@ func (n *NodeConfig) RunsScanner() bool {
 	return n.Role == NodeRoleAll || n.Role == NodeRoleWorker
 }
 
-type LogConfig struct {
-	Level      string `mapstructure:"level"`
-	File       string `mapstructure:"file"`
-	MaxSize    int    `mapstructure:"max_size"`
-	MaxBackups int    `mapstructure:"max_backups"`
-	MaxAge     int    `mapstructure:"max_age"`
-}
-
-type AlertConfig struct {
-	Enabled bool     `mapstructure:"enabled"`
-	Types   []string `mapstructure:"types"`
-}
+// 说明：历史上的 log.*（slog 默认行为接管，无读者）与 alert.*（通知已迁移
+// 到数据库 app_settings，代码零读取）配置段已删除；scanner.retry_delay 同因
+// 无读者删除。若部署环境 yaml 里仍残留这些段，viper 会静默忽略，不影响启动。
 
 type ThirdPartyConfig struct {
 	Fofa    FofaConfig    `mapstructure:"fofa"`

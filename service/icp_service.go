@@ -1,9 +1,9 @@
 package service
 
 import (
-	"fmt"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -138,6 +138,12 @@ func (s *ICPService) ensureWorker() {
 	}
 	s.started = true
 	go s.worker()
+}
+
+// EnsureStarted 供 main.go 启动时调用：ICP worker 原是懒启动（首次查询才拉起），
+// 启动时先拉起，避免重启后排队中的查询滞留到有人再次触发 ICP 查询。
+func (s *ICPService) EnsureStarted() {
+	s.ensureWorker()
 }
 
 func (s *ICPService) worker() {

@@ -351,8 +351,14 @@ func main() {
 	log.Println("Asset probe executor started")
 	defer probeExecutor.Stop()
 
+	// 惰性 worker 启动保障：种子收集与 ICP 查询的 worker 原是首次请求才拉起，
+	// 重启后残留的 queued 任务会滞留到下一次人工触发。启动时立即拉起并恢复。
+	service.GetSeedCollectionService().EnsureStarted()
+	service.DefaultICPService().EnsureStarted()
+
 	// 自动存活验证：新扫描/导入的 pending 站点后台探测，不等人工点。
-	if os.Getenv("ZRE_AUTOVERIFY_ENABLED") != "0" {
+	// 开关与参数在 config site_liveness 段（环境变量可单项覆盖）。
+	if service.SiteLivenessEnabled() {
 		autoVerify := service.NewAutoVerifyService()
 		autoVerify.Start()
 		log.Println("Auto verify scheduler started")

@@ -1,14 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Button, Card, Checkbox, Input, Tabs, Tag } from 'antd'
+import { Button, Card, Checkbox, Input, Select, Tabs, Tag } from 'antd'
 import { getErrorMessage } from '@/lib/errors'
 import { useAuthStore } from '@/store/auth'
 import { useAppStore } from '@/store/app'
 import { authApi } from '@/api/auth'
 import { settingsApi, ThirdPartyConfig } from '@/api/settings'
 import { retentionApi, type RetentionReport } from '@/api/retention'
-import { monitoringApi } from '@/api/monitoring'
+import { monitoringApi, type MonitoringPreset } from '@/api/monitoring'
 import { useConfirm } from '@/components/common/confirm-provider'
 import { useToast } from '@/components/ui/use-toast'
 import { MCPAccessPanel } from '@/components/settings/MCPAccessPanel'
@@ -18,7 +18,7 @@ import { ProxyPanel } from '@/components/settings/ProxyPanel'
 import { GitHubTokenPanel } from '@/components/settings/GitHubTokenPanel'
 import { LLMSettingsPanel } from '@/components/settings/LLMSettingsPanel'
 import DatasourceSessionsTab from '@/components/settings/DatasourceSessionsTab'
-import { Moon, Sun, Monitor, Palette, User, Lock, Key, KeyRound, CheckCircle, XCircle, Plug, Database, Plus, Trash2, Gauge, Globe, ShieldCheck, Sparkles } from 'lucide-react'
+import { Moon, Sun, Monitor, Palette, User, Lock, Key, KeyRound, CheckCircle, XCircle, Plug, Database, Plus, Pencil, Trash2, Gauge, Globe, ShieldCheck, Sparkles } from 'lucide-react'
 
 export default function SettingsPage() {
   const confirm = useConfirm()
@@ -92,6 +92,74 @@ export default function SettingsPage() {
     },
     onError: (e: any) =>
       toast({ title: '删除预设失败', description: e?.message, variant: 'destructive' }),
+  })
+  // 编辑态：复用新增表单，提交走 PUT /monitoring-presets/:id
+  const [editingPreset, setEditingPreset] = useState<MonitoringPreset | null>(null)
+  const updatePreset = useMutation({
+    mutationFn: () =>
+      monitoringApi.update(editingPreset!.id, {
+        name: presetForm.name,
+        interval_hours: presetForm.interval_hours,
+        is_default: presetForm.is_default,
+      }),
+    onSuccess: () => {
+      toast({ title: '监控预设已更新' })
+      setEditingPreset(null)
+      setPresetForm({ name: '', interval_hours: 24, is_default: false })
+      queryClient.invalidateQueries({ queryKey: ['monitoring-presets'] })
+    },
+    onError: (e: any) =>
+      toast({ title: '更新预设失败', description: e?.message, variant: 'destructive' }),
+  })
+  // 默认预设 → 新建表单预填（只在名称为空时填，不覆盖正在输入的内容）
+  const defaultsQuery = useQuery({
+    queryKey: ['monitoring-defaults'],
+    queryFn: () => monitoringApi.defaults(),
+    enabled: isAdmin,
+  })
+  useEffect(() => {
+    const p = defaultsQuery.data?.data?.preset
+    if (p) {
+      setPresetForm((f) =>
+        f.name.trim()
+          ? f
+          : { name: `${p.name} 副本`, interval_hours: p.interval_hours, is_default: false },
+      )
+    }
+  }, [defaultsQuery.data])
+  // 计划批量调整（POST /monitoring-bulk：先 preview 看影响面，再 apply）
+  const [bulkForm, setBulkForm] = useState<{
+    project_id: string
+    interval_hours: string
+    enabled: '' | 'true' | 'false'
+  }>({ project_id: '', interval_hours: '', enabled: '' })
+  const [bulkPreviewTotal, setBulkPreviewTotal] = useState<number | null>(null)
+  const bulkPayload = () => ({
+    ...(bulkForm.project_id.trim() ? { project_id: Number(bulkForm.project_id) } : {}),
+    ...(bulkForm.interval_hours.trim() ? { interval_hours: Number(bulkForm.interval_hours) } : {}),
+    ...(bulkForm.enabled !== '' ? { enabled: bulkForm.enabled === 'true' } : {}),
+  })
+  const bulkHasChange = bulkForm.enabled !== '' || bulkForm.interval_hours.trim() !== ''
+  const bulkPreviewMutation = useMutation({
+    mutationFn: () => monitoringApi.previewBulk(bulkPayload()),
+    onSuccess: (res) => {
+      setBulkPreviewTotal(res.data?.total ?? 0)
+      toast({ title: `预览完成：将影响 ${res.data?.total ?? 0} 个监控计划` })
+    },
+    onError: (e: any) =>
+      toast({ title: '预览失败', description: e?.message, variant: 'destructive' }),
+  })
+  const bulkApplyMutation = useMutation({
+    mutationFn: () => monitoringApi.bulk(bulkPayload()),
+    onSuccess: (res) => {
+      setBulkPreviewTotal(null)
+      toast({
+        title: '批量更新完成',
+        description: `请求 ${res.data?.requested ?? 0} · 更新 ${res.data?.updated ?? 0}`,
+      })
+    },
+    onError: (e: any) =>
+      toast({ title: '批量更新失败', description: e?.message, variant: 'destructive' }),
   })
   const presetList = presets.data?.data?.items ?? []
 
@@ -603,14 +671,31 @@ export default function SettingsPage() {
                               />
                               设为默认
                             </label>
+                            {editingPreset && (
+                              <Button
+                                size="small"
+                                onClick={() => {
+                                  setEditingPreset(null)
+                                  setPresetForm({ name: '', interval_hours: 24, is_default: false })
+                                }}
+                              >
+                                取消编辑
+                              </Button>
+                            )}
                             <Button
                               type="primary"
                               size="small"
                               disabled={!presetForm.name.trim()}
-                              loading={createPreset.isPending}
-                              onClick={() => createPreset.mutate()}
+                              loading={createPreset.isPending || updatePreset.isPending}
+                              onClick={() => (editingPreset ? updatePreset.mutate() : createPreset.mutate())}
                             >
-                              <Plus className="mr-2 h-4 w-4" /> 新增
+                              {editingPreset ? (
+                                '保存修改'
+                              ) : (
+                                <>
+                                  <Plus className="mr-2 h-4 w-4" /> 新增
+                                </>
+                              )}
                             </Button>
                           </div>
 
@@ -636,6 +721,21 @@ export default function SettingsPage() {
                                       <Button
                                         type="text"
                                         size="small"
+                                        title="编辑预设"
+                                        onClick={() => {
+                                          setEditingPreset(p)
+                                          setPresetForm({
+                                            name: p.name,
+                                            interval_hours: p.interval_hours,
+                                            is_default: p.is_default,
+                                          })
+                                        }}
+                                      >
+                                        <Pencil className="h-4 w-4" />
+                                      </Button>
+                                      <Button
+                                        type="text"
+                                        size="small"
                                         danger
                                         disabled={removePreset.isPending}
                                         onClick={async () => {
@@ -657,6 +757,77 @@ export default function SettingsPage() {
                                 )}
                               </tbody>
                             </table>
+                          </div>
+
+                          {/* 计划批量调整：按项目范围批量改间隔/启停（先预览再应用） */}
+                          <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+                            <div className="text-sm font-medium">计划批量调整</div>
+                            <p className="text-muted-foreground text-xs">
+                              按项目范围批量修改监控计划的间隔与启停。先「预览」确认影响面，再「应用」。影响的是已建的监控计划，不动上面的预设。
+                            </p>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Input
+                                className="w-40"
+                                placeholder="项目 ID（留空=全部）"
+                                value={bulkForm.project_id}
+                                onChange={(e) => setBulkForm((f) => ({ ...f, project_id: e.target.value }))}
+                              />
+                              <Input
+                                className="w-36"
+                                type="number"
+                                min={1}
+                                max={720}
+                                placeholder="间隔小时（可选）"
+                                value={bulkForm.interval_hours}
+                                onChange={(e) => setBulkForm((f) => ({ ...f, interval_hours: e.target.value }))}
+                              />
+                              <Select
+                                className="w-32"
+                                placeholder="启停（可选）"
+                                allowClear
+                                value={bulkForm.enabled || undefined}
+                                onChange={(v) =>
+                                  setBulkForm((f) => ({ ...f, enabled: (v ?? '') as '' | 'true' | 'false' }))
+                                }
+                                options={[
+                                  { value: 'true', label: '全部启用' },
+                                  { value: 'false', label: '全部停用' },
+                                ]}
+                              />
+                              <Button
+                                size="small"
+                                disabled={!bulkHasChange}
+                                loading={bulkPreviewMutation.isPending}
+                                onClick={() => bulkPreviewMutation.mutate()}
+                              >
+                                预览
+                              </Button>
+                              <Button
+                                size="small"
+                                type="primary"
+                                danger={bulkForm.enabled === 'false'}
+                                disabled={!bulkHasChange || bulkPreviewTotal === null}
+                                loading={bulkApplyMutation.isPending}
+                                onClick={async () => {
+                                  const ok = await confirm({
+                                    title: `批量更新 ${bulkPreviewTotal ?? 0} 个监控计划？`,
+                                    description:
+                                      bulkForm.enabled === 'false'
+                                        ? '全部停用后这些计划将不再到期执行。'
+                                        : undefined,
+                                    destructive: bulkForm.enabled === 'false',
+                                  })
+                                  if (ok) bulkApplyMutation.mutate()
+                                }}
+                              >
+                                应用
+                              </Button>
+                              {bulkPreviewTotal !== null && (
+                                <span className="text-muted-foreground text-xs">
+                                  预览：影响 {bulkPreviewTotal} 个计划（改条件后请重新预览）
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </Card>

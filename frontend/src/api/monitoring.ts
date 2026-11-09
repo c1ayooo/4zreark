@@ -15,6 +15,9 @@ export const monitoringApi = {
     api.get<unknown, ApiResponse<{ items: MonitoringPreset[]; total: number }>>(
       '/monitoring-presets'
     ),
+  // 当前默认预设（可能不存在，data.preset 为 null）
+  defaults: () =>
+    api.get<unknown, ApiResponse<{ preset: MonitoringPreset | null }>>('/monitoring-defaults'),
   create: (body: {
     name: string
     interval_hours: number

@@ -19,6 +19,11 @@ type ProbeExecutor struct {
 	lease    time.Duration
 	stop     chan struct{}
 	done     chan struct{}
+
+	// 关系图谱节流重建：批次结案后涉及的项目最多每小时自动重建一次，
+	// 不做的话图谱只靠手动/MCP 触发，会长期过期。
+	rebuildMu   sync.Mutex
+	lastRebuild map[int64]time.Time
 }
 
 func NewProbeExecutor(parallel int) *ProbeExecutor {
@@ -26,10 +31,11 @@ func NewProbeExecutor(parallel int) *ProbeExecutor {
 		parallel = 8
 	}
 	return &ProbeExecutor{
-		parallel: parallel,
-		lease:    2 * time.Minute,
-		stop:     make(chan struct{}),
-		done:     make(chan struct{}),
+		parallel:    parallel,
+		lease:       2 * time.Minute,
+		stop:        make(chan struct{}),
+		done:        make(chan struct{}),
+		lastRebuild: map[int64]time.Time{},
 	}
 }
 
@@ -42,6 +48,8 @@ type RunStats struct {
 	Skipped   int `json:"skipped"`
 	Targets   int `json:"targets_done"`
 	RunsDone  int `json:"runs_finished"`
+	// Projects 本次涉及的项目（去重），供图谱节流重建使用。
+	Projects []int64 `json:"-"`
 }
 
 func (e *ProbeExecutor) stores() (repo.RunRepo, *repo.AssetRepo, *VerifyService, error) {
@@ -65,6 +73,16 @@ func (e *ProbeExecutor) ProcessOnce(ctx context.Context, runID int64, limit int)
 	stats := &RunStats{Claimed: len(targets)}
 	if len(targets) == 0 {
 		return stats, nil
+	}
+	projectSeen := map[int64]bool{}
+	addProject := func(pid int64) {
+		if pid > 0 && !projectSeen[pid] {
+			projectSeen[pid] = true
+			stats.Projects = append(stats.Projects, pid)
+		}
+	}
+	for _, t := range targets {
+		addProject(t.ProjectID)
 	}
 
 	// capability.probe=false 的目标只做信息收集，不向目标发请求：
@@ -170,6 +188,41 @@ func (e *ProbeExecutor) ProcessOnce(ctx context.Context, runID int64, limit int)
 	return stats, nil
 }
 
+// relationRebuildInterval 是同一项目两次自动重建图谱的最小间隔。
+const relationRebuildInterval = time.Hour
+
+// maybeRebuildRelations 批次结案后节流触发关系图谱重建（每项目每小时最多一次）。
+// 异步执行，失败只记日志——图谱是派生视图，重建失败不影响探测主链路。
+func (e *ProbeExecutor) maybeRebuildRelations(stats *RunStats) {
+	if len(stats.Projects) == 0 {
+		return
+	}
+	var due []int64
+	now := time.Now()
+	e.rebuildMu.Lock()
+	for _, pid := range stats.Projects {
+		if last, ok := e.lastRebuild[pid]; !ok || now.Sub(last) >= relationRebuildInterval {
+			e.lastRebuild[pid] = now
+			due = append(due, pid)
+		}
+	}
+	e.rebuildMu.Unlock()
+	for _, pid := range due {
+		go func(projectID int64) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			counts, err := NewRelationService().Rebuild(ctx, projectID)
+			if err != nil {
+				log.Printf("[Relation] 项目 %d 图谱自动重建失败: %v", projectID, err)
+				return
+			}
+			if counts["edges"] > 0 || counts["nodes"] > 0 {
+				log.Printf("[Relation] 项目 %d 图谱已自动重建: %v", projectID, counts)
+			}
+		}(pid)
+	}
+}
+
 // finishSettledRuns 批次里没有 pending/running 目标时结案（含全量 skipped 的批次）。
 func finishSettledRuns(ctx context.Context, runs repo.RunRepo, affectedRuns map[int64]bool, stats *RunStats) {
 	for id := range affectedRuns {
@@ -213,6 +266,9 @@ func (e *ProbeExecutor) Start() {
 				if stats.Claimed > 0 {
 					log.Printf("[Probe] 领取 %d，可达 %d，失联 %d，不确定 %d，结案批次 %d",
 						stats.Claimed, stats.Reachable, stats.Dead, stats.Inconcl, stats.RunsDone)
+				}
+				if stats.RunsDone > 0 {
+					e.maybeRebuildRelations(stats)
 				}
 			}
 		}

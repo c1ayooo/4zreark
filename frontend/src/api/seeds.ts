@@ -15,37 +15,83 @@ export interface Seed {
   created_at: string
 }
 
-export interface SeedPreview {
-  targets?: { host?: string; value?: string; port?: number }[]
-  total?: number
-  shown?: number
-  truncated?: boolean
-  mode?: string
-  warnings?: string[]
-  note?: string
-}
-
 export const seedsApi = {
   list: (projectId?: number | string): Promise<ApiResponse<Seed[]>> =>
     api.get('/seeds', {
       params: projectId && String(projectId) !== '0' ? { project_id: projectId } : undefined,
     }),
 
-  create: (body: {
-    project_id: number | string
-    kind: SeedKind
-    value: string
-    capability?: Record<string, unknown>
-  }): Promise<ApiResponse<Seed>> => api.post('/seeds', body),
-
-  remove: (id: number): Promise<ApiResponse<null>> => api.delete(`/seeds/${id}`),
-
-  preview: (body: { project_id: number | string; kind: SeedKind; value: string }): Promise<ApiResponse<SeedPreview>> =>
-    api.post('/seeds/preview', body),
-
   // 域名种子的覆盖站点数：后端返回 items:[{seed_id, site_count}]，不是 map。
   domainCounts: (projectId?: number | string): Promise<ApiResponse<{ items: { seed_id: number; site_count: number }[]; total: number }>> =>
     api.get('/seeds/domain-counts', {
       params: projectId && String(projectId) !== '0' ? { project_id: projectId } : undefined,
     }),
+
+  // 批量建种子（可选同时建计划），逐条返回状态，不因一条失败中断整批。
+  createBatch: (body: {
+    project_id: number | string
+    items: {
+      kind: SeedKind
+      value: string
+      capability?: Record<string, unknown>
+      enabled?: boolean
+      interval_hours?: number
+    }[]
+  }): Promise<ApiResponse<SeedBatchResult>> => api.post('/seeds/batch', body),
+
+  // 重建计划：先预览拿一次性 token（15 分钟有效），确认后执行。
+  restartPreview: (
+    seedId: number,
+    body?: { interval_hours?: number }
+  ): Promise<ApiResponse<SeedRestartPreview>> =>
+    api.post(`/seeds/${seedId}/restart-preview`, body ?? {}),
+
+  restart: (
+    seedId: number,
+    token: string
+  ): Promise<ApiResponse<{ plan: PlanLike | null; deleted: SeedRestartCounts }>> =>
+    api.post(`/seeds/${seedId}/restart`, { token }),
+}
+
+export interface SeedBatchResult {
+  requested: number
+  created: number
+  duplicate: number
+  invalid: number
+  failed: number
+  items: {
+    index: number
+    kind: string
+    value: string
+    status: string
+    seed_id?: number
+    plan_id?: number
+    error?: string
+  }[]
+}
+
+export interface SeedRestartPreview {
+  seed: Seed | null
+  plans: { id: number; interval_hours: number; enabled: boolean }[]
+  runs: number
+  run_targets: number
+  interval_hours: number
+  token: string
+  expires_at: string
+}
+
+export interface SeedRestartCounts {
+  plans?: number
+  runs?: number
+  targets?: number
+  [k: string]: unknown
+}
+
+// 重启返回的计划体（前端只展示字段，避免引入 Plan 类型循环依赖）
+export interface PlanLike {
+  id: number
+  seed_id: number
+  interval_hours: number
+  enabled: boolean
+  [k: string]: unknown
 }

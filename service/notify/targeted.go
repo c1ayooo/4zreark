@@ -39,10 +39,13 @@ func (m *NotifyManager) SendTargetedAsync(msg *NotifyMessage, channelTypes []str
 	}()
 }
 
-// sendTargeted 定向分发：脱敏、站内落库与级别过滤的语义与 Send 保持一致，
-// 差别仅在只投递类型命中的渠道。
+// sendTargeted 定向分发：脱敏、站内落库、级别过滤与「通知对象」开关的语义
+// 与 Send 保持一致，差别仅在只投递类型命中的渠道。
 func (m *NotifyManager) sendTargeted(ctx context.Context, msg *NotifyMessage, types map[NotifyType]bool) {
 	if !NotifyLevelAllowed(msg.Level) {
+		return
+	}
+	if m.sourceSuppressed(msg) {
 		return
 	}
 	m.mu.RLock()

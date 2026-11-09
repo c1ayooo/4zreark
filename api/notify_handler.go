@@ -194,6 +194,55 @@ func (h *NotifyHandler) EnableConfig(c *gin.Context) {
 	})
 }
 
+// ListSources 获取通知对象目录与开关状态
+// @Summary 获取通知对象（事件源开关）
+// @Tags Notify
+// @Security ApiKeyAuth
+// @Success 200 {object} Response
+// @Router /api/notify/sources [get]
+func (h *NotifyHandler) ListSources(c *gin.Context) {
+	c.JSON(http.StatusOK, utils.Response{
+		Code:    0,
+		Message: "success",
+		Data:    h.manager.ListSources(),
+	})
+}
+
+// SetSourceEnabled 开关一个通知对象
+// @Summary 开关通知对象
+// @Tags Notify
+// @Security ApiKeyAuth
+// @Param body body object true "{key, enabled}"
+// @Success 200 {object} Response
+// @Router /api/notify/sources [post]
+func (h *NotifyHandler) SetSourceEnabled(c *gin.Context) {
+	var req struct {
+		Key     string `json:"key"`
+		Enabled bool   `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, utils.Response{
+			Code:    -1,
+			Message: "Invalid request: " + err.Error(),
+		})
+		return
+	}
+	if !notify.KnownSourceKey(req.Key) {
+		c.JSON(http.StatusBadRequest, utils.Response{
+			Code:    -1,
+			Message: "未知通知对象: " + req.Key,
+		})
+		return
+	}
+
+	h.manager.SetSourceEnabled(req.Key, req.Enabled)
+
+	c.JSON(http.StatusOK, utils.Response{
+		Code:    0,
+		Message: "Source updated successfully",
+	})
+}
+
 // TestConfig 测试通知配置
 // @Summary 测试通知配置
 // @Tags Notify

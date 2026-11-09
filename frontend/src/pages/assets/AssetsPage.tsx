@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
-import { Button, Checkbox, Dropdown, Input, Modal, Pagination, Select, Table, Tag, Tooltip } from 'antd'
+import { Button, Checkbox, Dropdown, Input, Modal, Pagination, Select, Table, Tabs, Tag, Tooltip } from 'antd'
 import type { MenuProps, TableProps } from 'antd'
 import {
   assetApi,
@@ -94,6 +94,11 @@ const VIEWS: { value: AssetView; label: string; title?: string }[] = [
   { value: 'technologies', label: '技术栈' },
   { value: 'ignored', label: '已忽略' },
 ]
+
+// 视图域拆分：「资产检索」管浏览与定位（缺省/线索/失联/接口/爬虫），
+// 「聚类与治理」管分析与人审入口（图标/技术栈聚类 + 已忽略）。
+const EXPLORE_VIEW_VALUES: AssetView[] = ['', 'clues', 'lost', 'interfaces', 'crawler']
+const GOVERN_VIEW_VALUES: AssetView[] = ['icons', 'technologies', 'ignored']
 
 type AssetSort = 'first_seen' | 'risk'
 
@@ -247,6 +252,10 @@ export default function AssetsPage() {
     return v === 'verified' || v === 'candidates' ? v : 'all'
   })
   const [view, setView] = useState<AssetView>(() => (searchParams.get('view') as AssetView) || '')
+  // 视图域 tab 从 view 派生（view 是唯一事实源）：深链 /assets?view=icons 直接落在聚类治理 tab。
+  const [pageTab, setPageTab] = useState<'explore' | 'govern'>(() =>
+    GOVERN_VIEW_VALUES.includes((searchParams.get('view') as AssetView) || '') ? 'govern' : 'explore',
+  )
   const [siteGroup, setSiteGroup] = useState(() => searchParams.get('site_group') !== '0')
   const [starredOnly, setStarredOnly] = useState(() => searchParams.get('starred') === '1')
   const [sort, setSort] = useState<AssetSort>(() => (searchParams.get('sort') === 'risk' ? 'risk' : 'first_seen'))
@@ -275,6 +284,10 @@ export default function AssetsPage() {
   const [expandedSiteIDs, setExpandedSiteIDs] = useState<Set<number>>(new Set())
   const cursor = cursorStack[cursorStack.length - 1]
   const clusterView = view === 'icons' || view === 'technologies'
+  // 当前 tab 可见的视图选项；view 变化时 tab 自动归位（含 kind 切换重置 view 的场景）。
+  const viewOptions = VIEWS.filter((v) =>
+    pageTab === 'govern' ? GOVERN_VIEW_VALUES.includes(v.value) : EXPLORE_VIEW_VALUES.includes(v.value),
+  )
   const riskSort = sort === 'risk' && (kind === 'domain' || kind === 'ip' || (kind === 'site' && siteGroup))
   // 排序适用于：站点归并 / 域名 / IP，且不在聚类视图。工具栏控件按需禁用——
   // 排序在「更多筛选」面板内，展开/收起不影响第一行工具区的几何形状。
@@ -596,6 +609,15 @@ export default function AssetsPage() {
     setCatalog('all')
     setPage(1)
   }
+  // 切 tab = 把 view 归位到目标域的默认视图；view 变化经 effect 回写 tab，状态单向。
+  const switchPageTab = (key: string) => {
+    const t = key as 'explore' | 'govern'
+    if (t === 'govern' && !GOVERN_VIEW_VALUES.includes(view)) changeView('icons')
+    else if (t === 'explore' && GOVERN_VIEW_VALUES.includes(view)) changeView('')
+  }
+  useEffect(() => {
+    setPageTab(GOVERN_VIEW_VALUES.includes(view) ? 'govern' : 'explore')
+  }, [view])
 
   const persistSavedViews = (next: SavedAssetView[]) => {
     setSavedViews(next)
@@ -993,6 +1015,17 @@ export default function AssetsPage() {
         </div>
       </div>
 
+      {/* 视图域 tab：仅作导航条（内容区隐藏），工具区/表格仍由下方统一承载 */}
+      <Tabs
+        activeKey={pageTab}
+        onChange={switchPageTab}
+        className="[&>.ant-tabs-content-holder]:hidden [&>.ant-tabs-nav]:mb-0"
+        items={[
+          { key: 'explore', label: '资产检索' },
+          { key: 'govern', label: '聚类与治理' },
+        ]}
+      />
+
       {/* 工具区第一行：搜索 + 查询/清空 + 视图 + 计数 + 更多筛选开关（flex-wrap，窄屏换行不重叠） */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-[240px] flex-1">
@@ -1018,7 +1051,7 @@ export default function AssetsPage() {
         </Button>
         <div className="flex items-center gap-2">
           <span className="text-[13px] text-muted-foreground">视图</span>
-          <Segmented value={view} options={VIEWS} onChange={changeView} />
+          <Segmented value={view} options={viewOptions} onChange={changeView} />
         </div>
         <span className="ml-auto flex items-center gap-2 text-sm text-muted-foreground">
           {list.isFetching && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-label="加载中" />}

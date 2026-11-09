@@ -63,18 +63,20 @@ export default function NotifyPage() {
   const confirm = useConfirm()
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
-  const [activeTab, setActiveTab] = useState(() =>
-    searchParams.get('tab') === 'inbox' ? 'inbox' : 'channels',
-  )
+  const [activeTab, setActiveTab] = useState(() => {
+    const t = searchParams.get('tab')
+    return t === 'inbox' || t === 'sources' ? t : 'channels'
+  })
 
   // 铃铛里的「查看全部」会带 ?tab=inbox，已经停留在本页时也要切过去。
   useEffect(() => {
-    if (searchParams.get('tab') === 'inbox') setActiveTab('inbox')
+    const t = searchParams.get('tab')
+    if (t === 'inbox' || t === 'sources') setActiveTab(t)
   }, [searchParams])
 
   const changeTab = (tab: string) => {
     setActiveTab(tab)
-    setSearchParams(tab === 'inbox' ? { tab: 'inbox' } : {}, { replace: true })
+    setSearchParams(tab === 'channels' ? {} : { tab }, { replace: true })
   }
   const [showAddDialog, setShowAddDialog] = useState(false)
 
@@ -129,6 +131,23 @@ export default function NotifyPage() {
     queryFn: () => notifyApi.listNotifications({ page: 1, page_size: 50 }),
     enabled: activeTab === 'inbox',
     refetchInterval: activeTab === 'inbox' ? 30_000 : false,
+  })
+
+  // 通知对象（事件源开关）
+  const { data: sourcesData, isLoading: sourcesLoading } = useQuery({
+    queryKey: ['notify-sources'],
+    queryFn: notifyApi.listSources,
+    enabled: activeTab === 'sources',
+  })
+
+  const setSourceMutation = useMutation({
+    mutationFn: ({ key, enabled }: { key: string; enabled: boolean }) =>
+      notifyApi.setSourceEnabled(key, enabled),
+    onSuccess: (_d, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['notify-sources'] })
+      toast({ title: vars.enabled ? '已开启通知' : '已关闭该类通知' })
+    },
+    onError: (e) => toast({ title: getErrorMessage(e, '设置失败'), variant: 'destructive' }),
   })
 
   const markAllMutation = useMutation({
@@ -532,6 +551,64 @@ export default function NotifyPage() {
                     </Card>
                   ))
                 )}
+              </div>
+            ),
+          },
+          {
+            key: 'sources',
+            label: '通知对象',
+            children: (
+              <div className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  按事件类型开关：关闭后该类事件不再进入任何渠道与站内铃铛。
+                </p>
+                <div className="divide-y rounded-lg border">
+                  {sourcesLoading ? (
+                    <div className="py-8 text-center text-sm text-muted-foreground">加载中...</div>
+                  ) : (
+                    (sourcesData?.data ?? []).map((s) => (
+                      <div key={s.key}>
+                        <div className="flex items-center justify-between gap-4 px-4 py-3">
+                          <div className="min-w-0">
+                            <span className="text-sm font-medium">{s.label}</span>
+                            <span className="ml-3 text-xs text-muted-foreground">
+                              {s.description}
+                            </span>
+                          </div>
+                          <Switch
+                            size="small"
+                            checked={s.enabled}
+                            disabled={setSourceMutation.isPending}
+                            onChange={(enabled) =>
+                              setSourceMutation.mutate({ key: s.key, enabled })
+                            }
+                          />
+                        </div>
+                        {s.children?.map((c) => (
+                          <div
+                            key={c.key}
+                            className="flex items-center justify-between gap-4 border-t bg-muted/30 px-4 py-2.5 pl-8"
+                          >
+                            <div className="min-w-0 text-sm">
+                              {c.label}
+                              <span className="ml-3 text-xs text-muted-foreground">
+                                {c.description}
+                              </span>
+                            </div>
+                            <Switch
+                              size="small"
+                              checked={c.enabled}
+                              disabled={setSourceMutation.isPending}
+                              onChange={(enabled) =>
+                                setSourceMutation.mutate({ key: c.key, enabled })
+                              }
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             ),
           },

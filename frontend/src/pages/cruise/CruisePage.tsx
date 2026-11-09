@@ -5,7 +5,7 @@ import { cruiseApi, CruiseTask, CruiseCreateRequest, CruiseTargetPreview } from 
 import { enterpriseApi, type EnterpriseProvider } from '@/api/enterprise'
 import { projectApi } from '@/api/projects'
 import { seedCollectionApi, CruiseOverviewRow } from '@/api/seedCollection'
-import { Badge, Button, Card, Input, Modal, Select, Switch, Table, Tag } from 'antd'
+import { Badge, Button, Card, Input, Modal, Select, Switch, Table, Tabs, Tag } from 'antd'
 import type { TableProps } from 'antd'
 import EmptyState from '@/components/common/EmptyState'
 import { useToast } from '@/components/ui/use-toast'
@@ -140,11 +140,15 @@ export default function CruisePage() {
   const projectName = (id?: number) =>
     projectList.find((p) => p.id === id)?.name || (id ? `项目 #${id}` : '-')
 
-  // 资产巡航 v2 总览：被动发现 + 站点内容巡检（60s 自动刷新）
+  // tab 划分：巡航任务（CRUD 与执行）与发现巡检总览（v2 被动发现+巡检汇总）是两套数据源。
+  const [activeTab, setActiveTab] = useState('tasks')
+
+  // 资产巡航 v2 总览：被动发现 + 站点内容巡检（60s 自动刷新；仅在总览 tab 拉取）
   const { data: overview, isLoading: overviewLoading } = useQuery({
     queryKey: ['cruise-v2-overview'],
     queryFn: () => seedCollectionApi.overview(),
     refetchInterval: 60000,
+    enabled: activeTab === 'overview',
   })
   const overviewRows = overview?.data ?? []
   const queryClient = useQueryClient()
@@ -667,83 +671,103 @@ export default function CruisePage() {
 
   return (
     <div className="space-y-6">
-      {/* 头部统计 */}
-      <div className="grid grid-cols-4 gap-4">
-        <div className="rounded-lg border bg-card p-4">
-          <div className="text-2xl font-bold">{stats?.total || 0}</div>
-          <div className="text-sm text-muted-foreground">总任务数</div>
-        </div>
-        <div className="rounded-lg border bg-card p-4">
-          <div className="text-2xl font-bold text-green-500">{stats?.enabled || 0}</div>
-          <div className="text-sm text-muted-foreground">已启用</div>
-        </div>
-        <div className="rounded-lg border bg-card p-4">
-          <div className="text-2xl font-bold text-gray-500">{stats?.disabled || 0}</div>
-          <div className="text-sm text-muted-foreground">已禁用</div>
-        </div>
-        <div className="rounded-lg border bg-card p-4">
-          <div className="text-2xl font-bold text-blue-500">{stats?.running || 0}</div>
-          <div className="text-sm text-muted-foreground">执行中</div>
-        </div>
-      </div>
+      <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
+        items={[
+          {
+            key: 'tasks',
+            label: '巡航任务',
+            children: (
+              <div className="space-y-4">
+                {/* 头部统计 */}
+                <div className="grid grid-cols-4 gap-4">
+                  <div className="rounded-lg border bg-card p-4">
+                    <div className="text-2xl font-bold">{stats?.total || 0}</div>
+                    <div className="text-sm text-muted-foreground">总任务数</div>
+                  </div>
+                  <div className="rounded-lg border bg-card p-4">
+                    <div className="text-2xl font-bold text-green-500">{stats?.enabled || 0}</div>
+                    <div className="text-sm text-muted-foreground">已启用</div>
+                  </div>
+                  <div className="rounded-lg border bg-card p-4">
+                    <div className="text-2xl font-bold text-gray-500">{stats?.disabled || 0}</div>
+                    <div className="text-sm text-muted-foreground">已禁用</div>
+                  </div>
+                  <div className="rounded-lg border bg-card p-4">
+                    <div className="text-2xl font-bold text-blue-500">{stats?.running || 0}</div>
+                    <div className="text-sm text-muted-foreground">执行中</div>
+                  </div>
+                </div>
 
-      {/* 资产巡航 v2 总览 */}
-      <Card
-        title={
-          <div className="flex flex-col gap-1">
-            <span>资产巡航 v2（发现 + 巡检）</span>
-            <span className="text-xs font-normal leading-relaxed text-muted-foreground">
-              被动发现与站点内容巡检的汇总。新内容在项目详情「发现候选」面板确认；详情见
-              docs/方案-资产巡航v2
-            </span>
-          </div>
-        }
-      >
-        <Table<CruiseOverviewRow>
-          columns={overviewColumns}
-          dataSource={overviewRows}
-          rowKey="project_id"
-          loading={overviewLoading}
-          size="small"
-          pagination={false}
-          locale={{ emptyText: <EmptyState title="暂无项目数据" className="border-0" /> }}
-        />
-      </Card>
+                {/* 工具栏 */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <div className="relative">
+                      <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        placeholder="搜索巡航任务..."
+                        className="pl-8 w-64"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <Button onClick={() => refetch()}>
+                      <RefreshCw className="mr-2 h-4 w-4" />
+                      刷新
+                    </Button>
+                    <Button type="primary" onClick={() => setCreateDialogOpen(true)}>
+                      <Plus className="mr-2 h-4 w-4" />
+                      新建巡航
+                    </Button>
+                  </div>
+                </div>
 
-
-      {/* 工具栏 */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-2">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="搜索巡航任务..."
-              className="pl-8 w-64"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
-        </div>
-        <div className="flex items-center space-x-2">
-          <Button onClick={() => refetch()}>
-            <RefreshCw className="mr-2 h-4 w-4" />
-            刷新
-          </Button>
-          <Button type="primary" onClick={() => setCreateDialogOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            新建巡航
-          </Button>
-        </div>
-      </div>
-
-      {/* 表格 */}
-      <Table
-        columns={columns}
-        dataSource={data?.items ?? []}
-        rowKey="id"
-        loading={isLoading}
-        locale={{ emptyText: <EmptyState title="暂无巡航任务" className="border-0" /> }}
-        pagination={tablePagination}
+                {/* 表格 */}
+                <Table
+                  columns={columns}
+                  dataSource={data?.items ?? []}
+                  rowKey="id"
+                  loading={isLoading}
+                  locale={{ emptyText: <EmptyState title="暂无巡航任务" className="border-0" /> }}
+                  pagination={tablePagination}
+                />
+              </div>
+            ),
+          },
+          {
+            key: 'overview',
+            label: '发现与巡检总览',
+            children: (
+              <div className="space-y-4">
+                {/* 资产巡航 v2 总览 */}
+                <Card
+                  title={
+                    <div className="flex flex-col gap-1">
+                      <span>资产巡航 v2（发现 + 巡检）</span>
+                      <span className="text-xs font-normal leading-relaxed text-muted-foreground">
+                        被动发现与站点内容巡检的汇总。新内容在项目详情「发现候选」面板确认；详情见
+                        docs/方案-资产巡航v2
+                      </span>
+                    </div>
+                  }
+                >
+                  <Table<CruiseOverviewRow>
+                    columns={overviewColumns}
+                    dataSource={overviewRows}
+                    rowKey="project_id"
+                    loading={overviewLoading}
+                    size="small"
+                    pagination={false}
+                    locale={{ emptyText: <EmptyState title="暂无项目数据" className="border-0" /> }}
+                  />
+                </Card>
+              </div>
+            ),
+          },
+        ]}
       />
 
       {/* 创建/编辑对话框 */}

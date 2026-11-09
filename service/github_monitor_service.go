@@ -32,9 +32,6 @@ type GitHubMonitorService struct {
 	svc   *githubleak.Service
 	store *githubleak.Store
 	repo  repo.GitHubMonitorRepo
-	// token 池与配额（与 githubleak.Store 共用同一个 database/sql 适配层连接）
-	tokens *githubtokens.Store
-	pool   *githubtokens.Pool
 	// lastRulesKey 上轮规则指纹（项目:名:关键词 串接哈希的替身——直接拼串比较）
 	lastRules string
 }
@@ -72,17 +69,13 @@ func GetGitHubMonitor() (*GitHubMonitorService, error) {
 			githubMonitorSvc = nil
 			return
 		}
-		// Token 池：与 githubleak.Store 共用同一 database/sql 连接；池表由包自建。
+		// Token 池：平台统一池（github_token_pool 表，github_tokens.go 单例装配）。
 		// 池为空时 Pick 返回 ""，监控自动回退项目级单 token，向后兼容。
-		tokens, terr := githubtokens.NewStore(sqldb)
-		if terr != nil {
-			log.Printf("[GitHubLeak] Token 池初始化失败（监控将退回单 token 模式）: %v", terr)
-		} else {
-			pool := githubtokens.NewPool(tokens)
+		if pool := GitHubTokenPool(); pool != nil {
 			svc.SetTokenPool(pool)
 			svc.SetSearchLimiter(githubtokens.NewSearchLimiter(0))
-			githubMonitorSvc.tokens = tokens
-			githubMonitorSvc.pool = pool
+		} else {
+			log.Printf("[GitHubLeak] 统一 Token 池未就绪（监控将退回单 token 模式）")
 		}
 		// 通知出口：接 4zreark 通知设施（飞书/钉钉/企业微信/Telegram/邮件/自定义 webhook，
 		// 渠道与级别门槛由 notify 配置决定；未配置任何渠道时 Manager 静默跳过）。
@@ -115,21 +108,8 @@ func GitHubMonitorStore() *githubleak.Store {
 	return githubMonitorSvc.store
 }
 
-// GitHubTokenStore Token 池存储访问（handler 管理/配额展示用）；未就绪返回 nil。
-func GitHubTokenStore() *githubtokens.Store {
-	if githubMonitorSvc == nil {
-		return nil
-	}
-	return githubMonitorSvc.tokens
-}
-
-// GitHubTokenPool Token 池轮换器访问（handler 手动刷新配额用）；未就绪返回 nil。
-func GitHubTokenPool() *githubtokens.Pool {
-	if githubMonitorSvc == nil {
-		return nil
-	}
-	return githubMonitorSvc.pool
-}
+// GitHubTokenStore / GitHubTokenPool 已上移到 github_tokens.go（平台统一池单例），
+// 监控与其它消费方共用同一实例。
 
 // GitHubLeakService 泄露监控内核访问（管理端点 Run/Backfill/Suppressions 等）；
 // 未就绪返回 nil。
@@ -222,13 +202,13 @@ func (g *GitHubMonitorService) syncOnce(ctx context.Context) (bool, error) {
 	// Token 池优先：按剩余配额轮换多账号；池空/未初始化回退项目级单 token。
 	// 顺带刷新全池配额（rate_limit 端点不计配额；同步周期 2 分钟，调用方节流足够）。
 	token := active.Token
-	if g.pool != nil {
-		if errs := g.pool.RefreshRates(ctx); len(errs) > 0 {
+	if pool := GitHubTokenPool(); pool != nil {
+		if errs := pool.RefreshRates(ctx); len(errs) > 0 {
 			for _, e := range errs {
 				log.Printf("[GitHubLeak] Token 配额刷新失败: %v", e)
 			}
 		}
-		if picked := g.pool.Pick(ctx); picked != "" {
+		if picked := pool.Pick(ctx); picked != "" {
 			token = picked
 		}
 	}

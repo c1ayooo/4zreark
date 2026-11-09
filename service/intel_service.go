@@ -186,21 +186,13 @@ func NewIntelServiceWithToken(fn func(context.Context) string) *IntelService {
 }
 
 // intelGitHubToken 解析 GitHub 凭据：环境变量/数据源 github 凭据优先（显式配置），
-// 都没有时依次回退两条平台池：
-//   - 设置页「GitHub Token」池（app_settings github.tokens，简单轮询）
-//   - 监控面板「Token 池」（github_token_pool，按剩余配额轮换；监控未初始化时跳过）
-// 两条池都空时返回空串，由调用方报错。
+// 没有则回退平台统一 Token 池（github_token_pool，git 取号轮转）。
+// 池也为空时返回空串，由调用方报错。
 func intelGitHubToken(ctx context.Context) string {
 	if tok := NewSourceService().GitHubToken(ctx); tok != "" {
 		return tok
 	}
-	if tok := PickGitHubToken(ctx); tok != "" {
-		return tok
-	}
-	if pool := GitHubTokenPool(); pool != nil {
-		return pool.Pick(ctx)
-	}
-	return ""
+	return PickGitHubToken(ctx)
 }
 
 func (s *IntelService) githubToken(ctx context.Context) string {

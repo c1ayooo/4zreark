@@ -1,7 +1,6 @@
 package api
 
 import (
-	"log"
 	"strconv"
 	"strings"
 
@@ -319,16 +318,8 @@ func (h *GitHubMonitorHandler) UpdateFindingStatus(c *gin.Context) {
 		utils.InternalError(c, err.Error())
 		return
 	}
-	if req.Status == githubleak.StatusFalsePositive && finding.Fingerprint != "" {
-		fp := finding.Fingerprint
-		if len(fp) > 16 {
-			fp = fp[:16]
-		}
-		if _, serr := leakSvc.AddSuppression(c.Request.Context(),
-			githubleak.SuppressionFingerprintPrefix, fp, "标记误报自动静默", sessionUser(c)); serr != nil {
-			// 副作用失败不阻断处置，记录日志即可
-			log.Printf("[GitHubLeak] 误报自动抑制创建失败 finding=%s: %v", c.Param("fid"), serr)
-		}
+	if req.Status == githubleak.StatusFalsePositive {
+		silenceFalsePositive(c, leakSvc, finding)
 	}
 	utils.SuccessWithMessage(c, "已更新", finding)
 }

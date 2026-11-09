@@ -144,6 +144,12 @@ func (s *SeedCollectionService) ensureWorker() {
 	log.Printf("[SeedCollect] 收集 worker 已启动")
 }
 
+// EnsureStarted 供 main.go 启动时调用：进程重启后立即拉起 worker 并恢复
+// 残留的 running/queued 任务，而不是等下一次有人手动发起收集才懒启动。
+func (s *SeedCollectionService) EnsureStarted() {
+	s.ensureWorker()
+}
+
 // refillQueue 通道见底时从 DB 补拉 queued 任务接力执行。
 // 全部收集一次落库全量目标，通道只保留执行窗口，超出部分由这里消化；
 // 重复补拉的任务 ClaimJob 条件更新幂等，不会双跑。

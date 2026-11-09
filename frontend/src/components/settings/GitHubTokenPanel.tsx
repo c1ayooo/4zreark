@@ -4,6 +4,7 @@ import { Button, Card, Input, Popconfirm, Tag } from 'antd'
 import { KeyRound, Plus, Trash2 } from 'lucide-react'
 import { getErrorMessage } from '@/lib/errors'
 import { useToast } from '@/components/ui/use-toast'
+import { formatDate } from '@/lib/utils'
 import { githubTokensApi, GitHubToken } from '@/api/githubTokens'
 
 // 卡片标题：主标题 + 说明小字，与设置页其他 tab 一致。
@@ -14,6 +15,12 @@ function cardTitle(title: string, desc: string) {
       <span className="text-xs font-normal leading-relaxed text-muted-foreground">{desc}</span>
     </div>
   )
+}
+
+function quotaText(t: GitHubToken) {
+  if (!t.enabled) return '—'
+  if (t.rate_remaining < 0) return '未采集'
+  return `${t.rate_remaining}/${t.rate_limit}`
 }
 
 export function GitHubTokenPanel() {
@@ -29,7 +36,7 @@ export function GitHubTokenPanel() {
   const items: GitHubToken[] = tokensQuery.data?.data?.items ?? []
 
   const add = useMutation({
-    mutationFn: () => githubTokensApi.add({ name: name.trim() || undefined, token: token.trim() }),
+    mutationFn: () => githubTokensApi.add({ label: name.trim() || undefined, token: token.trim() }),
     onSuccess: () => {
       toast({ title: 'Token 已添加' })
       setName('')
@@ -41,7 +48,7 @@ export function GitHubTokenPanel() {
   })
 
   const remove = useMutation({
-    mutationFn: (id: number) => githubTokensApi.remove(id),
+    mutationFn: (id: string) => githubTokensApi.remove(id),
     onSuccess: () => {
       toast({ title: 'Token 已删除' })
       queryClient.invalidateQueries({ queryKey: ['github-tokens'] })
@@ -60,14 +67,14 @@ export function GitHubTokenPanel() {
       <Card
         title={cardTitle(
           'GitHub Token 池',
-          'Token 用于仓库采集认证与 API 限流提升，多条轮询使用。'
+          '平台统一池：sentinel 采集认证、GitHub 泄露监控、情报 PoC 检索共用；多条轮询使用，入池后自动采集剩余配额。'
         )}
       >
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
             <Input
               className="w-56"
-              placeholder="名称（可空，默认自动命名）"
+              placeholder="名称（可空，默认脱敏串）"
               value={name}
               onChange={(e) => setName(e.target.value)}
               onPressEnter={submit}
@@ -97,6 +104,7 @@ export function GitHubTokenPanel() {
                   <th className="p-2">名称</th>
                   <th className="p-2">Token</th>
                   <th className="p-2">状态</th>
+                  <th className="p-2">剩余配额</th>
                   <th className="p-2">添加时间</th>
                   <th className="p-2 text-right">操作</th>
                 </tr>
@@ -104,7 +112,7 @@ export function GitHubTokenPanel() {
               <tbody>
                 {items.map((t) => (
                   <tr key={t.id} className="border-b last:border-0">
-                    <td className="p-2 font-medium">{t.name || '—'}</td>
+                    <td className="p-2 font-medium">{t.label || '—'}</td>
                     <td className="p-2 font-mono text-xs">{t.masked}</td>
                     <td className="p-2">
                       {t.enabled ? (
@@ -113,10 +121,13 @@ export function GitHubTokenPanel() {
                         <Tag>停用</Tag>
                       )}
                     </td>
-                    <td className="p-2 text-muted-foreground">{t.created_at}</td>
+                    <td className="p-2 text-muted-foreground">{quotaText(t)}</td>
+                    <td className="p-2 text-muted-foreground">
+                      {t.created_at ? formatDate(t.created_at) : '—'}
+                    </td>
                     <td className="p-2 text-right">
                       <Popconfirm
-                        title={`删除 Token「${t.name || t.masked}」？`}
+                        title={`删除 Token「${t.label || t.masked}」？`}
                         onConfirm={() => remove.mutate(t.id)}
                       >
                         <Button type="text" size="small" danger disabled={remove.isPending}>
@@ -128,7 +139,7 @@ export function GitHubTokenPanel() {
                 ))}
                 {items.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="p-6 text-center text-sm text-muted-foreground">
+                    <td colSpan={6} className="p-6 text-center text-sm text-muted-foreground">
                       <span className="inline-flex items-center gap-1">
                         <KeyRound className="h-4 w-4" />
                         还没有 Token

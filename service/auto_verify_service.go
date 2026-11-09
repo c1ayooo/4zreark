@@ -8,14 +8,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c1ayooo/4zreark/config"
 	"github.com/c1ayooo/4zreark/repo"
 )
 
 // 自动存活验证：新扫描/导入的站点（state=pending、attempts=0）由后台按批次
 // 真实探测，不再依赖人工点「探测」或治理 run。
 //
-// 只选有 HTTP 入口的站点；每批默认 20 个、并发 4、间隔 30 秒，避免把新资产
-// 一次性全部打出去。可通过 ZRE_AUTOVERIFY_* 调整；设为 0 可关闭。
+// 参数从配置文件 site_liveness 段读取（历史版本读 ZRE_AUTOVERIFY_* 环境变量，
+// 环境变量保留为单项覆盖，便于临时降载不改配置）。site_liveness.enabled=false
+// 或 ZRE_AUTOVERIFY_ENABLED=0 关闭。
 
 type AutoVerifyStats struct {
 	Picked       int `json:"picked"`
@@ -44,19 +46,24 @@ func envIntDefault(key string, def int) int {
 }
 
 func NewAutoVerifyService() *AutoVerifyService {
-	parallel := envIntDefault("ZRE_AUTOVERIFY_PARALLEL", 4)
+	cfg := config.Loaded()
+	sl := &config.SiteLivenessConfig{}
+	if cfg != nil {
+		sl = &cfg.SiteLiveness
+	}
+	parallel := envIntDefault("ZRE_AUTOVERIFY_PARALLEL", intDefault(sl.Parallel, 4))
 	if parallel < 1 || parallel > 32 {
 		parallel = 4
 	}
-	limit := envIntDefault("ZRE_AUTOVERIFY_LIMIT", 20)
+	limit := envIntDefault("ZRE_AUTOVERIFY_LIMIT", intDefault(sl.BatchLimit, 20))
 	if limit < 1 || limit > 500 {
 		limit = 20
 	}
-	sec := envIntDefault("ZRE_AUTOVERIFY_INTERVAL_SEC", 30)
+	sec := envIntDefault("ZRE_AUTOVERIFY_INTERVAL_SEC", intDefault(sl.IntervalSec, 30))
 	if sec < 5 {
 		sec = 30
 	}
-	delayMS := envIntDefault("ZRE_AUTOVERIFY_DELAY_MS", 200)
+	delayMS := envIntDefault("ZRE_AUTOVERIFY_DELAY_MS", intDefault(sl.DelayMS, 200))
 	if delayMS < 0 || delayMS > 10000 {
 		delayMS = 200
 	}
@@ -65,6 +72,25 @@ func NewAutoVerifyService() *AutoVerifyService {
 		delay: time.Duration(delayMS) * time.Millisecond,
 		stop:  make(chan struct{}),
 	}
+}
+
+// SiteLivenessEnabled 判定站点存活自动验证开关：config site_liveness.enabled
+// 显式配置优先；未配置默认开启。环境变量 ZRE_AUTOVERIFY_ENABLED=0 仍可关闭。
+func SiteLivenessEnabled() bool {
+	if os.Getenv("ZRE_AUTOVERIFY_ENABLED") == "0" {
+		return false
+	}
+	if cfg := config.Loaded(); cfg != nil && cfg.SiteLiveness.Enabled != nil {
+		return *cfg.SiteLiveness.Enabled
+	}
+	return true
+}
+
+func intDefault(v, def int) int {
+	if v > 0 {
+		return v
+	}
+	return def
 }
 
 // RunOnce 验证一批候选站点；projectID=0 表示全部项目。

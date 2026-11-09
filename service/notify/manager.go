@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,7 @@ func GetGlobalManager() *NotifyManager {
 		globalManager = NewNotifyManager()
 		globalManager.loadConfigs()
 		globalManager.loadEnvFeishuConfig()
+		globalManager.loadDisabledSources()
 		globalManager.Start()
 		log.Println("[Notify] Global notify manager initialized")
 	})
@@ -39,6 +41,10 @@ type NotifyManager struct {
 	dispatch []channelDispatch
 	configs  []NotifyConfig
 	mu       sync.RWMutex
+
+	// disabledSources 是「通知对象」开关：key 为事件源（或资产变更子键），
+	// 命中即完全静默（不进渠道、不进站内铃铛）。与 configs 共用 mu。
+	disabledSources map[string]bool
 
 	// 通知队列
 	queue  chan *NotifyMessage
@@ -69,13 +75,103 @@ type NotifyHistory struct {
 // NewNotifyManager 创建通知管理器
 func NewNotifyManager() *NotifyManager {
 	return &NotifyManager{
-		dispatch:   make([]channelDispatch, 0),
-		configs:    make([]NotifyConfig, 0),
-		queue:      make(chan *NotifyMessage, 1000),
-		stopCh:     make(chan struct{}),
-		history:    make([]*NotifyHistory, 0),
-		maxHistory: 1000,
+		dispatch:        make([]channelDispatch, 0),
+		configs:         make([]NotifyConfig, 0),
+		disabledSources: make(map[string]bool),
+		queue:           make(chan *NotifyMessage, 1000),
+		stopCh:          make(chan struct{}),
+		history:         make([]*NotifyHistory, 0),
+		maxHistory:      1000,
 	}
+}
+
+// settingsKey 是「通知对象」开关在 app_settings 里的持久化键。
+const disabledSourcesSettingsKey = "notify.disabled_sources"
+
+// loadDisabledSources 从 app_settings 恢复被关闭的通知对象。repo 未初始化时跳过。
+func (m *NotifyManager) loadDisabledSources() {
+	r := repo.Default()
+	if r == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var keys []string
+	if ok, err := r.Settings().Get(ctx, disabledSourcesSettingsKey, &keys); err != nil {
+		log.Printf("[Notify] 加载通知对象开关失败: %v", err)
+		return
+	} else if !ok {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, k := range keys {
+		m.disabledSources[k] = true
+	}
+	if len(keys) > 0 {
+		log.Printf("[Notify] 已关闭的通知对象: %s", strings.Join(keys, ", "))
+	}
+}
+
+// SetSourceEnabled 打开/关闭一个通知对象（目录 key 或资产变更子键），并持久化。
+func (m *NotifyManager) SetSourceEnabled(key string, enabled bool) {
+	m.mu.Lock()
+	if enabled {
+		delete(m.disabledSources, key)
+	} else {
+		m.disabledSources[key] = true
+	}
+	keys := make([]string, 0, len(m.disabledSources))
+	for k := range m.disabledSources {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	m.mu.Unlock()
+
+	if r := repo.Default(); r != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := r.Settings().Set(ctx, disabledSourcesSettingsKey, keys); err != nil {
+			log.Printf("[Notify] 通知对象开关持久化失败: %v", err)
+		}
+	}
+}
+
+// ListSources 返回目录及各对象当前开关状态。
+func (m *NotifyManager) ListSources() []NotifySourceItem {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]NotifySourceItem, 0, len(SourceCatalog))
+	for _, s := range SourceCatalog {
+		item := s
+		item.Enabled = !m.disabledSources[s.Key]
+		item.Children = make([]NotifySourceItem, 0, len(s.Children))
+		for _, c := range s.Children {
+			c.Enabled = !m.disabledSources[c.Key]
+			item.Children = append(item.Children, c)
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// sourceSuppressed 判断一条消息是否被「通知对象」开关拦下：
+// 资产变更先看子键（extra.change_type 归一），子键没关再看父键。
+func (m *NotifyManager) sourceSuppressed(msg *NotifyMessage) bool {
+	if msg == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.disabledSources[msg.Source] {
+		return true
+	}
+	if msg.Source == "asset_monitor" {
+		if ct, _ := msg.Extra["change_type"].(string); ct != "" {
+			return m.disabledSources[AssetChangeTypeKey(ct)]
+		}
+	}
+	return false
 }
 
 // Start 启动通知管理器
@@ -383,12 +479,16 @@ func (m *NotifyManager) createNotifier(config NotifyConfig) Notifier {
 	return nil
 }
 
-// Send 发送通知（同步）。按渠道 MinLevel 过滤：级别够不着门槛的渠道直接跳过。
+// Send 发送通知（同步）。先过「通知对象」开关（关闭即完全静默），
+// 再按渠道 MinLevel 过滤：级别够不着门槛的渠道直接跳过。
 func (m *NotifyManager) Send(ctx context.Context, msg *NotifyMessage) error {
 	if msg == nil {
 		return nil
 	}
 	if !NotifyLevelAllowed(msg.Level) {
+		return nil
+	}
+	if m.sourceSuppressed(msg) {
 		return nil
 	}
 	m.mu.RLock()
@@ -605,7 +705,19 @@ func (m *NotifyManager) NotifyAssetChange(changeType, assetInfo string, extra ma
 }
 
 // NotifyAssetChangeWithLevel 带级别的资产变更通知。分级路由按 level 与渠道 MinLevel 匹配。
+// changeType 同时写入 extra.change_type，「通知对象」开关靠它区分子类型。
 func (m *NotifyManager) NotifyAssetChangeWithLevel(level NotifyLevel, changeType, assetInfo string, extra map[string]interface{}) {
+	if extra == nil {
+		extra = map[string]interface{}{}
+	} else {
+		merged := make(map[string]interface{}, len(extra)+1)
+		for k, v := range extra {
+			merged[k] = v
+		}
+		extra = merged
+	}
+	extra["change_type"] = changeType
+
 	msg := &NotifyMessage{
 		Level:     level,
 		Title:     "资产变更: " + changeType,

@@ -1,199 +1,98 @@
 package service
 
-// GitHub Token 池（平台级，多 token）。
+// GitHub Token 池（平台级唯一池）。
 //
-// 为什么是池：GitHub API/克隆限流按 token 计（匿名 60 次/小时，token 5000），
-// 监控十几个仓库时单 token 不够用。存取沿用 llm.config 的形态：
-// app_settings JSON + secretbox 信封加密，回显只给掩码。
-// 消费方：sentinel 采集（clone/fetch 轮询取一个注入认证头）。
+// 历史上这里是一条独立的池（app_settings github.tokens JSON，简单轮询），
+// 与监控面板的 github_token_pool 表（internal/githubtokens，带配额管理）并存，
+// 导致「设置页加了 token、监控/情报却看不到」的割裂。现已合并：
+// 存储统一收敛到 github_token_pool 表（功能超集：按剩余配额轮换、启停、
+// 占位值校验、去重、配额采集），本文件只保留统一池的单例装配与
+// 采集认证取号（git clone 不受 API 配额影响，绕过配额过滤直接轮转）。
+//
+// 消费方：sentinel 采集（git 认证头）、GitHub 泄露监控（API 轮询）、
+// 情报富化（PoC 检索）；三个管理入口（/github/tokens、/github-tokens、面板）
+// 读写的是同一张表。
 
 import (
 	"context"
 	"encoding/base64"
-	"fmt"
+	"log"
 	"strings"
 	"sync"
-	"time"
+	"sync/atomic"
 
+	"github.com/c1ayooo/4zreark/internal/githubtokens"
 	"github.com/c1ayooo/4zreark/internal/secretbox"
 	"github.com/c1ayooo/4zreark/repo"
 
-	"github.com/c1ayooo/4zreark/oid"
+	"github.com/jackc/pgx/v5/stdlib"
 )
-
-const githubTokensKey = "github.tokens"
-
-// GitHubTokenEntry 是池里的一条 token（cipher 为密文，不出库）。
-type GitHubTokenEntry struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Cipher    string    `json:"-"`
-	Enabled   bool      `json:"enabled"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-type githubTokensRecord struct {
-	Tokens []GitHubTokenEntry `json:"tokens"`
-}
-
-// GitHubTokenView 是给前端的一条：掩码，不带密文。
-type GitHubTokenView struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Masked    string    `json:"masked"`
-	Enabled   bool      `json:"enabled"`
-	CreatedAt time.Time `json:"created_at"`
-}
 
 var (
-	ghTokenMu       sync.Mutex
-	ghTokenCache    *githubTokensRecord
-	ghTokenCachedAt time.Time
-	ghTokenCounter  uint64
+	ghPoolOnce  sync.Once
+	ghPoolStore *githubtokens.Store
+	ghPool      *githubtokens.Pool
 )
 
-func invalidateGitHubTokens() {
-	ghTokenMu.Lock()
-	ghTokenCache = nil
-	ghTokenMu.Unlock()
-}
-
-// loadGitHubTokens 带锁读取（外部调用入口）。
-func loadGitHubTokens(ctx context.Context) (*githubTokensRecord, error) {
-	ghTokenMu.Lock()
-	defer ghTokenMu.Unlock()
-	return loadGitHubTokensLocked(ctx)
-}
-
-// loadGitHubTokensLocked 无锁读取：调用方必须已持有 ghTokenMu
-// （Add/Delete 外层持锁再进这里，非重入锁会死锁——已踩过）。
-func loadGitHubTokensLocked(ctx context.Context) (*githubTokensRecord, error) {
-	if ghTokenCache != nil && time.Since(ghTokenCachedAt) < 10*time.Second {
-		return ghTokenCache, nil
-	}
-	rec := &githubTokensRecord{}
-	found, err := repo.Default().Settings().Get(ctx, githubTokensKey, rec)
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		rec = &githubTokensRecord{Tokens: []GitHubTokenEntry{}}
-	}
-	ghTokenCache = rec
-	ghTokenCachedAt = time.Now()
-	return rec, nil
-}
-
-func saveGitHubTokens(ctx context.Context, rec *githubTokensRecord) error {
-	ghTokenMu.Lock()
-	defer ghTokenMu.Unlock()
-	return saveGitHubTokensLocked(ctx, rec)
-}
-
-// saveGitHubTokensLocked 无锁写库并更新缓存：调用方必须已持有 ghTokenMu。
-func saveGitHubTokensLocked(ctx context.Context, rec *githubTokensRecord) error {
-	if err := repo.Default().Settings().Set(ctx, githubTokensKey, rec); err != nil {
-		return err
-	}
-	// 调用方已持有 ghTokenMu，这里直接更新缓存（再 Lock = 自锁，已踩过）。
-	ghTokenCache = rec
-	ghTokenCachedAt = time.Now()
-	return nil
-}
-
-// ListGitHubTokens 返回掩码视图。
-func ListGitHubTokens(ctx context.Context) ([]GitHubTokenView, error) {
-	rec, err := loadGitHubTokens(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]GitHubTokenView, 0, len(rec.Tokens))
-	for _, t := range rec.Tokens {
-		out = append(out, GitHubTokenView{
-			ID: t.ID, Name: t.Name, Masked: maskGitHubToken(t.Cipher),
-			Enabled: t.Enabled, CreatedAt: t.CreatedAt,
-		})
-	}
-	return out, nil
-}
-
-// AddGitHubToken 新增一条：名字可空（默认 gh-token-N），token 走 secretbox。
-func AddGitHubToken(ctx context.Context, name, token string) (*GitHubTokenView, error) {
-	token = strings.TrimSpace(token)
-	if len(token) < 20 {
-		return nil, fmt.Errorf("token 长度不合法（github_pat_/ghp_/gho_ 开头的完整 token）")
-	}
-	cipher, err := secretbox.EncryptText(token)
-	if err != nil {
-		return nil, fmt.Errorf("加密失败: %w", err)
-	}
-	ghTokenMu.Lock()
-	defer ghTokenMu.Unlock()
-	rec, err := loadGitHubTokensLocked(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if name == "" {
-		name = fmt.Sprintf("gh-token-%d", len(rec.Tokens)+1)
-	}
-	entry := GitHubTokenEntry{
-		ID: oid.NewObjectID().Hex(), Name: name, Cipher: cipher,
-		Enabled: true, CreatedAt: time.Now(),
-	}
-	rec.Tokens = append(rec.Tokens, entry)
-	if err := saveGitHubTokensLocked(ctx, rec); err != nil {
-		return nil, err
-	}
-	return &GitHubTokenView{ID: entry.ID, Name: entry.Name,
-		Masked: maskGitHubToken(cipher), Enabled: true, CreatedAt: entry.CreatedAt}, nil
-}
-
-// DeleteGitHubToken 按 id 删除。
-func DeleteGitHubToken(ctx context.Context, id string) error {
-	ghTokenMu.Lock()
-	defer ghTokenMu.Unlock()
-	rec, err := loadGitHubTokensLocked(ctx)
-	if err != nil {
-		return err
-	}
-	out := rec.Tokens[:0]
-	removed := false
-	for _, t := range rec.Tokens {
-		if t.ID == id {
-			removed = true
-			continue
+// initGitHubTokenPool 构造统一池单例（表由 Store 自建）；DB 未就绪时不阻塞，
+// 返回 nil 由调用方降级（监控退回项目级单 token，采集回退匿名克隆）。
+func initGitHubTokenPool() (*githubtokens.Store, *githubtokens.Pool) {
+	ghPoolOnce.Do(func() {
+		r := repo.Default()
+		if r == nil {
+			return
 		}
-		out = append(out, t)
-	}
-	if !removed {
-		return repo.ErrNotFound
-	}
-	rec.Tokens = out
-	return saveGitHubTokensLocked(ctx, rec)
+		sqldb := stdlib.OpenDBFromPool(r.Pool())
+		store, err := githubtokens.NewStore(sqldb)
+		if err != nil {
+			log.Printf("[GitHubTokens] 统一 Token 池初始化失败: %v", err)
+			return
+		}
+		ghPoolStore = store
+		ghPool = githubtokens.NewPool(store)
+	})
+	return ghPoolStore, ghPool
 }
 
-// PickGitHubToken 轮询取一个可用 token 的明文（采集认证用）。
-// 池为空返回空串——调用方回退匿名克隆。
+// GitHubTokenStore 统一池存储访问（管理端点列表/删除/配额展示用）；未就绪返回 nil。
+func GitHubTokenStore() *githubtokens.Store {
+	s, _ := initGitHubTokenPool()
+	return s
+}
+
+// GitHubTokenPool 统一池轮换器访问（监控热更/手动刷新配额用）；未就绪返回 nil。
+func GitHubTokenPool() *githubtokens.Pool {
+	_, p := initGitHubTokenPool()
+	return p
+}
+
+var ghPickCounter atomic.Uint64
+
+// PickGitHubToken 轮询取一个启用 token 的明文（git 采集认证用）。
+// 与 Pool.Pick 的配额优先策略刻意不同：API 配额打满不影响 git 认证，
+// 这里对全部启用号做 rr 轮转，把配额压力均摊到每个号。
+// 池为空/未就绪返回空串——调用方回退匿名克隆。
 func PickGitHubToken(ctx context.Context) string {
-	rec, err := loadGitHubTokens(ctx)
-	if err != nil {
+	store := GitHubTokenStore()
+	if store == nil {
 		return ""
 	}
-	enabled := make([]GitHubTokenEntry, 0, len(rec.Tokens))
-	for _, t := range rec.Tokens {
-		if t.Enabled {
+	tokens, err := store.List(ctx)
+	if err != nil {
+		log.Printf("[GitHubTokens] 读取统一池失败（回退匿名克隆）: %v", err)
+		return ""
+	}
+	enabled := make([]githubtokens.Token, 0, len(tokens))
+	for _, t := range tokens {
+		if t.Enabled && t.Token != "" {
 			enabled = append(enabled, t)
 		}
 	}
 	if len(enabled) == 0 {
 		return ""
 	}
-	ghTokenCounter++
-	tok, err := secretbox.DecryptText(enabled[ghTokenCounter%uint64(len(enabled))].Cipher)
-	if err != nil {
-		return ""
-	}
-	return tok
+	idx := ghPickCounter.Add(1) - 1
+	return enabled[idx%uint64(len(enabled))].Token
 }
 
 // GitHubTokenAuthArgs 返回采集用 git 认证参数（http.extraheader），
@@ -207,11 +106,50 @@ func GitHubTokenAuthArgs(ctx context.Context) []string {
 	return []string{"-c", "http.extraheader=AUTHORIZATION: basic " + b64}
 }
 
-// maskGitHubToken 头 7 尾 4，中间省略。
-func maskGitHubToken(cipher string) string {
-	plain, err := secretbox.DecryptText(cipher)
-	if err != nil || len(plain) < 12 {
-		return "****"
+// MigrateLegacyGitHubTokens 把旧 app_settings「github.tokens」池（独立 JSON 轮询池，
+// 已废弃）的存量 token 一次性搬进统一池。旧 key 里存的是 secretbox 密文。
+// 幂等：搬运成功即删除旧 key，重复执行无副作用；store.Add 自带去重与占位值拒绝。
+func MigrateLegacyGitHubTokens(ctx context.Context) {
+	store := GitHubTokenStore()
+	if store == nil {
+		return
 	}
-	return plain[:7] + "…" + plain[len(plain)-4:]
+	var legacy struct {
+		Tokens []struct {
+			Name    string `json:"name"`
+			Cipher  string `json:"cipher"`
+			Enabled bool   `json:"enabled"`
+		} `json:"tokens"`
+	}
+	found, err := repo.Default().Settings().Get(ctx, "github.tokens", &legacy)
+	if err != nil || !found || len(legacy.Tokens) == 0 {
+		return
+	}
+	moved := 0
+	for _, t := range legacy.Tokens {
+		plain, err := secretboxDecryptToken(t.Cipher)
+		if err != nil || plain == "" {
+			continue
+		}
+		if _, err := store.Add(ctx, t.Name, plain); err != nil {
+			// 重复号/占位值不是故障：统一池已有同号或本来就是示例值，跳过即可
+			log.Printf("[GitHubTokens] 旧池 token「%s」未搬入统一池: %v", t.Name, err)
+			continue
+		}
+		moved++
+	}
+	if err := repo.Default().Settings().Delete(ctx, "github.tokens"); err != nil {
+		log.Printf("[GitHubTokens] 清理旧 github.tokens 设置失败（下次启动会重试，重复号会被去重）: %v", err)
+		return
+	}
+	log.Printf("[GitHubTokens] 旧 github.tokens 池已并入统一池：新增 %d/%d 条", moved, len(legacy.Tokens))
+}
+
+// secretboxDecryptToken 解开旧池条目的密文；未配置密钥或格式不对时返回错误。
+func secretboxDecryptToken(cipher string) (string, error) {
+	cipher = strings.TrimSpace(cipher)
+	if cipher == "" {
+		return "", nil
+	}
+	return secretbox.DecryptText(cipher)
 }

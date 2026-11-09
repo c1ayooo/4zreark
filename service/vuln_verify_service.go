@@ -1,15 +1,15 @@
 package service
 
 import (
-	"github.com/c1ayooo/4zreark/internal/datadir"
 	"context"
 	"encoding/json"
-	"regexp"
 	"errors"
 	"fmt"
+	"github.com/c1ayooo/4zreark/internal/datadir"
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -62,10 +62,10 @@ func (s *VulnVerifyService) init() {
 		}
 		return vulnverify.Config{
 			Configured:  true,
-			Enabled:     cfg.AutoVerify.Enabled,
-			RecheckDays: cfg.AutoVerify.RecheckDays,
-			Concurrency: cfg.AutoVerify.Concurrency,
-			RateLimit:   cfg.AutoVerify.RateLimit,
+			Enabled:     cfg.FingerprintVerify.Enabled,
+			RecheckDays: cfg.FingerprintVerify.RecheckDays,
+			Concurrency: cfg.FingerprintVerify.Concurrency,
+			RateLimit:   cfg.FingerprintVerify.RateLimit,
 		}
 	}
 	s.svc = vulnverify.New(vulnverify.Options{
@@ -177,10 +177,10 @@ func recordAutoVerifyHit(ctx context.Context, hit vulnverify.HitResult) (string,
 		// 审计 H4：原始报文面向所有登录用户可读，落库前对凭据模式统一脱敏
 		//（Authorization/Cookie/口令参数），研判需要明文的场景走后续的秘密
 		// 读取授权（产品决策项）。
-		Request:    maskRawTraffic(hit.Request),
-		Response:   maskRawTraffic(hit.Response),
-		Scanner:    "nuclei-auto",
-		Tags:       []string{"auto-verify", hit.Product},
+		Request:  maskRawTraffic(hit.Request),
+		Response: maskRawTraffic(hit.Response),
+		Scanner:  "nuclei-auto",
+		Tags:     []string{"auto-verify", hit.Product},
 	}
 	if hit.TemplateDescription != "" {
 		vuln.Description = hit.TemplateDescription

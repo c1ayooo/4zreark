@@ -24,7 +24,7 @@ import {
   ShieldCheck,
   Trash2,
 } from 'lucide-react'
-import { Badge, Button, Card, Dropdown, Skeleton, Table, Tag } from 'antd'
+import { Badge, Button, Card, Dropdown, Input, Modal, Select, Skeleton, Table, Tag } from 'antd'
 import type { TableProps } from 'antd'
 
 import {
@@ -37,6 +37,7 @@ import {
   type SeedKind,
   type PlanTriggerMode,
 } from '@/api/projects'
+import { seedsApi, type SeedBatchResult, type SeedRestartPreview } from '@/api/seeds'
 import {
   buildPlanColumns,
   buildRunColumns,
@@ -176,6 +177,17 @@ export default function ProjectDetailPage() {
   const [editOpen, setEditOpen] = useState(false)
   const [seedOpen, setSeedOpen] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
+  // 种子重建计划：预览拿一次性 token（15 分钟）→ 确认执行（POST /seeds/:id/restart）
+  const [restartSeed, setRestartSeed] = useState<Seed | null>(null)
+  const [restartPreview, setRestartPreview] = useState<SeedRestartPreview | null>(null)
+  const [restartInterval, setRestartInterval] = useState('24')
+  const [restartLoading, setRestartLoading] = useState(false)
+  // 批量添加种子（POST /seeds/batch，逐条返回状态，不因一条失败中断整批）
+  const [batchOpen, setBatchOpen] = useState(false)
+  const [batchKind, setBatchKind] = useState<SeedKind>('domain')
+  const [batchText, setBatchText] = useState('')
+  const [batchSubmitting, setBatchSubmitting] = useState(false)
+  const [batchResult, setBatchResult] = useState<SeedBatchResult | null>(null)
   // 种子表勾选（收集入口）
   const [selectedSeedIds, setSelectedSeedIds] = useState<number[]>([])
 
@@ -438,6 +450,97 @@ export default function ProjectDetailPage() {
     collectMutation.mutate({ all: true })
   }
 
+  // 种子重建计划：预览拿一次性 token → 确认执行。重建会删除该种子关联的计划与
+  // 批次后按新参数重建，所以先预览影响面（后端 15 分钟 token 防误触）。
+  const openRestartDialog = async (seed: Seed) => {
+    setRestartSeed(seed)
+    setRestartPreview(null)
+    setRestartInterval('24')
+    setRestartLoading(true)
+    try {
+      const res = await seedsApi.restartPreview(seed.id, {})
+      setRestartPreview(res.data ?? null)
+      if (res.data?.interval_hours) setRestartInterval(String(res.data.interval_hours))
+    } catch (e) {
+      toast({ title: '预览重建失败', description: (e as Error).message, variant: 'destructive' })
+      setRestartSeed(null)
+    } finally {
+      setRestartLoading(false)
+    }
+  }
+
+  const refreshRestartPreview = async () => {
+    if (!restartSeed) return
+    setRestartLoading(true)
+    try {
+      const res = await seedsApi.restartPreview(restartSeed.id, {
+        interval_hours: Math.max(1, Number(restartInterval) || 24),
+      })
+      setRestartPreview(res.data ?? null)
+    } catch (e) {
+      toast({ title: '预览重建失败', description: (e as Error).message, variant: 'destructive' })
+    } finally {
+      setRestartLoading(false)
+    }
+  }
+
+  const confirmRestart = async () => {
+    if (!restartSeed || !restartPreview) return
+    const ok = await confirm({
+      title: `重建「${restartSeed.value}」的监控计划？`,
+      description: `将删除 ${restartPreview.plans.length} 个计划、${restartPreview.runs} 个批次、${restartPreview.run_targets} 个执行单元，然后按每 ${restartPreview.interval_hours} 小时重建。`,
+      confirmText: '重建',
+      destructive: true,
+    })
+    if (!ok) return
+    setRestartLoading(true)
+    try {
+      await seedsApi.restart(restartSeed.id, restartPreview.token)
+      toast({ title: '监控计划已重建' })
+      setRestartSeed(null)
+      setRestartPreview(null)
+      invalidateMonitoring()
+    } catch (e) {
+      toast({ title: '重建失败', description: (e as Error).message, variant: 'destructive' })
+    } finally {
+      setRestartLoading(false)
+    }
+  }
+
+  // 批量添加种子：每行一个值，逐条入库并返回状态（重复/非法不中断整批）。
+  const submitBatch = async () => {
+    const values = batchText
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+    if (values.length === 0) return
+    setBatchSubmitting(true)
+    try {
+      const res = await seedsApi.createBatch({
+        project_id: idNum,
+        items: values.map((value) => ({ kind: batchKind, value })),
+      })
+      setBatchResult(res.data ?? null)
+      invalidateMonitoring()
+      if (res.data) {
+        toast({
+          title: `批量添加完成：新建 ${res.data.created} 个`,
+          description: [
+            res.data.duplicate ? `重复 ${res.data.duplicate}` : '',
+            res.data.invalid ? `非法 ${res.data.invalid}` : '',
+            res.data.failed ? `失败 ${res.data.failed}` : '',
+          ]
+            .filter(Boolean)
+            .join(' · ') || undefined,
+        })
+      }
+    } catch (e) {
+      toast({ title: '批量添加失败', description: (e as Error).message, variant: 'destructive' })
+    } finally {
+      setBatchSubmitting(false)
+    }
+  }
+
   const updatePlanMutation = useMutation({
     mutationFn: ({ planId, enabled }: { planId: number; enabled: boolean }) =>
       projectApi.updatePlan(planId, { enabled }),
@@ -500,6 +603,7 @@ export default function ProjectDetailPage() {
     planBySeedId: new Map(plans.map((p) => [p.seed_id, p])),
     confirm,
     deleteSeedMutation,
+    onRestart: (seed) => void openRestartDialog(seed),
   })
 
   const seedRowSelection: TableProps<Seed>['rowSelection'] = {
@@ -745,10 +849,22 @@ export default function ProjectDetailPage() {
               title="监控种子"
               description="种子决定持续监控的范围；暂停项目后，种子保留但不会到期执行。"
               action={
-                <Button type="primary" size="small" onClick={() => setSeedOpen(true)}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  添加种子
-                </Button>
+                <span className="flex gap-2">
+                  <Button
+                    size="small"
+                    onClick={() => {
+                      setBatchOpen(true)
+                      setBatchResult(null)
+                      setBatchText('')
+                    }}
+                  >
+                    批量添加
+                  </Button>
+                  <Button type="primary" size="small" onClick={() => setSeedOpen(true)}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    添加种子
+                  </Button>
+                </span>
               }
             />
             <div className="mt-4">
@@ -1023,6 +1139,124 @@ export default function ProjectDetailPage() {
           })
         }
       />
+
+      {/* 种子重建计划：预览影响面 → 确认执行（一次性 token，15 分钟有效） */}
+      <Modal
+        open={restartSeed !== null}
+        onCancel={() => {
+          setRestartSeed(null)
+          setRestartPreview(null)
+        }}
+        title={restartSeed ? `重建监控计划 · ${restartSeed.value}` : '重建监控计划'}
+        width={560}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button
+              onClick={() => {
+                setRestartSeed(null)
+                setRestartPreview(null)
+              }}
+            >
+              取消
+            </Button>
+            <Button onClick={refreshRestartPreview} loading={restartLoading}>
+              重新预览
+            </Button>
+            <Button
+              type="primary"
+              danger
+              disabled={!restartPreview}
+              loading={restartLoading}
+              onClick={confirmRestart}
+            >
+              确认重建
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">间隔（小时）</span>
+            <Input
+              className="w-28"
+              type="number"
+              min={1}
+              max={720}
+              value={restartInterval}
+              onChange={(e) => setRestartInterval(e.target.value)}
+            />
+            <span className="text-muted-foreground text-xs">
+              调整后点「重新预览」刷新影响面
+            </span>
+          </div>
+          {restartPreview && (
+            <div className="rounded-md border bg-muted/20 p-3 text-sm">
+              <p className="text-muted-foreground mb-1 text-xs">预览（一次性 token 已生成，15 分钟内有效）：</p>
+              <p>
+                将删除 <b>{restartPreview.plans.length}</b> 个计划、<b>{restartPreview.runs}</b> 个批次、
+                <b> {restartPreview.run_targets}</b> 个执行单元，然后按每{' '}
+                <b>{restartPreview.interval_hours}</b> 小时重建。
+              </p>
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {/* 批量添加种子：每行一个值，逐条入库（重复/非法不中断整批） */}
+      <Modal
+        open={batchOpen}
+        onCancel={() => setBatchOpen(false)}
+        title="批量添加种子"
+        width={560}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setBatchOpen(false)}>关闭</Button>
+            <Button
+              type="primary"
+              loading={batchSubmitting}
+              disabled={!batchText.trim()}
+              onClick={submitBatch}
+            >
+              提交
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">类型</span>
+            <Select
+              className="w-40"
+              value={batchKind}
+              onChange={(v) => setBatchKind(v)}
+              options={Object.entries(seedKindLabel).map(([value, label]) => ({ value, label }))}
+            />
+          </div>
+          <Input.TextArea
+            rows={6}
+            placeholder={'每行一个种子值，例如：\nexample.com\nfoo.example.org'}
+            value={batchText}
+            onChange={(e) => setBatchText(e.target.value)}
+          />
+          {batchResult && (
+            <div className="rounded-md border bg-muted/20 p-3 text-sm">
+              <p>
+                共 {batchResult.requested} 条：新建 <b>{batchResult.created}</b> · 重复{' '}
+                {batchResult.duplicate} · 非法 {batchResult.invalid} · 失败 {batchResult.failed}
+              </p>
+              {batchResult.items
+                .filter((it) => it.status !== 'created' && it.status !== 'created_plan_failed')
+                .slice(0, 8)
+                .map((it, i) => (
+                  <p key={i} className="text-muted-foreground text-xs">
+                    {it.value}: {it.status}
+                    {it.error ? `（${it.error}）` : ''}
+                  </p>
+                ))}
+            </div>
+          )}
+        </div>
+      </Modal>
 
       <ReportGenerateDialog
         open={reportOpen}

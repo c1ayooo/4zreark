@@ -33,6 +33,9 @@ func MigratePlaintextSecrets(ctx context.Context) {
 	defer cancel()
 
 	total := 0
+	// 0) 旧 app_settings「github.tokens」池并入统一池（github_token_pool 表）；
+	//    两条池已合并，这一步只处理存量数据，搬完即删旧 key，幂等。
+	MigrateLegacyGitHubTokens(mctx)
 	// 1) 数据源会话：cookie / password
 	total += migrateSessionColumn(mctx, "cookie")
 	total += migrateSessionColumn(mctx, "password")

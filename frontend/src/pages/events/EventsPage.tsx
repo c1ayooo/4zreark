@@ -55,7 +55,7 @@ export default function EventsPage() {
       const a = after?.[key]
       if (JSON.stringify(b) === JSON.stringify(a)) return
       rows.push({
-        key,
+        key: diffKeyLabel[key] ?? key,
         from: formatValue(b),
         to: formatValue(a),
       })
@@ -127,7 +127,9 @@ export default function EventsPage() {
       title: '变化',
       key: 'diff',
       render: (_, e) => {
-        const rows = e.event_type === 'attribute_change' ? diff(e.before ?? {}, e.after ?? {}) : []
+        // 所有事件类型都可能带 before/after（属性/指纹/内容变化、重现、接管等），
+        // 有差异就展示，不再只认 attribute_change——此前其它类型一律显示「—」。
+        const rows = diff(e.before ?? {}, e.after ?? {})
         if (rows.length === 0) {
           return <span className="text-xs text-muted-foreground">—</span>
         }
@@ -204,6 +206,23 @@ export default function EventsPage() {
       />
     </div>
   )
+}
+
+// before/after 字段名 → 中文标签（各事件写入方的常见键；未登记的回落原键名）。
+const diffKeyLabel: Record<string, string> = {
+  title: '标题',
+  http_status: '状态码',
+  ip: 'IP',
+  technology: '技术栈',
+  technologies: '技术栈',
+  icon_sha256: '图标指纹',
+  state: '状态',
+  text_hash: '内容指纹',
+  url: 'URL',
+  domain: '域名',
+  cname: 'CNAME',
+  provider: '服务',
+  reason: '原因',
 }
 
 function formatValue(v: unknown): string {

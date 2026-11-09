@@ -261,6 +261,10 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				ghLeakAdmin := api.NewGitHubLeakAdminHandler()
 				protected.GET("/github-monitor/runtime", middleware.RequirePermission("asset:read"), ghLeakAdmin.RuntimeStatus)
 				protected.GET("/github-monitor/stats", middleware.RequirePermission("asset:read"), ghLeakAdmin.Stats)
+				// 全局命中（独立「敏感信息监控」页）：不带项目过滤，与 /projects/:id/... 并存不冲突
+				protected.GET("/github-monitor/findings", middleware.RequirePermission("asset:read"), ghLeakAdmin.GlobalFindings)
+				protected.PUT("/github-monitor/findings/:fid/status", middleware.RequirePermission("asset:write"), ghLeakAdmin.GlobalUpdateFindingStatus)
+				protected.POST("/github-monitor/findings/:fid/verify-result", middleware.RequirePermission("asset:write"), ghLeakAdmin.GlobalRecordVerifyResult)
 				protected.POST("/github-monitor/run", middleware.RequirePermission("asset:write"), ghLeakAdmin.Run)
 				protected.POST("/github-monitor/backfill", middleware.RequirePermission("asset:write"), ghLeakAdmin.Backfill)
 				protected.GET("/github-monitor/suppressions", middleware.RequirePermission("asset:read"), ghLeakAdmin.ListSuppressions)
@@ -706,6 +710,10 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				notifyGroup.PUT("/configs", middleware.RequirePermission("notify:write"), notifyHandler.UpdateConfig)
 				notifyGroup.DELETE("/configs", middleware.RequirePermission("notify:write"), notifyHandler.DeleteConfig)
 				notifyGroup.POST("/configs/enable", middleware.RequirePermission("notify:write"), notifyHandler.EnableConfig)
+
+				// 通知对象（事件源开关）
+				notifyGroup.GET("/sources", notifyHandler.ListSources)
+				notifyGroup.POST("/sources", middleware.RequirePermission("notify:write"), notifyHandler.SetSourceEnabled)
 
 				// 测试和发送
 				notifyGroup.POST("/test", middleware.RequirePermission("notify:write"), notifyHandler.TestConfig)

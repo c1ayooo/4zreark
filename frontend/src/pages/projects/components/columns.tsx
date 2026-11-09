@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 import { Button, Progress, Switch, Tag } from 'antd'
 import type { TableProps } from 'antd'
-import { Loader2, Play, Trash2, Zap } from 'lucide-react'
+import { Loader2, Play, RotateCcw, Trash2, Zap } from 'lucide-react'
 import {
   seedKindLabel,
   planTriggerModeLabel,
@@ -142,11 +142,12 @@ export const taskColumns: TableProps<Task>['columns'] = [
   },
 ]
 
-export const buildSeedColumns = ({ domainCountMap, planBySeedId, confirm, deleteSeedMutation }: {
+export const buildSeedColumns = ({ domainCountMap, planBySeedId, confirm, deleteSeedMutation, onRestart }: {
   domainCountMap: Map<number, number>
   planBySeedId: Map<number, Plan>
   confirm: ConfirmFn
   deleteSeedMutation: { mutate: (seedId: number) => void }
+  onRestart?: (seed: Seed) => void
 }): TableProps<Seed>['columns'] => [
   {
     title: '类型',
@@ -220,25 +221,39 @@ export const buildSeedColumns = ({ domainCountMap, planBySeedId, confirm, delete
   {
     title: '',
     key: 'actions',
-    width: 48,
+    width: 96,
     render: (_, seed) => (
-      <Button
-        type="text"
-        size="small"
-        title="删除种子"
-        icon={<Trash2 className="text-destructive size-4" />}
-        onClick={async () => {
-          if (
-            await confirm({
-              title: '删除这个种子？',
-              description: '种子和它关联的监控计划都会删除，已经产生的批次记录保留。',
-              confirmText: '删除',
-              destructive: true,
-            })
-          )
-            deleteSeedMutation.mutate(seed.id)
-        }}
-      />
+      <span className="flex items-center gap-1">
+        {onRestart && (
+          <Button
+            type="text"
+            size="small"
+            title="重建计划：删除该种子关联的计划与批次后按新参数重建"
+            icon={<RotateCcw className="text-muted-foreground size-4" />}
+            onClick={(e) => {
+              e.stopPropagation()
+              onRestart(seed)
+            }}
+          />
+        )}
+        <Button
+          type="text"
+          size="small"
+          title="删除种子"
+          icon={<Trash2 className="text-destructive size-4" />}
+          onClick={async () => {
+            if (
+              await confirm({
+                title: '删除这个种子？',
+                description: '种子和它关联的监控计划都会删除，已经产生的批次记录保留。',
+                confirmText: '删除',
+                destructive: true,
+              })
+            )
+              deleteSeedMutation.mutate(seed.id)
+          }}
+        />
+      </span>
     ),
   },
 ]
