@@ -14,10 +14,10 @@ import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Table, Tooltip } from 'antd'
 import type { TableProps } from 'antd'
-import { CheckCircle2, ExternalLink, Flame, ListChecks, ShieldCheck } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { CheckCircle2, Flame, ListChecks, ShieldCheck } from 'lucide-react'
 import { sentinelApi, type SentinelArtifactStatus, type SentinelFinding } from '@/api/sentinel'
 import PocVerifyCard from './audit/PocVerifyCard'
+import JudgmentBasisCard from './audit/JudgmentBasisCard'
 import { PageHeader, SeverityTag, VulnClassTag, FindingGradeTag, FindingStatusTag, fmtNumber, fmtTime } from './audit/shared'
 
 type ArtifactSummary = NonNullable<SentinelFinding['artifacts']>[number]
@@ -79,9 +79,9 @@ function ArtifactCell({ finding }: { finding: SentinelFinding }) {
 }
 
 export default function HighRiskFindingsPage() {
-  const navigate = useNavigate()
   const [page, setPage] = useState(1)
   const [size, setSize] = useState(20)
+  const [expandedKeys, setExpandedKeys] = useState<readonly React.Key[]>([])
 
   const summaryQuery = useQuery({
     queryKey: ['sentinel', 'findings-summary'],
@@ -174,17 +174,17 @@ export default function HighRiskFindingsPage() {
       key: 'op',
       width: 96,
       render: (_, row) => (
-        <a
-          className="inline-flex items-center gap-1 text-[12px] text-primary hover:underline"
+        <span
+          className="cursor-pointer text-[12px] text-primary hover:underline"
+          title="展开查看判定依据与靶场验证卡"
           onClick={(e) => {
             e.stopPropagation()
-            navigate(`/sentinel/audit/results?commit=${row.commit_id}`)
+            const key = expandedKeys.includes(row.id) ? expandedKeys.filter((k) => k !== row.id) : [...expandedKeys, row.id]
+            setExpandedKeys(key)
           }}
-          title="判定依据（reasoning + hunk 证据）在分析结果页"
         >
-          判定依据
-          <ExternalLink size={11} />
-        </a>
+          查看依据
+        </span>
       ),
     },
   ]
@@ -216,9 +216,16 @@ export default function HighRiskFindingsPage() {
         columns={columns}
         dataSource={items}
         expandable={{
-          /** 行展开 = 方案 B 靶场验证卡：不跳页，原地看环境/时间线/结论并触发验证 */
-          expandedRowRender: (r) => <PocVerifyCard findingId={r.id} />,
+          /** 行展开 = 判定依据卡 + 方案 B 靶场验证卡：不跳页，原地看「凭什么判」与「验证结论」并触发验证 */
+          expandedRowRender: (r) => (
+            <div className="space-y-3 py-1">
+              <JudgmentBasisCard commitId={r.commit_id} finding={r} />
+              <PocVerifyCard findingId={r.id} />
+            </div>
+          ),
           rowExpandable: () => true,
+          expandedRowKeys: expandedKeys,
+          onExpandedRowsChange: (keys) => setExpandedKeys(keys),
         }}
         pagination={{
           current: page,
