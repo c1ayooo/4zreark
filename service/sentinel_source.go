@@ -226,6 +226,7 @@ func (s *SentinelSource) syncMirror(ctx context.Context, r *repo.GitRepo, cloneU
 			skipped++
 			continue
 		}
+		commit.Score = ScoreCommit(commit.Subject, ParseDiff(commit.Diff))
 		id, ok, ierr := s.store.InsertCommit(ctx, commit)
 		if ierr != nil {
 			log.Printf("[Sentinel] 写入提交失败 repo=%s sha=%s: %v", r.ID, sha, ierr)

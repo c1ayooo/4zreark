@@ -30,6 +30,7 @@ import {
   VerdictTag,
   fmtNumber,
   fmtTime,
+  FindingGradeTag,
 } from './shared'
 
 const STATUS_OPTIONS = [
@@ -540,6 +541,7 @@ export default function AnalysisResultsPage() {
                             <span className="text-[11.5px] font-medium text-foreground">{f.title}</span>
                             <SeverityTag severity={f.severity} />
                             <span className="font-mono text-[10px] text-muted-foreground">{f.vuln_class}</span>
+                            <FindingGradeTag grade={(f as { grade?: string }).grade ?? ''} />
                             <span className="ml-auto flex items-center gap-1.5">
                               <Popconfirm
                                 title="生成 nuclei 模板？"

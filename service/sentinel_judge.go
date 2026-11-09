@@ -252,7 +252,8 @@ func (j *SentinelJudge) Judge(ctx context.Context, commitID int64) (judgment *re
 	}
 
 	if verdict.IsSecurityFix {
-		if _, err := j.store.CreateFinding(ctx, &repo.CommitFinding{
+		grade := gradeForVerdict(verdict.IsSecurityFix, verdict.VulnClass, verdict.Severity)
+		findingID, err := j.store.CreateFinding(ctx, &repo.CommitFinding{
 			CommitID:   commit.ID,
 			JudgmentID: &judgment.ID,
 			VulnClass:  verdict.VulnClass,
@@ -260,8 +261,20 @@ func (j *SentinelJudge) Judge(ctx context.Context, commitID int64) (judgment *re
 			Status:     "open",
 			Title:      verdict.Title,
 			Detail:     verdict.Reasoning,
-		}); err != nil {
+			Grade:      grade,
+		})
+		if err != nil {
 			log.Printf("[Sentinel] 写入发现失败 commit=%d: %v", commit.ID, err)
+		}
+		// S 级（critical + 注入/SSRF/反序列化形态）：自动草拟 nuclei 候选落 draft，
+		// 人工 verified 后才可发布/复现——铁律不自动越过。
+		if err == nil && grade == "S" {
+			if a, gerr := GenerateNucleiTemplate(ctx, findingID); gerr != nil {
+				log.Printf("[Sentinel] S 级自动生成 nuclei 失败 finding=%d: %v", findingID, gerr)
+			} else {
+				log.Printf("[Sentinel] S 级自动生成 nuclei 完成 finding=%d artifact=%d (%s)",
+					findingID, a.ID, a.Title)
+			}
 		}
 		// 命中即通知：级别随 severity，渠道侧可用 MinLevel 过滤降级噪音。
 		notifyJudgeHit(commit, verdict, judgment.ID)

@@ -62,6 +62,7 @@ type GitCommit struct {
 	Deletions    int       `json:"deletions"`
 	Diff         string    `json:"diff,omitempty"`
 	Status       string    `json:"status"`
+	Score        int       `json:"score"`
 	SkipReason   string    `json:"skip_reason"`
 	CreatedAt    time.Time `json:"created_at"`
 }
@@ -69,6 +70,7 @@ type GitCommit struct {
 // CommitListItem 是提交列表行：不含 diff，附最新判定的摘要。
 type CommitListItem struct {
 	ID            int64     `json:"id"`
+	Grade         string    `json:"grade"`
 	RepoID        string    `json:"repo_id"`
 	RepoFullName  string    `json:"repo_full_name"`
 	SHA           string    `json:"sha"`
@@ -131,6 +133,7 @@ type CommitFinding struct {
 	UpdatedAt  time.Time  `json:"updated_at"`
 	VerifiedAt *time.Time `json:"verified_at"`
 	VerifiedBy string     `json:"verified_by"`
+	Grade      string     `json:"grade"`
 }
 
 // Sentinel 是提交哨兵域的仓储入口。
@@ -306,12 +309,12 @@ func (s *Sentinel) InsertCommit(ctx context.Context, c *GitCommit) (int64, bool,
 	var id int64
 	err := s.pool().QueryRow(ctx, `
 		insert into commit (repo_id, sha, author_name, author_email, committed_at,
-		                    subject, message, files_changed, additions, deletions, diff, status)
-		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending')
+		                    subject, message, files_changed, additions, deletions, diff, score, status)
+		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending')
 		on conflict (repo_id, sha) do nothing
 		returning id`,
 		c.RepoID, c.SHA, c.AuthorName, c.AuthorEmail, c.CommittedAt,
-		c.Subject, c.Message, c.FilesChanged, c.Additions, c.Deletions, c.Diff,
+		c.Subject, c.Message, c.FilesChanged, c.Additions, c.Deletions, c.Diff, c.Score,
 	).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, false, nil
@@ -458,7 +461,7 @@ func (s *Sentinel) ListPendingCommits(ctx context.Context, repoID string, limit 
 		  from commit c
 		 where c.status = 'pending'
 		   and ($1 = '' or c.repo_id = $1)
-		 order by c.committed_at desc, c.id desc
+		 order by c.score desc, c.committed_at desc, c.id desc
 		 limit $2`, repoID, limit)
 	if err != nil {
 		return nil, err
@@ -558,17 +561,17 @@ func (s *Sentinel) LatestJudgments(ctx context.Context, limit int) ([]*CommitJud
 func (s *Sentinel) CreateFinding(ctx context.Context, f *CommitFinding) (int64, error) {
 	var id int64
 	err := s.pool().QueryRow(ctx, `
-		insert into finding (commit_id, judgment_id, vuln_class, severity, status, title, detail)
-		values ($1,$2,$3,$4,coalesce(nullif($5,''),'open'),$6,$7)
+		insert into finding (commit_id, judgment_id, vuln_class, severity, status, title, detail, grade)
+		values ($1,$2,$3,$4,coalesce(nullif($5,''),'open'),$6,$7,$8)
 		returning id`,
-		f.CommitID, f.JudgmentID, f.VulnClass, f.Severity, f.Status, f.Title, f.Detail).Scan(&id)
+		f.CommitID, f.JudgmentID, f.VulnClass, f.Severity, f.Status, f.Title, f.Detail, f.Grade).Scan(&id)
 	return id, err
 }
 
 // ListFindingsByCommit 列出某提交下的发现。
 func (s *Sentinel) ListFindingsByCommit(ctx context.Context, commitID int64) ([]*CommitFinding, error) {
 	rows, err := s.pool().Query(ctx, `
-		select id, commit_id, judgment_id, vuln_class, severity, status, title, detail, created_at, updated_at, verified_at, verified_by
+		select id, commit_id, judgment_id, vuln_class, severity, status, title, detail, created_at, updated_at, verified_at, verified_by, grade
 		  from finding where commit_id = $1 order by id desc`, commitID)
 	if err != nil {
 		return nil, err
@@ -579,7 +582,7 @@ func (s *Sentinel) ListFindingsByCommit(ctx context.Context, commitID int64) ([]
 	for rows.Next() {
 		var f CommitFinding
 		if err := rows.Scan(&f.ID, &f.CommitID, &f.JudgmentID, &f.VulnClass, &f.Severity,
-			&f.Status, &f.Title, &f.Detail, &f.CreatedAt, &f.UpdatedAt, &f.VerifiedAt, &f.VerifiedBy); err != nil {
+			&f.Status, &f.Title, &f.Detail, &f.CreatedAt, &f.UpdatedAt, &f.VerifiedAt, &f.VerifiedBy, &f.Grade); err != nil {
 			return nil, err
 		}
 		items = append(items, &f)
@@ -644,7 +647,7 @@ func (s *Sentinel) ListFindings(ctx context.Context, f FindingFilter) ([]*Findin
 	args = append(args, f.Size, (f.Page-1)*f.Size)
 	rows, err := s.pool().Query(ctx, `
 		select f.id, f.commit_id, f.judgment_id, f.vuln_class, f.severity, f.status,
-		       f.title, f.detail, f.created_at, f.updated_at,
+		       f.title, f.detail, f.created_at, f.updated_at, f.grade,
 		       c.repo_id, coalesce(r.full_name, ''), c.sha, c.subject, c.committed_at,
 		       coalesce(j.model, '')
 		  from finding f
@@ -662,7 +665,7 @@ func (s *Sentinel) ListFindings(ctx context.Context, f FindingFilter) ([]*Findin
 	for rows.Next() {
 		var it FindingListItem
 		if err := rows.Scan(&it.ID, &it.CommitID, &it.JudgmentID, &it.VulnClass, &it.Severity, &it.Status,
-			&it.Title, &it.Detail, &it.CreatedAt, &it.UpdatedAt,
+			&it.Title, &it.Detail, &it.CreatedAt, &it.UpdatedAt, &it.Grade,
 			&it.RepoID, &it.RepoFullName, &it.SHA, &it.Subject, &it.CommittedAt, &it.Model); err != nil {
 			return nil, 0, err
 		}
@@ -766,10 +769,10 @@ func (s *Sentinel) CountArtifactsByKind(ctx context.Context, findingID int64, ki
 func (s *Sentinel) GetFinding(ctx context.Context, id int64) (*CommitFinding, error) {
 	var f CommitFinding
 	err := s.pool().QueryRow(ctx, `
-		select id, commit_id, judgment_id, vuln_class, severity, status, title, detail, created_at, updated_at, verified_at, verified_by
+		select id, commit_id, judgment_id, vuln_class, severity, status, title, detail, created_at, updated_at, verified_at, verified_by, grade
 		  from finding where id = $1`, id).
 		Scan(&f.ID, &f.CommitID, &f.JudgmentID, &f.VulnClass, &f.Severity,
-			&f.Status, &f.Title, &f.Detail, &f.CreatedAt, &f.UpdatedAt, &f.VerifiedAt, &f.VerifiedBy)
+			&f.Status, &f.Title, &f.Detail, &f.CreatedAt, &f.UpdatedAt, &f.VerifiedAt, &f.VerifiedBy, &f.Grade)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

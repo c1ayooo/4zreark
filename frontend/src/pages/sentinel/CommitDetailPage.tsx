@@ -194,6 +194,7 @@ export default function SentinelCommitDetailPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <Tag color="red">{finding.vuln_class}</Tag>
                   <Tag color={severityColor[finding.severity] ?? 'default'}>{finding.severity}</Tag>
+                  {finding.grade ? <Tag color={finding.grade === 'S' ? 'magenta' : finding.grade === 'A' ? 'orange' : 'default'}>grade {finding.grade}</Tag> : null}
                   <span className="ml-auto font-mono text-xs text-muted-foreground">{finding.repo_full_name}</span>
                   <FindingStatusSelect
                     status={finding.status}

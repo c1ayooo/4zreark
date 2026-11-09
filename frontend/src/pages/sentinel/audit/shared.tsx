@@ -377,3 +377,20 @@ export const RUN_STATUS_META: Record<string, Tone> = {
   failed: { label: '失败', cls: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-300' },
   pending: { label: '排队中', cls: 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300' },
 }
+
+const GRADE_TAG: Record<string, { label: string; cls: string }> = {
+  S: { label: 'S', cls: 'border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700 dark:border-fuchsia-900 dark:bg-fuchsia-950/50 dark:text-fuchsia-300' },
+  A: { label: 'A', cls: 'border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-900 dark:bg-orange-950/50 dark:text-orange-300' },
+  B: { label: 'B', cls: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900 dark:bg-sky-950/50 dark:text-sky-300' },
+  C: { label: 'C', cls: 'border-slate-200 bg-slate-50 text-slate-500 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-400' },
+}
+
+export function FindingGradeTag({ grade }: { grade: string }) {
+  if (!grade) return null
+  const m = GRADE_TAG[grade] ?? { label: grade, cls: 'border-slate-200 bg-slate-50 text-slate-600' }
+  return (
+    <span className={`inline-flex shrink-0 rounded-full border px-1.5 py-0.5 text-[11px] font-medium ${m.cls}`}>
+      {m.label}
+    </span>
+  )
+}
