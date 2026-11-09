@@ -22,6 +22,8 @@ export default function POCsPage() {
   const [search, setSearch] = useState('')
   const debouncedSearch = useDebouncedValue(search)
   useEffect(() => { setPage(1) }, [debouncedSearch])
+  const [origin, setOrigin] = useState('')
+  useEffect(() => { setPage(1) }, [origin])
   const [page, setPage] = useState(1)
   const [selectedPOC, setSelectedPOC] = useState<POC | null>(null)
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
@@ -40,7 +42,7 @@ export default function POCsPage() {
   })
 
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['pocs', page, debouncedSearch],
+    queryKey: ['pocs', page, debouncedSearch, origin],
     // 切筛选/翻页时保留上一份数据渲染，列表不塌陷（消除点击闪烁）
     placeholderData: keepPreviousData,
     queryFn: () =>
@@ -48,6 +50,7 @@ export default function POCsPage() {
         page,
         pageSize: 10,
         search: debouncedSearch,
+        origin: origin || undefined,
       }),
   })
 
@@ -508,6 +511,18 @@ export default function POCsPage() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
+        <Select
+          value={origin}
+          onChange={(v) => setOrigin(v)}
+          className="w-[170px]"
+          options={[
+            { value: '', label: '全部来源' },
+            { value: 'manual', label: '手工录入' },
+            { value: 'sentinel', label: 'Sentinel 发现' },
+            { value: 'import', label: '导入' },
+            { value: 'intel', label: '情报' },
+          ]}
+        />
         {selectedIds.length > 0 && (
           <Button
             type="primary"

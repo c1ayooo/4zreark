@@ -58,6 +58,9 @@ func SetFindingStatus(ctx context.Context, id int64, status string) (*repo.Commi
 	f.Status = status
 	if status == "confirmed" {
 		ensurePatchArtifact(ctx, store, f)
+		// 确认即富化（异步，LLM 调用不阻塞接口）：POC 库命中挂载 +
+		// repro-guide 复现指南 + 自动草拟 nuclei 模板（均落 draft 待审）。
+		enrichFindingAsync(f.ID, true)
 	}
 	return f, nil
 }
@@ -156,9 +159,8 @@ func PublishArtifact(ctx context.Context, id int64) (string, error) {
 	p := parsed.poc
 	p.Type = "nuclei"
 	p.Source = "custom"
-	if p.Origin == "" {
-		p.Origin = "manual"
-	}
+	// 来源打标 sentinel：POC 库列表可按 origin=sentinel 筛出「由代码审计发现发布」的模板。
+	p.Origin = "sentinel"
 	if err := repo.Default().Pocs().Create(ctx, p); err != nil {
 		if errors.Is(err, repo.ErrDuplicate) {
 			return p.TemplateID, fmt.Errorf("模板 %s 已存在于 PoC 库", p.TemplateID)

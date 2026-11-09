@@ -10,7 +10,7 @@
  *   POST /api/sentinel/commits/{id}/judge
  */
 import { useEffect, useMemo, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { Button, Drawer, Dropdown, Input, Popconfirm, Select, Table, Tooltip } from 'antd'
 import type { TableProps } from 'antd'
@@ -278,6 +278,32 @@ export default function AnalysisResultsPage() {
   const evidence = evidenceList(judgment?.evidence)
   const snippets = evidenceList(judgment?.evidence_snippets)
   const findings = detail?.findings ?? []
+
+  /**
+   * 富化状态：每条 finding 的产物计数（POC 命中数 / nuclei 草稿 / 复现指南）。
+   * 与产物中心共用 ['sentinel', 'finding-artifacts', id] 缓存 key，互不打爆。
+   */
+  const enrichByFinding = useQueries({
+    queries: findings.map((f) => ({
+      queryKey: ['sentinel', 'finding-artifacts', f.id] as const,
+      queryFn: () => sentinelApi.findingArtifacts(f.id),
+      enabled: !!activeId,
+    })),
+    combine: (results) => {
+      const map: Record<number, { poc: number; nuclei: boolean; guide: boolean }> = {}
+      results.forEach((r, i) => {
+        const arts = r.data ?? []
+        map[findings[i].id] = {
+          poc: arts.filter((a) => a.kind === 'poc').length,
+          nuclei: arts.some((a) => a.kind === 'nuclei'),
+          guide: arts.some(
+            (a) => a.kind === 'report' && a.title.trim().toLowerCase() === 'repro-guide',
+          ),
+        }
+      })
+      return map
+    },
+  })
 
   return (
     <div className="space-y-4">
@@ -681,6 +707,35 @@ export default function AnalysisResultsPage() {
                               />
                             </span>
                           </div>
+                          {(() => {
+                            const e = enrichByFinding[f.id]
+                            if (!e) return null
+                            return (
+                              <div className="mt-1 flex flex-wrap items-center gap-1">
+                                {e.poc > 0 && (
+                                  <Tooltip title="POC 库命中并已挂载为 draft 产物，审核 verified 后可用于差分复现">
+                                    <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[9.5px] text-secondary-foreground">
+                                      POC 命中 {e.poc}
+                                    </span>
+                                  </Tooltip>
+                                )}
+                                {e.nuclei && (
+                                  <Tooltip title="已有 nuclei 模板草稿，到「分析产物」审核 verified 后可发布 PoC 库">
+                                    <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[9.5px] text-secondary-foreground">
+                                      nuclei 草稿
+                                    </span>
+                                  </Tooltip>
+                                )}
+                                {e.guide && (
+                                  <Tooltip title="复现指南（repro-guide）已生成，含攻击路径与分步复现说明">
+                                    <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[9.5px] text-secondary-foreground">
+                                      复现指南
+                                    </span>
+                                  </Tooltip>
+                                )}
+                              </div>
+                            )
+                          })()}
                           {f.detail && (
                             <div className="mt-0.5 text-[11px] leading-relaxed text-secondary-foreground">
                               {f.detail}

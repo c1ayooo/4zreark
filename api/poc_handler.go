@@ -191,6 +191,7 @@ func (h *POCHandler) ListPOCs(c *gin.Context) {
 		Type:     c.Query("type"),
 		Severity: c.Query("severity"),
 		Search:   c.Query("search"),
+		Origin:   c.Query("origin"),
 	}
 
 	if enabledStr := c.Query("enabled"); enabledStr != "" {

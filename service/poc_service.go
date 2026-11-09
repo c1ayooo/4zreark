@@ -429,6 +429,7 @@ type POCListParams struct {
 	Severity string
 	Enabled  *bool
 	Search   string
+	Origin   string
 }
 
 type POCListResult struct {
@@ -449,6 +450,7 @@ func (s *POCService) List(params POCListParams) (*POCListResult, error) {
 		Severity: params.Severity,
 		Enabled:  params.Enabled,
 		Keyword:  params.Search,
+		Origin:   params.Origin,
 		Page:     int(params.Page),
 		PageSize: int(params.PageSize),
 	})

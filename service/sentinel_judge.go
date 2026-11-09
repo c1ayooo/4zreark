@@ -78,8 +78,11 @@ const sentinelJudgeSystemPrompt = `你是资深安全研究员，任务是审计
    low/info=防御性问题或实际几乎不可利用。
 3. is_security_fix=true 时必须完整给出：
    - title：一句可读的漏洞标题（组件 + 后果），不要只写「文件:函数」；
-   - attack_path：从外部入口到危险 sink 的完整路径，标注文件/函数；
-   - impact：攻击者在什么条件下能造成什么后果；
+   - attack_path：分步攻击路径，从外部入口到危险 sink 逐段列出（用 → 连接），
+     每步标注文件:函数与数据形态（参数/请求体/文件/IPC），并标注哪一步是
+     可控输入进入点、哪一步是漏洞触发点——后续复现指南直接消费该字段；
+   - impact：攻击者在什么条件下能造成什么后果，必须写明前置条件
+     （所需权限/认证状态/编译选项/运行环境/版本范围），无前置条件则写「无需前置条件」；
    - fix_evidence：说明 diff 到底修掉了攻击链哪一环（校验/过滤/白名单/边界检查）；
    - evidence_snippets：从 diff 原样摘录 2~4 段关键 +/- 代码行，每段不超过 5 行，
      逐字复制，不许改写、缩写或编造。
@@ -299,15 +302,13 @@ func (j *SentinelJudge) Judge(ctx context.Context, commitID int64) (judgment *re
 		if err != nil {
 			log.Printf("[Sentinel] 写入发现失败 commit=%d: %v", commit.ID, err)
 		}
-		// S 级（critical + 注入/SSRF/反序列化形态）：自动草拟 nuclei 候选落 draft，
-		// 人工 verified 后才可发布/复现——铁律不自动越过。
-		if err == nil && grade == "S" {
-			if a, gerr := GenerateNucleiTemplate(ctx, findingID); gerr != nil {
-				log.Printf("[Sentinel] S 级自动生成 nuclei 失败 finding=%d: %v", findingID, gerr)
-			} else {
-				log.Printf("[Sentinel] S 级自动生成 nuclei 完成 finding=%d artifact=%d (%s)",
-					findingID, a.ID, a.Title)
-			}
+		// 命中即富化（异步，不阻塞判定 worker）：
+		//   - POC 库命中检索并挂载 draft 产物（复用既有模板）；
+		//   - repro-guide 复现指南确定性拼装；
+		//   - S 级自动草拟 nuclei 候选落 draft——人工 verified 才可发布/复现，
+		//     铁律不自动越过；确认（confirmed）时所有等级都会补齐 nuclei。
+		if err == nil {
+			enrichFindingAsync(findingID, grade == "S")
 		}
 		// 命中即通知：级别随 severity，渠道侧可用 MinLevel 过滤降级噪音。
 		notifyJudgeHit(commit, verdict, judgment.ID)

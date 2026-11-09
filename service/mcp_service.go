@@ -326,7 +326,16 @@ func (s *MCPService) initialize(params json.RawMessage) map[string]any {
 			"先用 list_projects 确认可访问项目，再按需调用 read/write 工具。" +
 			"代码审计工作流（自带分析能力，无需平台模型）：sentinel_list_repos → sentinel_list_commits(status=pending) → " +
 			"sentinel_get_commit 读 diff 自行分析 → sentinel_submit_judgment 回写（evidence 引用 hunk 头）→ " +
-			"sentinel_add_artifact 挂 PoC 与 repro-plan → 人工 verified 后 sentinel_request_repro → sentinel_wait_repro 取差分结论。",
+			"sentinel_add_artifact 挂 PoC 与 repro-plan → 人工 verified 后 sentinel_request_repro → sentinel_wait_repro 取差分结论。" +
+			"判定深度要求（与平台内部判定同标准）：attack_path 必须分步给出（外部入口 → 传播 → 危险汇聚点，" +
+			"逐步标注 文件:函数 与数据形态，标明可控输入进入点与漏洞触发点）；impact 必须写明前置条件" +
+			"（所需权限/认证状态/编译选项/版本范围），无前置条件则写「无需前置条件」。" +
+			"evidence 必须逐字复制 diff 中真实 hunk 头，evidence_snippets 摘录的代码行必须在 diff 中逐字存在，" +
+			"对不上会被降权。" +
+			"sentinel_get_finding 返回的 artifacts 中，kind=report 且 title=repro-guide 是自动生成的分步复现指南" +
+			"（含攻击路径/前置条件/复现步骤/POC 命中），可直接消费；kind=poc 的 draft 产物可能是 POC 库自动命中的模板。" +
+			"上传代码分析：sentinel_import_archive 上传 zip/tar.gz 压缩包（base64 ≤3MB），导入后采集与判定自动入队，" +
+			"用 sentinel_list_commits(repo_id) 查看新提交并按上述工作流分析。",
 	}
 }
 

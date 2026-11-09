@@ -23,6 +23,7 @@ func (s *MCPService) pocTools() []mcpToolHandler {
 					"severity":  map[string]any{"type": "string", "enum": []string{"critical", "high", "medium", "low", "info"}},
 					"enabled":   map[string]any{"type": "boolean"},
 					"search":    map[string]any{"type": "string"},
+					"origin":    map[string]any{"type": "string", "enum": []string{"manual", "sentinel", "import", "intel"}, "description": "来源过滤：sentinel = 由代码审计发现发布"},
 				}),
 				Annotations: readOnlyAnnotations(),
 			},
@@ -152,6 +153,7 @@ func (s *MCPService) listPOCs(ctx context.Context, key *repo.APIKey, raw json.Ra
 		Severity string `json:"severity"`
 		Enabled  *bool  `json:"enabled"`
 		Search   string `json:"search"`
+		Origin   string `json:"origin"`
 	}
 	if err := decodeArgs(raw, &args); err != nil {
 		return toolError(err.Error())
@@ -168,6 +170,7 @@ func (s *MCPService) listPOCs(ctx context.Context, key *repo.APIKey, raw json.Ra
 	res, err := s.pocs.List(POCListParams{
 		Page: args.Page, PageSize: args.PageSize, Type: args.Type,
 		Severity: args.Severity, Enabled: args.Enabled, Search: args.Search,
+		Origin: args.Origin,
 	})
 	if err != nil {
 		return toolError("读取 POC 失败: " + err.Error())

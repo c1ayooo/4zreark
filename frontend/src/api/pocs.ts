@@ -23,6 +23,8 @@ const transformPOC = (p: Record<string, unknown>): POC => ({
   author: p.author as string,
   references: (p.references as string[]) || [],
   enabled: p.enabled as boolean,
+  templateId: (p.template_id as string) || '',
+  origin: (p.origin as string) || '',
   lastUsed: p.last_used as string,
   successCount: p.success_count as number,
   failCount: p.fail_count as number,
@@ -42,6 +44,9 @@ export interface POC {
   author?: string
   references?: string[]
   enabled: boolean
+  templateId?: string
+  /** manual（手工）/ import（导入）/ intel（情报）/ sentinel（Sentinel 发布） */
+  origin?: string
   lastUsed?: string
   successCount?: number
   failCount?: number
@@ -82,6 +87,7 @@ export interface POCListParams {
   severity?: string
   enabled?: boolean
   search?: string
+  origin?: string
 }
 
 export interface POCStatistics {
@@ -111,6 +117,7 @@ export const pocApi = {
         severity: params?.severity,
         enabled: params?.enabled,
         search: params?.search,
+        origin: params?.origin,
       },
     })
     return {

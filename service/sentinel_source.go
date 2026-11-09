@@ -134,9 +134,16 @@ func (s *SentinelSource) Collect(ctx context.Context, repoID string) (*CollectRe
 		return nil, err
 	}
 
-	cloneURL, err := ValidateCloneURL(r.CloneURL, s.cfg.CloneHosts)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", errSentinelConfig, err)
+	// mirror 已就绪（上传仓库在导入时预置、普通仓库早已克隆）时跳过 https 校验：
+	// 增量读取全在本地 mirror 上，clone_url 只是首次克隆才需要的远端地址。
+	branch := r.EffectiveBranch()
+	mirror := s.MirrorPath(r.ID)
+	var cloneURL string
+	if _, statErr := os.Stat(mirror); statErr != nil {
+		cloneURL, err = ValidateCloneURL(r.CloneURL, s.cfg.CloneHosts)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", errSentinelConfig, err)
+		}
 	}
 
 	result := &CollectResult{RepoID: r.ID}
@@ -150,9 +157,6 @@ func (s *SentinelSource) Collect(ctx context.Context, repoID string) (*CollectRe
 	now := time.Now()
 	_ = s.store.UpdateRun(ctx, runID, map[string]interface{}{"started_at": now})
 	s.emit(ctx, runID, "info", "collect_start", "开始采集 "+r.FullName, nil)
-
-	branch := r.EffectiveBranch()
-	mirror := s.MirrorPath(r.ID)
 
 	found, inserted, skipped, err := s.syncMirror(ctx, r, cloneURL, mirror, branch, result)
 	if err != nil {
@@ -189,12 +193,16 @@ func (s *SentinelSource) syncMirror(ctx context.Context, r *repo.GitRepo, cloneU
 	authArgs := GitHubTokenAuthArgs(ctx)
 
 	if _, statErr := os.Stat(mirror); statErr != nil {
+		if cloneURL == "" {
+			return 0, 0, 0, fmt.Errorf("%w: mirror 不存在且 clone_url 为空（上传仓库的 mirror 被删除）", errSentinelConfig)
+		}
 		args := append([]string{}, authArgs...)
 		args = append(args, "clone", "--bare", "--quiet", cloneURL, mirror)
 		if _, gitErr := runGit(ctx, "", args...); gitErr != nil {
 			return 0, 0, 0, gitErr
 		}
-	} else {
+	} else if cloneURL != "" {
+		// cloneURL == "" 表示上传仓库的静态快照：mirror 即最终状态，无需 fetch。
 		args := append([]string{}, authArgs...)
 		args = append(args, "fetch", "--prune", "--quiet", "origin",
 			"+refs/heads/*:refs/heads/*")

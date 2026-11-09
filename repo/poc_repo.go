@@ -20,6 +20,8 @@ type POCFilter struct {
 	Tags     []string
 	Enabled  *bool
 	Keyword  string
+	// Origin 按来源过滤：manual（手工）/ import（导入）/ intel（情报）/ sentinel（Sentinel 发布）。空为不过滤。
+	Origin   string
 	Page     int
 	PageSize int
 }
@@ -255,18 +257,19 @@ func (r *pocRepo) GetByTemplateID(ctx context.Context, templateID string) (*mode
 	return scanPOC(r.r.pool.QueryRow(ctx, `select `+pocColumns+` from pocs where template_id = $1`, templateID))
 }
 
-// pocWhere 参数位置固定：$1 类型、$2 等级、$3 启停、$4 关键字、$5 关键字模式、$6 标签。
+// pocWhere 参数位置固定：$1 类型、$2 等级、$3 启停、$4 关键字、$5 关键字模式、$6 标签、$7 来源。
 const pocWhere = `where ($1 = '' or type = $1)
                    and ($2 = '' or severity = $2)
                    and ($3::bool is null or enabled = $3)
                    and ($4 = '' or name ilike $5 or description ilike $5
                         or exists (select 1 from unnest(cve_id) c where c ilike $5))
-                   and ($6::text[] = '{}' or tags @> $6::text[])`
+                   and ($6::text[] = '{}' or tags @> $6::text[])
+                   and ($7 = '' or origin = $7)`
 
 func (r *pocRepo) List(ctx context.Context, f POCFilter) ([]*models.POC, int64, error) {
 	page, pageSize := vulnPage(f.Page, f.PageSize)
 	keyword := strings.TrimSpace(f.Keyword)
-	args := []any{f.Type, f.Severity, f.Enabled, keyword, likePattern(keyword), textArray(f.Tags)}
+	args := []any{f.Type, f.Severity, f.Enabled, keyword, likePattern(keyword), textArray(f.Tags), f.Origin}
 
 	var total int64
 	if err := r.r.pool.QueryRow(ctx, `select count(*) from pocs `+pocWhere, args...).Scan(&total); err != nil {
@@ -274,7 +277,7 @@ func (r *pocRepo) List(ctx context.Context, f POCFilter) ([]*models.POC, int64, 
 	}
 
 	rows, err := r.r.pool.Query(ctx,
-		`select `+pocColumns+` from pocs `+pocWhere+` order by created_at desc, name limit $7 offset $8`,
+		`select `+pocColumns+` from pocs `+pocWhere+` order by created_at desc, name limit $8 offset $9`,
 		append(args, pageSize, (page-1)*pageSize)...)
 	if err != nil {
 		return nil, 0, err

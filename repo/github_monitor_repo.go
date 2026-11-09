@@ -3,10 +3,10 @@ package repo
 import (
 	"fmt"
 
-	"github.com/c1ayooo/4zreark/internal/secretbox"
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/c1ayooo/4zreark/internal/secretbox"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -27,12 +27,21 @@ type GitHubMonitorRule struct {
 }
 
 type GitHubMonitorSettings struct {
-	ProjectID       int64     `json:"project_id"`
-	Enabled         bool      `json:"enabled"`
-	Token           string    `json:"-"` // 不回显
-	TokenConfigured bool      `json:"token_configured"`
-	IntervalSeconds int       `json:"interval_seconds,omitempty"`
-	Updated         time.Time `json:"updated,omitempty"`
+	ProjectID       int64  `json:"project_id"`
+	Enabled         bool   `json:"enabled"`
+	Token           string `json:"-"` // 不回显
+	TokenConfigured bool   `json:"token_configured"`
+	IntervalSeconds int    `json:"interval_seconds,omitempty"`
+	// 高级误报治理与动态规则（迁移自 4zreco 的 PatchSettings/PatchAdvancedSettings 参数面）。
+	// 零值/空串语义为「沿用旧值」，UpsertSettings 里用 excluded case 实现。
+	RepoMaxAgeDays        int       `json:"repo_max_age_days,omitempty"`
+	LookbackDays          int       `json:"lookback_days,omitempty"`
+	BoilerplateRepos      int       `json:"boilerplate_repos,omitempty"`
+	BlobRescan            bool      `json:"blob_rescan"`
+	MaxBlobRescansPerRule int       `json:"max_blob_rescans_per_rule,omitempty"`
+	ExtraRulesPath        string    `json:"extra_rules_path,omitempty"`
+	NotifyEnabled         bool      `json:"notify_enabled"`
+	Updated               time.Time `json:"updated,omitempty"`
 }
 
 type GitHubMonitorRepo interface {
@@ -72,7 +81,15 @@ create table if not exists github_monitor_settings (
 	token text not null default '',
 	interval_seconds int not null default 0,
 	updated timestamptz not null default now()
-);`)
+);
+-- 高级误报治理与动态规则列（迁移自 4zreco 的设置面；幂等补列，老库无痛升级）
+alter table github_monitor_settings add column if not exists repo_max_age_days int not null default 0;
+alter table github_monitor_settings add column if not exists lookback_days int not null default 0;
+alter table github_monitor_settings add column if not exists boilerplate_repos int not null default 0;
+alter table github_monitor_settings add column if not exists blob_rescan boolean not null default true;
+alter table github_monitor_settings add column if not exists max_blob_rescans_per_rule int not null default 0;
+alter table github_monitor_settings add column if not exists extra_rules_path text not null default '';
+alter table github_monitor_settings add column if not exists notify_enabled boolean not null default true;`)
 	return err
 }
 
@@ -166,9 +183,12 @@ func (g *githubMonitorRepo) GetSettings(ctx context.Context, projectID int64) (*
 	s := &GitHubMonitorSettings{ProjectID: projectID}
 	var token string
 	err := g.r.pool.QueryRow(ctx, `
-select enabled, token, interval_seconds, updated
+select enabled, token, interval_seconds, repo_max_age_days, lookback_days, boilerplate_repos,
+       blob_rescan, max_blob_rescans_per_rule, extra_rules_path, notify_enabled, updated
 from github_monitor_settings where project_id = $1`, projectID).
-		Scan(&s.Enabled, &token, &s.IntervalSeconds, &s.Updated)
+		Scan(&s.Enabled, &token, &s.IntervalSeconds, &s.RepoMaxAgeDays, &s.LookbackDays,
+			&s.BoilerplateRepos, &s.BlobRescan, &s.MaxBlobRescansPerRule, &s.ExtraRulesPath,
+			&s.NotifyEnabled, &s.Updated)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return s, nil
 	}
@@ -196,13 +216,28 @@ func (g *githubMonitorRepo) UpsertSettings(ctx context.Context, s *GitHubMonitor
 		return fmt.Errorf("加密监控 token 失败: %w", encErr)
 	}
 	_, err := g.r.pool.Exec(ctx, `
-insert into github_monitor_settings (project_id, enabled, token, interval_seconds, updated)
-values ($1,$2,$3,$4,now())
+insert into github_monitor_settings (project_id, enabled, token, interval_seconds,
+                                     repo_max_age_days, lookback_days, boilerplate_repos,
+                                     blob_rescan, max_blob_rescans_per_rule, extra_rules_path,
+                                     notify_enabled, updated)
+values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now())
 on conflict (project_id) do update set
 	enabled = excluded.enabled,
 	token = case when excluded.token != '' then excluded.token else github_monitor_settings.token end,
 	interval_seconds = excluded.interval_seconds,
-	updated = now()`, s.ProjectID, s.Enabled, encToken, s.IntervalSeconds)
+	-- 高级参数零值/空串 = 沿用旧值（前端只传变更字段）
+	repo_max_age_days = case when excluded.repo_max_age_days > 0 then excluded.repo_max_age_days else github_monitor_settings.repo_max_age_days end,
+	lookback_days = case when excluded.lookback_days > 0 then excluded.lookback_days else github_monitor_settings.lookback_days end,
+	boilerplate_repos = case when excluded.boilerplate_repos > 0 then excluded.boilerplate_repos else github_monitor_settings.boilerplate_repos end,
+	blob_rescan = excluded.blob_rescan,
+	max_blob_rescans_per_rule = case when excluded.max_blob_rescans_per_rule > 0 then excluded.max_blob_rescans_per_rule else github_monitor_settings.max_blob_rescans_per_rule end,
+	extra_rules_path = case when excluded.extra_rules_path != '' then excluded.extra_rules_path else github_monitor_settings.extra_rules_path end,
+	notify_enabled = excluded.notify_enabled,
+	updated = now()`,
+		s.ProjectID, s.Enabled, encToken, s.IntervalSeconds,
+		s.RepoMaxAgeDays, s.LookbackDays, s.BoilerplateRepos,
+		s.BlobRescan, s.MaxBlobRescansPerRule, s.ExtraRulesPath,
+		s.NotifyEnabled)
 	return err
 }
 
@@ -216,11 +251,14 @@ func (g *githubMonitorRepo) FirstActiveSettings(ctx context.Context) (*GitHubMon
 	s := &GitHubMonitorSettings{}
 	var token string
 	err := g.r.pool.QueryRow(ctx, `
-select project_id, enabled, token, interval_seconds
+select project_id, enabled, token, interval_seconds, repo_max_age_days, lookback_days,
+       boilerplate_repos, blob_rescan, max_blob_rescans_per_rule, extra_rules_path, notify_enabled
 from github_monitor_settings
 where token != '' and enabled
 order by project_id limit 1`).
-		Scan(&s.ProjectID, &s.Enabled, &token, &s.IntervalSeconds)
+		Scan(&s.ProjectID, &s.Enabled, &token, &s.IntervalSeconds, &s.RepoMaxAgeDays,
+			&s.LookbackDays, &s.BoilerplateRepos, &s.BlobRescan, &s.MaxBlobRescansPerRule,
+			&s.ExtraRulesPath, &s.NotifyEnabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return s, nil
 	}

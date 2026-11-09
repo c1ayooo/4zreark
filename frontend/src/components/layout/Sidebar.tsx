@@ -81,6 +81,7 @@ const menuGroups: MenuGroup[] = [
       { path: '/sentinel/audit/tasks', icon: ListChecks, label: '分析任务', roles: ALL },
       { path: '/sentinel/audit/results', icon: ClipboardCheck, label: '分析结果', roles: ALL },
       { path: '/sentinel/audit/artifacts', icon: Package, label: '分析产物', roles: ALL },
+      { path: '/pocs', icon: FileCode, label: 'POC/模板库', roles: OPS },
       { path: '/sentinel/repos', icon: GitBranch, label: '仓库', roles: OPS },
       { path: '/sentinel/commits', icon: GitCommitHorizontal, label: '提交', roles: ALL },
       { path: '/sentinel/skills', icon: Sparkles, label: '技能库', roles: ALL },
@@ -148,7 +149,6 @@ const menuGroups: MenuGroup[] = [
     items: [
       { path: '/vulnerabilities', icon: Shield, label: '漏洞管理', roles: OPS },
       { path: '/vuln-intel', icon: Rss, label: '漏洞情报', roles: OPS },
-      { path: '/pocs', icon: FileCode, label: 'POC管理', roles: OPS },
     ],
   },
   {

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -364,6 +365,25 @@ func (s *MCPService) sentinelTools() []mcpToolHandler {
 			Scopes: []string{ScopeSentinelWrite, ScopeLLMInvoke},
 			Run: func(ctx context.Context, key *repo.APIKey, args json.RawMessage) *mcpToolResult {
 				return s.sentinelGenerateNuclei(ctx, key, args)
+			},
+		},
+		{
+			Tool: mcpTool{
+				Name:  "sentinel_import_archive",
+				Title: "上传代码包分析",
+				Description: "上传 zip/tar.gz 代码压缩包（base64，≤3MB）导入为本地静态仓库：解包 → 建 mirror → 采集落库提交 → 自动入队判定。" +
+					"包含 .git 的包按提交历史逐提交判定；纯源码包会合成单条初始提交。导入后用 sentinel_list_commits(repo_id) 查看新提交，" +
+					"按工作流分析（或 sentinel_wait_judge 等平台判定）。写操作。仅「全部项目」的 key 可用。",
+				InputSchema: inputSchema(map[string]any{
+					"name":           map[string]any{"type": "string", "description": "仓库名（展示用，可含中文）"},
+					"filename":       map[string]any{"type": "string", "description": "压缩包文件名，需以 .zip/.tar.gz/.tgz 结尾"},
+					"content_base64": map[string]any{"type": "string", "description": "压缩包内容的 base64 编码"},
+				}, "name", "filename", "content_base64"),
+				Annotations: writeAnnotations(false),
+			},
+			Scopes: []string{ScopeSentinelWrite},
+			Run: func(ctx context.Context, key *repo.APIKey, args json.RawMessage) *mcpToolResult {
+				return s.sentinelImportArchive(ctx, key, args)
 			},
 		},
 	}
@@ -1249,4 +1269,42 @@ func (s *MCPService) sentinelGenerateNuclei(ctx context.Context, key *repo.APIKe
 	}
 	return toolOK(map[string]any{"artifact": artifact,
 		"note": "模板为 draft，人工 verified 后可发布进 PoC 库"})
+}
+
+// sentinelImportArchive 是 Agent 上传代码包分析的入口：base64 压缩包 →
+// 解包建仓 → 采集落库 → 判定入队。MCP 请求体 4MiB，base64 有效载荷卡 3MB，
+// 更大的包走 REST POST /api/sentinel/repos/import-archive（32MB multipart）。
+func (s *MCPService) sentinelImportArchive(ctx context.Context, key *repo.APIKey, raw json.RawMessage) *mcpToolResult {
+	if err := requireGlobalKey(key); err != nil {
+		return toolError(err.Error())
+	}
+	var args struct {
+		Name          string `json:"name"`
+		Filename      string `json:"filename"`
+		ContentBase64 string `json:"content_base64"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return toolError(err.Error())
+	}
+	content, err := base64.StdEncoding.DecodeString(strings.TrimSpace(args.ContentBase64))
+	if err != nil {
+		return toolError("content_base64 不是合法 base64: " + err.Error())
+	}
+	cfg := config.Loaded()
+	if cfg == nil {
+		return toolError("配置未加载")
+	}
+	src := NewSentinelSource(cfg.Sentinel)
+	res, err := src.ImportArchive(ctx, args.Name, args.Filename, content)
+	if err != nil {
+		return toolError("导入失败: " + err.Error())
+	}
+	out := map[string]any{"result": res}
+	if res.Error != "" {
+		out["note"] = "仓库已注册，但采集失败，可稍后用 sentinel_collect_repo 重试"
+	} else {
+		out["next"] = "用 sentinel_list_commits(repo_id, status=pending) 查看新提交并按工作流分析；" +
+			"纯源码包是合成单提交，判定以「整包初检」视角进行"
+	}
+	return toolOK(out)
 }

@@ -14,7 +14,7 @@
  *   GET  /api/sentinel/artifacts/{id}/download   （仅 verified）
  *   POST /api/sentinel/artifacts/{id}/publish    （仅 verified 的 nuclei）
  */
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Button, Drawer, Input, Popconfirm, Select, Table, Tooltip } from 'antd'
@@ -57,6 +57,13 @@ const KIND_OPTIONS: { value: SentinelArtifactKind; label: string }[] = [
   { value: 'repro_log', label: '复现日志' },
 ]
 
+const KIND_LABELS: Record<string, string> = Object.fromEntries(
+  KIND_OPTIONS.map((o) => [o.value, o.label]),
+)
+
+const isReproGuide = (a: SentinelArtifact) =>
+  a.kind === 'report' && a.title.trim().toLowerCase() === 'repro-guide'
+
 const CREATE_FORM_INIT: { kind: SentinelArtifactKind; title: string; content: string } = {
   kind: 'poc',
   title: '',
@@ -84,6 +91,144 @@ function ContentPreview({ content }: { content: string }) {
           {open ? '收起' : `展开全部 ${lines.length} 行`}
         </Button>
       )}
+    </div>
+  )
+}
+
+/** 行内文本：极简解析 **加粗** 与 `代码`，其余原样输出。 */
+function InlineText({ text }: { text: string }) {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).filter(Boolean)
+  return (
+    <>
+      {parts.map((p, i) => {
+        if (p.startsWith('**') && p.endsWith('**'))
+          return (
+            <strong key={i} className="font-semibold text-foreground">
+              {p.slice(2, -2)}
+            </strong>
+          )
+        if (p.startsWith('`') && p.endsWith('`'))
+          return (
+            <code key={i} className="rounded bg-muted px-1 py-0.5 font-mono text-[10.5px]">
+              {p.slice(1, -1)}
+            </code>
+          )
+        return <span key={i}>{p}</span>
+      })}
+    </>
+  )
+}
+
+/**
+ * repro-guide 复现指南专用视图：极简 Markdown 渲染（标题/列表/引用/代码块/分隔线），
+ * 不引第三方依赖——指南结构由后端确定性拼装，覆盖这几类块级元素足够。
+ */
+function ReproGuideView({ content }: { content: string }) {
+  const [open, setOpen] = useState(false)
+  const lines = content.split('\n')
+  const nodes: ReactNode[] = []
+  let code: string[] | null = null
+  let list: string[] | null = null
+
+  const flushList = () => {
+    if (list === null) return
+    const items = list
+    nodes.push(
+      <ul key={`l${nodes.length}`} className="ml-4 list-disc space-y-0.5 text-[11.5px] leading-relaxed">
+        {items.map((it, i) => (
+          <li key={i}>
+            <InlineText text={it} />
+          </li>
+        ))}
+      </ul>,
+    )
+    list = null
+  }
+  const flushCode = () => {
+    if (code === null) return
+    const body = code
+    nodes.push(
+      <pre
+        key={`c${nodes.length}`}
+        className="m-0 whitespace-pre-wrap rounded-lg border border-border bg-muted/30 p-2 font-mono text-[10.5px] leading-relaxed text-secondary-foreground"
+      >
+        {body.join('\n')}
+      </pre>,
+    )
+    code = null
+  }
+
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, '')
+    if (line.startsWith('```')) {
+      flushList()
+      if (code === null) code = []
+      else flushCode()
+      continue
+    }
+    if (code !== null) {
+      code.push(line)
+      continue
+    }
+    if (!line.trim()) {
+      flushList()
+      continue
+    }
+    if (/^- /.test(line) || /^\d+\. /.test(line)) {
+      if (list === null) list = []
+      list.push(line.replace(/^- |^\d+\. /, ''))
+      continue
+    }
+    flushList()
+    if (line.startsWith('### ')) {
+      nodes.push(
+        <div key={nodes.length} className="mt-2 text-[12px] font-semibold text-foreground">
+          {line.slice(4)}
+        </div>,
+      )
+    } else if (line.startsWith('## ')) {
+      nodes.push(
+        <div key={nodes.length} className="mt-3 border-b border-border pb-1 text-[12.5px] font-semibold text-foreground">
+          {line.slice(3)}
+        </div>,
+      )
+    } else if (line.startsWith('# ')) {
+      nodes.push(
+        <div key={nodes.length} className="text-[14px] font-semibold text-foreground">
+          {line.slice(2)}
+        </div>,
+      )
+    } else if (line.startsWith('> ')) {
+      nodes.push(
+        <div key={nodes.length} className="rounded-lg bg-muted/40 px-2.5 py-1.5 text-[10.5px] leading-relaxed text-muted-foreground">
+          <InlineText text={line.slice(2)} />
+        </div>,
+      )
+    } else if (line === '---') {
+      nodes.push(<div key={nodes.length} className="my-2 border-t border-border" />)
+    } else {
+      nodes.push(
+        <p key={nodes.length} className="m-0 text-[11.5px] leading-relaxed text-secondary-foreground">
+          <InlineText text={line} />
+        </p>,
+      )
+    }
+  }
+  flushCode()
+  flushList()
+
+  return (
+    <div className="mt-1.5">
+      <div
+        className={`space-y-1.5 rounded-lg border border-border bg-card p-2.5 ${
+          open ? 'max-h-[70vh] overflow-auto' : 'max-h-72 overflow-hidden'
+        }`}
+      >
+        {nodes}
+      </div>
+      <Button size="small" type="link" className="!px-0 text-[10.5px]" onClick={() => setOpen((v) => !v)}>
+        {open ? '收起指南' : '展开完整指南'}
+      </Button>
     </div>
   )
 }
@@ -196,7 +341,7 @@ function FindingArtifacts({ finding }: { finding: SentinelFinding }) {
               <div key={a.id} className="rounded-xl border border-border bg-card px-3 py-2.5">
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="rounded-full bg-secondary px-1.5 py-0.5 font-mono text-[9.5px] text-secondary-foreground">
-                    {a.kind}
+                    {isReproGuide(a) ? '复现指南' : (KIND_LABELS[a.kind] ?? a.kind)}
                   </span>
                   <span className="text-[12.5px] font-medium text-foreground">
                     {a.title || '(无标题)'}
@@ -244,7 +389,7 @@ function FindingArtifacts({ finding }: { finding: SentinelFinding }) {
                     </Popconfirm>
                   </span>
                 </div>
-                <ContentPreview content={a.content} />
+                {isReproGuide(a) ? <ReproGuideView content={a.content} /> : <ContentPreview content={a.content} />}
               </div>
             )
           })}

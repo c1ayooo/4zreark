@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"strconv"
 	"strings"
 
@@ -82,6 +83,15 @@ func (h *GitHubMonitorHandler) SaveSettings(c *gin.Context) {
 		Enabled         bool   `json:"enabled"`
 		Token           string `json:"token"`
 		IntervalSeconds int    `json:"interval_seconds"`
+		// 高级误报治理与动态规则（迁移自 4zreco 的 PatchSettings/PatchAdvancedSettings）；
+		// 指针 nil = 不变更，零值语义由 repo 层 excluded case 处理。
+		RepoMaxAgeDays        *int    `json:"repo_max_age_days,omitempty"`
+		LookbackDays          *int    `json:"lookback_days,omitempty"`
+		BoilerplateRepos      *int    `json:"boilerplate_repos,omitempty"`
+		BlobRescan            *bool   `json:"blob_rescan,omitempty"`
+		MaxBlobRescansPerRule *int    `json:"max_blob_rescans_per_rule,omitempty"`
+		ExtraRulesPath        *string `json:"extra_rules_path,omitempty"`
+		NotifyEnabled         *bool   `json:"notify_enabled,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.BadRequest(c, "请求体不合法")
@@ -106,12 +116,46 @@ func (h *GitHubMonitorHandler) SaveSettings(c *gin.Context) {
 		utils.InternalError(c, err.Error())
 		return
 	}
-	if err := r.UpsertSettings(c.Request.Context(), &repo.GitHubMonitorSettings{
+	settings := &repo.GitHubMonitorSettings{
 		ProjectID:       projectID,
 		Enabled:         req.Enabled,
 		Token:           req.Token,
 		IntervalSeconds: req.IntervalSeconds,
-	}); err != nil {
+		// bool 字段缺省按开（与包层 Resolve 默认一致）：未传时不改库（nil → true 兜底）
+		BlobRescan:    true,
+		NotifyEnabled: true,
+	}
+	if req.RepoMaxAgeDays != nil {
+		settings.RepoMaxAgeDays = *req.RepoMaxAgeDays
+	}
+	if req.LookbackDays != nil {
+		settings.LookbackDays = *req.LookbackDays
+	}
+	if req.BoilerplateRepos != nil {
+		settings.BoilerplateRepos = *req.BoilerplateRepos
+	}
+	if req.BlobRescan != nil {
+		settings.BlobRescan = *req.BlobRescan
+	}
+	if req.MaxBlobRescansPerRule != nil {
+		settings.MaxBlobRescansPerRule = *req.MaxBlobRescansPerRule
+	}
+	if req.ExtraRulesPath != nil {
+		settings.ExtraRulesPath = *req.ExtraRulesPath
+	}
+	if req.NotifyEnabled != nil {
+		settings.NotifyEnabled = *req.NotifyEnabled
+	}
+	// 高级参数边界校验（与包层上限一致，防止把配额打爆）
+	if settings.LookbackDays != 0 && (settings.LookbackDays < 1 || settings.LookbackDays > 3650) {
+		utils.BadRequest(c, "lookback_days 取值范围 1~3650")
+		return
+	}
+	if settings.RepoMaxAgeDays != 0 && (settings.RepoMaxAgeDays < 0 || settings.RepoMaxAgeDays > 36500) {
+		utils.BadRequest(c, "repo_max_age_days 取值范围 0~36500")
+		return
+	}
+	if err := r.UpsertSettings(c.Request.Context(), settings); err != nil {
 		utils.InternalError(c, err.Error())
 		return
 	}
@@ -253,7 +297,9 @@ func (h *GitHubMonitorHandler) ListFindings(c *gin.Context) {
 	utils.Success(c, result)
 }
 
-// UpdateFindingStatus 处置命中（确认/忽略/已处置）。
+// UpdateFindingStatus 处置命中（确认/忽略/误报/已处置）。
+// 标记误报时自动建指纹前缀抑制规则（迁移自 4zreco 的副作用设计）：
+// 同一密钥值再被扫到会直接静默，省去逐条标记。
 func (h *GitHubMonitorHandler) UpdateFindingStatus(c *gin.Context) {
 	var req struct {
 		Status string `json:"status" binding:"required"`
@@ -262,8 +308,9 @@ func (h *GitHubMonitorHandler) UpdateFindingStatus(c *gin.Context) {
 		utils.BadRequest(c, "请求体不合法")
 		return
 	}
+	leakSvc := service.GitHubLeakService()
 	store := service.GitHubMonitorStore()
-	if store == nil {
+	if store == nil || leakSvc == nil {
 		utils.InternalError(c, "监控服务未就绪")
 		return
 	}
@@ -271,6 +318,17 @@ func (h *GitHubMonitorHandler) UpdateFindingStatus(c *gin.Context) {
 	if err != nil {
 		utils.InternalError(c, err.Error())
 		return
+	}
+	if req.Status == githubleak.StatusFalsePositive && finding.Fingerprint != "" {
+		fp := finding.Fingerprint
+		if len(fp) > 16 {
+			fp = fp[:16]
+		}
+		if _, serr := leakSvc.AddSuppression(c.Request.Context(),
+			githubleak.SuppressionFingerprintPrefix, fp, "标记误报自动静默", sessionUser(c)); serr != nil {
+			// 副作用失败不阻断处置，记录日志即可
+			log.Printf("[GitHubLeak] 误报自动抑制创建失败 finding=%s: %v", c.Param("fid"), serr)
+		}
 	}
 	utils.SuccessWithMessage(c, "已更新", finding)
 }

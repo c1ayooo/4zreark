@@ -3,12 +3,15 @@ package api
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/c1ayooo/4zreark/config"
 	"github.com/c1ayooo/4zreark/oid"
 	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/service"
@@ -123,6 +126,45 @@ func (h *SentinelHandler) CreateRepo(c *gin.Context) {
 		}
 	}
 	utils.SuccessWithMessage(c, "已创建并开始采集", item)
+}
+
+// ImportArchive 上传代码压缩包（multipart：file + 可选 name）导入为本地静态仓库，
+// 解包 → 建 mirror → 采集落库 → 自动入队判定。与 MCP sentinel_import_archive
+// 共用 service.ImportArchive；REST 侧放宽到 32MB。
+func (h *SentinelHandler) ImportArchive(c *gin.Context) {
+	const maxUpload = 32 << 20
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxUpload)
+	file, err := c.FormFile("file")
+	if err != nil {
+		utils.BadRequest(c, "缺少 file 字段（multipart/form-data）: "+err.Error())
+		return
+	}
+	fh, err := file.Open()
+	if err != nil {
+		utils.BadRequest(c, "读取上传文件失败: "+err.Error())
+		return
+	}
+	defer fh.Close()
+	content, err := io.ReadAll(fh)
+	if err != nil {
+		utils.BadRequest(c, "读取上传文件失败: "+err.Error())
+		return
+	}
+	cfg := config.Loaded()
+	if cfg == nil {
+		utils.InternalError(c, "配置未加载")
+		return
+	}
+	src := service.NewSentinelSource(cfg.Sentinel)
+	res, err := src.ImportArchive(c.Request.Context(), c.PostForm("name"), file.Filename, content)
+	if err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	h.audit(c, "repo.import_archive", res.RepoID, map[string]interface{}{
+		"full_name": res.FullName, "inserted": res.Inserted, "synthesized": res.Synthesized,
+	})
+	utils.Success(c, res)
 }
 
 type sentinelRepoUpdateReq struct {
@@ -275,11 +317,24 @@ func (h *SentinelHandler) GetCommit(c *gin.Context) {
 		return
 	}
 
+	// 判定查询必须区分「没判过」和「查询本身失败」：吞掉错误会把两者混成同一个
+	// 「尚未判定」UI 状态（典型事故：judgment 表缺新列没跑迁移，列表正常详情报错）。
 	var judgment *repo.CommitJudgment
-	if j, jErr := h.store.GetJudgment(c.Request.Context(), id); jErr == nil {
+	j, jErr := h.store.GetJudgment(c.Request.Context(), id)
+	switch {
+	case jErr == nil:
 		judgment = j
+	case errors.Is(jErr, repo.ErrNotFound):
+		// 尚未判定：正常路径
+	default:
+		log.Printf("[Sentinel] 查询判定详情失败 commit_id=%d: %v", id, jErr)
+		utils.InternalError(c, "查询判定详情失败（多为数据库迁移未执行，请先跑 docs/sql/apply_all.sh）: "+jErr.Error())
+		return
 	}
-	findings, _ := h.store.ListFindingsByCommit(c.Request.Context(), id)
+	findings, fErr := h.store.ListFindingsByCommit(c.Request.Context(), id)
+	if fErr != nil {
+		log.Printf("[Sentinel] 查询提交发现失败 commit_id=%d: %v", id, fErr)
+	}
 	if findings == nil {
 		findings = []*repo.CommitFinding{}
 	}

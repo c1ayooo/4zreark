@@ -114,7 +114,7 @@ mcp:
 # 提交哨兵（CommitSentinel v0.3）：采集公开仓库提交 → 判定是否为安全修复。
 # 默认关闭；开启前确认 mirror 目录可写、磁盘够用。密钥不落配置文件。
 sentinel:
-  enabled: false
+  enabled: true
   mirror_dir: "data/sentinel-mirrors"
   clone_hosts:
     - github.com
@@ -124,7 +124,7 @@ sentinel:
   max_commits_per_run: 50
   token_budget: 10000
   max_hunk_lines: 40
-  judge_model: "gpt-4o-mini"
+  judge_model: "deepseek-v4.1-flash"
   enable_audit_queue: false
   queue_poll_seconds: 30
 
