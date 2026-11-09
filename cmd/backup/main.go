@@ -20,9 +20,12 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/c1ayooo/4zreark/config"
 	"github.com/c1ayooo/4zreark/internal/backup"
+	"github.com/c1ayooo/4zreark/repo"
+	"github.com/c1ayooo/4zreark/service/notify"
 )
 
 const usageText = `4zreark 全量备份/恢复工具
@@ -217,9 +220,49 @@ func cmdRestore(args []string) {
 	for _, d := range res.DirsBackedUp {
 		fmt.Printf("    旧目录备份: %s\n", d)
 	}
+
+	// 行数交叉比对不一致 → 除 stderr 警告外再推一条 IM 告警（沿用全局通知渠道）。
+	// CLI 里 repo 未初始化：恢复刚完成、目标库可用，临时 Open 一次让 manager 读到
+	// notify_configs；读不到渠道时 SendAsync 仍会落站内通知，行为安全。
+	if len(res.RowCountDiffs) > 0 {
+		fmt.Fprintf(os.Stderr, "\n警告: %d 张核心表行数与 manifest 快照不一致（详见上方 WARN）\n", len(res.RowCountDiffs))
+		notifyRestoreRowCountDiffs(cfg, res.RowCountDiffs)
+	}
 	fmt.Println()
 	fmt.Println("提示：若备份来自旧版本，启动平台后请核对 schema_migrations——")
 	fmt.Println("      缺失的增量迁移需按文件名顺序重放 docs/sql/ 下的 migration_*.sql。")
+}
+
+// notifyRestoreRowCountDiffs 恢复后行数交叉比对不一致 → IM 告警。
+// 目标库（cfg 指向的恢复端）里才有 notify_configs：临时 Open 一次 repo，
+// 让全局 manager 能读到渠道配置；Open 失败则放弃外发（stderr 警告已足够）。
+func notifyRestoreRowCountDiffs(cfg *config.Config, diffs []backup.RowCountDiff) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := repo.Open(ctx, &cfg.Postgres); err != nil {
+		return
+	}
+
+	const maxList = 5
+	lines := make([]string, 0, maxList+1)
+	for i, d := range diffs {
+		if i == maxList {
+			lines = append(lines, fmt.Sprintf("… 等共 %d 张表", len(diffs)))
+			break
+		}
+		lines = append(lines, fmt.Sprintf("**%s**: 期望 %d，实际 %d", d.Table, d.Expected, d.Actual))
+	}
+	link := "/sentinel/audit/tasks"
+	if cfg.Server.PublicURL != "" {
+		link = strings.TrimRight(cfg.Server.PublicURL, "/") + "/sentinel/audit/tasks"
+	}
+	notify.GetGlobalManager().SendAsync(&notify.NotifyMessage{
+		Level:   notify.NotifyLevelWarning,
+		Title:   fmt.Sprintf("备份恢复: %d 张核心表行数不一致", len(diffs)),
+		Content: strings.Join(lines, "\n"),
+		Source:  "backup",
+		Extra:   map[string]interface{}{"link": link},
+	})
 }
 
 func cmdList(args []string) {

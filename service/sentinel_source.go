@@ -206,6 +206,11 @@ func (s *SentinelSource) syncMirror(ctx context.Context, r *repo.GitRepo, cloneU
 	}
 	found = len(shas)
 
+	// lastPersisted：最后一个确定落库（新插入或去重命中）的提交。解析/写入失败时
+	// 它停在失败点之前，基线只推进到已入库的位置，失败的提交下一轮采集会重试；
+	// 已入库的会被 InsertCommit 去重跳过，重试不产生副作用。全部失败时不推进，
+	// 避免「解析报错 → 基线照推 → 整批提交静默丢失」（git>=2.43 --patch=1 事故的教训）。
+	lastPersisted := ""
 	for _, sha := range shas {
 		commit, perr := s.readCommit(ctx, mirror, r.ID, sha)
 		if perr != nil {
@@ -221,15 +226,16 @@ func (s *SentinelSource) syncMirror(ctx context.Context, r *repo.GitRepo, cloneU
 		}
 		if !ok {
 			skipped++
-			continue
+		} else {
+			inserted++
+			s.emit(ctx, result.RunID, "info", "commit_new",
+				fmt.Sprintf("%s %s", shortSHA(sha), commit.Subject), map[string]interface{}{"commit_id": id})
 		}
-		inserted++
-		s.emit(ctx, result.RunID, "info", "commit_new",
-			fmt.Sprintf("%s %s", shortSHA(sha), commit.Subject), map[string]interface{}{"commit_id": id})
+		lastPersisted = sha
 	}
 
-	if len(shas) > 0 {
-		_ = s.store.MarkRepoChecked(ctx, r.ID, shas[len(shas)-1], "")
+	if lastPersisted != "" {
+		_ = s.store.MarkRepoChecked(ctx, r.ID, lastPersisted, "")
 	}
 	return found, inserted, skipped, nil
 }

@@ -175,6 +175,25 @@ export default function SentinelCommitDetailPage() {
         )}
       </Card>
 
+      {(data?.findings?.length ?? 0) > 0 && (
+        <Card className="border-border/60" title={`发现（${data!.findings.length}）`}>
+          <div className="space-y-3">
+            {data!.findings.map((finding) => (
+              <div key={finding.id} className="rounded-lg border border-border/40 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Tag color="red">{finding.vuln_class}</Tag>
+                  <Tag color={severityColor[finding.severity] ?? 'default'}>{finding.severity}</Tag>
+                  <Tag>{finding.status}</Tag>
+                  <span className="ml-auto font-mono text-xs text-muted-foreground">{finding.repo_full_name}</span>
+                </div>
+                <div className="mt-2 font-mono text-sm">{finding.title}</div>
+                <p className="mt-1 text-sm leading-6 text-muted-foreground">{finding.detail}</p>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
       <Card className="border-border/60" title="原始 diff">
         <DiffPanel diff={commit?.diff} />
       </Card>
