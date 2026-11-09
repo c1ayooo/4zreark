@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -462,6 +463,11 @@ func main() {
 		log.Printf("[GitHubLeak] 监控初始化失败（不阻塞启动）: %v", err)
 	} else {
 		gm.Start(context.Background())
+	}
+
+	// 可选 pprof（ZRE_PPROF=1 时开在 127.0.0.1:6060，排查挂起用）
+	if os.Getenv("ZRE_PPROF") == "1" {
+		go func() { _ = http.ListenAndServe("127.0.0.1:6060", nil) }()
 	}
 
 	// Initialize WebSocket hub for real-time data

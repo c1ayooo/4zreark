@@ -148,6 +148,12 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 
 				// 模型接入（LLM）：判定与对话共用同一份配置，密钥加密落库，保存即生效
 				llmSettingsHandler := api.NewLLMSettingsHandler()
+				// GitHub Token 池（多条轮询，采集认证用）
+				githubTokenHandler := api.NewGitHubTokenHandler()
+				protected.GET("/github/tokens", middleware.RequirePermission("settings:read"), githubTokenHandler.List)
+				protected.POST("/github/tokens", middleware.RequirePermission("settings:write"), githubTokenHandler.Add)
+				protected.DELETE("/github/tokens/:id", middleware.RequirePermission("settings:write"), githubTokenHandler.Delete)
+
 				protected.GET("/llm/settings", middleware.RequirePermission("settings:write"), llmSettingsHandler.Get)
 				protected.PUT("/llm/settings", middleware.RequirePermission("settings:write"), llmSettingsHandler.Save)
 				protected.POST("/llm/settings/test", middleware.RequirePermission("settings:write"), llmSettingsHandler.Test)

@@ -184,13 +184,21 @@ func (s *SentinelSource) syncMirror(ctx context.Context, r *repo.GitRepo, cloneU
 		return 0, 0, 0, fmt.Errorf("创建 mirror 目录失败: %w", err)
 	}
 
+	// GitHub token 池轮询：认证走 http.extraheader（token 只在单次命令行，
+	// 不落 mirror 的 remote 配置）；池为空回退匿名克隆。
+	authArgs := GitHubTokenAuthArgs(ctx)
+
 	if _, statErr := os.Stat(mirror); statErr != nil {
-		if _, gitErr := runGit(ctx, "", "clone", "--bare", "--quiet", cloneURL, mirror); gitErr != nil {
+		args := append([]string{}, authArgs...)
+		args = append(args, "clone", "--bare", "--quiet", cloneURL, mirror)
+		if _, gitErr := runGit(ctx, "", args...); gitErr != nil {
 			return 0, 0, 0, gitErr
 		}
 	} else {
-		if _, gitErr := runGit(ctx, mirror, "fetch", "--prune", "--quiet", "origin",
-			"+refs/heads/*:refs/heads/*"); gitErr != nil {
+		args := append([]string{}, authArgs...)
+		args = append(args, "fetch", "--prune", "--quiet", "origin",
+			"+refs/heads/*:refs/heads/*")
+		if _, gitErr := runGit(ctx, mirror, args...); gitErr != nil {
 			return 0, 0, 0, gitErr
 		}
 	}

@@ -15,9 +15,10 @@ import { MCPAccessPanel } from '@/components/settings/MCPAccessPanel'
 import { MCPGovernancePanel } from './components/MCPGovernancePanel'
 import { ToolRuntimePanel } from '@/components/settings/ToolRuntimePanel'
 import { ProxyPanel } from '@/components/settings/ProxyPanel'
+import { GitHubTokenPanel } from '@/components/settings/GitHubTokenPanel'
 import { LLMSettingsPanel } from '@/components/settings/LLMSettingsPanel'
 import DatasourceSessionsTab from '@/components/settings/DatasourceSessionsTab'
-import { Moon, Sun, Monitor, Palette, User, Lock, Key, CheckCircle, XCircle, Plug, Database, Plus, Trash2, Gauge, Globe, ShieldCheck, Sparkles } from 'lucide-react'
+import { Moon, Sun, Monitor, Palette, User, Lock, Key, KeyRound, CheckCircle, XCircle, Plug, Database, Plus, Trash2, Gauge, Globe, ShieldCheck, Sparkles } from 'lucide-react'
 
 export default function SettingsPage() {
   const confirm = useConfirm()
@@ -716,6 +717,16 @@ export default function SettingsPage() {
                     </span>
                   ),
                   children: <ProxyPanel />,
+                },
+                {
+                  key: 'github-tokens',
+                  label: (
+                    <span className="flex items-center gap-2">
+                      <KeyRound className="h-4 w-4" />
+                      GitHub Token
+                    </span>
+                  ),
+                  children: <GitHubTokenPanel />,
                 },
                 {
                   key: 'datasource-sessions',
