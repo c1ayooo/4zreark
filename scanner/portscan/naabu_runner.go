@@ -37,13 +37,16 @@ type naabuJSON struct {
 	Port     int    `json:"port"`
 	Protocol string `json:"protocol"`
 	TLS      bool   `json:"tls"`
+	// State 只在部分 naabu 版本/参数下出现；有值时只接受 open，
+	// 避免 CDN/全响应目标把 filtered/closed 也当成开放端口。
+	State string `json:"state"`
 }
 
 // NewNaabuScanner 创建 naabu 扫描器。路径统一由 toolruntime 解析。
 func NewNaabuScanner() *NaabuScanner {
 	return &NaabuScanner{
 		BinPath:  toolruntime.Default().ResolveToolPath("naabu"),
-		Rate:     1000,
+		Rate:     500,
 		Threads:  25,
 		Timeout:  3,
 		TempDir:  datadir.TmpDir(),
@@ -123,6 +126,10 @@ func (n *NaabuScanner) buildArgs(target, ports, outPath string) []string {
 		"-silent",
 		"-no-color",
 		"-scan-type", scanType,
+		// 对 CDN/WAF 只扫 80/443，避免 1-1000 全响应导致 997 端口误报；
+		// -verify 再做一次 TCP 复核。
+		"-exclude-cdn",
+		"-verify",
 		"-o", outPath,
 	}
 	if n.Rate > 0 {
@@ -161,6 +168,9 @@ func parseNaabuFile(path string) ([]core.PortResult, error) {
 			continue
 		}
 		if item.Port <= 0 || item.Port > 65535 || seen[item.Port] {
+			continue
+		}
+		if item.State != "" && item.State != "open" {
 			continue
 		}
 		seen[item.Port] = true

@@ -126,6 +126,8 @@ def main():
             "漏洞验证默认关闭，本次未复测漏洞；vulnerabilities 为空表示未执行，不代表已修复",
             "外部工具 gogo/katana/spray/nuclei/httpx/naabu 在本机未安装，端口/爬虫/目录结果可能降级或缺失",
             "raw_records 未由扫描任务写入，分阶段编排所需 raw 快照为空",
+            "JSAudit 因 nuclei keys 规则目录缺失被跳过（data/bin/nuclei/custom-templates/keys）",
+            "gogo/spray 已复制到 data/tools/linux；本轮若在任务启动后才重启，部分模块可能仍走旧路径",
         ],
     }
     with open(DIFF, "w", encoding="utf-8") as f:

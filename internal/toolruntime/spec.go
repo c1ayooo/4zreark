@@ -172,7 +172,8 @@ var Specs = []ToolSpec{
 
 		// scanner/portscan/naabu_runner.go buildArgs；connect 模式不需要 root。
 		RequiredFlags: []string{"-host", "-p", "-json", "-silent", "-o",
-			"-rate", "-c", "-timeout", "-scan-type", "-no-color"},
+			"-rate", "-c", "-timeout", "-scan-type", "-no-color",
+			"-verify", "-exclude-cdn"},
 		AutoUpdateByDefault: true,
 	},
 	{
