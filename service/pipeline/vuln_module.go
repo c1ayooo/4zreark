@@ -586,7 +586,7 @@ func vulnFindingsMessage(found []VulnResult) *notify.NotifyMessage {
 		fmt.Fprintf(&b, "\n- ……等共 %d 条", len(filtered))
 	}
 
-	level := notify.NotifyLevelWarning
+	level := notify.NotifyLevelHigh
 	if critical > 0 {
 		level = notify.NotifyLevelCritical
 	}

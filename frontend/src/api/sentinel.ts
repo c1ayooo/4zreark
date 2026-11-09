@@ -85,6 +85,12 @@ export interface SentinelJudgment {
   reasoning: string
   /** 结构化证据：后端是 []string（真实 hunk 头），可能为 null */
   evidence: string[] | null
+  /** 命中安全修复时展开的三段式说明（旧判定为空串） */
+  attack_path: string
+  impact: string
+  fix_evidence: string
+  /** 模型摘录的 diff 关键代码行，可能为 null */
+  evidence_snippets: string[] | null
   partial: boolean
   prompt_tokens: number
   completion_tokens: number
@@ -185,6 +191,10 @@ export interface CommitQuery {
   sha?: string
   /** 只看判定命中的安全修复 */
   security_fix?: boolean
+  /** 漏洞类型多选，逗号分隔（SQLI 自动连带历史 INJECTION） */
+  vuln_class?: string
+  /** 严重度下限：medium/high/critical */
+  min_severity?: string
   since?: string
   until?: string
   page?: number
@@ -194,6 +204,8 @@ export interface CommitQuery {
 export interface FindingQuery {
   status?: string
   severity?: string
+  vuln_class?: string
+  min_severity?: string
   repo_id?: string
   page?: number
   size?: number
@@ -240,6 +252,15 @@ const unwrap = <T>(p: Promise<ApiResponse<T>>) => p.then((r) => r.data)
 
 const paged = <T>(p: Promise<SentinelPagedRaw<T>>): Promise<SentinelPaged<T>> =>
   p.then((r) => ({ list: r.data ?? [], total: r.total, page: r.page, size: r.size }))
+
+/** 去掉空串/undefined 的查询参数，避免后端把空串当成有效筛选 */
+function compactSentinelQuery(q: FindingQuery): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(q)) {
+    if (typeof v === 'string' ? v !== '' : v != null) out[k] = String(v)
+  }
+  return out
+}
 
 /** responseType:'blob' 时 4xx/5xx 的 JSON 错误体也是 Blob，转回文本提取 message */
 async function blobErrorMessage(e: unknown, fallback: string): Promise<string> {
@@ -311,6 +332,31 @@ export const sentinelApi = {
 
   findings: (params: FindingQuery = {}) =>
     paged(api.get<unknown, SentinelPagedRaw<SentinelFinding>>('/sentinel/findings', { params })),
+
+  /**
+   * 发现报告导出（md / pdf）：走 api 实例带 Authorization 拿 blob 再触发下载，
+   * 同 downloadArtifact 套路。PDF 后端用 chrome 无头转换，耗时较长。
+   */
+  exportFindings: async (format: 'md' | 'pdf', query: FindingQuery = {}): Promise<void> => {
+    let blob: Blob
+    try {
+      blob = await api.get<unknown, Blob>('/sentinel/findings/export', {
+        params: { format, ...compactSentinelQuery(query) },
+        responseType: 'blob',
+        timeout: 180000,
+      })
+    } catch (e) {
+      throw new Error(await blobErrorMessage(e, '导出失败'))
+    }
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `sentinel-findings-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '')}.${format}`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    window.URL.revokeObjectURL(url)
+  },
 
   /** 流转发现状态（open/confirmed/ignored/resolved）；open→confirmed 时后端自动固化 patch 证据产物 */
   patchFinding: (id: number, status: SentinelFindingStatus) =>

@@ -67,6 +67,11 @@ CREATE TABLE IF NOT EXISTS judgment (
     title             text        NOT NULL DEFAULT '',
     reasoning         text        NOT NULL DEFAULT '',
     evidence          jsonb       NOT NULL DEFAULT '[]'::jsonb,
+    -- 命中安全修复时展开的三段式说明（审计质量增强，migration_sentinel_judge_detail.sql）
+    attack_path       text        NOT NULL DEFAULT '',        -- 攻击路径：入口 → 传播 → 汇聚点
+    impact            text        NOT NULL DEFAULT '',        -- 影响与可利用条件
+    fix_evidence      text        NOT NULL DEFAULT '',        -- 修复消除了攻击链哪一环
+    evidence_snippets jsonb       NOT NULL DEFAULT '[]'::jsonb, -- 模型摘录的 diff 关键代码行（防幻觉校验）
     partial           boolean     NOT NULL DEFAULT false,  -- 模型失败/校验降级时为 true
     prompt_tokens     integer     NOT NULL DEFAULT 0,
     completion_tokens integer     NOT NULL DEFAULT 0,

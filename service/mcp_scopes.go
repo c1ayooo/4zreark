@@ -25,6 +25,11 @@ const (
 	ScopePOCsWrite       = "pocs:write"
 	ScopeEnterpriseRead  = "enterprise:read"
 	ScopeEnterpriseWrite = "enterprise:write"
+	ScopeSentinelRead    = "sentinel:read"
+	ScopeSentinelWrite   = "sentinel:write"
+	// ScopeLLMInvoke 是密钥级「平台模型调用」开关：默认不授，
+	// 授予后才能调用消耗平台自身 LLM 的工具（判定排队、模板生成等）。
+	ScopeLLMInvoke = "llm:invoke"
 )
 
 // ScopeInfo 是设置页渲染权限选项与说明的唯一来源。
@@ -52,6 +57,9 @@ var ScopeCatalog = []ScopeInfo{
 	{ScopePOCsWrite, "改 POC", "POC", "创建/编辑/删除/启停 POC（仅全项目 key）", true},
 	{ScopeEnterpriseRead, "读企业", "企业", "查看企业数据源、深度采集任务状态与采集上限", false},
 	{ScopeEnterpriseWrite, "企业采集", "企业", "发起/取消子公司深度采集、调整采集上限（热更新，立即生效）", true},
+	{ScopeSentinelRead, "读代码审计", "代码审计", "查看哨兵仓库、提交与 diff、判定、发现、复现批次与审计技能（仅全项目 key）", false},
+	{ScopeSentinelWrite, "代码审计", "代码审计", "纳管仓库、触发采集、提交外部判定、挂产物、请求沙箱复现（仅全项目 key）", true},
+	{ScopeLLMInvoke, "调用平台模型", "模型", "调用消耗平台自身 LLM 的工具（内部判定排队、nuclei 模板生成）；默认不授，按密钥单独勾选", true},
 }
 
 // AllScopes 按目录顺序返回全部权限点，供 UI 或校验使用。

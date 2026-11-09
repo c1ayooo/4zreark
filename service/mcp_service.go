@@ -116,6 +116,7 @@ func (s *MCPService) toolRegistry() []mcpToolHandler {
 	out = append(out, s.vulnTools()...)
 	out = append(out, s.pocTools()...)
 	out = append(out, s.enterpriseTools()...)
+	out = append(out, s.sentinelTools()...)
 	return out
 }
 
@@ -319,10 +320,13 @@ func (s *MCPService) initialize(params json.RawMessage) map[string]any {
 			"title":   "4zreark 资产治理与扫描",
 			"version": MCPServerVersion,
 		},
-		"instructions": "按 API key 的权限操作 4zreark：资产/项目/治理/任务/扫描/漏洞/POC。" +
+		"instructions": "按 API key 的权限操作 4zreark：资产/项目/治理/任务/扫描/漏洞/POC/代码审计（sentinel_*）。" +
 			"每个 key 可绑定单个项目，绑定后所有项目内资源只在该项目范围内读写；" +
 			"写操作与扫描工具会在描述中标注，执行前请确认目标与影响。" +
-			"先用 list_projects 确认可访问项目，再按需调用 read/write 工具。",
+			"先用 list_projects 确认可访问项目，再按需调用 read/write 工具。" +
+			"代码审计工作流（自带分析能力，无需平台模型）：sentinel_list_repos → sentinel_list_commits(status=pending) → " +
+			"sentinel_get_commit 读 diff 自行分析 → sentinel_submit_judgment 回写（evidence 引用 hunk 头）→ " +
+			"sentinel_add_artifact 挂 PoC 与 repro-plan → 人工 verified 后 sentinel_request_repro → sentinel_wait_repro 取差分结论。",
 	}
 }
 

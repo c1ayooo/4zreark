@@ -31,13 +31,19 @@ const (
 	NotifyTypeTelegram NotifyType = "telegram"
 )
 
-// NotifyLevel 通知级别
+// NotifyLevel 通知级别。5 档与审计 severity（sentinel/nuclei）1:1 对齐，
+// 渠道 MinLevel 门槛即可精确到「medium 及以上」这类配置。
 type NotifyLevel string
 
 const (
 	NotifyLevelInfo     NotifyLevel = "info"
-	NotifyLevelWarning  NotifyLevel = "warning"
+	NotifyLevelLow      NotifyLevel = "low"
+	NotifyLevelMedium   NotifyLevel = "medium"
+	NotifyLevelHigh     NotifyLevel = "high"
 	NotifyLevelCritical NotifyLevel = "critical"
+	// NotifyLevelWarning 是 3 档时代的中间档，保留作 legacy 别名（rank 同 high），
+	// 存量渠道配置与旧消息不需要迁移。
+	NotifyLevelWarning NotifyLevel = "warning"
 )
 
 // NotifyMessage 通知消息
@@ -281,8 +287,10 @@ func feishuColorByLevel(level NotifyLevel) string {
 	switch level {
 	case NotifyLevelCritical:
 		return "red"
-	case NotifyLevelWarning:
+	case NotifyLevelHigh, NotifyLevelWarning:
 		return "orange"
+	case NotifyLevelMedium:
+		return "yellow"
 	default:
 		return "blue"
 	}
@@ -502,7 +510,7 @@ func (n *WechatNotifier) getColorByLevel(level NotifyLevel) string {
 	switch level {
 	case NotifyLevelCritical:
 		return "warning"
-	case NotifyLevelWarning:
+	case NotifyLevelHigh, NotifyLevelWarning:
 		return "comment"
 	default:
 		return "info"

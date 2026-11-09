@@ -26,6 +26,9 @@ type JudgePrompt struct {
 }
 
 // JudgeVerdict 是模型输出的强类型结果（由 decode 回调产出）。
+//
+// AttackPath/Impact/FixEvidence/Snippets 只在 IsSecurityFix=true 时有意义：
+// 命中时展开「攻击路径 → 影响 → 修复依据」三段式说明，未命中时为空。
 type JudgeVerdict struct {
 	IsSecurityFix bool
 	VulnClass     string
@@ -34,6 +37,10 @@ type JudgeVerdict struct {
 	Title         string
 	Reasoning     string
 	Evidence      []string
+	AttackPath    string
+	Impact        string
+	FixEvidence   string
+	Snippets      []string
 }
 
 // JudgeRunOutput 是判定图的产物。

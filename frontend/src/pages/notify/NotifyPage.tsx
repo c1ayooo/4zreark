@@ -44,6 +44,17 @@ const channelTypeLabels: Record<string, string> = {
   webhook: 'WebHook',
 }
 
+// 渠道最低级别门槛选项：5 档与审计 severity 对齐；warning 是旧版值（同 high），
+// 仅供存量配置回显，重新选择时自然迁移到新档位。
+const minLevelOptions = [
+  { value: '', label: '全部消息' },
+  { value: 'low', label: 'low 及以上' },
+  { value: 'medium', label: 'medium 及以上' },
+  { value: 'high', label: 'high 及以上' },
+  { value: 'critical', label: '仅 critical' },
+  { value: 'warning', label: 'warning 及以上（旧，同 high）' },
+]
+
 // shadcn Badge variant → antd Tag 的主题配色（沿用原 CSS 变量，保持视觉不变）
 const badgeCls = statusTagClass
 export default function NotifyPage() {
@@ -387,11 +398,17 @@ export default function NotifyPage() {
     {
       title: '级别',
       key: 'level',
-      render: (_, item) => (
-        <Tag className={badgeCls(item.message?.level === 'warning' ? 'destructive' : 'outline')}>
-          {item.message?.level}
-        </Tag>
-      ),
+      render: (_, item) => {
+        const level = item.message?.level
+        // critical/high（含旧 warning）醒目，medium 次级，low/info 默认
+        const cls =
+          level === 'critical'
+            ? 'destructive'
+            : level === 'high' || level === 'warning'
+              ? 'secondary'
+              : 'outline'
+        return <Tag className={badgeCls(cls)}>{level}</Tag>
+      },
     },
     {
       title: '状态',
@@ -483,11 +500,7 @@ export default function NotifyPage() {
                             minLevelMutation.mutate({ config, minLevel: value as NotifyConfig['min_level'] })
                           }
                           disabled={minLevelMutation.isPending}
-                          options={[
-                            { value: '', label: '全部消息' },
-                            { value: 'warning', label: 'warning+' },
-                            { value: 'critical', label: '仅 critical' },
-                          ]}
+                          options={minLevelOptions}
                         />
                       </div>
                       <div className="flex items-center justify-end">
@@ -665,11 +678,7 @@ export default function NotifyPage() {
               onChange={(value) =>
                 setNewChannel({ ...newChannel, minLevel: value as NotifyConfig['min_level'] })
               }
-              options={[
-                { value: '', label: '全部消息（info 及以上）' },
-                { value: 'warning', label: 'warning 及以上' },
-                { value: 'critical', label: '仅 critical' },
-              ]}
+              options={minLevelOptions}
             />
             <p className="text-xs text-muted-foreground">
               级别低于门槛的消息不会发到这个渠道，避免普通通知刷屏重要群。

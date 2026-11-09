@@ -45,10 +45,10 @@ func TestVulnFindingsMessageAggregates(t *testing.T) {
 	}
 }
 
-func TestVulnFindingsMessageHighOnlyIsWarning(t *testing.T) {
+func TestVulnFindingsMessageHighOnlyIsHigh(t *testing.T) {
 	msg := vulnFindingsMessage([]VulnResult{{Severity: "high", Name: "H", Target: "x.com"}})
-	if msg == nil || msg.Level != notify.NotifyLevelWarning {
-		t.Fatalf("仅高危时级别应为 warning: %+v", msg)
+	if msg == nil || msg.Level != notify.NotifyLevelHigh {
+		t.Fatalf("仅高危时级别应为 high: %+v", msg)
 	}
 }
 

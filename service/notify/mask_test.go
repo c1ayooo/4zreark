@@ -86,8 +86,8 @@ func TestManagerMasksAndFilters(t *testing.T) {
 func TestManagerChannelMinLevelRouting(t *testing.T) {
 	t.Setenv("ZRE_NOTIFY_MIN_LEVEL", "")
 	m := NewNotifyManager()
-	all := &fakeNotifier{}   // 无门槛渠道：全收
-	crit := &fakeNotifier{}  // min_level=critical：只收 critical
+	all := &fakeNotifier{}  // 无门槛渠道：全收
+	crit := &fakeNotifier{} // min_level=critical：只收 critical
 	m.dispatch = []channelDispatch{
 		{notifier: all},
 		{cfg: NotifyConfig{Name: "critical-only", MinLevel: NotifyLevelCritical}, notifier: crit},
@@ -100,6 +100,49 @@ func TestManagerChannelMinLevelRouting(t *testing.T) {
 	_ = m.Send(context.Background(), &NotifyMessage{Level: NotifyLevelCritical, Title: "c", Content: "x"})
 	if len(crit.msgs) != 1 {
 		t.Fatalf("critical 应到达 critical 渠道，实际 %d", len(crit.msgs))
+	}
+}
+
+func TestChannelLevelAllowedFiveTiers(t *testing.T) {
+	cases := []struct {
+		level string
+		min   string
+		want  bool
+	}{
+		// medium 门槛：medium 及以上放行，low/info 拦下
+		{"medium", "medium", true},
+		{"high", "medium", true},
+		{"critical", "medium", true},
+		{"low", "medium", false},
+		{"info", "medium", false},
+		// low 门槛收 low 及以上；空门槛 = 全收
+		{"low", "low", true},
+		{"info", "low", false},
+		{"info", "", true},
+		// legacy warning 与 high 同级：warning 门槛收 high 不收 medium（3 档时代语义不变）
+		{"high", "warning", true},
+		{"critical", "warning", true},
+		{"medium", "warning", false},
+		{"info", "warning", false},
+		// warning 级消息在 medium 渠道放行（warning≈high ≥ medium）
+		{"warning", "medium", true},
+	}
+	for _, tc := range cases {
+		if got := ChannelLevelAllowed(NotifyLevel(tc.level), NotifyLevel(tc.min)); got != tc.want {
+			t.Errorf("ChannelLevelAllowed(%s, %s) = %v, want %v", tc.level, tc.min, got, tc.want)
+		}
+	}
+}
+
+func TestNotifyLevelFilterFiveTiers(t *testing.T) {
+	t.Setenv("ZRE_NOTIFY_MIN_LEVEL", "medium")
+	if NotifyLevelAllowed(NotifyLevelInfo) || NotifyLevelAllowed(NotifyLevelLow) {
+		t.Fatal("info/low 应被过滤")
+	}
+	for _, l := range []NotifyLevel{NotifyLevelMedium, NotifyLevelHigh, NotifyLevelCritical} {
+		if !NotifyLevelAllowed(l) {
+			t.Fatalf("%s 应放行", l)
+		}
 	}
 }
 

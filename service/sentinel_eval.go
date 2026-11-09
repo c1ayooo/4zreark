@@ -99,7 +99,7 @@ func (e *SentinelEvaluator) Evaluate(ctx context.Context, commit *repo.GitCommit
 			Evidence:  []string{},
 		}
 	}
-	verdict = applyEvidenceCheck(verdict, HunkHeaders(files))
+	verdict = applyEvidenceCheck(verdict, HunkHeaders(files), DiffLines(files))
 
 	return &EvalOutcome{Pack: pack, Run: run, Verdict: verdict, Partial: partial}, nil
 }

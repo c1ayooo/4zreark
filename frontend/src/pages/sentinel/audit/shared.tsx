@@ -150,6 +150,57 @@ export function SeverityTag({ severity }: { severity: string }) {
   )
 }
 
+/**
+ * 漏洞类型中文标签（与后端 service/sentinel_export.go 的 VulnClassLabels 对齐）。
+ * SQLI/CMDI 历史上落在 INJECTION 桶，后端筛选时自动连带，这里只管展示。
+ */
+export const VULN_CLASS_LABELS: Record<string, string> = {
+  OOB_READ: '越界读',
+  OOB_WRITE: '越界写',
+  UAF: '释放后使用',
+  DOUBLE_FREE: '双重释放',
+  BUFFER_OVERFLOW: '缓冲区溢出',
+  INTEGER_OVERFLOW: '整数溢出',
+  NULL_DEREF: '空指针解引用',
+  TYPE_CONFUSION: '类型混淆',
+  RACE: '竞态条件',
+  SQLI: 'SQL注入',
+  CMDI: '命令注入',
+  RCE: '远程代码执行',
+  INJECTION: '其它注入',
+  SSRF: '服务端请求伪造',
+  XXE: 'XML外部实体',
+  PATH_TRAVERSAL: '路径穿越',
+  DESERIALIZATION: '反序列化',
+  AUTH_BYPASS: '认证绕过',
+  PRIV_ESC: '权限提升',
+  INFO_LEAK: '信息泄露',
+  DOS: '拒绝服务',
+  OTHER: '其它',
+}
+
+export const vulnClassLabel = (cls?: string | null) =>
+  (cls && VULN_CLASS_LABELS[cls.toUpperCase()]) || cls || ''
+
+/** 筛选下拉的选项口径（与后端枚举一致） */
+export const VULN_CLASS_OPTIONS = Object.entries(VULN_CLASS_LABELS).map(([value, label]) => ({
+  value,
+  label: `${label}（${value}）`,
+}))
+
+/** 漏洞类型标签：中文为主、枚举值小字兜底 */
+export function VulnClassTag({ vulnClass }: { vulnClass?: string | null }) {
+  if (!vulnClass) return <span className="text-[10.5px] text-muted-foreground">—</span>
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[11px] font-medium text-violet-700 dark:border-violet-900 dark:bg-violet-950/50 dark:text-violet-300"
+      title={vulnClass}
+    >
+      {vulnClassLabel(vulnClass)}
+    </span>
+  )
+}
+
 const COMMIT_STATUS: Record<string, Tone> = {
   pending: { label: '待判定', cls: 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300' },
   judged: { label: '已判定', cls: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-300' },

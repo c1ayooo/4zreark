@@ -12,9 +12,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
-import { Button, Drawer, Input, Popconfirm, Select, Table, Tooltip } from 'antd'
+import { Button, Drawer, Dropdown, Input, Popconfirm, Select, Table, Tooltip } from 'antd'
 import type { TableProps } from 'antd'
-import { Play, Search, Sparkles } from 'lucide-react'
+import { Download, FileText, Play, Search, Sparkles } from 'lucide-react'
 import { sentinelApi, type SentinelCommit, type SentinelFindingStatus } from '@/api/sentinel'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors'
@@ -28,6 +28,8 @@ import {
   PageHeader,
   SeverityTag,
   VerdictTag,
+  VULN_CLASS_OPTIONS,
+  VulnClassTag,
   fmtNumber,
   fmtTime,
 } from './shared'
@@ -38,6 +40,15 @@ const STATUS_OPTIONS = [
   { value: 'judged', label: '已判定' },
   { value: 'skipped', label: '已跳过' },
   { value: 'failed', label: '失败' },
+]
+
+/** 严重度下限（min_severity）：「高危」= high + critical 一起命中 */
+const MIN_SEVERITY_OPTIONS = [
+  { value: '', label: '全部严重度' },
+  { value: 'critical', label: '仅严重（critical）' },
+  { value: 'high', label: '高危及以上' },
+  { value: 'medium', label: '中危及以上' },
+  { value: 'low', label: '低危及以上' },
 ]
 
 /** evidence 是 []string（真实 hunk 头），后端会对不上 hunk 的结论降权。 */
@@ -54,6 +65,8 @@ export default function AnalysisResultsPage() {
   const [repoId, setRepoId] = useState('')
   const [status, setStatus] = useState('')
   const [onlyFix, setOnlyFix] = useState(false)
+  const [vulnClasses, setVulnClasses] = useState<string[]>([])
+  const [minSeverity, setMinSeverity] = useState('')
   const [sha, setSha] = useState('')
   const [page, setPage] = useState(1)
   const [size, setSize] = useState(20)
@@ -72,12 +85,14 @@ export default function AnalysisResultsPage() {
   const repos = reposQuery.data?.items ?? []
 
   const commitsQuery = useQuery({
-    queryKey: ['sentinel', 'commits', { repoId, status, onlyFix, sha, page, size }],
+    queryKey: ['sentinel', 'commits', { repoId, status, onlyFix, vulnClasses, minSeverity, sha, page, size }],
     queryFn: () =>
       sentinelApi.commits({
         repo_id: repoId || undefined,
         status: status || undefined,
         security_fix: onlyFix || undefined,
+        vuln_class: vulnClasses.length ? vulnClasses.join(',') : undefined,
+        min_severity: minSeverity || undefined,
         sha: sha.trim() || undefined,
         page,
         size,
@@ -131,6 +146,20 @@ export default function AnalysisResultsPage() {
       toast({ title: '生成失败', description: getErrorMessage(e), variant: 'destructive', duration: 6 }),
   })
 
+  /** 导出当前筛选下的发现报告：PDF 走后端 chrome 无头转换，耗时较长 */
+  const exportMutation = useMutation({
+    mutationFn: (format: 'md' | 'pdf') =>
+      sentinelApi.exportFindings(format, {
+        vuln_class: vulnClasses.length ? vulnClasses.join(',') : undefined,
+        min_severity: minSeverity || undefined,
+        repo_id: repoId || undefined,
+        status: undefined,
+      }),
+    onSuccess: () => toast({ title: '报告已导出' }),
+    onError: (e: Error) =>
+      toast({ title: '导出失败', description: e?.message, variant: 'destructive', duration: 6 }),
+  })
+
   const openDetail = (id: number) => {
     setActiveId(id)
     const next = new URLSearchParams(searchParams)
@@ -172,9 +201,7 @@ export default function AnalysisResultsPage() {
       render: (_, r) => (
         <div className="flex flex-col items-start gap-1">
           <VerdictTag judged={r.judged} isSecurityFix={r.is_security_fix} />
-          {r.judged && r.vuln_class && (
-            <span className="font-mono text-[10px] text-muted-foreground">{r.vuln_class}</span>
-          )}
+          {r.judged && r.vuln_class && <VulnClassTag vulnClass={r.vuln_class} />}
         </div>
       ),
     },
@@ -248,6 +275,7 @@ export default function AnalysisResultsPage() {
 
   const judgment = detail?.judgment ?? null
   const evidence = evidenceList(judgment?.evidence)
+  const snippets = evidenceList(judgment?.evidence_snippets)
   const findings = detail?.findings ?? []
 
   return (
@@ -331,6 +359,47 @@ export default function AnalysisResultsPage() {
         >
           只看安全修复
         </Button>
+        <Select
+          mode="multiple"
+          value={vulnClasses}
+          onChange={(v) => {
+            setVulnClasses(v)
+            setPage(1)
+          }}
+          className="min-w-[220px]"
+          maxTagCount={2}
+          allowClear
+          placeholder="漏洞类型"
+          options={VULN_CLASS_OPTIONS}
+          optionFilterProp="label"
+        />
+        <Select
+          value={minSeverity}
+          onChange={(v) => {
+            setMinSeverity(v)
+            setPage(1)
+          }}
+          className="w-[150px]"
+          options={MIN_SEVERITY_OPTIONS}
+        />
+        <Dropdown
+          menu={{
+            items: [
+              { key: 'md', icon: <FileText size={12} />, label: '导出 Markdown' },
+              { key: 'pdf', icon: <Download size={12} />, label: '导出 PDF' },
+            ],
+            onClick: ({ key }) => exportMutation.mutate(key as 'md' | 'pdf'),
+          }}
+        >
+          <Button
+            size="small"
+            icon={<Download size={12} />}
+            loading={exportMutation.isPending}
+            className="text-[11px]"
+          >
+            导出报告
+          </Button>
+        </Dropdown>
         <Input
           value={sha}
           onChange={(e) => {
@@ -467,19 +536,41 @@ export default function AnalysisResultsPage() {
                     <>
                       {judgment.title && (
                         <div className="mt-1.5 text-[11.5px] text-secondary-foreground">
-                          <span className="text-muted-foreground">组件：</span>
-                          <span className="font-mono">{judgment.title}</span>
+                          <span className="text-muted-foreground">标题：</span>
+                          <span className="font-medium text-foreground">{judgment.title}</span>
                           {judgment.vuln_class && (
-                            <>
-                              <span className="ml-2 text-muted-foreground">类型：</span>
-                              <span className="font-mono">{judgment.vuln_class}</span>
-                            </>
+                            <span className="ml-2 inline-flex translate-y-[1px] items-center">
+                              <VulnClassTag vulnClass={judgment.vuln_class} />
+                            </span>
                           )}
                         </div>
                       )}
                       <div className="mt-1.5 text-[11.5px] leading-relaxed text-secondary-foreground">
                         {judgment.reasoning || '模型未给出理由'}
                       </div>
+                      {/* 三段式说明：旧判定无这些字段，全部为空时不渲染区块 */}
+                      {(judgment.attack_path || judgment.impact || judgment.fix_evidence) && (
+                        <div className="mt-2 space-y-1.5 border-t border-border pt-2">
+                          {judgment.attack_path && (
+                            <div className="text-[11.5px] leading-relaxed text-secondary-foreground">
+                              <span className="font-medium text-foreground">攻击路径：</span>
+                              {judgment.attack_path}
+                            </div>
+                          )}
+                          {judgment.impact && (
+                            <div className="text-[11.5px] leading-relaxed text-secondary-foreground">
+                              <span className="font-medium text-foreground">影响：</span>
+                              {judgment.impact}
+                            </div>
+                          )}
+                          {judgment.fix_evidence && (
+                            <div className="text-[11.5px] leading-relaxed text-secondary-foreground">
+                              <span className="font-medium text-foreground">修复依据：</span>
+                              {judgment.fix_evidence}
+                            </div>
+                          )}
+                        </div>
+                      )}
                       <div className="mt-1.5 flex items-center gap-2 text-[10px] text-muted-foreground">
                         <span className="font-mono">
                           tokens {judgment.prompt_tokens}+{judgment.completion_tokens}
@@ -525,6 +616,24 @@ export default function AnalysisResultsPage() {
                       无 evidence（判为非安全修复，或模型未给出可对齐的 hunk）
                     </div>
                   )}
+                  {/* 模型摘录的关键代码行：后端校验对不上真实 diff 会降权 */}
+                  {snippets.length > 0 && (
+                    <div className="mt-2 border-t border-border pt-2">
+                      <div className="mb-1 text-[10.5px] text-muted-foreground">
+                        关键代码摘录 {snippets.length} 段
+                      </div>
+                      <div className="space-y-1">
+                        {snippets.map((snip, i) => (
+                          <pre
+                            key={i}
+                            className="m-0 max-h-32 overflow-auto rounded-lg border border-border bg-muted/30 px-2 py-1 font-mono text-[10.5px] leading-relaxed text-secondary-foreground"
+                          >
+                            {snip}
+                          </pre>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="rounded-xl border border-border bg-card px-3 py-2.5">
@@ -539,7 +648,7 @@ export default function AnalysisResultsPage() {
                           <div className="flex flex-wrap items-center gap-1.5">
                             <span className="text-[11.5px] font-medium text-foreground">{f.title}</span>
                             <SeverityTag severity={f.severity} />
-                            <span className="font-mono text-[10px] text-muted-foreground">{f.vuln_class}</span>
+                            <VulnClassTag vulnClass={f.vuln_class} />
                             <span className="ml-auto flex items-center gap-1.5">
                               <Popconfirm
                                 title="生成 nuclei 模板？"

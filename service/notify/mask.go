@@ -42,8 +42,8 @@ func MaskSensitive(s string) string {
 	return s
 }
 
-// NotifyLevelAllowed 按 ZRE_NOTIFY_MIN_LEVEL（info/warning/critical，默认 info）
-// 过滤通知级别；未知值按 info 处理。
+// NotifyLevelAllowed 按 ZRE_NOTIFY_MIN_LEVEL（info/low/medium/high/critical，
+// 兼容旧 warning；默认全收）过滤通知级别；未知值按 info 处理。
 func NotifyLevelAllowed(level NotifyLevel) bool {
 	min := strings.ToLower(strings.TrimSpace(os.Getenv("ZRE_NOTIFY_MIN_LEVEL")))
 	if min == "" {
@@ -53,7 +53,7 @@ func NotifyLevelAllowed(level NotifyLevel) bool {
 }
 
 // ChannelLevelAllowed 判断消息级别是否达到渠道门槛。min 为空或非法 = 全收。
-// 分级路由靠它：比如 critical 渠道只收 critical，warning 渠道收 warning 及以上。
+// 分级路由靠它：比如 critical 渠道只收 critical，medium 渠道收 medium 及以上。
 func ChannelLevelAllowed(level, min NotifyLevel) bool {
 	min = NotifyLevel(strings.ToLower(strings.TrimSpace(string(min))))
 	if min == "" {
@@ -62,11 +62,17 @@ func ChannelLevelAllowed(level, min NotifyLevel) bool {
 	return levelRank(level) >= levelRank(min)
 }
 
+// levelRank 5 档排序，与审计 severity 1:1；legacy warning 与 high 同级
+// （3 档时代 warning 门槛收 high+critical，语义不变）。
 func levelRank(l NotifyLevel) int {
 	switch l {
 	case NotifyLevelCritical:
+		return 4
+	case NotifyLevelHigh, NotifyLevelWarning:
+		return 3
+	case NotifyLevelMedium:
 		return 2
-	case NotifyLevelWarning:
+	case NotifyLevelLow:
 		return 1
 	default:
 		return 0

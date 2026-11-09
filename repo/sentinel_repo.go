@@ -88,11 +88,14 @@ type CommitListItem struct {
 }
 
 // CommitFilter 是提交列表的筛选条件，零值表示不限制。
+// VulnClasses 走「扩展口径」：传 SQLI/CMDI 会自动连带历史数据里的 INJECTION。
 type CommitFilter struct {
 	RepoID          string
 	SHA             string
 	Status          string
 	OnlySecurityFix bool
+	VulnClasses     []string
+	MinSeverity     string // info/low/medium/high/critical，语义为「不低于」
 	Since           *time.Time
 	Until           *time.Time
 	Page            int
@@ -101,16 +104,22 @@ type CommitFilter struct {
 
 // CommitJudgment 是一次模型判定。同一 (commit, model) 只允许一条。
 type CommitJudgment struct {
-	ID               int64           `json:"id"`
-	CommitID         int64           `json:"commit_id"`
-	Model            string          `json:"model"`
-	IsSecurityFix    bool            `json:"is_security_fix"`
-	VulnClass        string          `json:"vuln_class"`
-	Severity         string          `json:"severity"`
-	Confidence       float64         `json:"confidence"`
-	Title            string          `json:"title"`
-	Reasoning        string          `json:"reasoning"`
-	Evidence         json.RawMessage `json:"evidence"`
+	ID            int64           `json:"id"`
+	CommitID      int64           `json:"commit_id"`
+	Model         string          `json:"model"`
+	IsSecurityFix bool            `json:"is_security_fix"`
+	VulnClass     string          `json:"vuln_class"`
+	Severity      string          `json:"severity"`
+	Confidence    float64         `json:"confidence"`
+	Title         string          `json:"title"`
+	Reasoning     string          `json:"reasoning"`
+	Evidence      json.RawMessage `json:"evidence"`
+	// 命中安全修复时展开的三段式说明与摘录片段（migration_sentinel_judge_detail.sql），
+	// 旧判定记录为空值，前端需做空值兼容。
+	AttackPath       string          `json:"attack_path"`
+	Impact           string          `json:"impact"`
+	FixEvidence      string          `json:"fix_evidence"`
+	Snippets         json.RawMessage `json:"evidence_snippets"`
 	Partial          bool            `json:"partial"`
 	PromptTokens     int             `json:"prompt_tokens"`
 	CompletionTokens int             `json:"completion_tokens"`
@@ -359,9 +368,10 @@ func (s *Sentinel) GetCommitBySHA(ctx context.Context, repoID, sha string) (*Git
 }
 
 // buildCommitWhere 生成提交列表的 where 子句与参数（$n 从 1 开始）。
+// VulnClasses/MinSeverity 条件作用在 lateral join 出的判定摘要 j 上。
 func buildCommitWhere(f CommitFilter) (string, []interface{}) {
-	conds := make([]string, 0, 6)
-	args := make([]interface{}, 0, 6)
+	conds := make([]string, 0, 8)
+	args := make([]interface{}, 0, 8)
 
 	if f.RepoID != "" {
 		args = append(args, f.RepoID)
@@ -386,10 +396,53 @@ func buildCommitWhere(f CommitFilter) (string, []interface{}) {
 	if f.OnlySecurityFix {
 		conds = append(conds, "coalesce(j.is_security_fix, false)")
 	}
+	if len(f.VulnClasses) > 0 {
+		args = append(args, ExpandVulnClasses(f.VulnClasses))
+		conds = append(conds, fmt.Sprintf("coalesce(j.vuln_class, '') = any($%d)", len(args)))
+	}
+	if min := severityFloor(f.MinSeverity); len(min) > 0 {
+		args = append(args, min)
+		conds = append(conds, fmt.Sprintf("coalesce(j.severity, '') = any($%d)", len(args)))
+	}
 	if len(conds) == 0 {
 		return "", args
 	}
 	return " where " + strings.Join(conds, " and "), args
+}
+
+// ExpandVulnClasses 把筛选口径扩展成实际查询口径：
+// SQLI/CMDI 历史上落在 INJECTION 桶里，选中时自动连带，避免老数据查不到。
+// 返回值已去重、归一为大写。
+func ExpandVulnClasses(classes []string) []string {
+	seen := make(map[string]bool, len(classes)+2)
+	out := make([]string, 0, len(classes)+2)
+	add := func(v string) {
+		v = strings.ToUpper(strings.TrimSpace(v))
+		if v == "" || seen[v] {
+			return
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	for _, c := range classes {
+		add(c)
+		switch strings.ToUpper(strings.TrimSpace(c)) {
+		case "SQLI", "CMDI":
+			add("INJECTION")
+		}
+	}
+	return out
+}
+
+// severityFloor 把「不低于 X」翻译成允许的 severity 集合；非法值返回 nil（不过滤）。
+func severityFloor(min string) []string {
+	rank := map[string]int{"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+	r, ok := rank[strings.ToLower(strings.TrimSpace(min))]
+	if !ok {
+		return nil
+	}
+	byRank := []string{"info", "low", "medium", "high", "critical"}
+	return byRank[r:]
 }
 
 // latestJudgmentJoin 取每条提交 id 最大的判定作为列表摘要。
@@ -489,15 +542,21 @@ func (s *Sentinel) InsertJudgment(ctx context.Context, j *CommitJudgment) (int64
 	if len(evidence) == 0 {
 		evidence = json.RawMessage("[]")
 	}
+	snippets := j.Snippets
+	if len(snippets) == 0 {
+		snippets = json.RawMessage("[]")
+	}
 	var id int64
 	err := s.pool().QueryRow(ctx, `
 		insert into judgment (commit_id, model, is_security_fix, vuln_class, severity, confidence,
-		                      title, reasoning, evidence, partial, prompt_tokens, completion_tokens)
-		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		                      title, reasoning, evidence, attack_path, impact, fix_evidence,
+		                      evidence_snippets, partial, prompt_tokens, completion_tokens)
+		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 		on conflict (commit_id, model) do nothing
 		returning id`,
 		j.CommitID, j.Model, j.IsSecurityFix, j.VulnClass, j.Severity, j.Confidence,
-		j.Title, j.Reasoning, evidence, j.Partial, j.PromptTokens, j.CompletionTokens,
+		j.Title, j.Reasoning, evidence, j.AttackPath, j.Impact, j.FixEvidence,
+		snippets, j.Partial, j.PromptTokens, j.CompletionTokens,
 	).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, false, nil
@@ -509,12 +568,14 @@ func (s *Sentinel) InsertJudgment(ctx context.Context, j *CommitJudgment) (int64
 }
 
 const judgmentColumns = `id, commit_id, model, is_security_fix, vuln_class, severity,
-	confidence::float8, title, reasoning, evidence, partial, prompt_tokens, completion_tokens, created_at`
+	confidence::float8, title, reasoning, evidence, attack_path, impact, fix_evidence,
+	evidence_snippets, partial, prompt_tokens, completion_tokens, created_at`
 
 func scanJudgment(row pgx.Row) (*CommitJudgment, error) {
 	var j CommitJudgment
 	err := row.Scan(&j.ID, &j.CommitID, &j.Model, &j.IsSecurityFix, &j.VulnClass, &j.Severity,
-		&j.Confidence, &j.Title, &j.Reasoning, &j.Evidence, &j.Partial,
+		&j.Confidence, &j.Title, &j.Reasoning, &j.Evidence, &j.AttackPath, &j.Impact,
+		&j.FixEvidence, &j.Snippets, &j.Partial,
 		&j.PromptTokens, &j.CompletionTokens, &j.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -529,6 +590,34 @@ func scanJudgment(row pgx.Row) (*CommitJudgment, error) {
 func (s *Sentinel) GetJudgment(ctx context.Context, commitID int64) (*CommitJudgment, error) {
 	return scanJudgment(s.pool().QueryRow(ctx,
 		`select `+judgmentColumns+` from judgment where commit_id = $1 order by id desc limit 1`, commitID))
+}
+
+// GetJudgmentByModel 取某条提交在指定模型名下的判定。
+// 判定以 (commit_id, model) 幂等，内部 judge 与外部 agent 提交（model=agent:*）互为独立判定，
+// 「已判定过」的判断必须按模型维度做，否则外部判定会挡住内部重判路径。
+func (s *Sentinel) GetJudgmentByModel(ctx context.Context, commitID int64, model string) (*CommitJudgment, error) {
+	return scanJudgment(s.pool().QueryRow(ctx,
+		`select `+judgmentColumns+` from judgment where commit_id = $1 and model = $2 limit 1`, commitID, model))
+}
+
+// ListJudgmentsByCommit 列出某条提交的全部判定（内部模型与外部 agent 并列），按 id 倒序。
+func (s *Sentinel) ListJudgmentsByCommit(ctx context.Context, commitID int64) ([]*CommitJudgment, error) {
+	rows, err := s.pool().Query(ctx,
+		`select `+judgmentColumns+` from judgment where commit_id = $1 order by id desc`, commitID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]*CommitJudgment, 0, 2)
+	for rows.Next() {
+		j, err := scanJudgment(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, j)
+	}
+	return items, rows.Err()
 }
 
 // LatestJudgments 取最近判定（总览页）。
@@ -588,12 +677,15 @@ func (s *Sentinel) ListFindingsByCommit(ctx context.Context, commitID int64) ([]
 }
 
 // FindingFilter 是发现列表（跨仓库）的筛选条件，零值表示不限制。
+// VulnClasses 走「扩展口径」（见 ExpandVulnClasses）；MinSeverity 语义为「不低于」。
 type FindingFilter struct {
-	Status   string
-	Severity string
-	RepoID   string
-	Page     int
-	Size     int
+	Status      string
+	Severity    string
+	VulnClasses []string
+	MinSeverity string
+	RepoID      string
+	Page        int
+	Size        int
 }
 
 // FindingListItem 是发现列表行：带上来源提交与仓库，便于从产物回溯到改动。
@@ -616,7 +708,7 @@ func (s *Sentinel) ListFindings(ctx context.Context, f FindingFilter) ([]*Findin
 		f.Page = 1
 	}
 
-	conds := make([]string, 0, 3)
+	conds := make([]string, 0, 5)
 	args := make([]interface{}, 0, 5)
 	if f.Status != "" {
 		args = append(args, f.Status)
@@ -625,6 +717,14 @@ func (s *Sentinel) ListFindings(ctx context.Context, f FindingFilter) ([]*Findin
 	if f.Severity != "" {
 		args = append(args, f.Severity)
 		conds = append(conds, fmt.Sprintf("f.severity = $%d", len(args)))
+	}
+	if len(f.VulnClasses) > 0 {
+		args = append(args, ExpandVulnClasses(f.VulnClasses))
+		conds = append(conds, fmt.Sprintf("f.vuln_class = any($%d)", len(args)))
+	}
+	if min := severityFloor(f.MinSeverity); len(min) > 0 {
+		args = append(args, min)
+		conds = append(conds, fmt.Sprintf("f.severity = any($%d)", len(args)))
 	}
 	if f.RepoID != "" {
 		args = append(args, f.RepoID)
@@ -669,6 +769,92 @@ func (s *Sentinel) ListFindings(ctx context.Context, f FindingFilter) ([]*Findin
 		items = append(items, &it)
 	}
 	return items, total, rows.Err()
+}
+
+// FindingExportRow 是导出报告的一行：finding 全字段 + 来源提交/仓库 + 判定详情。
+type FindingExportRow struct {
+	CommitFinding
+	RepoID       string          `json:"repo_id"`
+	RepoFullName string          `json:"repo_full_name"`
+	SHA          string          `json:"sha"`
+	Subject      string          `json:"subject"`
+	CommittedAt  time.Time       `json:"committed_at"`
+	Model        string          `json:"model"`
+	Confidence   float64         `json:"confidence"`
+	Reasoning    string          `json:"reasoning"`
+	AttackPath   string          `json:"attack_path"`
+	Impact       string          `json:"impact"`
+	FixEvidence  string          `json:"fix_evidence"`
+	Snippets     json.RawMessage `json:"evidence_snippets"`
+}
+
+// ListFindingsForExport 导出用批量查询（不分页）：沿用 FindingFilter 条件，
+// 按 severity 从高到低排，单次最多 limit 行，防止一次导出把内存打爆。
+func (s *Sentinel) ListFindingsForExport(ctx context.Context, f FindingFilter, limit int) ([]*FindingExportRow, error) {
+	if limit <= 0 || limit > 2000 {
+		limit = 500
+	}
+	// 复用 ListFindings 的条件拼装：借一次假分页调用不划算，这里直接内联同样逻辑。
+	conds := make([]string, 0, 5)
+	args := make([]interface{}, 0, 5)
+	if f.Status != "" {
+		args = append(args, f.Status)
+		conds = append(conds, fmt.Sprintf("f.status = $%d", len(args)))
+	}
+	if f.Severity != "" {
+		args = append(args, f.Severity)
+		conds = append(conds, fmt.Sprintf("f.severity = $%d", len(args)))
+	}
+	if len(f.VulnClasses) > 0 {
+		args = append(args, ExpandVulnClasses(f.VulnClasses))
+		conds = append(conds, fmt.Sprintf("f.vuln_class = any($%d)", len(args)))
+	}
+	if min := severityFloor(f.MinSeverity); len(min) > 0 {
+		args = append(args, min)
+		conds = append(conds, fmt.Sprintf("f.severity = any($%d)", len(args)))
+	}
+	if f.RepoID != "" {
+		args = append(args, f.RepoID)
+		conds = append(conds, fmt.Sprintf("c.repo_id = $%d", len(args)))
+	}
+	where := ""
+	if len(conds) > 0 {
+		where = " where " + strings.Join(conds, " and ")
+	}
+
+	args = append(args, limit)
+	rows, err := s.pool().Query(ctx, `
+		select f.id, f.commit_id, f.judgment_id, f.vuln_class, f.severity, f.status,
+		       f.title, f.detail, f.created_at, f.updated_at, f.verified_at, f.verified_by,
+		       c.repo_id, coalesce(r.full_name, ''), c.sha, c.subject, c.committed_at,
+		       coalesce(j.model, ''), coalesce(j.confidence, 0)::float8,
+		       coalesce(j.reasoning, ''), coalesce(j.attack_path, ''),
+		       coalesce(j.impact, ''), coalesce(j.fix_evidence, ''),
+		       coalesce(j.evidence_snippets, '[]'::jsonb)
+		  from finding f
+		  join commit c on c.id = f.commit_id
+		  left join repo r on r.id = c.repo_id
+		  left join judgment j on j.id = f.judgment_id`+where+`
+		 order by array_position(array['critical','high','medium','low','info'], f.severity), f.created_at desc
+		 limit $`+fmt.Sprint(len(args)), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]*FindingExportRow, 0, 64)
+	for rows.Next() {
+		var it FindingExportRow
+		if err := rows.Scan(&it.ID, &it.CommitID, &it.JudgmentID, &it.VulnClass, &it.Severity, &it.Status,
+			&it.Title, &it.Detail, &it.CreatedAt, &it.UpdatedAt, &it.VerifiedAt, &it.VerifiedBy,
+			&it.RepoID, &it.RepoFullName, &it.SHA, &it.Subject, &it.CommittedAt,
+			&it.Model, &it.Confidence, &it.Reasoning, &it.AttackPath,
+			&it.Impact, &it.FixEvidence, &it.Snippets); err != nil {
+			return nil, err
+		}
+		items = append(items, &it)
+	}
+	return items, rows.Err()
 }
 
 // CommitArtifact 是 finding 的产物：PoC 源码、nuclei 模板、patch 证据、复现日志。

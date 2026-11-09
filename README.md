@@ -92,6 +92,9 @@
 
 - 插件管理、通知管理（站内 / 邮件 / 飞书群 Webhook / 企业应用机器人）。
 - 用户与角色、审计日志、API Key、MCP 接入与治理（工具开关、限流）。
+- MCP 工具面覆盖信息收集与代码审计（sentinel_*）：外部 agent（Claude Code / Cursor 等）
+  自带智能调用平台审计——读提交 diff、回写判定、请求沙箱复现，全部走密钥权限；
+  `llm:invoke` 按密钥控制是否可消耗平台自身 LLM。接入见 [docs/mcp-agent-guide.md](docs/mcp-agent-guide.md)。
 - 系统设置：出网代理（全局 + 模块级）、保留策略、TLS/HTTPS、公开注册开关。
 
 ---

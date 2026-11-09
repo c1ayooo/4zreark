@@ -540,14 +540,19 @@ func (m *NotifyManager) TestNotifier(config NotifyConfig) error {
 	return notifier.Send(ctx, msg)
 }
 
-// NotifyVulnerability 发送漏洞通知
+// NotifyVulnerability 发送漏洞通知。severity（nuclei 5 档）1:1 传给通知级别，
+// 渠道 MinLevel 门槛可精确到「medium 及以上」。
 func (m *NotifyManager) NotifyVulnerability(vulnName, target, severity, details string) {
 	level := NotifyLevelInfo
-	switch severity {
-	case "critical", "high":
+	switch strings.ToLower(strings.TrimSpace(severity)) {
+	case "critical":
 		level = NotifyLevelCritical
+	case "high":
+		level = NotifyLevelHigh
 	case "medium":
-		level = NotifyLevelWarning
+		level = NotifyLevelMedium
+	case "low":
+		level = NotifyLevelLow
 	}
 
 	msg := &NotifyMessage{

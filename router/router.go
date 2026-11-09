@@ -772,6 +772,8 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 
 				// 产物：判定命中后落地的发现（跨仓库分页）
 				sentinelGroup.GET("/findings", middleware.RequirePermission("sentinel:read"), sentinelHandler.ListFindings)
+				// 发现报告导出（md / pdf）：静态段需注册在 /findings/:id 之前，gin 静态优先
+				sentinelGroup.GET("/findings/export", middleware.RequirePermission("sentinel:read"), sentinelHandler.ExportFindings)
 				// 发现生命周期 + 产物链（§11.8）：状态流转 / 产物 CRUD / AI 生成 / 下载闸门 / 发布 PoC 库
 				sentinelGroup.PATCH("/findings/:id", middleware.RequirePermission("sentinel:write"), sentinelHandler.PatchFinding)
 				sentinelGroup.POST("/findings/:id/repro", middleware.RequirePermission("sentinel:write"), sentinelHandler.ReproFinding)

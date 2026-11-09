@@ -31,6 +31,7 @@ const READ_SCOPES = [
   'tasks:read',
   'vulns:read',
   'pocs:read',
+  'sentinel:read',
 ]
 
 const OPS_SCOPES = [
@@ -49,6 +50,9 @@ const SCOPE_PRESETS = [
   { label: '资产只读', scopes: ['assets:read'] },
   { label: '全部只读', scopes: READ_SCOPES },
   { label: '运维', scopes: OPS_SCOPES },
+  // 外部 agent 自带智能做代码审计：读写哨兵域即可，不含平台模型额度。
+  { label: '代码审计', scopes: ['sentinel:read', 'sentinel:write'] },
+  { label: '审计+平台模型', scopes: ['sentinel:read', 'sentinel:write', 'llm:invoke'] },
   { label: '完全控制', scopes: MCP_SCOPES.map((s) => s.name) },
 ]
 
@@ -300,8 +304,9 @@ export function MCPAccessPanel() {
                 ，或 <code className="font-mono">X-API-Key: &lt;API key&gt;</code>
               </p>
               <p>
-                工具按 key 权限开放：资产、项目、治理、任务、扫描、漏洞、POC。
-                写操作与扫描会修改平台数据或发起真实网络流量，请只授予可信平台。
+                工具按 key 权限开放：资产、项目、治理、任务、扫描、漏洞、POC、代码审计。
+                写操作与扫描会修改平台数据或发起真实网络流量，请只授予可信平台；
+                「调用平台模型」允许消耗平台自身 LLM 额度，默认不授。
               </p>
             </div>
           </div>
@@ -425,7 +430,7 @@ export function MCPAccessPanel() {
             )}
             {projectID !== '0' && (
               <p className="text-muted-foreground text-xs">
-                漏洞/POC 权限只对「全部项目」的 key 生效；绑定项目的 key 即使勾选也无法调用。
+                漏洞/POC/代码审计权限只对「全部项目」的 key 生效；绑定项目的 key 即使勾选也无法调用。
               </p>
             )}
           </div>

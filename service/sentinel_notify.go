@@ -16,13 +16,18 @@ import (
 	"github.com/c1ayooo/4zreark/service/notify"
 )
 
-// notifyLevelBySeverity 把判定 severity 映射到通知级别：critical→红、high→橙、其余 info。
+// notifyLevelBySeverity 把判定 severity 映射到通知级别：5 档 1:1 传递，
+// 渠道侧 MinLevel 即可按「medium 及以上」这类门槛精确过滤。
 func notifyLevelBySeverity(severity string) notify.NotifyLevel {
 	switch strings.ToLower(strings.TrimSpace(severity)) {
 	case "critical":
 		return notify.NotifyLevelCritical
 	case "high":
-		return notify.NotifyLevelWarning
+		return notify.NotifyLevelHigh
+	case "medium":
+		return notify.NotifyLevelMedium
+	case "low":
+		return notify.NotifyLevelLow
 	default:
 		return notify.NotifyLevelInfo
 	}

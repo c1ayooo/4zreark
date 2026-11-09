@@ -20,15 +20,21 @@ import (
 // 编排交给 eino 的 compose.Graph（service/sentinel_judge_graph.go），模型交给
 // eino-ext 的 openai ChatModel（internal/llm）。本文件只负责：
 //   - 判定 prompt 与装箱输入；
-//   - 输出解析与 17 项 vuln_class 枚举校验（decode 回调，图内会拿错误重试）；
-//   - evidence 对 hunk header 的防幻觉校验与置信度打折；
+//   - 输出解析与 vuln_class 枚举校验（decode 回调，图内会拿错误重试）；
+//   - evidence/evidence_snippets 对 diff 的防幻觉校验与置信度打折；
 //   - 落库幂等（judgment 表 UNIQUE(commit_id, model)）与 finding 生成。
 
-// SentinelVulnClasses 是文档 §7.4 规定的 17 个枚举值。
+// SentinelVulnClasses 是判定输出的漏洞类型枚举。
+//
+// INJECTION 拆分历史：SQL 注入 / 命令注入 / 远程代码执行原先全部挤在 INJECTION
+// 一个桶里，前端没法按「SQL 注入」「RCE」筛选。拆出 SQLI / CMDI / RCE 三个
+// 枚举后，INJECTION 保留给 SSTI / LDAP / 表达式注入等其余注入形态。
+// 历史数据不回填：筛选 SQLI/CMDI 时后端自动把 INJECTION 一并算进（见 repo 层）。
 var SentinelVulnClasses = []string{
 	"OOB_READ", "OOB_WRITE", "UAF", "DOUBLE_FREE", "BUFFER_OVERFLOW", "INTEGER_OVERFLOW",
-	"NULL_DEREF", "TYPE_CONFUSION", "RACE", "INJECTION", "SSRF", "XXE", "PATH_TRAVERSAL",
-	"DESERIALIZATION", "AUTH_BYPASS", "PRIV_ESC", "INFO_LEAK", "DOS", "OTHER",
+	"NULL_DEREF", "TYPE_CONFUSION", "RACE", "SQLI", "CMDI", "RCE", "INJECTION",
+	"SSRF", "XXE", "PATH_TRAVERSAL", "DESERIALIZATION", "AUTH_BYPASS", "PRIV_ESC",
+	"INFO_LEAK", "DOS", "OTHER",
 }
 
 var sentinelVulnClassSet = func() map[string]bool {
@@ -43,28 +49,46 @@ var sentinelSeveritySet = map[string]bool{
 	"info": true, "low": true, "medium": true, "high": true, "critical": true,
 }
 
-const sentinelJudgeSystemPrompt = `你是资深安全研究员，任务是判断一个 Git 提交是否是「安全漏洞修复」。
+const sentinelJudgeSystemPrompt = `你是资深安全研究员，任务是审计一个 Git 提交：判断它是否在修复安全漏洞，并给出可复核、可交付的结论。
 
 只输出一个 JSON 对象，不要解释，不要 markdown 代码块。字段：
 {
   "is_security_fix": true/false,
   "vuln_class": 枚举值,
-  "confidence": 0~1 的小数,
   "severity": "info|low|medium|high|critical",
-  "component": "文件:函数",
-  "reasoning": "一句话说明为什么",
-  "evidence": ["@@ -142,7 +142,9 @@ ..."]
+  "confidence": 0~1 的小数,
+  "title": "描述性漏洞标题",
+  "attack_path": "攻击路径：入口 → 传播 → 汇聚点",
+  "impact": "影响与可利用条件",
+  "fix_evidence": "修复 diff 消除了攻击链哪一环",
+  "reasoning": "2~4 句结论与关键依据",
+  "evidence": ["@@ -142,7 +142,9 @@ ..."],
+  "evidence_snippets": ["+ \tif (attacker_len > sizeof(buf)) { ... }"]
 }
 
 规则：
 1. vuln_class 只能取以下之一：OOB_READ OOB_WRITE UAF DOUBLE_FREE BUFFER_OVERFLOW
-   INTEGER_OVERFLOW NULL_DEREF TYPE_CONFUSION RACE INJECTION SSRF XXE PATH_TRAVERSAL
-   DESERIALIZATION AUTH_BYPASS PRIV_ESC INFO_LEAK DOS OTHER。
-2. 判断为安全修复时，evidence 必须逐字复制 diff 中真实的 hunk 头（以 @@ 开头的那一行）；
-   抄不出真实 hunk 头的结论会被降权。
-3. 判断为「不是安全修复」时 evidence 返回空数组。
-4. 普通重构、加日志、改注释、性能优化、依赖升级都不算安全修复。
-5. 只依据给出的 diff 判断，不要臆测未展示的代码。`
+   INTEGER_OVERFLOW NULL_DEREF TYPE_CONFUSION RACE SQLI CMDI RCE INJECTION SSRF XXE
+   PATH_TRAVERSAL DESERIALIZATION AUTH_BYPASS PRIV_ESC INFO_LEAK DOS OTHER。
+   SQLI=SQL 注入；CMDI=命令注入；RCE=远程代码/命令执行（含反序列化、模板注入等
+   直接落到代码执行的形态）；INJECTION=其余注入（SSTI、LDAP、表达式注入等）。
+2. severity 按可利用性判定，不要凭感觉：
+   critical=远程可达且直接 RCE 或完整认证绕过；high=远程可利用的注入/反序列化/
+   越界写/SSRF 打内网；medium=需要特定前置条件或影响有限（越界读、信息泄露、DoS）；
+   low/info=防御性问题或实际几乎不可利用。
+3. is_security_fix=true 时必须完整给出：
+   - title：一句可读的漏洞标题（组件 + 后果），不要只写「文件:函数」；
+   - attack_path：从外部入口到危险 sink 的完整路径，标注文件/函数；
+   - impact：攻击者在什么条件下能造成什么后果；
+   - fix_evidence：说明 diff 到底修掉了攻击链哪一环（校验/过滤/白名单/边界检查）；
+   - evidence_snippets：从 diff 原样摘录 2~4 段关键 +/- 代码行，每段不超过 5 行，
+     逐字复制，不许改写、缩写或编造。
+   is_security_fix=false 时上述五个字段分别返回空字符串/空数组，reasoning 一句话即可。
+4. evidence 必须逐字复制 diff 中真实的 hunk 头（以 @@ 开头的那一行）；
+   抄不出真实 hunk 头、或摘录的代码行在 diff 里不存在，结论会被降权。
+5. 普通重构、加日志、改注释、性能优化、依赖升级都不算安全修复。
+6. 只依据给出的 diff 判断，不要臆测未展示的代码；证据不足时降低 confidence，
+   不要编造细节来凑完整度。`
 
 // SentinelJudge 负责单条提交的判定与落库。
 // 判定编排本身在 SentinelEvaluator（filter → prep → eino graph），这里只管持久化。
@@ -140,8 +164,12 @@ func (j *SentinelJudge) Judge(ctx context.Context, commitID int64) (judgment *re
 	if err != nil {
 		return nil, err
 	}
-	if existing, err := j.store.GetJudgment(ctx, commit.ID); err == nil && existing != nil {
-		return existing, nil
+	// 「永不重判」按模型维度判断：外部 agent 经 MCP 提交的判定（model=agent:*）
+	// 与内部判定在 UNIQUE(commit_id, model) 下并列共存，谁也不能把谁顶掉或挡住。
+	if eval, evalErr := j.currentEvaluator(ctx); evalErr == nil {
+		if existing, err := j.store.GetJudgmentByModel(ctx, commit.ID, eval.ModelName()); err == nil && existing != nil {
+			return existing, nil
+		}
 	}
 
 	runID, runErr := j.store.CreateRun(ctx, &repo.SentinelRun{
@@ -216,6 +244,7 @@ func (j *SentinelJudge) Judge(ctx context.Context, commitID int64) (judgment *re
 	partial := outcome.Partial
 
 	evidenceJSON, _ := json.Marshal(verdict.Evidence)
+	snippetsJSON, _ := json.Marshal(verdict.Snippets)
 	judgment = &repo.CommitJudgment{
 		CommitID:         commit.ID,
 		Model:            eval.ModelName(),
@@ -226,6 +255,10 @@ func (j *SentinelJudge) Judge(ctx context.Context, commitID int64) (judgment *re
 		Title:            verdict.Title,
 		Reasoning:        verdict.Reasoning,
 		Evidence:         evidenceJSON,
+		AttackPath:       verdict.AttackPath,
+		Impact:           verdict.Impact,
+		FixEvidence:      verdict.FixEvidence,
+		Snippets:         snippetsJSON,
 		Partial:          partial,
 		PromptTokens:     out.PromptTokens,
 		CompletionTokens: out.CompletionTokens,
@@ -236,10 +269,10 @@ func (j *SentinelJudge) Judge(ctx context.Context, commitID int64) (judgment *re
 		return nil, err
 	}
 	if !inserted {
-		// 并发下另一个 worker 已经写入：以库里那条为准。
+		// 并发下另一个 worker 已经写入：以库里该模型那条为准。
 		emit("info", "judge_skipped", "并发重复判定，以库里记录为准", nil)
 		finishRun("completed", 0, "")
-		return j.store.GetJudgment(ctx, commit.ID)
+		return j.store.GetJudgmentByModel(ctx, commit.ID, eval.ModelName())
 	}
 	judgment.ID = id
 
@@ -289,13 +322,18 @@ func (j *SentinelJudge) Judge(ctx context.Context, commitID int64) (judgment *re
 // 返回的错误会被图回灌给模型，触发一次重试。
 func decodeJudgeVerdict(content string) (*JudgeVerdict, error) {
 	var raw struct {
-		IsSecurityFix bool     `json:"is_security_fix"`
-		VulnClass     string   `json:"vuln_class"`
-		Confidence    float64  `json:"confidence"`
-		Severity      string   `json:"severity"`
-		Component     string   `json:"component"`
-		Reasoning     string   `json:"reasoning"`
-		Evidence      []string `json:"evidence"`
+		IsSecurityFix    bool     `json:"is_security_fix"`
+		VulnClass        string   `json:"vuln_class"`
+		Confidence       float64  `json:"confidence"`
+		Severity         string   `json:"severity"`
+		Title            string   `json:"title"`
+		Component        string   `json:"component"`
+		AttackPath       string   `json:"attack_path"`
+		Impact           string   `json:"impact"`
+		FixEvidence      string   `json:"fix_evidence"`
+		Reasoning        string   `json:"reasoning"`
+		Evidence         []string `json:"evidence"`
+		EvidenceSnippets []string `json:"evidence_snippets"`
 	}
 	if err := json.Unmarshal([]byte(stripJSONFence(content)), &raw); err != nil {
 		return nil, fmt.Errorf("JSON 解析失败: %v", err)
@@ -329,12 +367,21 @@ func decodeJudgeVerdict(content string) (*JudgeVerdict, error) {
 	if evidence == nil {
 		evidence = []string{}
 	}
+	snippets := raw.EvidenceSnippets
+	if snippets == nil {
+		snippets = []string{}
+	}
 
-	title := strings.TrimSpace(raw.Component)
+	// 旧 prompt 时代用 component 当标题；新 prompt 直接给 title，两者兼容。
+	title := strings.TrimSpace(raw.Title)
+	if title == "" {
+		title = strings.TrimSpace(raw.Component)
+	}
 	if title == "" {
 		title = vulnClass
 	}
-	return &JudgeVerdict{
+
+	v := &JudgeVerdict{
 		IsSecurityFix: raw.IsSecurityFix,
 		VulnClass:     vulnClass,
 		Severity:      severity,
@@ -342,14 +389,31 @@ func decodeJudgeVerdict(content string) (*JudgeVerdict, error) {
 		Title:         title,
 		Reasoning:     strings.TrimSpace(raw.Reasoning),
 		Evidence:      evidence,
-	}, nil
+	}
+	if raw.IsSecurityFix {
+		// 三段式说明只在命中时保留；未命中时模型可能仍抄了 diff 细节，丢弃以免误导。
+		v.AttackPath = strings.TrimSpace(raw.AttackPath)
+		v.Impact = strings.TrimSpace(raw.Impact)
+		v.FixEvidence = strings.TrimSpace(raw.FixEvidence)
+		v.Snippets = snippets
+	}
+	return v, nil
 }
 
-// applyEvidenceCheck 校验 evidence 是否真的对得上 hunk 头；对不上则置信度减半。
-func applyEvidenceCheck(v *JudgeVerdict, hunkHeaders []string) *JudgeVerdict {
+// applyEvidenceCheck 校验证据是否真的对得上 diff：
+//   - evidence 必须能对上真实 hunk 头；
+//   - evidence_snippets 摘录的代码行必须在 diff 里逐字存在。
+//
+// 任一项全军覆没则置信度减半，防止模型编造"看起来很像"的证据。
+func applyEvidenceCheck(v *JudgeVerdict, hunkHeaders []string, diffLines []string) *JudgeVerdict {
 	if v == nil || !v.IsSecurityFix || len(hunkHeaders) == 0 {
 		return v
 	}
+	diminish := func(reason string) {
+		v.Confidence = math.Round(v.Confidence*0.5*1000) / 1000
+		v.Reasoning = strings.TrimSpace(v.Reasoning + "（" + reason + "，置信度已减半）")
+	}
+
 	matched := 0
 	for _, ev := range v.Evidence {
 		if evidenceMatches(ev, hunkHeaders) {
@@ -357,8 +421,12 @@ func applyEvidenceCheck(v *JudgeVerdict, hunkHeaders []string) *JudgeVerdict {
 		}
 	}
 	if matched == 0 {
-		v.Confidence = math.Round(v.Confidence*0.5*1000) / 1000
-		v.Reasoning = strings.TrimSpace(v.Reasoning + "（evidence 无法对上真实 hunk，置信度已减半）")
+		diminish("evidence 无法对上真实 hunk")
+	}
+
+	// snippets 为空不算作弊（旧判定没有该字段）；给了但全部对不上才算编造。
+	if len(v.Snippets) > 0 && !snippetsMatchDiff(v.Snippets, diffLines) {
+		diminish("evidence_snippets 摘录的代码行不在 diff 中")
 	}
 	return v
 }
@@ -376,6 +444,37 @@ func evidenceMatches(evidence string, hunkHeaders []string) bool {
 		}
 	}
 	return false
+}
+
+// snippetsMatchDiff 判断摘录片段是否至少有一条能在 diff 中逐字找到。
+// 多行片段折叠成一行（空白归一）后做子串匹配：模型常把相邻行合并摘录。
+func snippetsMatchDiff(snippets, diffLines []string) bool {
+	hay := normalizeSpace(strings.Join(diffLines, " "))
+	if hay == "" {
+		return false
+	}
+	for _, snip := range snippets {
+		needle := normalizeSpace(snip)
+		if needle != "" && strings.Contains(hay, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// DiffLines 取出 diff 中全部 +/- 变更行（含前缀符号），供 evidence_snippets 防幻觉校验。
+func DiffLines(files []FileChange) []string {
+	lines := make([]string, 0, 64)
+	for _, f := range files {
+		for _, h := range f.Hunks {
+			for _, l := range h.Lines {
+				if strings.HasPrefix(l, "+") || strings.HasPrefix(l, "-") {
+					lines = append(lines, l)
+				}
+			}
+		}
+	}
+	return lines
 }
 
 func normalizeSpace(s string) string {

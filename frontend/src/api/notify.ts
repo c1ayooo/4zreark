@@ -5,8 +5,8 @@ export interface NotifyConfig {
   type: 'dingtalk' | 'feishu' | 'wechat' | 'email' | 'webhook' | 'telegram'
   enabled: boolean
   name: string
-  /** 渠道最低接收级别：低于门槛的消息跳过该渠道；空 = 全收 */
-  min_level?: '' | 'info' | 'warning' | 'critical'
+  /** 渠道最低接收级别：低于门槛的消息跳过该渠道；空 = 全收（warning 为旧版值，等同 high） */
+  min_level?: '' | 'info' | 'low' | 'medium' | 'high' | 'warning' | 'critical'
   // DingTalk
   dingtalk_webhook?: string
   dingtalk_secret?: string

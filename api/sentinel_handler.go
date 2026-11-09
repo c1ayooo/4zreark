@@ -235,6 +235,8 @@ func (h *SentinelHandler) ListCommits(c *gin.Context) {
 		SHA:             strings.TrimSpace(c.Query("sha")),
 		Status:          status,
 		OnlySecurityFix: c.Query("security_fix") == "true" || c.Query("judged") == "hit",
+		VulnClasses:     parseVulnClasses(c.Query("vuln_class")),
+		MinSeverity:     strings.TrimSpace(c.Query("min_severity")),
 		Page:            page,
 		Size:            size,
 	}
@@ -289,7 +291,8 @@ func (h *SentinelHandler) GetCommit(c *gin.Context) {
 	})
 }
 
-// JudgeCommit 手动触发判定排队（已判定过的提交永不重判）。
+// JudgeCommit 手动触发判定排队。「永不重判」按模型维度在 Judge() 内判断：
+// 外部 agent 经 MCP 提交的判定（model=agent:*）不算内部已判，不挡内部重判排队。
 func (h *SentinelHandler) JudgeCommit(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -298,10 +301,6 @@ func (h *SentinelHandler) JudgeCommit(c *gin.Context) {
 	}
 	if _, err := h.store.GetCommit(c.Request.Context(), id); err != nil {
 		utils.NotFound(c, "提交不存在")
-		return
-	}
-	if existing, err := h.store.GetJudgment(c.Request.Context(), id); err == nil && existing != nil {
-		utils.SuccessWithMessage(c, "该提交已判定，按规则永不重判", existing)
 		return
 	}
 	q := service.DefaultSentinelQueue()
@@ -368,11 +367,13 @@ func (h *SentinelHandler) ListFindings(c *gin.Context) {
 		size = 20
 	}
 	items, total, err := h.store.ListFindings(c.Request.Context(), repo.FindingFilter{
-		Status:   strings.TrimSpace(c.Query("status")),
-		Severity: strings.TrimSpace(c.Query("severity")),
-		RepoID:   strings.TrimSpace(c.Query("repo_id")),
-		Page:     page,
-		Size:     size,
+		Status:      strings.TrimSpace(c.Query("status")),
+		Severity:    strings.TrimSpace(c.Query("severity")),
+		VulnClasses: parseVulnClasses(c.Query("vuln_class")),
+		MinSeverity: strings.TrimSpace(c.Query("min_severity")),
+		RepoID:      strings.TrimSpace(c.Query("repo_id")),
+		Page:        page,
+		Size:        size,
 	})
 	if err != nil {
 		utils.InternalError(c, "查询发现失败: "+err.Error())
@@ -382,6 +383,37 @@ func (h *SentinelHandler) ListFindings(c *gin.Context) {
 		items = []*repo.FindingListItem{}
 	}
 	utils.SuccessWithPagination(c, items, total, page, size)
+}
+
+// parseVulnClasses 解析逗号分隔的 vuln_class 筛选参数（如 vuln_class=SQLI,RCE）。
+func parseVulnClasses(raw string) []string {
+	var out []string
+	for _, v := range strings.Split(raw, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// ExportFindings 导出发现报告（md / pdf）。
+// 复用列表筛选参数；PDF 依赖本机 chrome/chromium，缺失时报错提示改用 md。
+func (h *SentinelHandler) ExportFindings(c *gin.Context) {
+	filter := repo.FindingFilter{
+		Status:      strings.TrimSpace(c.Query("status")),
+		Severity:    strings.TrimSpace(c.Query("severity")),
+		VulnClasses: parseVulnClasses(c.Query("vuln_class")),
+		MinSeverity: strings.TrimSpace(c.Query("min_severity")),
+		RepoID:      strings.TrimSpace(c.Query("repo_id")),
+	}
+	name, mime, body, err := service.ExportSentinelFindings(c.Request.Context(), filter, c.Query("format"))
+	if err != nil {
+		utils.InternalError(c, "导出失败: "+err.Error())
+		return
+	}
+	h.audit(c, "finding.export", name, map[string]interface{}{"format": c.Query("format"), "bytes": len(body)})
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
+	c.Data(200, mime, body)
 }
 
 // audit 记录一次写操作；失败只打日志，不影响主流程。

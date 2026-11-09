@@ -46,6 +46,9 @@ export const MCP_SCOPES: MCPScopeInfo[] = [
   { name: 'pocs:write', label: '改 POC', group: 'POC', description: '创建/编辑/删除/启停 POC（仅全项目 key）', dangerous: true },
   { name: 'enterprise:read', label: '读企业', group: '企业', description: '查看企业数据源、深度采集任务状态与采集上限', dangerous: false },
   { name: 'enterprise:write', label: '企业采集', group: '企业', description: '发起/取消子公司深度采集、调整采集上限（热更新，立即生效）', dangerous: true },
+  { name: 'sentinel:read', label: '读代码审计', group: '代码审计', description: '查看哨兵仓库、提交与 diff、判定、发现、复现批次与审计技能（仅全项目 key）', dangerous: false },
+  { name: 'sentinel:write', label: '代码审计', group: '代码审计', description: '纳管仓库、触发采集、提交外部判定、挂产物、请求沙箱复现（仅全项目 key）', dangerous: true },
+  { name: 'llm:invoke', label: '调用平台模型', group: '模型', description: '调用消耗平台自身 LLM 的工具（内部判定排队、nuclei 模板生成）；默认不授，按密钥单独勾选', dangerous: true },
 ]
 
 export const MCP_SCOPE_GROUPS = Array.from(new Set(MCP_SCOPES.map((s) => s.group)))
