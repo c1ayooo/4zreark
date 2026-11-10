@@ -385,7 +385,8 @@ func NewSentinelReproClient(ctx context.Context, pool *pgxpool.Pool, repro *Repr
 	client, err := river.NewClient(driver, &river.Config{
 		MaxAttempts:          2,
 		JobTimeout:           40 * time.Minute,
-		RescueStuckJobsAfter: 30 * time.Minute,
+		// River 要求 Rescue > JobTimeout，否则整个客户端拒绝启动。
+		RescueStuckJobsAfter: 50 * time.Minute,
 		Workers:              workers,
 		Queues: map[string]river.QueueConfig{
 			// 验证类作业一次只跑一个：两个队列都单 worker，另有进程级
