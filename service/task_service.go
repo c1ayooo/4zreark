@@ -676,6 +676,56 @@ func (s *TaskService) ResetTaskRun(taskID string) error {
 	return tx.Commit(ctx)
 }
 
+// RequeueOrphanedScanJobs 把服务重启后遗留的 running River 作业重新置为 available。
+// 只处理任务状态仍为 running 且超过 olderThan 没有心跳的作业，避免抢占正在跑的任务。
+// 置 available 时清空 unique_key：旧的唯一键仍被原作业占用，直接改状态会撞唯一索引。
+func (s *TaskService) RequeueOrphanedScanJobs(ctx context.Context, olderThan time.Duration) (int64, error) {
+	r := repo.Default()
+	if r == nil || r.Pool() == nil {
+		return 0, nil
+	}
+	if olderThan < time.Minute {
+		olderThan = time.Minute
+	}
+	tag, err := r.Pool().Exec(ctx, `
+		update zre.river_job j
+		   set unique_key = null,
+		       state = 'available',
+		       attempt = 0,
+		       errors = null,
+		       attempted_at = null,
+		       finalized_at = null,
+		       scheduled_at = now()
+		  from zre.tasks t
+		 where j.kind = 'scan_task'
+		   and j.state = 'running'
+		   and j.args->>'task_id' = t.id::text
+		   and t.status = 'running'
+		   and t.updated_at < now() - ($1::int * interval '1 second')`,
+		int(olderThan.Seconds()))
+	if err != nil {
+		return 0, err
+	}
+	if tag.RowsAffected() == 0 {
+		return 0, nil
+	}
+	// 旧执行器的 executor_id 还占着认领，新进程 claim 会失败；一并清掉。
+	if _, err := r.Pool().Exec(ctx, `
+		update zre.tasks t
+		   set executor_id = ''
+		 where t.status = 'running'
+		   and t.updated_at < now() - ($1::int * interval '1 second')
+		   and exists (
+		       select 1 from zre.river_job j
+		        where j.kind = 'scan_task'
+		          and j.state = 'available'
+		          and j.args->>'task_id' = t.id::text
+		   )`, int(olderThan.Seconds())); err != nil {
+		return tag.RowsAffected(), err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // enqueueScan 把扫描任务放进 River。River 未初始化时退回旧的 task_jobs 实现，
 // 仅用于测试/工具进程；生产启动时 main 会保证 ScanQueue 就绪。
 func (s *TaskService) enqueueScan(ctx context.Context, task *models.Task, jobs repo.JobRepo) error {

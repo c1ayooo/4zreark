@@ -630,6 +630,15 @@ func (e *TaskExecutor) reaper() {
 		case <-e.stopCh:
 			return
 		case <-ticker.C:
+			// 服务重启后 River 的 running 作业不会被新进程自动领回；
+			// 任务心跳超过 3 分钟未更新时，把对应作业重置为 available 再消费。
+			if ts, ok := e.taskService.(*TaskService); ok {
+				if n, err := ts.RequeueOrphanedScanJobs(context.Background(), 3*time.Minute); err != nil {
+					log.Printf("[TaskExecutor] 重新入队孤儿扫描作业失败: %v", err)
+				} else if n > 0 {
+					log.Printf("[TaskExecutor] 重新入队 %d 个孤儿扫描作业", n)
+				}
+			}
 			n, err := e.jobs.Reap(context.Background(), 50)
 			if err != nil {
 				log.Printf("[TaskExecutor] Reap error: %v", err)
