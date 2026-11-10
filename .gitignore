@@ -2,6 +2,8 @@
 frontend/node_modules/
 frontend/dist/
 /4zreark
+/app
+/sentinel-seed
 /fpmine
 /score-backfill
 *.exe
@@ -57,5 +59,5 @@ dist/
 /pocsmith
 
 # 运行时导出与数据库转储（含敏感数据）不入库
-reports/
+/reports/
 *.dump
