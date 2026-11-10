@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -169,6 +170,10 @@ func (s remoteAssetStore) ReportLearning(ctx context.Context, task *models.Task,
 type runningTask struct {
 	cancelFunc context.CancelFunc
 	pipeline   *pipeline.StreamingPipeline
+	// watchdog 活动检测：模块 processed/output/overall 任一变化都算活动。
+	lastSignature string
+	lastActivity  time.Time
+	stallWarned   bool
 }
 
 // MaxNodeWorkers 是节点并发上限的硬上限，防止误配把单机拖垮。
@@ -346,6 +351,10 @@ func (e *TaskExecutor) Start() {
 	e.wg.Add(1)
 	go e.reaper()
 
+	// 任务级 watchdog：进度/模块产生量连续无变化时，先告警再取消。
+	e.wg.Add(1)
+	go e.watchdog()
+
 	log.Printf("[TaskExecutor] 维护循环已启动（node=%q, river max_workers=%d）", e.nodeName, e.workers)
 }
 
@@ -376,8 +385,9 @@ func (e *TaskExecutor) registerRunningTask(taskID string, cancelFunc context.Can
 		return false
 	}
 	e.runningTasks[taskID] = &runningTask{
-		cancelFunc: cancelFunc,
-		pipeline:   pipe,
+		cancelFunc:   cancelFunc,
+		pipeline:     pipe,
+		lastActivity: time.Now(),
 	}
 	return true
 }
@@ -422,6 +432,89 @@ func (e *TaskExecutor) taskStatusMonitor() {
 			e.checkRunningTasks()
 		}
 	}
+}
+
+// watchdog 每 30 秒检查一次运行中任务的模块活动。
+// 任务心跳只能证明执行器还活着，不能证明流水线还在推进；这里用
+// overall + 各模块 processed/output 的稳定签名判断是否真的卡住。
+func (e *TaskExecutor) watchdog() {
+	defer e.wg.Done()
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-e.stopCh:
+			return
+		case <-ticker.C:
+			e.checkTaskActivity()
+		}
+	}
+}
+
+func (e *TaskExecutor) checkTaskActivity() {
+	e.runningMutex.RLock()
+	items := make([]struct {
+		id string
+		rt *runningTask
+	}, 0, len(e.runningTasks))
+	for id, rt := range e.runningTasks {
+		items = append(items, struct {
+			id string
+			rt *runningTask
+		}{id, rt})
+	}
+	e.runningMutex.RUnlock()
+
+	now := time.Now()
+	for _, item := range items {
+		if item.rt == nil || item.rt.pipeline == nil {
+			continue
+		}
+		tracker := item.rt.pipeline.GetProgressTracker()
+		if tracker == nil {
+			continue
+		}
+		sig := progressActivitySignature(tracker.GetReport())
+
+		e.runningMutex.Lock()
+		if item.rt.lastSignature != sig {
+			item.rt.lastSignature = sig
+			item.rt.lastActivity = now
+			item.rt.stallWarned = false
+		}
+		idle := now.Sub(item.rt.lastActivity)
+		warned := item.rt.stallWarned
+		if idle > 10*time.Minute && !warned {
+			item.rt.stallWarned = true
+		}
+		e.runningMutex.Unlock()
+
+		if idle > 10*time.Minute && !warned {
+			log.Printf("[TaskExecutor] 任务 %s 已 %s 无模块进展，标记疑似僵死", item.id, idle.Round(time.Second))
+		}
+		if idle > 20*time.Minute {
+			log.Printf("[TaskExecutor] 任务 %s 连续 %s 无进展，取消并标记失败", item.id, idle.Round(time.Second))
+			e.cancelRunningTask(item.id)
+			if ts, ok := e.taskService.(*TaskService); ok {
+				if err := ts.FailTask(item.id, "watchdog: 任务连续 20 分钟无模块进展，已自动取消"); err != nil {
+					log.Printf("[TaskExecutor] watchdog 标记任务 %s 失败失败: %v", item.id, err)
+				}
+			}
+		}
+	}
+}
+
+// progressActivitySignature 只取能代表“有新产出”的字段，不包含 elapsed，
+// 否则时间流逝会让签名一直变化，掩盖真正的卡死。
+func progressActivitySignature(report *pipeline.ProgressReport) string {
+	if report == nil {
+		return ""
+	}
+	b, err := json.Marshal(report.ModuleProgresses)
+	if err != nil {
+		return fmt.Sprintf("%d|%d|%s", report.OverallProgress, report.TotalResults, report.CurrentModule)
+	}
+	return fmt.Sprintf("%d|%d|%s|%s", report.OverallProgress, report.TotalResults, report.CurrentModule, string(b))
 }
 
 // checkRunningTasks 检查正在运行的任务状态

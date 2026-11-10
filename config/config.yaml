@@ -37,6 +37,9 @@ postgres:
   sslmode: "disable"
   max_conns: 50
   min_conns: 5
+  # 单条 SQL / 等锁上限，避免结果写入或 DDL 卡住任务 goroutine。
+  statement_timeout_ms: 30000
+  lock_timeout_ms: 10000
 
 # 已决定移除 Redis：队列 / 去重 / 登出由 PG 承担。该段待代码层删掉 go-redis 后一并移除
 scanner:
@@ -170,11 +173,15 @@ sentinel:
     python_poc: true
     exploit_guide: true
     nuclei_web: true
-  # POC 靶场验证（Tier 3b）：python-poc 人工 verified 后自动入队——docker 拉公开
-  # 靶场镜像（AI 出环境方案，受 image_allow 白名单约束）起 --internal 隔离内网
-  # 靶场，PoC 在网络内打靶场判定可行性；无外网出口。worker 在 pocsmith 进程。
+  # POC 靶场验证（Tier 3b）：高危产物生成完自动入队——docker 拉公开靶场镜像
+  # （AI 出环境方案，受 image_allow 白名单约束）起 --internal 隔离内网靶场，
+  # PoC 在网络内打靶场判定可行性；无外网出口。worker 在 pocsmith 进程，
+  # sentinel_poc_verify 队列单 worker + 进程级闸门，一次只验证一个。
   poc_verify:
     enabled: true
+    # 自动模式：产物就绪即入队，且允许自动生成的 draft PoC 作为验证输入。
+    # 设 false 则必须人工把 python-poc / nuclei 模板改成 verified 才会验证。
+    auto_enqueue: true
     python_image: "python:3.11-slim"
     image_allow:
       - "vulhub/"

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/c1ayooo/4zreark/config"
@@ -72,6 +73,21 @@ func Open(ctx context.Context, cfg *config.PostgresConfig) (*Repo, error) {
 	if cfg.MinConns > 0 {
 		poolCfg.MinConns = int32(cfg.MinConns)
 	}
+	// 默认 30s statement_timeout / 10s lock_timeout：结果写入或锁等待
+	// 不能无限挂住任务消费 goroutine。
+	stmtMS, lockMS := cfg.StatementTimeoutMS, cfg.LockTimeoutMS
+	if stmtMS <= 0 {
+		stmtMS = 30000
+	}
+	if lockMS <= 0 {
+		lockMS = 10000
+	}
+	if poolCfg.ConnConfig.RuntimeParams == nil {
+		poolCfg.ConnConfig.RuntimeParams = map[string]string{}
+	}
+	poolCfg.ConnConfig.RuntimeParams["statement_timeout"] = strconv.Itoa(stmtMS)
+	poolCfg.ConnConfig.RuntimeParams["lock_timeout"] = strconv.Itoa(lockMS)
+
 	poolCfg.MaxConnLifetime = time.Hour
 	poolCfg.MaxConnIdleTime = 30 * time.Minute
 

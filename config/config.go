@@ -109,8 +109,12 @@ type SentinelConfig struct {
 
 // SentinelPocVerifyConfig 是 POC 靶场验证的参数。
 type SentinelPocVerifyConfig struct {
-	// Enabled 总开关；未配置默认开启。关闭时 verified python-poc 不自动入队验证。
+	// Enabled 总开关；未配置默认开启。关闭时任何验证都不入队/执行。
 	Enabled *bool `mapstructure:"enabled"`
+	// AutoEnqueue 自动模式开关；未配置默认开启：产物生成完自动入队靶场验证，
+	// 并允许平台自动生成的 draft/pending_review PoC 作为输入（无需人工审核）。
+	// 设 false 回到「人工 verified 才验证」的旧闸门。
+	AutoEnqueue *bool `mapstructure:"auto_enqueue"`
 	// PythonImage 执行 PoC 与就绪探测用的 Python 镜像。
 	PythonImage string `mapstructure:"python_image"`
 	// ImageAllow 靶场镜像白名单前缀（AI 选的镜像必须命中其一）。
@@ -289,6 +293,9 @@ type PostgresConfig struct {
 	SSLMode  string `mapstructure:"sslmode"`
 	MaxConns int    `mapstructure:"max_conns"`
 	MinConns int    `mapstructure:"min_conns"`
+	// 单条 SQL / 等锁上限：防止结果写入或 DDL 卡住整个任务 goroutine。
+	StatementTimeoutMS int `mapstructure:"statement_timeout_ms"`
+	LockTimeoutMS      int `mapstructure:"lock_timeout_ms"`
 }
 
 type ScannerConfig struct {
