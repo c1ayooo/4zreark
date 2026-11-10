@@ -109,18 +109,6 @@ func (s *TaskService) CreateTask(task *models.Task) error {
 	ctx, cancel := dbCtx()
 	defer cancel()
 
-	// 信息收集父任务：交给计划服务拆成阶段子任务，父任务本身不入 River 队列。
-	// 阶段子任务带 Stage，不会再次进入这个分支。
-	if task.Type == models.TaskTypeCollection && strings.TrimSpace(task.Stage) == "" &&
-		config.GetConfig().Collection.Enabled {
-		env := EvaluateCollectionEnv(len(task.Targets), task.Config.CollectionMode)
-		if env.Stage {
-			log.Printf("[Collection] 切分阶段执行: %v", env.Reasons)
-			return GetCollectionPlanService().CreatePlan(ctx, task)
-		}
-		log.Printf("[Collection] 环境正常，走单链流式执行")
-	}
-
 	tasks, jobs, err := s.stores()
 	if err != nil {
 		return err
@@ -129,17 +117,51 @@ func (s *TaskService) CreateTask(task *models.Task) error {
 	if task.ProjectID <= 0 {
 		return errors.New("必须选择归属项目（project_id）")
 	}
+	projectName := ""
 	if r := repo.Default(); r != nil {
-		if _, err := repo.NewAssetRepo().GetProject(ctx, task.ProjectID); err != nil {
+		project, err := repo.NewAssetRepo().GetProject(ctx, task.ProjectID)
+		if err != nil {
 			return errors.New("归属项目不存在")
 		}
+		projectName = project.Name
 	}
+
+	// 创建 collection 任务前自动查企业数据源：企业实体名优先，没有实体用项目名。
+	// 同步执行，查到的关联域名直接并入本次 targets；失败只记日志，不阻断任务。
+	autoAdded := 0
+	autoWarnings := []string{}
+	if task.Type == models.TaskTypeCollection && strings.TrimSpace(task.Stage) == "" {
+		before := len(task.Targets)
+		enriched, warnings := AutoEnrichCollectionTargets(task.ProjectID, projectName, task.Targets)
+		task.Targets = enriched
+		autoAdded = len(enriched) - before
+		autoWarnings = warnings
+		if autoAdded > 0 {
+			log.Printf("[EnterpriseAuto] 自动补充 %d 个企业关联域名（原 %d 个目标）", autoAdded, before)
+		}
+		for _, w := range warnings {
+			log.Printf("[EnterpriseAuto] %s", w)
+		}
+	}
+
 	if err := validateScanTargets(task.Targets); err != nil {
 		return err
 	}
 	// 全局禁扫黑名单：命中即拒绝，无论目标是否在项目种子的授权范围内。
 	if denied := deniedTargets(task.Targets); len(denied) > 0 {
 		return fmt.Errorf("目标命中全局禁扫黑名单，拒绝创建任务：%s", strings.Join(denied, "、"))
+	}
+
+	// 信息收集父任务：交给计划服务拆成阶段子任务，父任务本身不入 River 队列。
+	// 阶段子任务带 Stage，不会再次进入这个分支。放自动扩域之后，按实际目标数判定。
+	if task.Type == models.TaskTypeCollection && strings.TrimSpace(task.Stage) == "" &&
+		config.GetConfig().Collection.Enabled {
+		env := EvaluateCollectionEnv(len(task.Targets), task.Config.CollectionMode)
+		if env.Stage {
+			log.Printf("[Collection] 切分阶段执行: %v", env.Reasons)
+			return GetCollectionPlanService().CreatePlan(ctx, task)
+		}
+		log.Printf("[Collection] 环境正常，走单链流式执行")
 	}
 
 	// nuclei 误报黑名单：把平台生效值盖章随任务下发（worker 不读平台设置）。
@@ -215,6 +237,15 @@ func (s *TaskService) CreateTask(task *models.Task) error {
 	if err := tasks.AddLogCategory(ctx, task.ID.Hex(), string(task.Type), "info",
 		fmt.Sprintf("任务已创建：%d 个目标", len(task.Targets)), ""); err != nil {
 		log.Printf("[TaskService] 任务日志写入失败: %v", err)
+	}
+	if autoAdded > 0 || len(autoWarnings) > 0 {
+		msg := fmt.Sprintf("企业自动扩域：新增 %d 个关联域名", autoAdded)
+		if len(autoWarnings) > 0 {
+			msg += "；" + strings.Join(autoWarnings, "；")
+		}
+		if err := tasks.AddLogCategory(ctx, task.ID.Hex(), "system", "info", msg, ""); err != nil {
+			log.Printf("[TaskService] 企业自动扩域日志写入失败: %v", err)
+		}
 	}
 	return nil
 }
