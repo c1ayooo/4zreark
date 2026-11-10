@@ -500,20 +500,14 @@ func (e *TaskExecutor) runLocalScan(ctx context.Context, taskID string, riverJob
 	// 服务重启后 River 会把 running job 重新拉起。先清理本任务上次未完成的结果，
 	// 避免端口/指纹/URL 重复写入；sites 是聚合资产，保留并由 upsert 去重。
 	if isResumedTask(task, e.processStart) {
-		// 已有进度说明上次已经跑了一部分：保留结果，靠 result_dedup/upsert 续跑。
-		// 每次重启都清空会让大任务永远跑不完；只有 0 进度才清理残片。
-		if task.Progress == 0 {
-			log.Printf("[TaskExecutor] 检测到服务重启后的任务 %s（0 进度），清理未完成结果后重跑", taskID)
-			e.logAction(task, "system", "warn", "检测到服务重启（0 进度），清理本任务未完成结果后重跑")
-			if ts, ok := e.taskService.(*TaskService); ok {
-				if err := ts.ResetTaskRun(taskID); err != nil {
-					log.Printf("[TaskExecutor] 清理重启任务 %s 未完成结果失败: %v", taskID, err)
-				}
-			}
-		} else {
-			log.Printf("[TaskExecutor] 检测到服务重启后的任务 %s（进度 %d%%），保留已有结果继续执行", taskID, task.Progress)
-			e.logAction(task, "system", "warn", fmt.Sprintf("检测到服务重启（进度 %d%%），保留已有结果继续执行", task.Progress))
+		// 旧进程崩溃后 executor_id 仍占着，Cloud 新进程 claim 会永远失败。
+		// 这里的任务启动时间早于本进程，说明旧执行器已经不在了，先释放认领；
+		// 已有结果保留，靠 result_dedup/upsert 续跑，避免每次重启都从头清空。
+		if err := e.taskService.ReleaseExecution(ctx, taskID); err != nil {
+			log.Printf("[TaskExecutor] 释放重启任务 %s 旧执行认领失败: %v", taskID, err)
 		}
+		log.Printf("[TaskExecutor] 检测到服务重启后的任务 %s（进度 %d%%），释放旧认领、保留已有结果继续执行", taskID, task.Progress)
+		e.logAction(task, "system", "warn", fmt.Sprintf("检测到服务重启（进度 %d%%），释放旧执行认领并保留已有结果继续执行", task.Progress))
 	}
 
 	// 节点被管理员停用或并发已满：把作业 snooze 回队列，不占用也不丢失。
