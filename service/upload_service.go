@@ -109,6 +109,9 @@ func analyzeUpload(name string, data []byte) (kind, summary string, files []Uplo
 	case ext == ".pdf":
 		return "pdf", "PDF 文件已接收，但当前没有 PDF 文本抽取能力，未解析内容。" +
 			"如需分析，请上传解压后的源码或相关文本。", nil
+	case isMarkdownExt(ext):
+		// 利用方法/复现指南常见载体：按 Markdown 章节解析，而不是只截前 2000 字符。
+		return analyzeMarkdown(name, data)
 	case isTextLike(ext, data):
 		return analyzeText(name, data)
 	default:
@@ -133,6 +136,43 @@ func isTextLike(ext string, data []byte) bool {
 		return false
 	}
 	return utf8.Valid(probe)
+}
+
+func isMarkdownExt(ext string) bool {
+	return ext == ".md" || ext == ".markdown"
+}
+
+// analyzeMarkdown 解析 Markdown 结构：章节标题、前置条件、利用/复现步骤、
+// curl/HTTP 请求示例、URL 路径与 CVE。原文仍保留开头片段供模型核对写法。
+func analyzeMarkdown(name string, data []byte) (string, string, []UploadFileInfo) {
+	text := string(data)
+	if len(text) > uploadMaxFileRead {
+		text = text[:uploadMaxFileRead]
+	}
+	guide := parseExploitMarkdown(name, text)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Markdown 文档 %s，%d 行，%s。\n", name,
+		len(strings.Split(text, "\n")), humanSize(int64(len(data))))
+	if s := guide.UploadSummary(); s != "" {
+		b.WriteString("结构化解析（章节/前置条件/利用步骤/请求路径/CVE）：\n")
+		b.WriteString(s)
+	} else {
+		b.WriteString("未识别到「利用步骤/前置条件/请求示例」等章节，按原文摘要。\n")
+	}
+	for i, req := range guide.Requests {
+		if i >= 2 {
+			break
+		}
+		b.WriteString("请求示例原文：\n```\n" + req + "\n```\n")
+	}
+
+	head := text
+	if len(head) > 2000 {
+		head = head[:2000]
+	}
+	b.WriteString("文件开头：\n```\n" + head + "\n```\n")
+	return "markdown", b.String(), []UploadFileInfo{{Path: name, Size: int64(len(data))}}
 }
 
 func analyzeText(name string, data []byte) (string, string, []UploadFileInfo) {
@@ -195,6 +235,7 @@ func analyzeZip(data []byte) (string, string, []UploadFileInfo) {
 
 	files := make([]UploadFileInfo, 0, 16)
 	codeFiles := make([]*zip.File, 0, 16)
+	mdFiles := make([]*zip.File, 0, 8)
 	for _, f := range zr.File {
 		if f.FileInfo().IsDir() {
 			continue
@@ -203,8 +244,11 @@ func analyzeZip(data []byte) (string, string, []UploadFileInfo) {
 			break
 		}
 		files = append(files, UploadFileInfo{Path: f.Name, Size: int64(f.UncompressedSize64)})
-		if codeExts[strings.ToLower(filepath.Ext(f.Name))] {
+		ext := strings.ToLower(filepath.Ext(f.Name))
+		if codeExts[ext] {
 			codeFiles = append(codeFiles, f)
+		} else if isMarkdownExt(ext) {
+			mdFiles = append(mdFiles, f)
 		}
 	}
 
@@ -261,6 +305,39 @@ func analyzeZip(data []byte) (string, string, []UploadFileInfo) {
 	}
 	if shown == 0 {
 		b.WriteString("  未在代码文件中命中常见危险调用。\n")
+	}
+
+	// Markdown 文档：以前只在目录列表出现、内容从不读取；利用方法/复现指南
+	// 常常恰好放在 README.md / exploit.md 里，这里按章节解析后写进摘要。
+	if len(mdFiles) > 0 {
+		b.WriteString("Markdown 文档（已解析利用方法/复现步骤）：\n")
+		mdShown := 0
+		for _, f := range mdFiles {
+			if mdShown >= 8 {
+				b.WriteString("  …（其余 Markdown 文档省略）\n")
+				break
+			}
+			rc, err := f.Open()
+			if err != nil {
+				continue
+			}
+			content, err := io.ReadAll(io.LimitReader(rc, uploadMaxFileRead))
+			_ = rc.Close()
+			if err != nil || bytes.IndexByte(content, 0) >= 0 {
+				continue
+			}
+			guide := parseExploitMarkdown(f.Name, string(content))
+			b.WriteString("  " + f.Name + "：\n")
+			if guide.IsEmpty() {
+				b.WriteString("    未识别到「利用步骤/前置条件/请求示例」等章节。\n")
+			} else {
+				summary := strings.TrimRight(guide.UploadSummary(), "\n")
+				for _, line := range strings.Split(summary, "\n") {
+					b.WriteString("    " + line + "\n")
+				}
+			}
+			mdShown++
+		}
 	}
 
 	fmt.Fprintf(&b, "（解析上限：%d 个文件、单文件 %s）\n", uploadMaxFiles, humanSize(uploadMaxFileRead))

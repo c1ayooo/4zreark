@@ -151,7 +151,9 @@ func (s *PocVerifyService) Verify(ctx context.Context, findingID int64, force bo
 	// 模板（nuclei 引擎）——有哪样用哪样，不必等另一条流水线补齐。
 	pocContent := ""
 	nucleiContent := ""
-	if arts, err := store.ListArtifacts(ctx, findingID); err == nil {
+	var arts []*repo.CommitArtifact
+	if got, err := store.ListArtifacts(ctx, findingID); err == nil {
+		arts = got
 		for _, a := range arts {
 			switch {
 			case a.Kind == "poc" && a.Title == pythonPocTitle && a.Status == "verified" && pocContent == "":
@@ -170,6 +172,20 @@ func (s *PocVerifyService) Verify(ctx context.Context, findingID int64, force bo
 			}
 		}
 	}
+
+	// 利用方法 Markdown（exploit-guide / repro-guide / deep-analysis）：此前是
+	// 只展示的死数据，现在解析成前置条件、步骤、请求示例与 URL 路径，作为选靶场
+	// 与核对 target_url 的确定性依据，并随验证结论一起落证据。
+	guide := parseExploitArtifacts(arts)
+	if guide.IsEmpty() {
+		emit("info", "poc_verify_guide", "未找到可解析的利用方法 Markdown（exploit-guide / repro-guide / deep-analysis）", nil)
+	} else {
+		emit("info", "poc_verify_guide",
+			fmt.Sprintf("已解析 %d 份利用方法 Markdown（步骤 %d / 请求示例 %d / 路径 %d）",
+				len(guide.Sources), len(guide.Steps), len(guide.Requests), len(guide.Paths)),
+			map[string]interface{}{"exploit_guide": guide})
+	}
+
 	engine := "python"
 	pocInput := pocContent
 	pocLabel := "python-poc"
@@ -180,14 +196,17 @@ func (s *PocVerifyService) Verify(ctx context.Context, findingID int64, force bo
 	}
 	if pocInput == "" {
 		msg := "缺少 verified 的 python-poc 或 nuclei 模板产物：任一审核通过后即可发起验证"
+		if !guide.IsEmpty() {
+			msg += fmt.Sprintf("（已解析 %d 份利用方法 Markdown，可作为生成/审核 PoC 的依据）", len(guide.Sources))
+		}
 		emit("info", "poc_verify_skipped", msg, nil)
 		finishRun("completed", "")
 		return nil
 	}
 
 	// ---- 1. AI 出环境方案（受白名单与 URL/环境变量校验约束）----
-	emit("info", "poc_verify_plan", "生成靶场环境方案（LLM，输入 "+pocLabel+"）", nil)
-	plan, err := s.planEnv(ctx, f, pocInput, pocLabel)
+	emit("info", "poc_verify_plan", "生成靶场环境方案（LLM，输入 "+pocLabel+" + 利用方法 Markdown）", nil)
+	plan, err := s.planEnv(ctx, f, pocInput, pocLabel, guide)
 	if err != nil {
 		emit("error", "poc_verify_failed", "环境方案生成失败: "+err.Error(), nil)
 		finishRun("failed", err.Error())
@@ -281,6 +300,9 @@ func (s *PocVerifyService) Verify(ctx context.Context, findingID int64, force bo
 		"engine": engine, "network": "docker --internal（无外网出口）",
 		"notes": plan.Notes,
 	}
+	if !guide.IsEmpty() {
+		verdict.Env["exploit_guide"] = guide
+	}
 	verdict.ExecDetail = fmt.Sprintf("耗时 %s，PoC 容器退出码 %d，超时 %v", time.Since(started).Round(time.Second), res.ExitCode, res.TimedOut)
 
 	content, _ := json.MarshalIndent(verdict, "", "  ")
@@ -310,8 +332,9 @@ func (s *PocVerifyService) Verify(ctx context.Context, findingID int64, force bo
 	return nil
 }
 
-// planEnv 让 LLM 生成环境方案并做安全校验。
-func (s *PocVerifyService) planEnv(ctx context.Context, f *repo.CommitFinding, pocInput, pocLabel string) (*pocVerifyEnvPlan, error) {
+// planEnv 让 LLM 生成环境方案并做安全校验。guide 是 Markdown 利用方法解析结果，
+// 作为「选哪个靶场/版本、target_url 该用什么路径」的可核对依据。
+func (s *PocVerifyService) planEnv(ctx context.Context, f *repo.CommitFinding, pocInput, pocLabel string, guide ExploitGuide) (*pocVerifyEnvPlan, error) {
 	cfg := pocVerifyCfg()
 	g, err := loadFindingGenContext(ctx, f.ID)
 	if err != nil {
@@ -326,8 +349,12 @@ func (s *PocVerifyService) planEnv(ctx context.Context, f *repo.CommitFinding, p
 		poc = poc[:8000] + "\n…（超长截断）"
 	}
 	user := fmt.Sprintf(
-		"仓库: %s\n漏洞类别: %s\n严重度: %s\n发现标题: %s\n\n## 待验证输入（%s）\n```\n%s\n```\n\n请为该验证输入生成靶场环境方案（JSON）。",
+		"仓库: %s\n漏洞类别: %s\n严重度: %s\n发现标题: %s\n\n## 待验证输入（%s）\n```\n%s\n```\n",
 		g.commit.RepoFullName, f.VulnClass, f.Severity, f.Title, pocLabel, poc)
+	if parsed := guide.LLMContext(); parsed != "" {
+		user += "\n" + parsed + "\n"
+	}
+	user += "\n请为该验证输入生成靶场环境方案（JSON）。"
 	raw, err := llmArtifactCall(ctx, live, pocVerifyEnvSystemPrompt, user)
 	if err != nil {
 		return nil, err
@@ -480,6 +507,8 @@ type PocVerifyStatus struct {
 	FindingID int64             `json:"finding_id"`
 	HasPoc    bool              `json:"has_poc"`            // 已有 verified 的 python-poc（可发起验证）
 	HasNuclei bool              `json:"has_nuclei"`         // 已有 verified 的 nuclei 模板（同样可发起验证）
+	HasGuide  bool              `json:"has_guide"`          // 已解析到利用方法 Markdown
+	Exploit   *ExploitGuide     `json:"exploit,omitempty"`   // 利用方法解析结果（步骤/路径/请求示例）
 	Verified  bool              `json:"verified"`           // finding 已机器验证（verified_at 非空）
 	Running   bool              `json:"running"`            // 最近一次验证仍在执行
 	Verify    *PocVerifyVerdict `json:"verify,omitempty"`   // 机器结论（有 poc-verify 产物时）
@@ -488,6 +517,7 @@ type PocVerifyStatus struct {
 
 // pocVerifyStepTitles 把事件 kind 映射成时间线标题。
 var pocVerifyStepTitles = map[string]string{
+	"poc_verify_guide":      "解析利用方法 Markdown",
 	"poc_verify_plan":       "生成环境方案（LLM）",
 	"poc_verify_plan_ok":    "环境方案校验通过",
 	"poc_verify_pull":       "拉取靶场镜像",
@@ -524,6 +554,10 @@ func GetPocVerifyStatus(ctx context.Context, findingID int64) (*PocVerifyStatus,
 				st.Verify = v
 			}
 		}
+	}
+	if guide := parseExploitArtifacts(arts); !guide.IsEmpty() {
+		st.HasGuide = true
+		st.Exploit = &guide
 	}
 
 	// 时间线：事件按 id 倒序取回，取最近一个 run 的顺序回放。
@@ -594,4 +628,8 @@ const pocVerifyEnvSystemPrompt = `你是漏洞靶场环境工程师。给定一�
 3. target_url 的路径必须与 PoC 脚本里请求的路径一致；port 与靶场服务端口一致。
 4. 不确定选哪个靶场时，选 notes 里说明理由的最接近版本；禁止编造不存在的 CVE 镜像标签，
    标签不确定时用该镜像的 latest。
-5. env 只放镜像文档明确要求的环境变量。`
+5. env 只放镜像文档明确要求的环境变量。
+6. 若给出了「利用方法（Markdown 解析结果）」：target_url 的 path 必须优先取其中的
+   请求路径，image/标签优先按其影响范围与明确写出的 CVE 选择；不得因为文档里
+   出现其它域名就把 target_url 的 host 改成非 pocverify-target。
+7. 文档里的 curl / HTTP 报文只是路径与参数依据，不要据此新增 env 或 docker 参数。`
