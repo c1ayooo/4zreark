@@ -1421,7 +1421,28 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 			if r.URL != "" && taskScope.AllowsURL(r.URL) {
 				crawledRoutes = append(crawledRoutes, CrawledEndpoint{URL: r.URL, Method: "GET", StatusCode: r.StatusCode})
 			}
-			if rec, ok := rawRecordFromScan(r.URL, r.Host, "https", r.StatusCode, r.Title, firstIP(r.IPs), r.Technologies); ok && taskScope.AllowsHost(rec.Host) {
+			rec, ok := rawRecordFromScan(r.URL, r.Host, "https", r.StatusCode, r.Title, firstIP(r.IPs), r.Technologies)
+			if !ok {
+				// 子域本身就是站点：URL/状态码缺失（DNS-only、未探活）或 URL 非法时，
+				// 用 host 兜底建 DNS-only 资产，避免“结果页有子域、资产页没有”。
+				h := strings.TrimSpace(r.Host)
+				if h == "" {
+					rec = repo.RawRecord{}
+				} else {
+					rec = repo.RawRecord{
+						Source:   "scan",
+						Host:     h,
+						Protocol: "https",
+						Value:    "https://" + h,
+						IP:       firstIP(r.IPs),
+						Evidence: map[string]any{
+							"dns_only": true, "verified": false, "subdomain": true,
+						},
+					}
+					ok = true
+				}
+			}
+			if ok && taskScope.AllowsHost(rec.Host) {
 				rec.Server = r.WebServer
 				if r.Source != "" {
 					if rec.Evidence == nil {
