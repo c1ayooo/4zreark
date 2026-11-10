@@ -140,7 +140,7 @@ func NewSentinelQueue(ctx context.Context, pool *pgxpool.Pool, cfg config.Sentin
 	riverCfg := &river.Config{
 		MaxAttempts:          3,
 		JobTimeout:           30 * time.Minute,
-		RescueStuckJobsAfter: 90 * time.Minute,
+		RescueStuckJobsAfter: 30 * time.Minute,
 		SoftStopTimeout:      30 * time.Second,
 	}
 	if workerMode {
@@ -385,7 +385,7 @@ func NewSentinelReproClient(ctx context.Context, pool *pgxpool.Pool, repro *Repr
 	client, err := river.NewClient(driver, &river.Config{
 		MaxAttempts:          2,
 		JobTimeout:           40 * time.Minute,
-		RescueStuckJobsAfter: 90 * time.Minute,
+		RescueStuckJobsAfter: 30 * time.Minute,
 		Workers:              workers,
 		Queues: map[string]river.QueueConfig{
 			SentinelReproQueueName:     {MaxWorkers: 2},
