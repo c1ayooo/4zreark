@@ -144,6 +144,14 @@ export default function PocVerifyCard({ findingId }: { findingId: number }) {
                 }
               />
               <KV
+                k="利用方法"
+                v={
+                  status.has_guide
+                    ? `已解析 ${status.exploit?.steps?.length ?? 0} 步 / ${status.exploit?.paths?.length ?? 0} 路径（${(status.exploit?.sources ?? []).join('、')}）`
+                    : '未解析到 Markdown 利用文档'
+                }
+              />
+              <KV
                 k="隔离边界"
                 v="docker --internal 无外网出口 · 镜像白名单 · AI 仅出声明式方案"
               />

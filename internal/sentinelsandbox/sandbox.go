@@ -36,8 +36,20 @@ type ExecResult struct {
 type Sandbox struct {
 	// Workdir 是 PoC 文件的宿主目录：执行时只读挂载到容器 /poc。
 	Workdir string
+	// MountSource 是 docker -v 的挂载源。pocsmith 直接跑在宿主机时留空（用
+	// Workdir）；跑在容器里通过 docker.sock 操作宿主 daemon（DooD）时，必须传
+	// 命名卷名或宿主 daemon 能解析的路径，否则容器内路径在宿主上不存在，
+	// docker 会新建一个空目录挂进 PoC 容器，PoC 文件自然读不到。
+	MountSource string
 	// TimeoutSeconds 是单次 PoC 执行上限（§7.8 默认 30）。
 	TimeoutSeconds int
+}
+
+func pocMountSource(workdir, source string) string {
+	if s := strings.TrimSpace(source); s != "" {
+		return s
+	}
+	return workdir
 }
 
 // Available 探测 docker 可用性；pocsmith 启动与入队前置检查共用。
@@ -63,7 +75,7 @@ func (s *Sandbox) Run(ctx context.Context, image string, cmd []string) (*ExecRes
 	defer cancel()
 
 	args := []string{"run", "--rm", "--network", "none",
-		"-v", s.Workdir + ":/poc:ro",
+		"-v", pocMountSource(s.Workdir, s.MountSource) + ":/poc:ro",
 		"--memory", "512m", "--cpus", "1",
 		image}
 	args = append(args, cmd...)

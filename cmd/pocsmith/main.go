@@ -10,6 +10,10 @@
 //	CONFIG_PATH=config/config.yaml ZRE_PG_PASSWORD=... \
 //	  pocsmith -workdir /var/lib/pocsmith -timeout 30
 //
+// 容器（DooD）部署时：镜像内需带 docker CLI、挂载 /var/run/docker.sock，
+// 并用 -mount-source 指定 docker -v 的挂载源（命名卷名），否则 PoC 目录在
+// 宿主 daemon 上不存在、PoC 容器读不到脚本。
+//
 // 未启用 sentinel 时直接退出（提示而非报错）；docker 不可用时启动即失败。
 package main
 
@@ -31,6 +35,7 @@ import (
 func main() {
 	workdir := flag.String("workdir", "data/pocsmith", "PoC 文件沙箱目录（挂载进容器 /poc）")
 	timeout := flag.Int("timeout", 30, "单次 PoC 执行超时秒数")
+	mountSource := flag.String("mount-source", "", "docker -v 挂载源（DooD 部署填命名卷名；宿主机直跑留空）")
 	cfgPath := os.Getenv("CONFIG_PATH")
 	if cfgPath == "" {
 		cfgPath = "config/config.yaml"
@@ -58,8 +63,8 @@ func main() {
 	}
 	defer pool.Close()
 
-	repro := service.NewReproService(*workdir, *timeout)
-	verify := service.NewPocVerifyService(*workdir)
+	repro := service.NewReproService(*workdir, *timeout, *mountSource)
+	verify := service.NewPocVerifyService(*workdir, *mountSource)
 	client, err := service.NewSentinelReproClient(ctx, pool.Pool(), repro, verify)
 	if err != nil {
 		log.Fatalf("[pocsmith] %v", err)
@@ -67,7 +72,7 @@ func main() {
 	if err := client.Start(ctx); err != nil {
 		log.Fatalf("[pocsmith] 启动 worker 失败: %v", err)
 	}
-	log.Printf("[pocsmith] 已启动（queue=sentinel_repro,sentinel_poc_verify workdir=%s timeout=%ds）——等待复现/靶场验证任务", *workdir, *timeout)
+	log.Printf("[pocsmith] 已启动（queue=sentinel_repro,sentinel_poc_verify workdir=%s mount_source=%q timeout=%ds）——等待复现/靶场验证任务", *workdir, *mountSource, *timeout)
 
 	<-ctx.Done()
 	log.Println("[pocsmith] 收到退出信号，等待在跑任务收尾…")

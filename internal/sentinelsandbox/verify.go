@@ -31,6 +31,9 @@ const TargetHostName = "pocverify-target"
 type VerifySandbox struct {
 	// Workdir 是 PoC 文件的宿主目录（与差分沙箱共用布局：容器内只读 /poc）。
 	Workdir string
+	// MountSource 见 Sandbox.MountSource：DooD 部署时传命名卷名，使宿主
+	// docker daemon 挂载到的是同一个卷，而不是容器内路径。
+	MountSource string
 }
 
 // WritePoc 把 PoC 内容写进沙箱 Workdir（宿主侧，容器内只读可见）。
@@ -202,7 +205,7 @@ func (s *VerifySandbox) RunPoC(ctx context.Context, network, image string, cmd, 
 
 	args := []string{"run", "--rm",
 		"--network", network,
-		"-v", s.Workdir + ":/poc:ro",
+		"-v", pocMountSource(s.Workdir, s.MountSource) + ":/poc:ro",
 		"--memory", "512m", "--cpus", "1"}
 	for _, e := range env {
 		if !ValidEnv(e) {

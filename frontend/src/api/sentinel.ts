@@ -199,6 +199,19 @@ export interface PocVerifyStep {
   time: string
 }
 
+/** 从 Markdown 利用文档（exploit-guide / repro-guide 等）解析出的结构化事实 */
+export interface ExploitGuide {
+  sources?: string[]
+  title?: string
+  prereq?: string
+  scope?: string
+  steps?: string[]
+  requests?: string[]
+  paths?: string[]
+  cves?: string[]
+  fix_check?: string
+}
+
 /** 一条发现的靶场验证完整状态（GET /sentinel/findings/:id/poc-verify） */
 export interface PocVerifyStatus {
   finding_id: number
@@ -206,6 +219,10 @@ export interface PocVerifyStatus {
   has_poc: boolean
   /** 已有 verified 的 nuclei 模板（同样可发起验证，引擎=nuclei） */
   has_nuclei: boolean
+  /** 已解析到利用方法 Markdown */
+  has_guide: boolean
+  /** 解析出的利用步骤 / 请求路径 / 请求示例 */
+  exploit?: ExploitGuide | null
   /** finding 已机器验证 */
   verified: boolean
   /** 最近一次验证仍在执行 */

@@ -59,13 +59,19 @@ type ReproService struct {
 }
 
 // NewReproService 构造复现服务；docker 不可用时 Work 会失败并写明原因。
-func NewReproService(workdir string, timeoutSeconds int) *ReproService {
+// mountSource 是可选参数：pocsmith 以容器方式（DooD）运行时传 docker -v 的
+// 挂载源（命名卷名），宿主机直跑时留空即可。
+func NewReproService(workdir string, timeoutSeconds int, mountSource ...string) *ReproService {
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 30
 	}
+	src := ""
+	if len(mountSource) > 0 {
+		src = mountSource[0]
+	}
 	return &ReproService{
 		store:             repo.Default().Sentinel(),
-		sandbox:           &sentinelsandbox.Sandbox{Workdir: workdir, TimeoutSeconds: timeoutSeconds},
+		sandbox:           &sentinelsandbox.Sandbox{Workdir: workdir, MountSource: src, TimeoutSeconds: timeoutSeconds},
 		MaxAttemptsPerRun: 3,
 	}
 }

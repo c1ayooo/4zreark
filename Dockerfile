@@ -19,17 +19,24 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go env -w GOPROXY=${GOPROXY} && go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/server .
+# server（控制面）与 pocsmith（复现/靶场验证 worker）是同一个二进制的不同进程角色；
+# 不编 pocsmith 的话 compose 里的验证队列无人消费，作业入队后永远「没拉 docker 验证」。
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/server . && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/pocsmith ./cmd/pocsmith
 
 # ---- 运行时 ----
 # 本层零网络下载（apk 在受限网络下不可靠）：证书复用 golang 基础镜像的，
 # 时区用 Go 自带的 zoneinfo.zip（Go 运行时优先读 ZONEINFO 环境变量）。
+# docker CLI 直接从官方 cli 镜像复制静态二进制（不 apk、不引 SDK），供 pocsmith
+# 通过挂载的 /var/run/docker.sock 执行 pull / network / run。
 FROM alpine:3.20
 WORKDIR /app
 
 COPY --from=builder /usr/local/go/lib/time/zoneinfo.zip /app/zoneinfo.zip
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /out/server /app/server
+COPY --from=builder /out/pocsmith /app/pocsmith
+COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=frontend /web/dist /app/frontend/dist
 COPY config /app/config
 

@@ -57,10 +57,15 @@ type PocVerifyService struct {
 }
 
 // NewPocVerifyService 构造靶场验证服务；workdir 与差分复现共用（PoC 目录布局一致）。
-func NewPocVerifyService(workdir string) *PocVerifyService {
+// mountSource 是可选参数：DooD 部署时传 docker -v 的命名卷名，见 Sandbox.MountSource。
+func NewPocVerifyService(workdir string, mountSource ...string) *PocVerifyService {
+	src := ""
+	if len(mountSource) > 0 {
+		src = mountSource[0]
+	}
 	return &PocVerifyService{
 		store:   repo.Default().Sentinel(),
-		sandbox: &sentinelsandbox.VerifySandbox{Workdir: workdir},
+		sandbox: &sentinelsandbox.VerifySandbox{Workdir: workdir, MountSource: src},
 	}
 }
 
