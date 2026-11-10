@@ -215,10 +215,12 @@ export interface ExploitGuide {
 /** 一条发现的靶场验证完整状态（GET /sentinel/findings/:id/poc-verify） */
 export interface PocVerifyStatus {
   finding_id: number
-  /** 已有 verified 的 python-poc */
+  /** 有可用 python-poc（自动模式下 draft 也算） */
   has_poc: boolean
-  /** 已有 verified 的 nuclei 模板（同样可发起验证，引擎=nuclei） */
+  /** 有可用 nuclei 模板（同样可发起验证，引擎=nuclei） */
   has_nuclei: boolean
+  /** 自动模式：产物就绪即自动排队验证，一次只跑一个 */
+  auto_enqueue: boolean
   /** 已解析到利用方法 Markdown */
   has_guide: boolean
   /** 解析出的利用步骤 / 请求路径 / 请求示例 */
@@ -395,6 +397,12 @@ export const sentinelApi = {
 
   judge: (id: number) => api.post<unknown, ApiResponse<unknown>>(`/sentinel/commits/${id}/judge`),
   judgeCommit: (id: number) => sentinelApi.judge(id),
+
+  /** 提交维度的 AI 分析事件流（判定 + 高危产物流水线，正序），回放判定过程 */
+  commitAIEvents: (id: number) =>
+    unwrap(
+      api.get<unknown, ApiResponse<{ events: SentinelRunEvent[] }>>(`/sentinel/commits/${id}/ai-events`),
+    ),
 
   findings: (params: FindingQuery = {}) =>
     paged(api.get<unknown, SentinelPagedRaw<SentinelFinding>>('/sentinel/findings', { params })),

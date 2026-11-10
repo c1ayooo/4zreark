@@ -160,19 +160,26 @@ func (s *PocVerifyService) Verify(ctx context.Context, findingID int64, force bo
 		return nil
 	}
 
-	// 验证输入二选一：verified 的 python-poc（python 引擎）或 verified 的 nuclei
-	// 模板（nuclei 引擎）——有哪样用哪样，不必等另一条流水线补齐。
+	// 验证输入二选一：python-poc（python 引擎）或 nuclei 模板（nuclei 引擎）。
+	// 自动模式下平台自动生成的 draft/pending_review 产物也放行（产物一生成完
+	// 就自动入队）；auto_enqueue=false 时仍严格只认人工 verified。
 	pocContent := ""
 	nucleiContent := ""
+	pocStatus := ""
+	nucleiStatus := ""
+	autoMode := pocVerifyAutoEnqueue()
 	var arts []*repo.CommitArtifact
 	if got, err := store.ListArtifacts(ctx, findingID); err == nil {
 		arts = got
 		for _, a := range arts {
+			if !pocVerifyInputAllowed(a, autoMode) {
+				continue
+			}
 			switch {
-			case a.Kind == "poc" && a.Title == pythonPocTitle && a.Status == "verified" && pocContent == "":
-				pocContent = a.Content
-			case a.Kind == "nuclei" && a.Status == "verified" && nucleiContent == "":
-				nucleiContent = a.Content
+			case a.Kind == "poc" && pocContent == "":
+				pocContent, pocStatus = a.Content, a.Status
+			case a.Kind == "nuclei" && nucleiContent == "":
+				nucleiContent, nucleiStatus = a.Content, a.Status
 			}
 		}
 		if !force {
@@ -208,13 +215,17 @@ func (s *PocVerifyService) Verify(ctx context.Context, findingID int64, force bo
 		pocLabel = "nuclei 模板"
 	}
 	if pocInput == "" {
-		msg := "缺少 verified 的 python-poc 或 nuclei 模板产物：任一审核通过后即可发起验证"
+		msg := "缺少可用的 python-poc 或 nuclei 模板产物：等待自动产物流水线生成，或人工新增/审核后重试"
 		if !guide.IsEmpty() {
 			msg += fmt.Sprintf("（已解析 %d 份利用方法 Markdown，可作为生成/审核 PoC 的依据）", len(guide.Sources))
 		}
 		emit("info", "poc_verify_skipped", msg, nil)
 		finishRun("completed", "")
 		return nil
+	}
+	inputStatus := pocStatus
+	if engine == "nuclei" {
+		inputStatus = nucleiStatus
 	}
 
 	// ---- 1. AI 出环境方案（受白名单与 URL/环境变量校验约束）----
@@ -229,6 +240,16 @@ func (s *PocVerifyService) Verify(ctx context.Context, findingID int64, force bo
 		map[string]interface{}{"image": plan.Image, "notes": plan.Notes})
 
 	// ---- 2. 编排执行：隔离网络 → 拉镜像 → 起靶场 → 就绪探测 → 跑 PoC → 清理 ----
+	// 一次只验证一个：docker 编排与差分复现共用进程级闸门（LLM 规划阶段不占用，
+	// 清理 defer 先于闸门释放执行）。
+	gateRelease, gateErr := acquireSentinelVerifyGate(ctx)
+	if gateErr != nil {
+		emit("error", "poc_verify_failed", "等待验证闸门失败: "+gateErr.Error(), nil)
+		finishRun("failed", gateErr.Error())
+		return gateErr
+	}
+	defer gateRelease()
+
 	network := fmt.Sprintf("pocverify-net-%d-%d", findingID, time.Now().Unix())
 	started := time.Now()
 	defer func() {
@@ -311,7 +332,9 @@ func (s *PocVerifyService) Verify(ctx context.Context, findingID int64, force bo
 		"image": plan.Image, "env": plan.Env, "port": plan.Port,
 		"probe_path": plan.ProbePath, "target_url": plan.TargetURL,
 		"engine": engine, "network": "docker --internal（无外网出口）",
-		"notes": plan.Notes,
+		"notes":            plan.Notes,
+		"poc_input_status": inputStatus, // draft 表示自动模式、未经人工审核，供审计区分
+		"auto_mode":        autoMode,
 	}
 	if !guide.IsEmpty() {
 		verdict.Env["exploit_guide"] = guide
@@ -517,15 +540,16 @@ type PocVerifyStep struct {
 
 // PocVerifyStatus 是一条发现的靶场验证完整状态（方案 B 卡片数据）。
 type PocVerifyStatus struct {
-	FindingID int64             `json:"finding_id"`
-	HasPoc    bool              `json:"has_poc"`            // 已有 verified 的 python-poc（可发起验证）
-	HasNuclei bool              `json:"has_nuclei"`         // 已有 verified 的 nuclei 模板（同样可发起验证）
-	HasGuide  bool              `json:"has_guide"`          // 已解析到利用方法 Markdown
-	Exploit   *ExploitGuide     `json:"exploit,omitempty"`  // 利用方法解析结果（步骤/路径/请求示例）
-	Verified  bool              `json:"verified"`           // finding 已机器验证（verified_at 非空）
-	Running   bool              `json:"running"`            // 最近一次验证仍在执行
-	Verify    *PocVerifyVerdict `json:"verify,omitempty"`   // 机器结论（有 poc-verify 产物时）
-	Timeline  []PocVerifyStep   `json:"timeline,omitempty"` // 最近一次执行的步骤时间线
+	FindingID   int64             `json:"finding_id"`
+	HasPoc      bool              `json:"has_poc"`            // 有可用 python-poc（自动模式下 draft 也算）
+	HasNuclei   bool              `json:"has_nuclei"`         // 有可用 nuclei 模板（同样可发起验证）
+	AutoEnqueue bool              `json:"auto_enqueue"`       // 自动模式：产物就绪即自动排队验证
+	HasGuide    bool              `json:"has_guide"`          // 已解析到利用方法 Markdown
+	Exploit     *ExploitGuide     `json:"exploit,omitempty"`  // 利用方法解析结果（步骤/路径/请求示例）
+	Verified    bool              `json:"verified"`           // finding 已机器验证（verified_at 非空）
+	Running     bool              `json:"running"`            // 最近一次验证仍在执行
+	Verify      *PocVerifyVerdict `json:"verify,omitempty"`   // 机器结论（有 poc-verify 产物时）
+	Timeline    []PocVerifyStep   `json:"timeline,omitempty"` // 最近一次执行的步骤时间线
 }
 
 // pocVerifyStepTitles 把事件 kind 映射成时间线标题。
@@ -550,17 +574,21 @@ func GetPocVerifyStatus(ctx context.Context, findingID int64) (*PocVerifyStatus,
 	if err != nil {
 		return nil, err
 	}
-	st := &PocVerifyStatus{FindingID: findingID, Verified: f.VerifiedAt != nil}
+	st := &PocVerifyStatus{
+		FindingID: findingID, Verified: f.VerifiedAt != nil,
+		AutoEnqueue: pocVerifyAutoEnqueue(),
+	}
 
 	arts, err := store.ListArtifacts(ctx, findingID)
 	if err != nil {
 		return nil, err
 	}
+	autoMode := st.AutoEnqueue
 	for _, a := range arts {
 		switch {
-		case a.Kind == "poc" && a.Title == pythonPocTitle && a.Status == "verified":
+		case a.Kind == "poc" && a.Title == pythonPocTitle && pocVerifyInputAllowed(a, autoMode):
 			st.HasPoc = true
-		case a.Kind == "nuclei" && a.Status == "verified":
+		case a.Kind == "nuclei" && pocVerifyInputAllowed(a, autoMode):
 			st.HasNuclei = true
 		case a.Kind == "repro_log" && a.Title == pocVerifyTitle:
 			if v, err := parsePocVerifyContent(a.Content); err == nil {

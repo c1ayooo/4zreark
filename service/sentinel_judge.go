@@ -188,9 +188,16 @@ func (j *SentinelJudge) Judge(ctx context.Context, commitID int64) (judgment *re
 		if runErr != nil {
 			return
 		}
-		p, _ := json.Marshal(payload)
+		// 分析结果页按提交回放「怎么得出这个结论」：所有判定事件都带
+		// commit_id（判定时 finding 尚未写入，只能按提交关联）。
+		p := make(map[string]interface{}, len(payload)+1)
+		for k, v := range payload {
+			p[k] = v
+		}
+		p["commit_id"] = commit.ID
+		data, _ := json.Marshal(p)
 		if _, err := j.store.AppendRunEvent(ctx, &repo.SentinelRunEvent{
-			RunID: runID, Level: level, Kind: kind, Message: message, Payload: p,
+			RunID: runID, Level: level, Kind: kind, Message: message, Payload: data,
 		}); err != nil {
 			log.Printf("[Sentinel] 写判定事件失败 run=%d: %v", runID, err)
 		}
@@ -248,6 +255,7 @@ func (j *SentinelJudge) Judge(ctx context.Context, commitID int64) (judgment *re
 	if evalErr != nil {
 		return nil, evalErr
 	}
+	emit("info", "judge_model", "判定模型: "+eval.ModelName(), nil)
 
 	outcome, err := eval.Evaluate(ctx, commit)
 	if err != nil {
@@ -268,6 +276,7 @@ func (j *SentinelJudge) Judge(ctx context.Context, commitID int64) (judgment *re
 	verdict := outcome.Verdict
 	out := outcome.Run
 	partial := outcome.Partial
+	createdFindingID := int64(0)
 
 	evidenceJSON, _ := json.Marshal(verdict.Evidence)
 	snippetsJSON, _ := json.Marshal(verdict.Snippets)
@@ -331,6 +340,9 @@ func (j *SentinelJudge) Judge(ctx context.Context, commitID int64) (judgment *re
 		//   - S 级自动草拟 nuclei 候选落 draft——人工 verified 才可发布/复现，
 		//     铁律不自动越过；确认（confirmed）时所有等级都会补齐 nuclei。
 		if err == nil {
+			createdFindingID = findingID
+			emit("info", "judge_finding", fmt.Sprintf("已生成发现 #%d（%s 级），富化与产物流水线排队中", findingID, grade),
+				map[string]interface{}{"finding_id": findingID, "grade": grade})
 			// 自动 nuclei 草拟：S 级始终；web 类漏洞按 sentinel.auto_artifacts.
 			// nuclei_web 开关扩展（内存破坏类没有 HTTP 验证面，不适合 nuclei）。
 			autoNuclei := grade == "S" ||
@@ -360,6 +372,7 @@ func (j *SentinelJudge) Judge(ctx context.Context, commitID int64) (judgment *re
 		"partial":           partial,
 		"prompt_tokens":     out.PromptTokens,
 		"completion_tokens": out.CompletionTokens,
+		"finding_id":        createdFindingID,
 	})
 	finishRun("completed", 1, "")
 

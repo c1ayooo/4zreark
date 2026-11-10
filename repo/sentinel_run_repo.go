@@ -213,6 +213,35 @@ func (s *Sentinel) EventsAfter(ctx context.Context, runID, afterSeq int64, limit
 	return items, rows.Err()
 }
 
+// ListCommitAIEvents 取一条提交相关的 AI 分析事件（判定 + 高危产物流水线），
+// 正序返回，作为「分析结果」页回放判定过程的数据源。
+// 判定发生在 finding 写入之前，judge 事件只能按 payload.commit_id 关联；
+// 产物流水线事件同时带 finding_id 与 commit_id（都由 service 层写入）。
+func (s *Sentinel) ListCommitAIEvents(ctx context.Context, commitID int64, limit int) ([]*SentinelRunEvent, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	rows, err := s.pool().Query(ctx, `
+		select id, run_id, seq, level, kind, message, payload, created_at
+		  from run_event
+		 where payload->>'commit_id' = $1
+		   and (kind like 'judge%' or kind like 'artifacts%')
+		 order by id asc limit $2`, strconv.FormatInt(commitID, 10), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events := make([]*SentinelRunEvent, 0, 16)
+	for rows.Next() {
+		var e SentinelRunEvent
+		if err := rows.Scan(&e.ID, &e.RunID, &e.Seq, &e.Level, &e.Kind, &e.Message, &e.Payload, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		events = append(events, &e)
+	}
+	return events, rows.Err()
+}
+
 // InsertAudit 写域内审计（仓库增删改、手动触发采集/判定）。
 func (s *Sentinel) InsertAudit(ctx context.Context, actor, action, target string, detail map[string]interface{}) error {
 	payload := json.RawMessage("{}")

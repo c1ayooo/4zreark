@@ -343,9 +343,10 @@ func (s *MCPService) sentinelTools() []mcpToolHandler {
 				Name:  "sentinel_verify_poc",
 				Title: "请求 POC 靶场验证",
 				Description: "把发现排入 pocsmith 靶场验证队列：AI 选公开靶场镜像（vulhub 等，白名单约束）→ docker 起" +
-					"隔离内网靶场（--internal 无外网出口）→ 在靶场上执行 verified 的 python-poc → 按 VULNERABLE/NOT " +
-					"VULNERABLE 判定可行性。前置材料：已人工 verified 的 kind=poc、title=python-poc 产物。" +
-					"force=true 忽略已有 poc-verify 产物重跑。入队后用 sentinel_wait_poc_verify 等结论。写操作。仅「全部项目」的 key 可用。",
+					"隔离内网靶场（--internal 无外网出口）→ 在靶场上执行 python-poc 或 nuclei 模板 → 按 VULNERABLE/NOT " +
+					"VULNERABLE 判定可行性。默认 auto_enqueue=true，产物生成完会自动入队且一次只验证一个；" +
+					"也可用本工具手动触发。force=true 忽略已有 poc-verify 产物重跑。" +
+					"入队后用 sentinel_wait_poc_verify 等结论。写操作。仅「全部项目」的 key 可用。",
 				InputSchema: inputSchema(map[string]any{
 					"finding_id": map[string]any{"type": "integer", "minimum": 1},
 					"force":      map[string]any{"type": "boolean", "description": "忽略已有 poc-verify 产物强制重跑（默认 false）"},

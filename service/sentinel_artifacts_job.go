@@ -10,6 +10,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -57,7 +58,57 @@ func (w *sentinelArtifactsWorker) Work(ctx context.Context, job *river.Job[Senti
 		// 发现被删等永久性缺失：取消而不是重试。
 		return river.JobCancel(fmt.Errorf("发现不存在: %w", err))
 	}
-	return runHighRiskArtifacts(runCtx, w.judge, job.Args.FindingID, job.Args.CommitID, f.VulnClass)
+
+	// 分析过程事件流：run_type=artifacts，事件带 finding_id + commit_id，
+	// 与判定事件一起被分析结果页按提交回放。
+	runID, runErr := store.CreateRun(runCtx, &repo.SentinelRun{
+		RunType: "artifacts", Status: "running", Total: 1,
+	})
+	if runErr != nil {
+		log.Printf("[Sentinel] 创建产物流水线批次失败 finding=%d: %v", job.Args.FindingID, runErr)
+	} else {
+		_ = store.UpdateRun(runCtx, runID, map[string]interface{}{"started_at": time.Now()})
+	}
+	emit := func(level, kind, message string, payload map[string]interface{}) {
+		if runErr != nil {
+			return
+		}
+		p := make(map[string]interface{}, len(payload)+2)
+		for k, v := range payload {
+			p[k] = v
+		}
+		p["finding_id"] = job.Args.FindingID
+		p["commit_id"] = job.Args.CommitID
+		data, _ := json.Marshal(p)
+		if _, err := store.AppendRunEvent(runCtx, &repo.SentinelRunEvent{
+			RunID: runID, Level: level, Kind: kind, Message: message, Payload: data,
+		}); err != nil {
+			log.Printf("[Sentinel] 写产物流水线事件失败 run=%d: %v", runID, err)
+		}
+	}
+	finishRun := func(status, runErrMsg string) {
+		if runErr != nil {
+			return
+		}
+		fields := map[string]interface{}{"status": status, "processed": 1, "finished_at": time.Now()}
+		if runErrMsg != "" {
+			fields["error"] = runErrMsg
+		}
+		if err := store.UpdateRun(runCtx, runID, fields); err != nil {
+			log.Printf("[Sentinel] 收尾产物流水线批次失败 run=%d: %v", runID, err)
+		}
+	}
+
+	emit("info", "artifacts_start", fmt.Sprintf("高危产物流水线开始（发现 #%d %s 级）", f.ID, f.Grade), nil)
+	err = runHighRiskArtifacts(runCtx, w.judge, job.Args.FindingID, job.Args.CommitID, f.VulnClass, emit)
+	if err != nil {
+		emit("error", "artifacts_failed", err.Error(), nil)
+		finishRun("failed", err.Error())
+		return err
+	}
+	emit("info", "artifacts_done", "产物流水线完成", nil)
+	finishRun("completed", "")
+	return nil
 }
 
 // EnqueueArtifacts 把产物流水线放进队列（幂等：同一发现排队中不会重复入队）。

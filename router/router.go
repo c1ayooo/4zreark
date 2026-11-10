@@ -826,6 +826,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				sentinelGroup.GET("/artifacts/:id/download", middleware.RequirePermission("sentinel:read"), sentinelHandler.DownloadArtifact)
 				sentinelGroup.POST("/artifacts/:id/publish", middleware.RequirePermission("sentinel:write"), sentinelHandler.PublishArtifact)
 
+				sentinelGroup.GET("/commits/:id/ai-events", middleware.RequirePermission("sentinel:read"), sentinelHandler.GetCommitAIEvents)
 				sentinelGroup.GET("/runs", middleware.RequirePermission("sentinel:read"), sentinelHandler.ListRuns)
 				sentinelGroup.GET("/runs/:id/events", middleware.RequirePermission("sentinel:read"), sentinelHandler.ListRunEvents)
 

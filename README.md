@@ -317,8 +317,20 @@ daemon 误当成宿主路径（那样 PoC 容器会挂到一个空目录）。�
 CONFIG_PATH=config/config.yaml go run ./cmd/pocsmith -workdir data/pocsmith
 ```
 
-把 `python-poc`（或 nuclei 模板）产物审核为 verified 会自动入队验证，也可调用
-`POST /api/sentinel/findings/:id/poc-verify`。验证前会解析 `exploit-guide` /
+AI 分析过程可回放：判定（模型就绪 → 模型判定 → 生成发现 → 判定完成）与高危
+产物流水线（深审 → python-poc → 利用方法文档 → 自动排队靶场验证）都会写 run
+事件流，`GET /api/sentinel/commits/:id/ai-events` 正序返回；分析结果页提交详情
+Drawer 里的「AI 分析过程」时间线直接展示，进行中每 5 秒刷新、终态停止。
+
+默认 `sentinel.poc_verify.auto_enqueue: true`，验证全自动：高危命中后产物流水线
+生成 `python-poc` / nuclei 模板即自动入队，不需要人工把产物改成 verified；已有结论
+（含未通过）不会自动重跑。`auto_enqueue: false` 可退回「人工 verified 才验证」的
+审核闸门——自动模式下未经人工审核的 draft PoC 也会执行，结论里以
+`poc_input_status` 标注供审计区分。`sentinel_poc_verify` 与 `sentinel_repro` 都是
+单 worker，并由进程级闸门跨队列串行化：**一次只跑一个 docker 验证**，其余排队。
+手动触发/重跑用 `POST /api/sentinel/findings/:id/poc-verify`（`force=true` 忽略已有结论）。
+
+验证前会解析 `exploit-guide` /
 `repro-guide` / `deep-analysis` 这些 Markdown 利用方法，抽出前置条件、利用步骤、
 请求示例与 URL 路径，作为选靶场镜像与核对 `target_url` 的依据；时间线依次显示
 「解析利用方法 Markdown → 生成环境方案 → 拉取靶场镜像 → 起靶场 → 执行 PoC」。

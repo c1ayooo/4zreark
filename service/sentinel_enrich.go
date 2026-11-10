@@ -127,6 +127,9 @@ func enrichFindingAsync(findingID int64, autoNuclei bool) {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer cancel()
 		enrichFinding(ctx, findingID, autoNuclei)
+		// 富化（nuclei 模板 / POC 库命中 / 复现指南）落库后也尝试自动入队，
+		// 与高危产物流水线共用幂等入口：谁先生成出可用 PoC 谁入队。
+		maybeAutoEnqueuePocVerify(ctx, findingID)
 	}()
 }
 

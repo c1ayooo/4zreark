@@ -86,8 +86,8 @@ export default function PocVerifyCard({ findingId }: { findingId: number }) {
         )}
         <span className="ml-auto flex items-center gap-1.5">
           {!status?.has_poc && !status?.has_nuclei && !status?.verified && (
-            <Tooltip title="需要一份 verified 的 python-poc 或 nuclei 模板产物（高危命中后 LLM 自动草拟，到「分析产物」审核 verified 后即可发起靶场验证，两种引擎任一即可）">
-              <span className="text-[11px] text-muted-foreground">缺少 verified python-poc / nuclei 模板，暂不可验证</span>
+            <Tooltip title="自动模式下高危命中会由 LLM 草拟 PoC 并自动排队验证（一次一个）；也可在「分析产物」人工新增/审核 PoC">
+              <span className="text-[11px] text-muted-foreground">暂无可用 PoC / nuclei 模板，等待自动生成</span>
             </Tooltip>
           )}
           {(status?.has_poc || status?.has_nuclei) && !status.verified && !busy && (
@@ -137,12 +137,13 @@ export default function PocVerifyCard({ findingId }: { findingId: number }) {
                 k="输入 PoC"
                 v={
                   status.has_poc
-                    ? 'python-poc（verified）'
+                    ? 'python-poc'
                     : status.has_nuclei
-                      ? 'nuclei 模板（verified，引擎=nuclei）'
-                      : '无 verified python-poc / nuclei 模板'
+                      ? 'nuclei 模板（引擎=nuclei）'
+                      : '暂无可用 PoC / nuclei 模板'
                 }
               />
+              <KV k="验证模式" v={status.auto_enqueue ? '自动排队 · 一次只验证一个' : '人工审核后触发'} />
               <KV
                 k="利用方法"
                 v={
@@ -180,7 +181,7 @@ export default function PocVerifyCard({ findingId }: { findingId: number }) {
                 </ol>
               ) : (
                 <div className="py-1 text-[11.5px] text-muted-foreground">
-                  尚未执行。发起后这里会回放：解析利用方法 → 环境方案 → 拉镜像 → 起靶场 → 就绪探测 → 执行 PoC → 清理。
+                  尚未执行。自动排队后这里会回放：解析利用方法 → 环境方案 → 拉镜像 → 起靶场 → 就绪探测 → 执行 PoC → 清理。
                 </div>
               )}
             </div>

@@ -78,6 +78,14 @@ func NewReproService(workdir string, timeoutSeconds int, mountSource ...string) 
 
 // Repro 执行一条发现的差分复现。river job 入口；已验证过的发现直接跳过。
 func (s *ReproService) Repro(ctx context.Context, findingID int64) error {
+	// 一次只验证一个：差分复现与靶场验证共用 docker 编排闸门，两个队列的
+	// worker 同时取到作业时后者会等前者跑完再进容器。
+	gateRelease, gateErr := acquireSentinelVerifyGate(ctx)
+	if gateErr != nil {
+		return gateErr
+	}
+	defer gateRelease()
+
 	store := s.store
 	f, err := store.GetFinding(ctx, findingID)
 	if err != nil {

@@ -526,6 +526,22 @@ func (h *SentinelHandler) GetPocVerifyStatus(c *gin.Context) {
 	utils.Success(c, st)
 }
 
+// GetCommitAIEvents 提交维度的 AI 分析事件流（判定 + 高危产物流水线），
+// 正序返回。分析结果页按它回放「这条结论是怎么得出的」。
+func (h *SentinelHandler) GetCommitAIEvents(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "提交 id 非法")
+		return
+	}
+	events, err := h.store.ListCommitAIEvents(c.Request.Context(), id, 100)
+	if err != nil {
+		utils.InternalError(c, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"events": events})
+}
+
 // VerifyPoc 把发现排入靶场验证队列（force 忽略已有结论重跑）。
 func (h *SentinelHandler) VerifyPoc(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)

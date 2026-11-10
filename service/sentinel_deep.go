@@ -67,6 +67,9 @@ func effectiveDeepLLMConfig(ctx context.Context) deepLLMConfig {
 	return deepLLMConfig{cfg: live}
 }
 
+// runEmit 是批次事件回调；nil 时静默（enrich 等无批次上下文的调用方）。
+type runEmit func(level, kind, message string, payload map[string]interface{})
+
 // runHighRiskArtifacts 高危产物流水线（同步执行，river worker 调用）：
 // 串行三步，每步独立容错，失败继续下一步；产物幂等（同名 draft 已存在即跳过）：
 //  1. 深审 deep-analysis（mirror 文件全文细查）；
@@ -74,11 +77,15 @@ func effectiveDeepLLMConfig(ctx context.Context) deepLLMConfig {
 //  3. exploit-guide（仅 web 类）。
 //
 // 内存破坏类没有远程验证面：只深审，验证产物走 Tier 3a 容器差分复现。
+// emit 非 nil 时把每步进展写进 run_type=artifacts 批次（分析结果页回放用）。
 // 返回值：三步全部失败时返回最后一个错误（river 据此重试；上游限流 429 等
 // 瞬时故障靠退避错峰自愈）。任一产物成功即返回 nil——重试时幂等跳过已有产物。
-func runHighRiskArtifacts(ctx context.Context, j *SentinelJudge, findingID, commitID int64, vulnClass string) error {
+func runHighRiskArtifacts(ctx context.Context, j *SentinelJudge, findingID, commitID int64, vulnClass string, emit runEmit) error {
 	deepSem <- struct{}{}
 	defer func() { <-deepSem }()
+	if emit == nil {
+		emit = func(level, kind, message string, payload map[string]interface{}) {}
+	}
 
 	var lastErr error
 	deepReport := ""
@@ -86,9 +93,13 @@ func runHighRiskArtifacts(ctx context.Context, j *SentinelJudge, findingID, comm
 		if a, err := runDeepAnalysis(ctx, j, findingID, commitID); err != nil {
 			lastErr = err
 			log.Printf("[Sentinel] 深审失败 finding=%d commit=%d: %v", findingID, commitID, err)
+			emit("error", "artifacts_deep_analysis", "深审失败: "+err.Error(), nil)
 		} else {
 			deepReport = a.Content
+			emit("info", "artifacts_deep_analysis", fmt.Sprintf("深审完成 artifact=%d（%d 字）", a.ID, len([]rune(a.Content))), nil)
 		}
+	} else {
+		emit("info", "artifacts_deep_analysis", "深审未开启（sentinel.deep_analysis=false）", nil)
 	}
 
 	if !isWebVulnClass(vulnClass) {
@@ -99,19 +110,28 @@ func runHighRiskArtifacts(ctx context.Context, j *SentinelJudge, findingID, comm
 		if a, err := GeneratePythonPOC(ctx, findingID, deepReport); err != nil {
 			lastErr = err
 			log.Printf("[Sentinel] python-poc 生成失败 finding=%d: %v", findingID, err)
+			emit("error", "artifacts_python_poc", "python-poc 生成失败: "+err.Error(), nil)
 		} else if a != nil {
 			lastErr = nil
 			log.Printf("[Sentinel] python-poc 生成完成 finding=%d artifact=%d", findingID, a.ID)
+			emit("info", "artifacts_python_poc", fmt.Sprintf("python-poc 就绪 artifact=%d", a.ID), nil)
 		}
 	}
 
 	if autoArtifactOn(func(c *config.SentinelAutoArtifactsConfig) *bool { return c.ExploitGuide }) {
 		if a, err := GenerateExploitGuide(ctx, findingID, deepReport); err != nil {
 			log.Printf("[Sentinel] exploit-guide 生成失败 finding=%d: %v", findingID, err)
+			emit("error", "artifacts_exploit_guide", "利用方法文档生成失败: "+err.Error(), nil)
 		} else if a != nil {
 			lastErr = nil
 			log.Printf("[Sentinel] exploit-guide 生成完成 finding=%d artifact=%d", findingID, a.ID)
+			emit("info", "artifacts_exploit_guide", fmt.Sprintf("利用方法文档就绪 artifact=%d", a.ID), nil)
 		}
+	}
+	// 产物就绪 → 自动入队靶场验证（幂等；不需要人工把 PoC 改成 verified）。
+	// web 类才有 HTTP 靶场，上面的 !isWebVulnClass 已提前返回。
+	if maybeAutoEnqueuePocVerify(ctx, findingID) {
+		emit("info", "artifacts_poc_verify_enqueued", "已自动入队靶场验证（一次只跑一个，排队执行）", nil)
 	}
 	return lastErr
 }

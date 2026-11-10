@@ -388,8 +388,10 @@ func NewSentinelReproClient(ctx context.Context, pool *pgxpool.Pool, repro *Repr
 		RescueStuckJobsAfter: 30 * time.Minute,
 		Workers:              workers,
 		Queues: map[string]river.QueueConfig{
-			SentinelReproQueueName:     {MaxWorkers: 2},
-			SentinelPocVerifyQueueName: {MaxWorkers: 1}, // 容器编排重，串行执行
+			// 验证类作业一次只跑一个：两个队列都单 worker，另有进程级
+			// sentinelVerifyGate 跨队列兜底（固定靶场容器名 + 资源限制不允许并发）。
+			SentinelReproQueueName:     {MaxWorkers: 1},
+			SentinelPocVerifyQueueName: {MaxWorkers: 1},
 		},
 	})
 	if err != nil {

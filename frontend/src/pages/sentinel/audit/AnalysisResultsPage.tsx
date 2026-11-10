@@ -16,6 +16,7 @@ import { Button, Drawer, Dropdown, Input, Popconfirm, Select, Table, Tooltip } f
 import type { TableProps } from 'antd'
 import { Download, FileText, Play, Search, Sparkles } from 'lucide-react'
 import { sentinelApi, type SentinelCommit, type SentinelFindingStatus } from '@/api/sentinel'
+import AIEventsCard from './AIEventsCard'
 import PocVerifyCard from './PocVerifyCard'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors'
@@ -621,6 +622,9 @@ export default function AnalysisResultsPage() {
                     </Button>
                   )}
                 </div>
+
+                {/* AI 分析过程事件流：判定 + 产物流水线（分析进行中每 5s 刷新，终态停止） */}
+                <AIEventsCard commitId={detail.commit.id} />
 
                 <div className="rounded-xl border border-border bg-card px-3 py-2.5">
                   <div className="mb-1.5 flex items-center gap-2">
