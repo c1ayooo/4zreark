@@ -81,8 +81,13 @@ func (m *retryModel) Generate(ctx context.Context, input []*schema.Message, opts
 	var lastErr error
 	for attempt := 0; attempt <= m.maxRetries; attempt++ {
 		msg, err := m.base.Generate(ctx, input, opts...)
-		if err == nil {
+		if err == nil && msg != nil && strings.TrimSpace(msg.Content) != "" {
 			return msg, nil
+		}
+		// 服务端断连的另一形态：HTTP 200 但响应体为空。与网络错误同属
+		// 瞬时故障（Classify 对未知错误归 ErrTransient），一并退避重试。
+		if err == nil {
+			err = errors.New("模型返回空内容")
 		}
 		lastErr = err
 		if !retryableLLMError(err) {
