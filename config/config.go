@@ -225,6 +225,11 @@ func (l *LLMConfig) Normalize() {
 	if l.TimeoutSeconds <= 0 {
 		l.TimeoutSeconds = 90
 	}
+	// 0 = 未配置，套默认 4 次（1s/2s/4s/8s 退避，能跨过中转服务端秒级断连窗口）；
+	// 显式 -1 表示关闭应用层重试，只靠调用方的作业级重试。
+	if l.MaxRetries == 0 {
+		l.MaxRetries = 4
+	}
 	if l.MaxRetries < 0 {
 		l.MaxRetries = 0
 	}

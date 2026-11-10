@@ -62,13 +62,15 @@ func newChatModel(ctx context.Context, cfg config.LLMConfig, jsonMode bool) (mod
 	}
 	// 重试仍在 eino 抽象内：包装的是 model.BaseChatModel，图外无需感知。
 	if cfg.MaxRetries > 0 {
-		return &retryModel{base: cm, maxRetries: cfg.MaxRetries, baseDelay: 200 * time.Millisecond}, nil
+		return &retryModel{base: cm, maxRetries: cfg.MaxRetries, baseDelay: time.Second}, nil
 	}
 	return cm, nil
 }
 
 // retryModel 只对可重试错误（限流/5xx/网络）做指数退避。
 // 永久错误与未配置密钥直接返回；Stream 一旦开始输出就不再重试。
+// 退避 1s/2s/4s…封顶 15s：中转服务端的 unexpected EOF 抖动通常持续数秒，
+// 200ms 级别的快速重试跨不过去，只会把三次尝试都撞在同一窗口里。
 type retryModel struct {
 	base       model.BaseChatModel
 	maxRetries int
@@ -90,8 +92,8 @@ func (m *retryModel) Generate(ctx context.Context, input []*schema.Message, opts
 			break
 		}
 		delay := m.baseDelay << attempt
-		if delay > 5*time.Second {
-			delay = 5 * time.Second
+		if delay > 15*time.Second {
+			delay = 15 * time.Second
 		}
 		select {
 		case <-ctx.Done():
