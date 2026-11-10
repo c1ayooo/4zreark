@@ -6,6 +6,19 @@ export interface AssetEndpoint {
   status_code: number
 }
 
+/** 站点下的 path 层级（爬虫 / 目录扫描产物），与入口(scheme+port)、原始记录(证据)分层存放 */
+export interface SiteRoute {
+  id: number
+  site_id: number
+  project_id: number
+  method: string
+  path: string
+  status_code: number
+  source: string
+  first_seen: string
+  last_seen: string
+}
+
 export interface Site {
   id: number
   project_id: number
@@ -14,7 +27,10 @@ export interface Site {
   host: string
   port: number
   protocol: string
+  /** 历史展示/索引字段（可能是完整入口 URL，会被后续证据覆盖） */
   value: string
+  /** 权威可请求主入口 URL */
+  url: string
   ip: string
   http_status: number
   title: string
@@ -304,6 +320,11 @@ export const assetApi = {
     api.get<unknown, { code: number; message: string; data: AssetDetail }>(`/assets/${id}`),
   records: (id: number, params: { cursor?: string; limit?: number; interface?: 1; crawler?: 1 } = {}) =>
     api.get<unknown, { code: number; data: AssetRecordsPage }>(`/assets/${id}/records`, { params }),
+  /** 站点下的路由层级（后端 GET /assets/routes?site_id=） */
+  routes: (siteId: number, limit = 200) =>
+    api.get<unknown, { code: number; data: SiteRoute[] }>('/assets/routes', {
+      params: { site_id: siteId, limit },
+    }),
   checkQuery: (q: string) =>
     api.get<unknown, { code: number; data: { valid: boolean; compiled: string } }>('/assets/query-check', {
       params: { q },

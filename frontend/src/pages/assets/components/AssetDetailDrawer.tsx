@@ -2,12 +2,12 @@ import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Button, Checkbox, Drawer, Table, Tag } from 'antd'
 import { Star } from 'lucide-react'
-import { assetApi, type Site } from '@/api/assets'
+import { assetApi, type Site, type SiteRoute } from '@/api/assets'
 import { formatDate } from '@/lib/utils'
 import { statusTagClass, type BadgeVariant } from '@/components/ui/StatusTag'
 import { CertExpiryTag } from './GovernanceCard'
 
-export type DrawerTab = 'overview' | 'endpoints' | 'records' | 'fingerprints' | 'verifications' | 'vulns'
+export type DrawerTab = 'overview' | 'endpoints' | 'routes' | 'records' | 'fingerprints' | 'verifications' | 'vulns'
 
 // 漏洞等级的展示口径与漏洞库页一致：颜色只区分高危及以下两档，
 // 避免抽屉里出现一排高饱和色块。
@@ -77,6 +77,14 @@ export default function AssetDetailDrawer({
   })
   const recordsPage = recordsQuery.data?.data
   const records = recordsPage?.items ?? []
+  // 路由是站点下的 path 层级，后端早已落 site_routes，这里才把它接进详情。
+  const routesQuery = useQuery({
+    queryKey: ['asset-routes', site?.id],
+    queryFn: () => assetApi.routes(site!.id),
+    enabled: !!site && tab === 'routes',
+    staleTime: 30_000,
+  })
+  const routes = routesQuery.data?.data ?? []
 
   const stateVariant = (state: string): BadgeVariant => {
     if (state === 'reachable') return 'default'
@@ -96,7 +104,7 @@ export default function AssetDetailDrawer({
         site && (
           <div className="min-w-0">
             <div className="truncate font-mono text-sm font-semibold">
-              {site.value || site.host}
+              {site.host || site.value}
             </div>
             <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
               <Tag className={statusTagClass(stateVariant(site.state))}>
@@ -120,6 +128,7 @@ export default function AssetDetailDrawer({
         {([
           ['overview', '概览'],
           ['endpoints', '入口'],
+          ['routes', '路由'],
           ['records', '原始记录'],
           ['fingerprints', '指纹'],
           ['verifications', '验证'],
@@ -210,6 +219,9 @@ export default function AssetDetailDrawer({
 
             {tab === 'records' && (
               <div className="space-y-3">
+                <p className="text-xs text-muted-foreground">
+                  原始记录是资产证据层；爬虫产出的 path 层级请切到「路由」页签查看。
+                </p>
                 <div className="flex items-center gap-4 text-[13px] text-muted-foreground">
                   <Checkbox
                     checked={recordsInterfaceOnly}
@@ -300,6 +312,56 @@ export default function AssetDetailDrawer({
                     </Button>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {tab === 'routes' && (
+              <div className="space-y-3">
+                <p className="text-xs text-muted-foreground">
+                  路由是站点下的 path 层级（爬虫 / 目录扫描产物）；「入口」是协议+端口层级，
+                  「原始记录」是证据层，三者不互为替代。
+                </p>
+                {routesQuery.isLoading ? (
+                  <p className="text-sm text-muted-foreground">加载站点路由…</p>
+                ) : routes.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">暂无路由记录。</p>
+                ) : (
+                  <div className="rounded-md border">
+                    <Table
+                      size="small"
+                      pagination={false}
+                      rowKey={(r: SiteRoute) => String(r.id)}
+                      dataSource={routes}
+                      columns={[
+                        {
+                          title: '方法',
+                          width: 60,
+                          render: (_, r: SiteRoute) => <span className="font-mono text-xs">{r.method || 'GET'}</span>,
+                        },
+                        {
+                          title: '路径',
+                          render: (_, r: SiteRoute) => <span className="break-all font-mono text-xs">{r.path}</span>,
+                        },
+                        {
+                          title: '状态',
+                          width: 54,
+                          align: 'right',
+                          render: (_, r: SiteRoute) => <span className="text-xs tabular-nums">{r.status_code || '—'}</span>,
+                        },
+                        {
+                          title: '来源 / 最近',
+                          width: 110,
+                          render: (_, r: SiteRoute) => (
+                            <div className="text-[11px] text-muted-foreground">
+                              <div>{r.source || '—'}</div>
+                              <div>{formatDate(r.last_seen)}</div>
+                            </div>
+                          ),
+                        },
+                      ]}
+                    />
+                  </div>
+                )}
               </div>
             )}
 

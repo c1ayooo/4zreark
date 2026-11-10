@@ -7,6 +7,7 @@ import type { TableProps } from 'antd'
 import { assetApi, type AssetProject, type OverviewData } from '@/api/assets'
 import EmptyState from '@/components/common/EmptyState'
 import { statusTagClass } from '@/components/ui/StatusTag'
+import { siteHostLabel } from '@/lib/utils'
 
 const nf = new Intl.NumberFormat('zh-CN')
 
@@ -249,16 +250,19 @@ export default function AssetOverviewPage() {
           ) : (
             (d?.recent_events || []).slice(0, 8).map((e: any, i: number) => {
               // 事件带 site_id 时直达资产详情页（/assets/:id）；否则退回按 host 过滤的探索视图。
+              // asset_value 是证据 URL，而 DSL host= 只匹配 s.host，必须先归一化成域名，
+              // 否则下钻永远过滤不到任何资产。
               const detailId: number | undefined = e.site_id
-              const hostUrl = e.asset_value ? drillUrl(`host="${e.asset_value}"`) : ''
+              const host = siteHostLabel(e.host, e.asset_value)
+              const hostUrl = host !== '—' ? drillUrl(`host="${host}"`) : ''
               const to = detailId ? `/assets/${detailId}` : hostUrl
               const inner = (
                 <>
                   <span className="bg-primary/60 mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full" />
                   <span className="flex-1 truncate">
                     {e.title || e.event_type || '变更'}
-                    {e.asset_value ? (
-                      <span className="text-muted-foreground ml-2 font-mono text-[11px]">{e.asset_value}</span>
+                    {host !== '—' ? (
+                      <span className="text-muted-foreground ml-2 font-mono text-[11px]">{host}</span>
                     ) : null}
                   </span>
                   <span className="text-muted-foreground shrink-0 font-mono text-[11px]">

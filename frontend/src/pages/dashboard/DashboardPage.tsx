@@ -4,7 +4,7 @@ import { dashboardApi, type DashboardPanels, type DashboardStats, type TrendData
 import RealTimeMonitor from '@/components/dashboard/RealTimeMonitor'
 import { PulseDot } from '@/components/common/PulseDot'
 import { Button, Card, Statistic, Table, Tag } from 'antd'
-import { cn, formatDate, formatNumber } from '@/lib/utils'
+import { cn, formatDate, formatNumber, siteHostLabel } from '@/lib/utils'
 import { ArrowUpRight } from 'lucide-react'
 import {
   CartesianGrid,
@@ -364,7 +364,7 @@ function RecentSitesPanel() {
               to={`/assets/${s.id}`}
               className="flex items-baseline gap-2 py-2.5 text-sm hover:text-primary"
             >
-              <span className="truncate font-medium">{s.value}</span>
+              <span className="truncate font-medium">{siteHostLabel(undefined, s.value)}</span>
               {s.http_status >= 400 && (
                 <span className="shrink-0 text-[13px] text-destructive">{s.http_status}</span>
               )}

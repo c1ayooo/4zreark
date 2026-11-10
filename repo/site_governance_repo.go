@@ -26,6 +26,7 @@ alter table sites add column if not exists tags jsonb not null default '[]'::jso
 alter table sites add column if not exists note text not null default '';
 alter table sites add column if not exists ignored boolean not null default false;
 alter table sites add column if not exists cert_not_after timestamptz;
+alter table sites add column if not exists url text not null default '';
 create index if not exists idx_sites_starred on sites (project_id, last_seen desc) where starred;
 create index if not exists idx_sites_tags on sites using gin (tags jsonb_path_ops);
 create index if not exists idx_sites_ignored on sites (project_id, last_seen desc) where ignored;

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -340,14 +341,16 @@ func (s *DiscoveryService) AcceptOrReject(ctx context.Context, projectID int64, 
 	return repo.Default().AssetCandidates().DecideCandidates(ctx, projectID, ids, false)
 }
 
-// AcceptCandidates 人工确认候选：建 domain 种子（后续巡航周期会对它做展开/探测）。
+// AcceptCandidates 人工确认候选：建 domain 种子 + 直接入资产（未验证站点），
+// 并把种子交给收集队列，后续巡航再补 HTTP 探测信息。此前「accept 只建种子」，
+// 候选池里 696 个 accepted 域名因此长期停在中间态、资产页看不到。
 func (s *DiscoveryService) AcceptCandidates(ctx context.Context, projectID int64, ids []int64) (int64, error) {
 	updated, err := repo.Default().AssetCandidates().DecideCandidates(ctx, projectID, ids, true)
 	if err != nil {
 		return 0, err
 	}
-	// 接受的 domain 候选转成种子，纳入巡航与资产展开
-	candidates, err := repo.Default().AssetCandidates().ListCandidates(ctx, projectID, string(repo.CandidateAccepted), 500)
+	// 取全量 accepted 列表按 ids 精确过滤，避免列表截断漏掉较早的候选。
+	candidates, err := repo.Default().AssetCandidates().ListCandidates(ctx, projectID, string(repo.CandidateAccepted), 5000)
 	if err != nil {
 		return updated, err
 	}
@@ -355,14 +358,58 @@ func (s *DiscoveryService) AcceptCandidates(ctx context.Context, projectID int64
 	for _, id := range ids {
 		accepted[id] = true
 	}
+	seedIDs := make([]int64, 0, len(ids))
+	assetRecords := make([]repo.RawRecord, 0, len(ids))
 	for _, c := range candidates {
 		if !accepted[c.ID] || c.Kind != "domain" {
 			continue
 		}
-		// 种子已存在时 CreateSeed 报错，忽略即可（幂等）
-		_ = repo.Default().Seeds().CreateSeed(ctx, &repo.Seed{
-			ProjectID: projectID, Kind: "domain", Value: c.Value, Enabled: true,
+		host := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(c.Value), "https://"), "http://")
+		if host == "" {
+			continue
+		}
+		seed := &repo.Seed{ProjectID: projectID, Kind: "domain", Value: host, Enabled: true}
+		if err := repo.Default().Seeds().CreateSeed(ctx, seed); err != nil {
+			if !errors.Is(err, repo.ErrDuplicate) {
+				log.Printf("[Discovery] 候选 %s 建种子失败: %v", host, err)
+			}
+		} else if seed.ID > 0 {
+			seedIDs = append(seedIDs, seed.ID)
+		}
+		// 接受即入库：纯 DNS 证据先建站点，标记为未验证；后续巡航探测刷新状态。
+		assetRecords = append(assetRecords, repo.RawRecord{
+			Source:   "discovery",
+			Host:     host,
+			Protocol: "https",
+			Value:    "https://" + host,
+			Evidence: map[string]any{
+				"dns_only":      true,
+				"candidate_id":  c.ID,
+				"discovered_by": c.Source,
+			},
 		})
+	}
+	if len(assetRecords) > 0 {
+		// ImportRecords 单批上限 5000，按批切片，避免一次确认上千候选时整批失败。
+		const chunk = 5000
+		for start := 0; start < len(assetRecords); start += chunk {
+			end := start + chunk
+			if end > len(assetRecords) {
+				end = len(assetRecords)
+			}
+			if _, err := NewAssetService().Ingest(ctx, projectID, "discovery", assetRecords[start:end]); err != nil {
+				// 不影响候选确认结果，但必须留痕，避免静默丢数据。
+				log.Printf("[Discovery] 候选转资产失败（project=%d, 第 %d 批 %d 条）: %v",
+					projectID, start/chunk+1, end-start, err)
+			}
+		}
+	}
+	if len(seedIDs) > 0 {
+		if n, _, err := GetSeedCollectionService().Enqueue(ctx, projectID, seedIDs, false); err != nil {
+			log.Printf("[Discovery] 候选种子入收集队列失败: %v", err)
+		} else if n > 0 {
+			log.Printf("[Discovery] 候选种子已入收集队列: %d 个", n)
+		}
 	}
 	return updated, nil
 }

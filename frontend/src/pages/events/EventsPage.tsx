@@ -7,7 +7,7 @@ import type { TableProps } from 'antd'
 
 import { assetEventApi, eventTypeLabel, eventTypeVariant, type AssetEvent } from '@/api/relations'
 import RecordDetailDrawer from '@/components/common/RecordDetailDrawer'
-import { formatDate } from '@/lib/utils'
+import { formatDate, siteHostLabel } from '@/lib/utils'
 
 const eventFilter = [
   { value: '', label: '全部' },
@@ -110,12 +110,12 @@ export default function EventsPage() {
       render: (v: string) => <span className="text-sm text-muted-foreground">{v || '—'}</span>,
     },
     {
-      title: '站点',
+      title: '域名',
       dataIndex: 'asset_value',
       key: 'asset_value',
       width: 220,
       ellipsis: true,
-      render: (v: string) => <span className="font-mono text-sm">{v || '—'}</span>,
+      render: (v: string) => <span className="font-mono text-sm">{siteHostLabel(undefined, v)}</span>,
     },
     {
       title: '说明',

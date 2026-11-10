@@ -64,7 +64,9 @@ on conflict (project_id, kind, value) do nothing`,
 }
 
 func (c *assetCandidateRepo) ListCandidates(ctx context.Context, projectID int64, status string, limit int) ([]AssetCandidate, error) {
-	if limit <= 0 || limit > 500 {
+	// 上限放宽到 5000：确认候选时需要一次拿到全量 accepted 列表按 ids 过滤，
+	// 否则项目候选较多时旧候选会因截断而漏建种子、漏入资产。
+	if limit <= 0 || limit > 5000 {
 		limit = 200
 	}
 	if status == "" {

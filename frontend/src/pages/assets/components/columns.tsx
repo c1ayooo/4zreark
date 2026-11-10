@@ -188,7 +188,6 @@ export function buildAssetTableParts({
           // 单行紧凑：favicon/状态码/项目并入本格，不再占独立列（v2 紧凑化）；
           // 完整入口/技术栈/标签点行看抽屉，表内只留前几项 + 溢出计数
           const eps = s.endpoints ?? []
-          const epExtra = eps.length > 3 ? eps.length - 3 : 0
           const techs = s.technology_stack
           const techExtra = techs.length > 2 ? techs.length - 2 : 0
           const tagExtra = (s.tags?.length ?? 0) > 2 ? s.tags!.length - 2 : 0
@@ -196,27 +195,18 @@ export function buildAssetTableParts({
             <div className="flex min-w-0 items-center gap-2">
               <SiteIcon sha256={s.icon_sha256} alt={s.host} compact />
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium">{s.value}</div>
+                <div className="truncate text-sm font-medium" title={s.host}>{s.host || s.value}</div>
                 <div className="text-muted-foreground mt-0.5 flex items-center gap-1 overflow-hidden whitespace-nowrap text-[13px]">
                   {statusTag(s.http_status)}
-                  {eps.length > 0 ? (
-                    <>
-                      {eps.slice(0, 3).map((e) => (
-                        <span
-                          key={`${e.scheme}-${e.port}`}
-                          title={`最近状态码 ${e.status_code || '—'}`}
-                          className="rounded-sm bg-muted px-1.5 py-0.5"
-                        >
-                          {e.scheme}:{e.port}
-                        </span>
-                      ))}
-                      {epExtra > 0 && <span className="text-[11px]">+{epExtra}</span>}
-                    </>
-                  ) : (
-                    <span>
-                      {s.protocol}:{s.port}
-                    </span>
-                  )}
+                  {/* 端口/协议属于「入口」下一层级，站点行只给入口数，明细 hover 或点抽屉查看 */}
+                  <span
+                    className="rounded-sm bg-muted px-1.5 py-0.5"
+                    title={eps.length > 0
+                      ? eps.map((e) => `${e.scheme}:${e.port}`).join('、')
+                      : `${s.protocol}:${s.port}`}
+                  >
+                    入口 {eps.length > 0 ? eps.length : 1}
+                  </span>
                   <span className="truncate">{s.ip || '—'}</span>
                   {techs.length > 0 && (
                     <span className="truncate">
@@ -435,8 +425,8 @@ export function buildAssetTableParts({
       })
     }
     columns.push(...(siteColumns as unknown as NonNullable<TableProps<AssetRow>['columns']>))
-    // 行键用站点 value：多选、导出、派任务都以 host/value 为准。
-    rowKey = (s) => (s as Site).value
+    // 行键用域名：value 是会被后续证据覆盖的完整 URL，不能当站点身份。
+    rowKey = (s) => (s as Site).host
     onRow = (s) => ({
       className: 'cursor-pointer',
       onClick: (e) => {
@@ -459,7 +449,7 @@ export function buildAssetTableParts({
                 {e.host}:{e.port}
               </div>
               <div className="text-[13px] text-muted-foreground">
-                {e.value || '—'} · 站点 #{e.site_id} · 采集 {e.record_count} 次
+                站点 #{e.site_id} · 采集 {e.record_count} 次
               </div>
             </>
           )

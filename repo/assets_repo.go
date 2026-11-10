@@ -18,14 +18,16 @@ import (
 
 // Site 是归并后的资产（可访问站点），字段口径对齐 ScopesHub 实测结构。
 type Site struct {
-	ID                  int64      `json:"id"`
-	ProjectID           int64      `json:"project_id"`
-	ProjectCode         string     `json:"project_code"`
-	ProjectName         string     `json:"project_name"`
-	Host                string     `json:"host"`
-	Port                int        `json:"port"`
-	Protocol            string     `json:"protocol"`
-	Value               string     `json:"value"`
+	ID          int64  `json:"id"`
+	ProjectID   int64  `json:"project_id"`
+	ProjectCode string `json:"project_code"`
+	ProjectName string `json:"project_name"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	Protocol    string `json:"protocol"`
+	Value       string `json:"value"`
+	// URL 是权威的可请求主入口（https 优先），value 保留为历史展示/索引字段。
+	URL                 string     `json:"url"`
 	IP                  string     `json:"ip"`
 	HTTPStatus          int        `json:"http_status"`
 	Title               string     `json:"title"`
@@ -160,6 +162,7 @@ type AssetRepo struct{ r *Repo }
 func NewAssetRepo() *AssetRepo { return &AssetRepo{r: defaultRepo} }
 
 const siteColumns = `s.id, s.project_id, p.code, p.name, s.host, s.port, s.protocol, s.value,
+	coalesce(s.url,''),
 	coalesce(s.ip::text,''), s.http_status, coalesce(s.title,''), coalesce(s.icon_sha256,''),
 	s.tech, s.discovery_type, s.state, s.consecutive_failures, s.retry_step, s.cleanup_eligible,
 	s.verification_status, coalesce(s.verification_reason,''), s.attempts, s.max_attempts,
@@ -179,7 +182,7 @@ func scanSite(scan func(...any) error) (*Site, error) {
 	var s Site
 	var tech, eps, tags []byte
 	err := scan(&s.ID, &s.ProjectID, &s.ProjectCode, &s.ProjectName, &s.Host, &s.Port,
-		&s.Protocol, &s.Value, &s.IP, &s.HTTPStatus, &s.Title, &s.IconSHA256, &tech,
+		&s.Protocol, &s.Value, &s.URL, &s.IP, &s.HTTPStatus, &s.Title, &s.IconSHA256, &tech,
 		&s.DiscoveryType, &s.State, &s.ConsecutiveFailures, &s.RetryStep, &s.CleanupEligible,
 		&s.VerificationStatus, &s.VerificationReason, &s.Attempts, &s.MaxAttempts,
 		&s.FirstSeen, &s.LastSeen, &s.VerifiedAt, &s.NextVerificationAt, &s.LastHTTPVerifiedAt,
@@ -579,10 +582,10 @@ func (a *AssetRepo) ImportRecords(ctx context.Context, projectID int64, source s
 		var siteID int64
 		var siteInserted bool
 		err = tx.QueryRow(ctx, `
-			INSERT INTO sites (project_id, site_key, host, port, protocol, value, ip, http_status,
+			INSERT INTO sites (project_id, site_key, host, port, protocol, value, url, ip, http_status,
 				title, body_hash, cert_org, cert_not_after, cookie_names, js_frameworks, api_hosts,
 				state, verification_status, attempts, max_attempts, first_seen, last_seen, verified_at)
-			VALUES ($1,$2,$3,$4,$5,$6,nullif($7,'')::inet,$8,nullif($9,''),nullif($10,''),
+			VALUES ($1,$2,$3,$4,$5,$6,$6,nullif($7,'')::inet,$8,nullif($9,''),nullif($10,''),
 				nullif($11,''),$15,$12,$13,$14,
 				'pending','pending',0,3,now(),now(),null)
 			ON CONFLICT (site_key) DO UPDATE SET
@@ -598,6 +601,7 @@ func (a *AssetRepo) ImportRecords(ctx context.Context, projectID int64, source s
 				js_frameworks = coalesce(EXCLUDED.js_frameworks, sites.js_frameworks),
 				api_hosts = coalesce(EXCLUDED.api_hosts, sites.api_hosts),
 				value = CASE WHEN EXCLUDED.protocol = 'https' THEN EXCLUDED.value ELSE sites.value END,
+				url = CASE WHEN EXCLUDED.protocol = 'https' THEN EXCLUDED.url ELSE sites.url END,
 				port = CASE WHEN EXCLUDED.protocol = 'https' THEN EXCLUDED.port ELSE sites.port END
 			RETURNING id, (xmax = 0)`,
 			projectID, key, host, port, proto, value, rec.IP, rec.StatusCode, rec.Title, rec.BodyHash,
@@ -1158,10 +1162,10 @@ func nullIfZeroTime(t time.Time) any {
 
 // IntelMatchSite 是情报资产匹配查询的一行：命中某指纹规则的站点。
 type IntelMatchSite struct {
-	SiteID   int64
-	Host     string
+	SiteID    int64
+	Host      string
 	ProjectID int64
-	RuleID   string
+	RuleID    string
 }
 
 // ListSitesForRules 返回命中任一指纹规则的站点（去重后上限 limit 条）。

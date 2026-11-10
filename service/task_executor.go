@@ -76,9 +76,16 @@ type localAssetStore struct{}
 
 func (localAssetStore) Ingest(ctx context.Context, task *models.Task, records []repo.RawRecord) error {
 	if task.ProjectID <= 0 || len(records) == 0 {
+		if task.ProjectID <= 0 && len(records) > 0 {
+			log.Printf("[TaskExecutor] 跳过资产并入: task=%v 缺少 project_id（%d 条记录未落库）", task.ID, len(records))
+		}
 		return nil
 	}
 	assetSvc := NewAssetService()
+	// 收尾刷盘时任务 ctx 可能已经被取消；资产写入改用独立超时 ctx，与
+	// SaveCrawledRoutes 的后台 ctx 对齐，避免「路由进库了、资产整批失败」。
+	writeCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 	const importChunk = 5000
 	var totalRecords, newSites, newEndpoints, fpSites, fpRules, fpMissed, fpWriteErrs int
 	for start := 0; start < len(records); start += importChunk {
@@ -87,7 +94,7 @@ func (localAssetStore) Ingest(ctx context.Context, task *models.Task, records []
 			end = len(records)
 		}
 		batch := records[start:end]
-		res, err := assetSvc.Ingest(ctx, task.ProjectID, "scan", batch)
+		res, err := assetSvc.Ingest(writeCtx, task.ProjectID, "scan", batch)
 		if err != nil {
 			// 分块逐块提交：本块失败时前面的块已经落库，最终状态是「一半成功」。
 			// 任务仍按失败处理（语义不变），但错误要带出失败前已提交多少，
@@ -2097,12 +2104,14 @@ func subdomainScanResult(task *models.Task, r pipeline.SubdomainResult) *models.
 }
 
 // rawRecordFromScan 把一条扫描结果转成资产原始记录。
-// URL 优先；没有 URL 但已有主机时按协议拼一个。status=0 且无 URL 的纯 DNS 记录不入资产。
+// URL 优先；S1/domain_only 阶段的纯 DNS 子域没有 URL/状态码，用 host 兜底建站点，
+// 在证据里标 dns_only，避免「结果页有、资产页没有」，也避免和已探活站点混淆。
 func rawRecordFromScan(rawURL, host, defaultProto string, status int, title, ip string, tech []string) (repo.RawRecord, bool) {
 	rawURL = strings.TrimSpace(rawURL)
 	host = strings.TrimSpace(host)
+	dnsOnly := false
 	if rawURL == "" {
-		if host == "" || status == 0 {
+		if host == "" {
 			return repo.RawRecord{}, false
 		}
 		proto := defaultProto
@@ -2110,6 +2119,7 @@ func rawRecordFromScan(rawURL, host, defaultProto string, status int, title, ip 
 			proto = "https"
 		}
 		rawURL = proto + "://" + host
+		dnsOnly = status == 0
 	}
 
 	u, err := url.Parse(rawURL)
@@ -2132,6 +2142,10 @@ func rawRecordFromScan(rawURL, host, defaultProto string, status int, title, ip 
 	evidence := map[string]any{}
 	if len(tech) > 0 {
 		evidence["tech"] = tech
+	}
+	if dnsOnly {
+		evidence["dns_only"] = true
+		evidence["verified"] = false
 	}
 	return repo.RawRecord{
 		Source:     "scan",

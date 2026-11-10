@@ -136,7 +136,9 @@ CREATE INDEX IF NOT EXISTS targets_due_idx ON run_targets (state, lease_until);
 
 -- ---------------------------------------------------------------- 站点入口（P1）
 
--- P0 的 sites 只存了一个展示用 protocol/value（https 优先）。
+-- P0 的 sites 只存了一个展示用 protocol/value（https 优先，会被后续证据覆盖）。
+-- 增量迁移 migration_sites_url.sql 新增 sites.url 作为权威可请求主入口；
+-- 站点层展示一律用 host，端口/URL 下沉到 sites.url 与 site_endpoints。
 -- 站点按 host 归并（site_key = sha1(project|host)），同一个 host 的 http:80、https:443
 -- 以及 http:8080 这类非标准入口都落在这一个站点下，端口视图只能靠本表还原。
 -- 唯一键是 (site_id, scheme, port) 而不是 (site_id, scheme)：

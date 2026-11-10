@@ -495,7 +495,7 @@ export default function AssetsPage() {
   const remove = useMutation({
     mutationFn: (site: Site) => assetApi.delete(site.id),
     onSuccess: (_, site) => {
-      toast({ title: `已删除 ${site.value}` })
+      toast({ title: `已删除 ${site.host}` })
       refresh()
     },
     onError: (e: any) => toast({ title: '删除失败', description: e?.message, variant: 'destructive' }),
@@ -508,7 +508,7 @@ export default function AssetsPage() {
     const aftermath = '将删除该站点及其验证记录、变更事件、入口与指纹命中；原始记录保留。删除后不可恢复。'
     if (!until) {
       const ok = await confirm({
-        title: `删除资产 ${site.value}？`,
+        title: `删除资产 ${site.host}？`,
         description: aftermath,
         confirmText: '删除',
         destructive: true,
@@ -517,7 +517,7 @@ export default function AssetsPage() {
       return
     }
     const ok = await confirm({
-      title: `删除资产 ${site.value}？`,
+      title: `删除资产 ${site.host}？`,
       description: `该资产处于删除保护期，到期时间 ${until.slice(0, 19).replace('T', ' ')}。${aftermath}`,
       confirmText: '解除保护并删除',
       destructive: true,
@@ -530,7 +530,7 @@ export default function AssetsPage() {
       return
     }
     const ok2 = await confirm({
-      title: `删除资产 ${site.value}？`,
+      title: `删除资产 ${site.host}？`,
       description: `保护期已解除。${aftermath}`,
       confirmText: '删除',
       destructive: true,
@@ -691,9 +691,9 @@ export default function AssetsPage() {
     if (kind === 'site') {
       const sites = siteSubset ?? (items as Site[])
       rows = [
-        ['资产', '标题', 'IP', '协议', '端口', '状态码', '状态', '风险', '记录数', '项目'],
+        ['域名', '标题', 'IP', '协议', '端口', '状态码', '状态', '风险', '记录数', '项目'],
         ...sites.map((s) => [
-          s.value || s.host, s.title, s.ip, s.protocol, s.port, s.http_status,
+          s.host, s.title, s.ip, s.protocol, s.port, s.http_status,
           stateLabel[s.state] ?? s.state, `${priorityLabel(s.priority)} ${s.risk_score}`,
           s.record_count, s.project_name,
         ]),
@@ -826,11 +826,11 @@ export default function AssetsPage() {
     ? {
         // 展开入口在「记录」列与行菜单里，antd 自带的展开图标列不显示
         showExpandColumn: false,
-        expandedRowKeys: (items as Site[]).filter((s) => expandedSiteIDs.has(s.id)).map((s) => s.value),
+        expandedRowKeys: (items as Site[]).filter((s) => expandedSiteIDs.has(s.id)).map((s) => s.host),
         onExpandedRowsChange: (keys) =>
           setExpandedSiteIDs(
             new Set(
-              (items as Site[]).filter((s) => (keys as (string | number)[]).includes(s.value)).map((s) => s.id)
+              (items as Site[]).filter((s) => (keys as (string | number)[]).includes(s.host)).map((s) => s.id)
             )
           ),
         expandedRowRender: (s) => {
@@ -1217,7 +1217,7 @@ export default function AssetsPage() {
           </Button>
           <Button
             size="small"
-            onClick={() => exportCurrent((items as Site[]).filter((s) => selectedHosts.has(s.value)))}
+            onClick={() => exportCurrent((items as Site[]).filter((s) => selectedHosts.has(s.host)))}
           >
             <Download className="mr-1 h-4 w-4" />
             导出所选

@@ -5,6 +5,16 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+/** 站点层只显示域名：优先 host；只有证据 URL 时去掉 scheme / 端口 / 路径。 */
+export function siteHostLabel(host?: string, value?: string) {
+  const h = (host || '').trim()
+  if (h) return h
+  const v = (value || '').trim()
+  if (!v) return '—'
+  const withoutScheme = v.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+  return withoutScheme.split('/')[0].replace(/:\d+$/, '') || v
+}
+
 export function formatDate(date: string | Date) {
   return new Date(date).toLocaleString('zh-CN', {
     year: 'numeric',

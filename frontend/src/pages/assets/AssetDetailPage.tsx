@@ -17,6 +17,7 @@ import {
 import { FileSearch } from 'lucide-react'
 import { Button, Card, Descriptions, Modal, Skeleton, Switch, Table, Tag } from 'antd'
 import type { TableProps } from 'antd'
+import { safeExternalURL } from '@/lib/safeUrl'
 
 import {
   assetApi,
@@ -324,7 +325,7 @@ function Records({ items }: { items: AssetRawRecord[] }) {
       render: (v: string, r) => <span className="text-xs">{r.collector || v}</span>,
     },
     {
-      title: '入口',
+      title: '观测地址',
       dataIndex: 'value',
       key: 'value',
       ellipsis: true,
@@ -426,7 +427,7 @@ function Relations({ items }: { items: AssetRelation[] }) {
                 to={`/assets/${r.peer.id}`}
                 className="text-primary min-w-0 truncate font-mono text-sm hover:underline"
               >
-                {r.peer.value || r.peer.host}
+                {r.peer.host || r.peer.value}
               </Link>
               <span className="text-muted-foreground text-xs">
                 置信度 {(r.confidence * 100).toFixed(0)}%
@@ -602,15 +603,19 @@ export default function AssetDetailPage() {
             </span>
           )}
           <div className="min-w-0">
-            <h1 className="truncate font-mono text-xl font-bold" title={site.value}>
-              {site.value || `${site.host}:${site.port}`}
+            <h1 className="truncate font-mono text-xl font-bold" title={site.host}>
+              {site.host}
             </h1>
             <div className="text-muted-foreground mt-1 flex flex-wrap items-center gap-2 text-sm">
               <Link to={`/projects/${site.project_id}`} className="hover:text-foreground hover:underline">
                 {site.project_name}
               </Link>
               <span>·</span>
-              <span className="font-mono">{site.host}</span>
+              {(site.url || site.value) && (
+                <span className="max-w-[360px] truncate font-mono text-xs" title={site.url || site.value}>
+                  主入口 {site.url || site.value}
+                </span>
+              )}
               {site.title && (
                 <>
                   <span>·</span>
@@ -630,10 +635,10 @@ export default function AssetDetailPage() {
             <Radar className="mr-2 h-4 w-4" />
             真实探测
           </Button>
-          {site.value && (
-            <Button size="small" href={site.value} target="_blank" rel="noreferrer">
+          {safeExternalURL(site.url || site.value) && (
+            <Button size="small" href={safeExternalURL(site.url || site.value)} target="_blank" rel="noreferrer">
               <ExternalLink className="mr-2 h-4 w-4" />
-              打开站点
+              打开主入口
             </Button>
           )}
         </div>

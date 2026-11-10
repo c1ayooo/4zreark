@@ -201,11 +201,16 @@ func (h *AssetHandler) ExportAssets(c *gin.Context) {
 				break
 			}
 			written++
+			// url 列读权威主入口；老库尚未回填时回退到 value，避免导出空值。
+			mainURL := st.URL
+			if mainURL == "" {
+				mainURL = st.Value
+			}
 			_ = w.Write([]string{
 				strconv.FormatInt(st.ID, 10),
 				sanitizeCSVCell(st.Host), sanitizeCSVCell(st.IP),
 				st.Protocol, strconv.Itoa(st.Port),
-				sanitizeCSVCell(st.Value), sanitizeCSVCell(st.Title),
+				sanitizeCSVCell(mainURL), sanitizeCSVCell(st.Title),
 				strconv.Itoa(st.HTTPStatus), st.State,
 				strconv.Itoa(st.RiskScore),
 				sanitizeCSVCell(strings.Join(st.Tags, "|")),
