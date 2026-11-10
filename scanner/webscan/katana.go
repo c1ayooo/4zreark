@@ -33,6 +33,16 @@ type KatanaScanner struct {
 	Headless bool
 	// UASeed 是任务级 UA seed；按目标 host 派生会话，保证同站同 UA。
 	UASeed string
+	// MemLimit 是单进程 Go 内存软上限（GOMEMLIMIT）。-jsl/jsluice 会把 JS
+	// 解析结果驻留内存，曾出现单进程 12-14GB 触发 WSL 全局 OOM；设软上限
+	// 让运行时提前 GC，把单进程压在预算内（撞上限变慢而不是吃光整机）。
+	MemLimit string
+	// DisableJSL 关闭 -jsl（jsluice 从 JS 抽端点）。这是内存放大的主要来源
+	// （katana 官方标注 memory intensive）；默认开启，极端目标可显式关闭降内存。
+	DisableJSL bool
+	// MaxResponseSize 是单响应读取上限（-mrs，字节）。超大 JS/HTML 不截断会
+	// 被完整载入解析，默认 1MB 足够端点提取，0 表示用引擎默认（4MB）。
+	MaxResponseSize int
 }
 
 // SetUASeed 设置任务级 UA seed。
@@ -120,7 +130,27 @@ func NewKatanaScanner() *KatanaScanner {
 		RateLimit:        150, // 速率限制
 		TempDir:          datadir.TmpDir(),
 		ExecutionTimeout: 10, // 执行超时（分钟）
+		// 构造期兜底：不进 crawler_module 的调用路径（批量/直接调用）也要有
+		// 页数上限，否则 -mdp 默认 unlimited，大站会把 URL 表撑爆。
+		MaxDomainPages:  500,
+		MaxResponseSize: 1 << 20, // 1MB
+		// 单进程 1GiB 软限：流水线爬虫默认 8 并发，8×~1GiB 在 16-32GB 机器
+		// 上留足余量；正常 500 页爬取实际只用 200-600MB，不会因 GC 变慢。
+		MemLimit: "1GiB",
+		// jsluice 保留（端点提取需要），内存风险由 MemLimit + 响应体上限兜底；
+		// 极端场景可把单个任务的 DisableJSL 置 true。
 	}
+}
+
+// katanaEnv 返回子进程环境：在继承当前环境的基础上注入 GOMEMLIMIT。
+// GOMEMLIMIT 是 Go 运行时的软上限（超限激进 GC），不改变功能语义，
+// 但能避免单个 katana 进程把 WSL 全局内存吃光触发整机 OOM。
+func (k *KatanaScanner) katanaEnv() []string {
+	env := os.Environ()
+	if k.MemLimit != "" {
+		env = append(env, "GOMEMLIMIT="+k.MemLimit)
+	}
+	return env
 }
 
 // headlessMinTimeoutSeconds headless 模式的单请求超时下限：无头浏览器要真渲染
@@ -148,9 +178,18 @@ func (k *KatanaScanner) commonArgs(target, outputPath string) []string {
 		"-or",    // 不带原始请求/响应
 		// 前端只保留 HTML/JS/接口，其余静态资源与二进制全部跳过；JS 必须保留。
 		"-ef", "css,map,wasm,png,jpg,jpeg,gif,svg,ico,webp,avif,woff,woff2,ttf,otf,eot,mp4,mp3,pdf,zip,rar,7z,tar,gz,exe,dmg,apk,doc,docx,xls,xlsx,ppt,pptx",
-		"-jc",  // 解析 JS 里的链接与接口
-		"-jsl", // jsluice：从 JS 内容里提取 API/端点（内存占用高，流式单目标可接受）
+		"-jc", // 解析 JS 里的链接与接口（轻量）
 		"-kf", "all",
+	}
+	// 响应体读取上限：katana 默认 4MB，超大 bundle 会被完整载入解析；
+	// 1MB 足够提取端点，显式传入降低峰值内存。
+	if k.MaxResponseSize > 0 {
+		args = append(args, "-mrs", fmt.Sprintf("%d", k.MaxResponseSize))
+	}
+	// jsluice 是内存主放大器（官方标注 memory intensive），默认开启保留端点
+	// 发现能力；目标 JS 体量异常时可显式 DisableJSL 降内存。
+	if !k.DisableJSL {
+		args = append(args, "-jsl")
 	}
 	// 引擎层节奏钳制：每主机限速保护单业务站（多目标并发时全局 -rl 对单站过快），
 	// 每域页数在 katana 内部止损——模块层 MaxPages 只截产出，不减少实际请求量。
@@ -204,6 +243,7 @@ func (k *KatanaScanner) Crawl(ctx context.Context, target string) (*KatanaResult
 	args := append([]string{"-u", target}, k.commonArgs(target, outputPath)...)
 
 	cmd := exec.CommandContext(ctx, k.BinPath, args...)
+	cmd.Env = k.katanaEnv()
 
 	fmt.Printf("[*] Running Katana: %s %s\n", k.BinPath, strings.Join(args, " "))
 
@@ -342,6 +382,7 @@ func (k *KatanaScanner) CrawlList(ctx context.Context, urls []string) (*KatanaRe
 	args := append([]string{"-list", inputPath}, k.commonArgs(first, outputPath)...)
 
 	cmd := exec.CommandContext(ctx, k.BinPath, args...)
+	cmd.Env = k.katanaEnv()
 
 	fmt.Printf("[*] Running Katana (list mode): %s -list [%d urls] ...\n", k.BinPath, len(urls))
 
