@@ -45,6 +45,22 @@ SELECT project_id, state, coalesce(title, ''), http_status, tech,
 
 // InsertEvent 写入一条资产事件。recordID 可为 nil（探测事件没有原始记录）。
 func (a *AssetRepo) InsertEvent(ctx context.Context, projectID, siteID int64, recordID *int64, eventType, title string, before, after map[string]any) error {
+	// attribute_change 合并 5 分钟窗口：同一站点被多条并发探活反复覆盖
+	// http_status 时（200/404 来回跳），只保留一条事件并更新 after，避免刷屏。
+	if eventType == "attribute_change" {
+		tag, err := a.r.pool.Exec(ctx, `
+UPDATE asset_events
+   SET after = $7, created_at = now()
+ WHERE id = (
+   SELECT id FROM asset_events
+    WHERE project_id=$1 AND site_id=$2 AND event_type=$4
+      AND created_at > now() - interval '5 minutes'
+    ORDER BY id DESC LIMIT 1
+ )`, projectID, siteID, recordID, eventType, title, toJSONB(before), toJSONB(after))
+		if err == nil && tag.RowsAffected() > 0 {
+			return nil
+		}
+	}
 	_, err := a.r.pool.Exec(ctx, `
 INSERT INTO asset_events (project_id, site_id, record_id, event_type, title, before, after)
 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
@@ -54,6 +70,20 @@ VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 
 // insertEventTx 导入事务内写事件。
 func insertEventTx(ctx context.Context, tx pgx.Tx, projectID, siteID int64, recordID *int64, eventType, title string, before, after map[string]any) error {
+	if eventType == "attribute_change" {
+		tag, err := tx.Exec(ctx, `
+UPDATE asset_events
+   SET after = $7, created_at = now()
+ WHERE id = (
+   SELECT id FROM asset_events
+    WHERE project_id=$1 AND site_id=$2 AND event_type=$4
+      AND created_at > now() - interval '5 minutes'
+    ORDER BY id DESC LIMIT 1
+ )`, projectID, siteID, recordID, eventType, title, toJSONB(before), toJSONB(after))
+		if err == nil && tag.RowsAffected() > 0 {
+			return nil
+		}
+	}
 	_, err := tx.Exec(ctx, `
 INSERT INTO asset_events (project_id, site_id, record_id, event_type, title, before, after)
 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
