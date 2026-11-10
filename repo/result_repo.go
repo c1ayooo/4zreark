@@ -375,11 +375,12 @@ func (r *resultRepo) CreateWithDedup(ctx context.Context, res *models.ScanResult
 	return isNew, tx.Commit(ctx)
 }
 
-// batchDedupType 保持扫描期原有的去重范围；端口/漏洞/接管/敏感仍按发现逐条插入。
+// batchDedupType 批量写入时启用去重的类型。
+// 端口也必须去重：同一 host:port 在重启/重复投递时会写多行。
 func batchDedupType(t models.ResultType) bool {
 	switch t {
 	case models.ResultTypeSubdomain, models.ResultTypeService, models.ResultTypeURL,
-		models.ResultTypeCrawler, models.ResultTypeDirScan:
+		models.ResultTypeCrawler, models.ResultTypeDirScan, models.ResultTypePort:
 		return true
 	default:
 		return false

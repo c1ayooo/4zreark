@@ -100,12 +100,17 @@ func applyDedupKey(res *models.ScanResult) {
 	case models.ResultTypeSubdomain:
 		parts = []string{getString("subdomain")}
 	case models.ResultTypePort:
-		ip := getString("ip")
+		// 端口结果按 host:port 去重：同一域名可能解析到多个 IP，
+		// 用 IP 做键会把同一个开放端口写成多条；host 缺失时才退回 IP。
+		host := getString("host")
+		if host == "" {
+			host = getString("ip")
+		}
 		port := ""
 		if v, ok := data["port"]; ok {
 			port = fmt.Sprintf("%v", v)
 		}
-		parts = []string{ip, port}
+		parts = []string{host, port}
 	case models.ResultTypeService:
 		// Web 服务按 host 去重（同一 host 的 http / https 只保留一条）
 		if rawURL := getString("url"); rawURL != "" {
