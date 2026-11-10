@@ -174,6 +174,7 @@ type runningTask struct {
 	lastSignature string
 	lastActivity  time.Time
 	stallWarned   bool
+	recovering    bool
 }
 
 // MaxNodeWorkers 是节点并发上限的硬上限，防止误配把单机拖垮。
@@ -484,20 +485,32 @@ func (e *TaskExecutor) checkTaskActivity() {
 		}
 		idle := now.Sub(item.rt.lastActivity)
 		warned := item.rt.stallWarned
+		shouldRecover := false
 		if idle > 10*time.Minute && !warned {
 			item.rt.stallWarned = true
+		}
+		if idle > 20*time.Minute && !item.rt.recovering {
+			item.rt.recovering = true
+			shouldRecover = true
 		}
 		e.runningMutex.Unlock()
 
 		if idle > 10*time.Minute && !warned {
 			log.Printf("[TaskExecutor] 任务 %s 已 %s 无模块进展，标记疑似僵死", item.id, idle.Round(time.Second))
 		}
-		if idle > 20*time.Minute {
-			log.Printf("[TaskExecutor] 任务 %s 连续 %s 无进展，取消并标记失败", item.id, idle.Round(time.Second))
+		if shouldRecover {
+			log.Printf("[TaskExecutor] 任务 %s 连续 %s 无进展，取消当前执行并尝试恢复", item.id, idle.Round(time.Second))
 			e.cancelRunningTask(item.id)
 			if ts, ok := e.taskService.(*TaskService); ok {
-				if err := ts.FailTask(item.id, "watchdog: 任务连续 20 分钟无模块进展，已自动取消"); err != nil {
-					log.Printf("[TaskExecutor] watchdog 标记任务 %s 失败失败: %v", item.id, err)
+				revives, err := ts.RequeueStalledTask(context.Background(), item.id,
+					fmt.Sprintf("连续 %s 无模块进展，自动重启恢复", idle.Round(time.Second)))
+				if err != nil {
+					log.Printf("[TaskExecutor] watchdog 恢复任务 %s 失败: %v", item.id, err)
+				} else {
+					// 旧 goroutine 可能卡在不响应 ctx 的 channel send；先移除注册，
+					// 否则新 River 作业会因“任务已注册”被拒绝，恢复不了。
+					e.unregisterRunningTask(item.id)
+					log.Printf("[TaskExecutor] watchdog 已恢复任务 %s（第 %d 次）", item.id, revives)
 				}
 			}
 		}

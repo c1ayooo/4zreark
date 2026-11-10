@@ -726,6 +726,51 @@ func (s *TaskService) RequeueOrphanedScanJobs(ctx context.Context, olderThan tim
 	return tag.RowsAffected(), nil
 }
 
+// RequeueStalledTask 是 watchdog 的恢复动作：保留已有结果，把任务置回 pending
+// 并重新入队，让新执行器从断点结果续跑。连续恢复 3 次仍无进展才判失败。
+func (s *TaskService) RequeueStalledTask(ctx context.Context, taskID, reason string) (int, error) {
+	r := repo.Default()
+	if r == nil || r.Pool() == nil {
+		return 0, nil
+	}
+	var revives int
+	if err := r.Pool().QueryRow(ctx,
+		`select count(*) from zre.task_logs
+		  where task_id=$1 and message like 'watchdog 重启恢复%'`, taskID).Scan(&revives); err != nil {
+		return 0, err
+	}
+	if revives >= 2 {
+		if err := s.FailTask(taskID, "watchdog: 已连续重启恢复 3 次仍无模块进展，停止重试"); err != nil {
+			return revives, err
+		}
+		return revives, nil
+	}
+
+	tx, err := r.Pool().Begin(ctx)
+	if err != nil {
+		return revives, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx,
+		`update zre.tasks set status='pending', executor_id='' where id=$1`, taskID); err != nil {
+		return revives, err
+	}
+	if _, err := tx.Exec(ctx, `
+		update zre.river_job
+		   set unique_key=null, state='available', attempt=0, errors=null,
+		       attempted_at=null, finalized_at=null, scheduled_at=now()
+		 where kind='scan_task' and args->>'task_id'=$1`, taskID); err != nil {
+		return revives, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return revives, err
+	}
+	_ = r.Tasks().AddLogCategory(ctx, taskID, "system", "warn",
+		fmt.Sprintf("watchdog 重启恢复 #%d：%s", revives+1, reason), "")
+	log.Printf("[TaskService] 任务 %s 已重新入队恢复（第 %d 次）：%s", taskID, revives+1, reason)
+	return revives + 1, nil
+}
+
 // enqueueScan 把扫描任务放进 River。River 未初始化时退回旧的 task_jobs 实现，
 // 仅用于测试/工具进程；生产启动时 main 会保证 ScanQueue 就绪。
 func (s *TaskService) enqueueScan(ctx context.Context, task *models.Task, jobs repo.JobRepo) error {
