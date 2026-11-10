@@ -3,7 +3,7 @@
  *
  * 放在发现条目下方：左侧环境事实 + 隔离边界，右侧流水线时间线，底部 verdict 横幅。
  * 数据源 GET /sentinel/findings/:id/poc-verify；执行中 10s 轮询，静态时停表。
- * 触发 POST /sentinel/findings/:id/poc-verify（verified python-poc 才可用）。
+ * 触发 POST /sentinel/findings/:id/poc-verify（verified python-poc / nuclei 模板均可用）。
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button, Popconfirm, Spin, Tag, Tooltip } from 'antd'
@@ -180,7 +180,7 @@ export default function PocVerifyCard({ findingId }: { findingId: number }) {
                 </ol>
               ) : (
                 <div className="py-1 text-[11.5px] text-muted-foreground">
-                  尚未执行。发起后这里会回放：环境方案 → 拉镜像 → 起靶场 → 就绪探测 → 执行 PoC → 清理。
+                  尚未执行。发起后这里会回放：解析利用方法 → 环境方案 → 拉镜像 → 起靶场 → 就绪探测 → 执行 PoC → 清理。
                 </div>
               )}
             </div>

@@ -108,9 +108,17 @@ func (s *PocVerifyService) Verify(ctx context.Context, findingID int64, force bo
 		if runErr != nil {
 			return
 		}
-		p, _ := json.Marshal(payload)
+		// ListPocVerifyEvents 用 payload->>'finding_id' 过滤：此前只有
+		// poc_verify_start 带这个字段，其余事件（拉镜像/起靶场/跑 PoC/结论）
+		// 全部查不到，前端时间线空白且状态一直显示「执行中」。
+		p := make(map[string]interface{}, len(payload)+1)
+		for k, v := range payload {
+			p[k] = v
+		}
+		p["finding_id"] = findingID
+		data, _ := json.Marshal(p)
 		if _, err := store.AppendRunEvent(ctx, &repo.SentinelRunEvent{
-			RunID: runID, Level: level, Kind: kind, Message: message, Payload: p,
+			RunID: runID, Level: level, Kind: kind, Message: message, Payload: data,
 		}); err != nil {
 			log.Printf("[pocverify] 写验证事件失败 run=%d: %v", runID, err)
 		}
@@ -513,7 +521,7 @@ type PocVerifyStatus struct {
 	HasPoc    bool              `json:"has_poc"`            // 已有 verified 的 python-poc（可发起验证）
 	HasNuclei bool              `json:"has_nuclei"`         // 已有 verified 的 nuclei 模板（同样可发起验证）
 	HasGuide  bool              `json:"has_guide"`          // 已解析到利用方法 Markdown
-	Exploit   *ExploitGuide     `json:"exploit,omitempty"`   // 利用方法解析结果（步骤/路径/请求示例）
+	Exploit   *ExploitGuide     `json:"exploit,omitempty"`  // 利用方法解析结果（步骤/路径/请求示例）
 	Verified  bool              `json:"verified"`           // finding 已机器验证（verified_at 非空）
 	Running   bool              `json:"running"`            // 最近一次验证仍在执行
 	Verify    *PocVerifyVerdict `json:"verify,omitempty"`   // 机器结论（有 poc-verify 产物时）
@@ -571,12 +579,19 @@ func GetPocVerifyStatus(ctx context.Context, findingID int64) (*PocVerifyStatus,
 		return nil, err
 	}
 	var curRun int64 = -1
+	hasStart, hasTerminal := false, false
 	for _, e := range events {
 		if curRun == -1 {
 			curRun = e.RunID
 		}
 		if e.RunID != curRun {
 			break // 只回放最近一次执行
+		}
+		switch e.Kind {
+		case "poc_verify_start":
+			hasStart = true
+		case "poc_verify_passed", "poc_verify_not_passed", "poc_verify_failed", "poc_verify_skipped":
+			hasTerminal = true
 		}
 		step := PocVerifyStep{
 			Title: pocVerifyStepTitles[e.Kind],
@@ -592,13 +607,15 @@ func GetPocVerifyStatus(ctx context.Context, findingID int64) (*PocVerifyStatus,
 		case "info":
 			if strings.Contains(e.Kind, "start") {
 				step.State = "info"
-				st.Running = true
 			}
 		}
 		if step.Title != "" {
 			st.Timeline = append(st.Timeline, step)
 		}
 	}
+	// 完成的批次也带 poc_verify_start：只看 start 会把已结束的验证判成「执行中」
+	// （前端一直轮询，看起来像卡住/没拉镜像）。有终态事件即视为结束。
+	st.Running = hasStart && !hasTerminal
 	// 事件是倒序取的，回放需正序。
 	for i, j := 0, len(st.Timeline)-1; i < j; i, j = i+1, j-1 {
 		st.Timeline[i], st.Timeline[j] = st.Timeline[j], st.Timeline[i]

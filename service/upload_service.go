@@ -164,14 +164,14 @@ func analyzeMarkdown(name string, data []byte) (string, string, []UploadFileInfo
 		if i >= 2 {
 			break
 		}
-		b.WriteString("请求示例原文：\n```\n" + req + "\n```\n")
+		fmt.Fprintf(&b, "请求示例原文：\n```\n%s\n```\n", req)
 	}
 
 	head := text
 	if len(head) > 2000 {
 		head = head[:2000]
 	}
-	b.WriteString("文件开头：\n```\n" + head + "\n```\n")
+	fmt.Fprintf(&b, "文件开头：\n```\n%s\n```\n", head)
 	return "markdown", b.String(), []UploadFileInfo{{Path: name, Size: int64(len(data))}}
 }
 
@@ -327,13 +327,13 @@ func analyzeZip(data []byte) (string, string, []UploadFileInfo) {
 				continue
 			}
 			guide := parseExploitMarkdown(f.Name, string(content))
-			b.WriteString("  " + f.Name + "：\n")
+			fmt.Fprintf(&b, "  %s：\n", f.Name)
 			if guide.IsEmpty() {
 				b.WriteString("    未识别到「利用步骤/前置条件/请求示例」等章节。\n")
 			} else {
 				summary := strings.TrimRight(guide.UploadSummary(), "\n")
 				for _, line := range strings.Split(summary, "\n") {
-					b.WriteString("    " + line + "\n")
+					fmt.Fprintf(&b, "    %s\n", line)
 				}
 			}
 			mdShown++

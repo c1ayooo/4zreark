@@ -127,15 +127,17 @@ func SetArtifactStatus(ctx context.Context, id int64, status string) (*repo.Comm
 	if err != nil {
 		return nil, err
 	}
-	// verified 的 python-poc 自动入队靶场验证（Tier 3b）：这是「人工确认过
-	// PoC 可信」的信号，随后由 pocsmith 拉靶场跑 PoC。入队失败只记日志，
-	// 不影响状态流转本身；开关（sentinel.poc_verify.enabled=false）可关闭。
-	if status == "verified" && a.Kind == "poc" && a.Title == pythonPocTitle && pocVerifyEnabled() {
+	// verified 的 python-poc / nuclei 模板自动入队靶场验证（Tier 3b）：这是
+	// 「人工确认过验证输入可信」的信号，随后由 pocsmith 拉靶场跑 PoC。两种引擎
+	// 都支持，任一审核通过即可触发（此前只认 python-poc，nuclei 审核完不会跑）。
+	// 入队失败只记日志，不影响状态流转本身；开关可关闭。
+	verifiedInput := (a.Kind == "poc" && a.Title == pythonPocTitle) || a.Kind == "nuclei"
+	if status == "verified" && verifiedInput && pocVerifyEnabled() {
 		if q := DefaultSentinelQueue(); q != nil {
 			if err := q.EnqueuePocVerify(context.Background(), a.FindingID, false); err != nil {
-				log.Printf("[Sentinel] python-poc verified 自动入队靶场验证失败 finding=%d: %v", a.FindingID, err)
+				log.Printf("[Sentinel] %s verified 自动入队靶场验证失败 finding=%d: %v", a.Title, a.FindingID, err)
 			} else {
-				log.Printf("[Sentinel] python-poc verified，已入队靶场验证 finding=%d", a.FindingID)
+				log.Printf("[Sentinel] %s verified，已入队靶场验证 finding=%d", a.Title, a.FindingID)
 			}
 		}
 	}

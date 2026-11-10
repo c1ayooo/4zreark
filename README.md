@@ -300,7 +300,31 @@ docker compose up -d postgres
 PGURL="postgres://zre:${ZRE_PG_PASSWORD}@127.0.0.1:25433/zreark?sslmode=disable" \
   bash docs/sql/apply_all.sh
 docker compose up -d app                          # 本地改动加 --build
+docker compose up -d pocsmith                     # 复现 / 靶场验证 worker（同一镜像，换入口）
 ```
+
+`pocsmith` 是真正执行 `docker pull` / `docker run` 的进程：镜像内置静态 `docker` CLI，
+经 `/var/run/docker.sock` 操作宿主 daemon，消费 `sentinel_repro` 与
+`sentinel_poc_verify` 两个 River 队列（主服务只入队、不消费）。PoC 文件放在命名卷
+`zreark_pocsmith_work`，`-mount-source` 与卷名一致，避免 DooD 下容器内路径被宿主
+daemon 误当成宿主路径（那样 PoC 容器会挂到一个空目录）。⚠ 挂载 `docker.sock`
+等于把宿主 docker 的控制权交给该容器，只在可信单机启用；不需要容器验证时执行
+`docker compose stop pocsmith`，并设 `sentinel.poc_verify.enabled=false`。
+
+宿主机本地开发可以不进容器（此时无需 `-mount-source`）：
+
+```bash
+CONFIG_PATH=config/config.yaml go run ./cmd/pocsmith -workdir data/pocsmith
+```
+
+把 `python-poc`（或 nuclei 模板）产物审核为 verified 会自动入队验证，也可调用
+`POST /api/sentinel/findings/:id/poc-verify`。验证前会解析 `exploit-guide` /
+`repro-guide` / `deep-analysis` 这些 Markdown 利用方法，抽出前置条件、利用步骤、
+请求示例与 URL 路径，作为选靶场镜像与核对 `target_url` 的依据；时间线依次显示
+「解析利用方法 Markdown → 生成环境方案 → 拉取靶场镜像 → 起靶场 → 执行 PoC」。
+上传的 `.md`（含 zip 包内）同样按章节结构化解析，不再只截前 2000 字符原文。
+靶场镜像受 `sentinel.poc_verify.image_allow` 白名单约束，PoC 与靶场同处
+`--internal` 隔离网络、无外网出口。
 
 外部扫描工具目录 `tools/` 以只读方式挂载到 `/app/tools`（不入库）。
 

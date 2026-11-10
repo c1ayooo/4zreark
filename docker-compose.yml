@@ -76,5 +76,49 @@ services:
       # - ZRE_TLS_CERT=/app/tls/fullchain.pem
       # - ZRE_TLS_KEY=/app/tls/privkey.pem
 
+  # CommitSentinel 复现 / 靶场验证 worker（Tier 3）：消费 sentinel_repro 与
+  # sentinel_poc_verify 队列，真正执行 docker pull / network create / run。
+  # 与主服务共用同一个镜像，只是换入口；不启动它，验证作业入队后无人消费，
+  # 前端会一直停在「已入队/执行中」，也就「没有拉 docker 下来验证」。
+  #
+  # 安全提示：/var/run/docker.sock 等于把宿主 docker 的控制权交给该容器，
+  # 只在可信单机环境启用。不需要容器验证时可 `docker compose stop pocsmith`
+  # 或设 sentinel.poc_verify.enabled=false（作业不再自动入队）。
+  pocsmith:
+    image: ghcr.io/c1ayooo/4zreark:${ZRE_IMAGE_TAG:-latest}
+    container_name: zreark_pocsmith
+    # 与 app 同镜像：也声明 build，确保 `docker compose up --build` 时镜像里
+    # 确实带上新编的 /app/pocsmith（否则可能拉到不含该二进制的旧发布版）。
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["/app/pocsmith"]
+    command: ["-workdir", "/poc", "-mount-source", "zreark_pocsmith_work", "-timeout", "30"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./config:/app/config:ro
+      # DooD：PoC 写在命名卷里，目标容器用同一个卷名挂载，避免把容器内
+      # 路径直接交给宿主 docker daemon（那样会被当成宿主路径、PoC 不可见）。
+      - pocsmith_work:/poc
+      # nuclei 引擎：FindNucleiBinary 会查 /app/data/nuclei/bin/nuclei（先跑一次
+      # nuclei 扫描触发下载）；宿主没有该二进制时 nuclei 验证会给出明确报错，
+      # python-poc 引擎不受影响。
+      - ./data/nuclei/bin:/app/data/nuclei/bin:ro
+    environment:
+      - CONFIG_PATH=/app/config/config.yaml
+      - ZRE_PG_HOST=postgres
+      - ZRE_PG_PORT=5432
+      - ZRE_PG_USER=zre
+      - ZRE_PG_DBNAME=zreark
+      - ZRE_PG_PASSWORD=${ZRE_PG_PASSWORD}
+      - ZRE_SECRET_KEY=${ZRE_SECRET_KEY:-}
+
 volumes:
   pg_data:
+  # 固定卷名：pocsmith 的 -mount-source 必须与之完全一致（compose 默认会加项目前缀）。
+  pocsmith_work:
+    name: zreark_pocsmith_work
