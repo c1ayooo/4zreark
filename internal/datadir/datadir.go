@@ -11,6 +11,8 @@
 package datadir
 
 import (
+	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -78,11 +80,80 @@ func adopt(legacy, dst string) string {
 		}
 		log.Printf("[datadir] 已将 %s 收编到 %s", legacy, dst)
 	default:
-		// 两边都有内容（异常态）：保守起见沿用旧目录，避免覆盖 bin 内数据
-		log.Printf("[datadir] %s 与 %s 同时存在且均有内容，沿用旧目录 %s", legacy, dst, legacy)
-		return legacy
+		// 两边都有内容（异常态，如旧版本进程把工具重装回旧路径）：以 bin 为准
+		// 收敛——旧目录中 bin 缺失的条目搬过去，同名条目保留 bin 版本（bin 是
+		// 统一后的权威位置），搬完移除旧目录。此前这里「保守沿用旧目录」，结果
+		// 一旦旧目录被重建，平台就永远困在旧路径：bin 里的新装工具（如 rem）
+		// 检测不到，还在持续使用旧目录里的旧版本二进制。
+		if err := mergeInto(legacy, dst); err != nil {
+			log.Printf("[datadir] %s 并入 %s 失败（%v），沿用旧目录", legacy, dst, err)
+			return legacy
+		}
+		if err := os.RemoveAll(legacy); err != nil {
+			log.Printf("[datadir] 移除旧目录 %s 失败（%v），沿用旧目录", legacy, err)
+			return legacy
+		}
+		log.Printf("[datadir] %s 已并入 %s（同名条目以 %s 为准）", legacy, dst, dst)
 	}
 	return dst
+}
+
+// mergeInto 把 src 目录树并入 dst：同名条目保留 dst 现状，src 独有的搬过去。
+// bin 内已存在的任何文件都不会被覆盖。
+func mergeInto(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dst, 0o750); err != nil {
+		return err
+	}
+	for _, e := range entries {
+		s := filepath.Join(src, e.Name())
+		d := filepath.Join(dst, e.Name())
+		if e.IsDir() {
+			if err := mergeInto(s, d); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := os.Lstat(d); err == nil {
+			continue // dst 已有同名条目，保留 bin 版本
+		}
+		if err := os.Rename(s, d); err == nil {
+			continue
+		}
+		// rename 失败（跨设备等）退化为拷贝
+		if err := copyFile(s, d, e); err != nil {
+			return fmt.Errorf("搬移 %s: %w", s, err)
+		}
+	}
+	return nil
+}
+
+func copyFile(src, dst string, e os.DirEntry) error {
+	info, err := e.Info()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("跳过非普通文件 %s", src)
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(dst)
+		return err
+	}
+	return out.Close()
 }
 
 // tmpOnce / tmpDirVal 缓存临时目录（含一次性残留清理）。
