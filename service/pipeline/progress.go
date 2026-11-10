@@ -19,6 +19,9 @@ type ProgressTracker struct {
 	// 各模块进度
 	moduleProgress map[string]*ModuleProgress
 
+	// 最后一次真实活动时间（模块开始/处理/产出变化）；仅时间流逝不算活动。
+	lastActivity time.Time
+
 	// 模块权重配置（用于计算总体进度）
 	moduleWeights map[string]float64
 
@@ -53,6 +56,8 @@ type ProgressReport struct {
 	TotalResults      int                        `json:"total_results"`       // 总结果数
 	ElapsedTime       string                     `json:"elapsed_time"`        // 已用时间
 	EstimatedTimeLeft string                     `json:"estimated_time_left"` // 预计剩余时间
+	// LastActivityAt 最后一次模块活动；前端据此显示“疑似卡住”。
+	LastActivityAt time.Time `json:"last_activity_at,omitempty"`
 }
 
 // DefaultModuleWeights 默认模块权重
@@ -74,6 +79,7 @@ func NewProgressTracker(totalTargets int, callback ProgressCallback) *ProgressTr
 	return &ProgressTracker{
 		totalTargets:   totalTargets,
 		startTime:      time.Now(),
+		lastActivity:   time.Now(),
 		moduleProgress: make(map[string]*ModuleProgress),
 		moduleWeights:  DefaultModuleWeights,
 		callback:       callback,
@@ -106,6 +112,7 @@ func (pt *ProgressTracker) SetModuleWeights(enabledModules []string) {
 func (pt *ProgressTracker) StartModule(moduleName string, totalItems int) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
+	pt.lastActivity = time.Now()
 
 	pt.moduleProgress[moduleName] = &ModuleProgress{
 		Name:       moduleName,
@@ -121,6 +128,7 @@ func (pt *ProgressTracker) StartModule(moduleName string, totalItems int) {
 func (pt *ProgressTracker) UpdateModuleTotal(moduleName string, totalItems int) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
+	pt.lastActivity = time.Now()
 
 	if mp, ok := pt.moduleProgress[moduleName]; ok {
 		mp.TotalItems = totalItems
@@ -133,6 +141,7 @@ func (pt *ProgressTracker) UpdateModuleTotal(moduleName string, totalItems int) 
 func (pt *ProgressTracker) IncrementModuleProcessed(moduleName string, count int) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
+	pt.lastActivity = time.Now()
 
 	if mp, ok := pt.moduleProgress[moduleName]; ok {
 		mp.ProcessedItems += count
@@ -156,6 +165,7 @@ func (pt *ProgressTracker) IncrementModuleProcessed(moduleName string, count int
 func (pt *ProgressTracker) IncrementModuleOutput(moduleName string, count int) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
+	pt.lastActivity = time.Now()
 
 	if mp, ok := pt.moduleProgress[moduleName]; ok {
 		mp.OutputItems += count
@@ -166,6 +176,7 @@ func (pt *ProgressTracker) IncrementModuleOutput(moduleName string, count int) {
 func (pt *ProgressTracker) CompleteModule(moduleName string) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
+	pt.lastActivity = time.Now()
 
 	if mp, ok := pt.moduleProgress[moduleName]; ok {
 		mp.Status = "completed"
@@ -262,6 +273,7 @@ func (pt *ProgressTracker) GetReport() *ProgressReport {
 		TotalResults:      totalResults,
 		ElapsedTime:       formatDuration(elapsed),
 		EstimatedTimeLeft: estimatedLeft,
+		LastActivityAt:    pt.lastActivity,
 	}
 }
 
@@ -326,6 +338,7 @@ func (pt *ProgressTracker) getReportUnsafe() *ProgressReport {
 		TotalResults:      totalResults,
 		ElapsedTime:       formatDuration(elapsed),
 		EstimatedTimeLeft: estimatedLeft,
+		LastActivityAt:    pt.lastActivity,
 	}
 }
 

@@ -467,6 +467,13 @@ export default function TaskDetailPage() {
                     </span>
                   </>
                 )}
+                {task.status === 'running' && task.progressDetails?.last_activity_at &&
+                  Date.now() - new Date(task.progressDetails.last_activity_at).getTime() > 5 * 60 * 1000 && (
+                    <>
+                      <span className="text-muted-foreground text-sm">•</span>
+                      <span className="text-amber-600 text-sm">已超过 5 分钟无模块活动，可能卡住</span>
+                    </>
+                  )}
               </div>
               {/* 进度区：running 实时刷新，completed/failed 定格最后状态——
                   失败时也能看到死在哪个模块 */}

@@ -103,6 +103,8 @@ export interface ProgressDetails {
   elapsed_time?: string        // 已用时间
   estimated_time_left?: string // 预计剩余时间
   total_results?: number       // 总结果数
+  /** 最后一次模块活动时间；前端据此显示“疑似卡住” */
+  last_activity_at?: string
   modules?: Record<string, ModuleProgress>  // 各模块进度
 }
 

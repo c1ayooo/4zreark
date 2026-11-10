@@ -295,6 +295,14 @@ func (s *CollectionPlanService) StartReconciler(ctx context.Context) {
 	}()
 }
 
+func (s *CollectionPlanService) stageTimeout() time.Duration {
+	min := config.GetConfig().Collection.StageTimeoutMin
+	if min <= 0 {
+		min = 180
+	}
+	return time.Duration(min) * time.Minute
+}
+
 func (s *CollectionPlanService) reconcileOnce(ctx context.Context) {
 	plans, err := s.store.ListRunningPlans(ctx, 50)
 	if err != nil {
@@ -307,6 +315,15 @@ func (s *CollectionPlanService) reconcileOnce(ctx context.Context) {
 		}
 		task, err := repo.Default().Tasks().GetByID(ctx, stage.TaskID)
 		if err != nil || task == nil {
+			continue
+		}
+		// 阶段超时：子任务本身可能卡在模块里，running 状态不会自己结束。
+		// reconciler 到点后取消子任务并推进计划，避免整条计划无限等待。
+		if stage.StartedAt != nil && time.Since(*stage.StartedAt) > s.stageTimeout() {
+			log.Printf("[Collection] 阶段 %s 超时（%s），取消子任务 %s", stage.Stage,
+				time.Since(*stage.StartedAt).Round(time.Second), stage.TaskID)
+			_ = NewTaskService().FailTask(stage.TaskID, "collection stage timeout: "+stage.Stage)
+			s.OnStageDone(task, "failed")
 			continue
 		}
 		switch task.Status {

@@ -82,6 +82,8 @@ collection:
   max_targets_for_full: 500
   # 单站开放端口超过该值时做纯 Go TCP 二次复核；复核后仍超阈值只保留常见端口。
   max_ports_per_host: 200
+  # 单阶段最长执行时间；超时由 reconciler 取消子任务并推进计划。
+  stage_timeout_minutes: 180
   site_scope: host
   # 收集侧 AI Gate：off 关闭；shadow 只判定不路由；enforce 允许规则层消费。
   # 默认 off，先离线/影子跑，避免模型不稳定影响收集主链。

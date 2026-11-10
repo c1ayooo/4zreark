@@ -37,7 +37,9 @@ type CollectionConfig struct {
 	MaxTargetsForFull int      `mapstructure:"max_targets_for_full"`
 	// MaxPortsPerHost 单站开放端口阈值：超过后先做 TCP 二次复核，
 	// 复核后仍超阈值则只保留常见端口。0 表示不复核。
-	MaxPortsPerHost int    `mapstructure:"max_ports_per_host"`
+	MaxPortsPerHost int `mapstructure:"max_ports_per_host"`
+	// StageTimeoutMin 单个阶段子任务的最长执行时间；超时由 reconciler 取消并推进。
+	StageTimeoutMin int    `mapstructure:"stage_timeout_minutes"`
 	SiteScope       string `mapstructure:"site_scope"` // host | registrable_domain | project
 	// GateMode：off 关闭；shadow 只判定不路由；enforce 允许规则层消费判定结果。
 	GateMode    string `mapstructure:"gate_mode"`
@@ -68,6 +70,9 @@ func (c *CollectionConfig) Normalize() {
 	}
 	if c.MaxPortsPerHost < 0 {
 		c.MaxPortsPerHost = 0
+	}
+	if c.StageTimeoutMin <= 0 {
+		c.StageTimeoutMin = 180
 	}
 	if c.SiteScope == "" {
 		c.SiteScope = "host"
