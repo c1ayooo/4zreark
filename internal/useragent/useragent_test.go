@@ -89,3 +89,30 @@ func TestDeriveSeedStableAndProjectScoped(t *testing.T) {
 		t.Fatal("密钥缺失时也应有可复现的 seed")
 	}
 }
+
+func TestNormalizeSiteKey(t *testing.T) {
+	cases := map[string]string{
+		"http://a.example.com":         "a.example.com",
+		"https://a.example.com:443":    "a.example.com",
+		"a.example.com:80":             "a.example.com",
+		"a.example.com:8443":           "a.example.com:8443",
+		"HTTPS://A.Example.COM/path":   "a.example.com",
+		"  https://a.example.com./x  ": "a.example.com",
+	}
+	for in, want := range cases {
+		if got := NormalizeSiteKey(in); got != want {
+			t.Errorf("NormalizeSiteKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestForSiteSameHostAcrossSchemes(t *testing.T) {
+	a := ForSite("seed", "http://verify.example.com")
+	b := ForSite("seed", "https://verify.example.com:443")
+	if a.UserAgent != b.UserAgent {
+		t.Fatalf("同一站 http/https 必须同 UA: %q != %q", a.UserAgent, b.UserAgent)
+	}
+	if NormalizeSiteKey("https://verify.example.com:8443") == NormalizeSiteKey("verify.example.com") {
+		t.Fatal("非默认端口应保留在站点键里")
+	}
+}

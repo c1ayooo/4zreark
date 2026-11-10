@@ -61,11 +61,12 @@ func (s *VulnVerifyService) init() {
 			return vulnverify.Config{}
 		}
 		return vulnverify.Config{
-			Configured:  true,
-			Enabled:     cfg.FingerprintVerify.Enabled,
-			RecheckDays: cfg.FingerprintVerify.RecheckDays,
-			Concurrency: cfg.FingerprintVerify.Concurrency,
-			RateLimit:   cfg.FingerprintVerify.RateLimit,
+			Configured:      true,
+			Enabled:         cfg.FingerprintVerify.Enabled,
+			RecheckDays:     cfg.FingerprintVerify.RecheckDays,
+			Concurrency:     cfg.FingerprintVerify.Concurrency,
+			RateLimit:       cfg.FingerprintVerify.RateLimit,
+			DenyTemplateIDs: cfg.Scanner.NucleiDenyTemplateIDs,
 		}
 	}
 	s.svc = vulnverify.New(vulnverify.Options{

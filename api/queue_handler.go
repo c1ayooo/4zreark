@@ -1,9 +1,6 @@
 package api
 
 import (
-	"context"
-	"strings"
-	"time"
 
 	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/service/queue"
@@ -30,7 +27,6 @@ func NewQueueHandler(config *queue.QueueConfig) (*QueueHandler, error) {
 	}
 
 	// 注册内置任务处理器
-	registerBuiltinHandlers(taskQueue)
 
 	// 启动工作者
 	taskQueue.Start()
@@ -47,48 +43,6 @@ func StopQueueHandler() {
 	if defaultQueueHandler != nil {
 		defaultQueueHandler.taskQueue.Stop()
 	}
-}
-
-// registerBuiltinHandlers 注册内置任务处理器
-func registerBuiltinHandlers(q *queue.TaskQueue) {
-	// 示例: 端口扫描任务
-	q.RegisterHandler("port_scan", func(ctx context.Context, task *queue.Task) (interface{}, error) {
-		// 从 payload 获取参数
-		target, _ := task.Payload["target"].(string)
-		// ports, _ := task.Payload["ports"].(string)
-
-		// 执行扫描 (这里是简化示例)
-		result := map[string]interface{}{
-			"target": target,
-			"status": "completed",
-		}
-
-		return result, nil
-	})
-
-	// 示例: 漏洞扫描任务
-	q.RegisterHandler("vuln_scan", func(ctx context.Context, task *queue.Task) (interface{}, error) {
-		target, _ := task.Payload["target"].(string)
-
-		result := map[string]interface{}{
-			"target": target,
-			"status": "completed",
-		}
-
-		return result, nil
-	})
-
-	// 示例: 子域名枚举任务
-	q.RegisterHandler("subdomain_enum", func(ctx context.Context, task *queue.Task) (interface{}, error) {
-		domain, _ := task.Payload["domain"].(string)
-
-		result := map[string]interface{}{
-			"domain": domain,
-			"status": "completed",
-		}
-
-		return result, nil
-	})
 }
 
 // GetTaskQueue 获取任务队列实例
@@ -122,56 +76,6 @@ func (h *QueueHandler) GetStats(c *gin.Context) {
 	}
 
 	utils.Success(c, stats)
-}
-
-// EnqueueTask 添加任务
-// @Summary 添加任务到队列
-// @Tags Queue
-// @Security ApiKeyAuth
-// @Param task body EnqueueRequest true "任务信息"
-// @Success 200 {object} utils.Response
-// @Router /api/queue/tasks [post]
-func (h *QueueHandler) EnqueueTask(c *gin.Context) {
-	var req struct {
-		Type     string                 `json:"type" binding:"required"`
-		Payload  map[string]interface{} `json:"payload"`
-		Priority int                    `json:"priority"`
-		Delay    int                    `json:"delay"` // 延迟秒数
-	}
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		utils.BadRequest(c, "参数错误: "+err.Error())
-		return
-	}
-
-	// 未注册 handler 的类型入队只会空转退避后进死信，入口直接拒绝。
-	if !h.taskQueue.HasHandler(req.Type) {
-		utils.BadRequest(c, "不支持的任务类型: "+req.Type+"（可用: "+strings.Join(h.taskQueue.RegisteredTypes(), ", ")+"）")
-		return
-	}
-
-	ctx := c.Request.Context()
-	var task *queue.Task
-	var err error
-
-	if req.Delay > 0 {
-		task, err = h.taskQueue.Schedule(ctx, req.Type, req.Payload, time.Duration(req.Delay)*time.Second)
-	} else if req.Priority != 0 {
-		task, err = h.taskQueue.EnqueueWithPriority(ctx, req.Type, req.Payload, req.Priority)
-	} else {
-		task, err = h.taskQueue.Enqueue(ctx, req.Type, req.Payload)
-	}
-
-	if err != nil {
-		utils.InternalError(c, "添加任务失败: "+err.Error())
-		return
-	}
-
-	utils.SuccessWithMessage(c, "任务已添加", map[string]interface{}{
-		"task_id": task.ID,
-		"type":    task.Type,
-		"status":  task.Status,
-	})
 }
 
 // GetTaskResult 获取任务结果

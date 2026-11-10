@@ -63,8 +63,6 @@ export type VulnStatus = 'new' | 'confirmed' | 'fixed' | 'ignored' | 'false_posi
 
 // 后端真实状态（DB CHECK 与 models.VulnStatus 一致）。'open' 是历史遗留写法，
 // 现在统一按 'new' 处理；兼容时用 vulnStatusLabel 出中文标签。
-export const VULN_STATUSES: VulnStatus[] = ['new', 'confirmed', 'fixed', 'ignored', 'false_positive']
-
 export const vulnStatusLabel: Record<VulnStatus, string> = {
   new: '待复核',
   confirmed: '已确认',
@@ -311,11 +309,12 @@ export const vulnApi = {
     }
   },
 
-  exportVulnerabilities: (params?: { severity?: string; status?: string }): Promise<Blob> =>
-    api.get('/vulnerabilities/export', { params, responseType: 'blob' }),
-
   getStats: (): Promise<ApiResponse<VulnStats>> =>
     api.get('/vulnerabilities/stats'),
+
+  // 服务端 CSV 导出：分页遍历全量（上限 10 万行），带当前筛选参数
+  exportCsv: (params?: { keyword?: string; severity?: string; status?: string; project_id?: number }) =>
+    api.get('/vulnerabilities/export', { params, responseType: 'blob' }),
 
   // POCs
   getPOCs: async (params?: PaginationParams & {
@@ -372,6 +371,4 @@ export const vulnApi = {
     })
   },
 
-  testPOC: (id: string, target: string): Promise<ApiResponse<{ success: boolean; message: string }>> =>
-    api.post(`/pocs/${id}/test`, { target }),
 }

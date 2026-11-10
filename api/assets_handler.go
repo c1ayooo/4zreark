@@ -1,8 +1,11 @@
 package api
 
 import (
+	"encoding/csv"
 	"errors"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/service"
@@ -159,6 +162,87 @@ func (h *AssetHandler) ResumeProject(c *gin.Context) { h.SetProjectPaused(c, fal
 //	&with_recent=1&recent_limit=5  站点列表顺带返回每站最近几条采集证据
 //
 // 容错口径（v4 §11.4）：q 语法错误明确报错；kind/catalog/view/sort 非法值静默回落缺省。
+// ExportAssets 服务端 CSV 导出（GET /api/assets/export）。
+// 复用列表筛选参数，分页遍历站点行（平铺不分组），上限 10 万行；公式注入
+// 在服务端做一次统一消毒（前端导出同样处理，双保险）。
+// @Router /api/assets/export [get]
+func (h *AssetHandler) ExportAssets(c *gin.Context) {
+	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
+	csvFile := "assets-" + time.Now().Format("20060102-150405") + ".csv"
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", `attachment; filename="`+csvFile+`"`)
+
+	w := csv.NewWriter(c.Writer)
+	_ = w.Write([]string{"id", "host", "ip", "protocol", "port", "url", "title", "status", "state",
+		"risk_score", "tags", "technology_stack", "cert_not_after", "first_seen", "last_seen", "project"})
+
+	const pageSize = 500
+	const maxRows = 100000
+	written := 0
+	for page := 1; written < maxRows; page++ {
+		res, err := h.assets.ListAssets(c.Request.Context(), repo.AssetQuery{
+			ProjectID: projectID,
+			Q:         c.Query("q"),
+			Starred:   starredParam(c.Query("starred")),
+			Tag:       c.Query("tag"),
+			SiteGroup: false, // 平铺站点行，行元素是 *Site
+			Page:      page,
+			PageSize:  pageSize,
+		})
+		if err != nil {
+			return // 头已发出，中断流即可
+		}
+		items, _ := res.Items.([]*repo.Site)
+		if len(items) == 0 {
+			break
+		}
+		for _, st := range items {
+			if written >= maxRows {
+				break
+			}
+			written++
+			_ = w.Write([]string{
+				strconv.FormatInt(st.ID, 10),
+				sanitizeCSVCell(st.Host), sanitizeCSVCell(st.IP),
+				st.Protocol, strconv.Itoa(st.Port),
+				sanitizeCSVCell(st.Value), sanitizeCSVCell(st.Title),
+				strconv.Itoa(st.HTTPStatus), st.State,
+				strconv.Itoa(st.RiskScore),
+				sanitizeCSVCell(strings.Join(st.Tags, "|")),
+				sanitizeCSVCell(strings.Join(st.Tech, "|")),
+				csvTimePtr(st.CertNotAfter), csvTime(st.FirstSeen), csvTime(st.LastSeen),
+				sanitizeCSVCell(st.ProjectName),
+			})
+		}
+		if res.Total > 0 && int64(page*pageSize) >= res.Total {
+			break
+		}
+	}
+	w.Flush()
+}
+
+// sanitizeCSVCell 防 CSV 公式注入：以 = + - @ 开头的单元格前置单引号。
+func sanitizeCSVCell(v string) string {
+	if len(v) > 0 && (v[0] == '=' || v[0] == '+' || v[0] == '-' || v[0] == '@') {
+		return "'" + v
+	}
+	return v
+}
+
+func csvTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
+}
+
+func csvTimePtr(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return csvTime(*t)
+}
+
 func (h *AssetHandler) ListAssets(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))

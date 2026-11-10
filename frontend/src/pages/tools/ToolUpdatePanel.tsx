@@ -37,6 +37,17 @@ const TOOL_HINTS: Record<string, string> = {
   rem: 'rem 当前为 fork 构建（官方版本反向转发不通）。建议关闭自动更新，或把版本锁定在 0.3.0，待官方修复后再放开。',
 }
 
+// templatesSyncDetail 拼官方模板同步的版本/增量摘要；从未同步过返回空串。
+function templatesSyncDetail(nuclei: any): string {
+  const sync = nuclei?.TemplatesSync ?? nuclei?.templates_sync
+  if (!sync) return ''
+  const parts: string[] = []
+  if (sync.version) parts.push(`上游 ${sync.version}`)
+  if (typeof sync.total === 'number') parts.push(`快照 ${sync.total}`)
+  if (sync.added || sync.removed) parts.push(`上次同步 +${sync.added ?? 0}/-${sync.removed ?? 0}`)
+  return parts.length ? ` · ${parts.join(' · ')}` : ''
+}
+
 export default function ToolUpdatePanel() {
   const { toast } = useToast()
   const [overview, setOverview] = useState<ToolsRuntimeOverview | null>(null)
@@ -111,8 +122,10 @@ export default function ToolUpdatePanel() {
 
   const nucleiUpd = useMutation({
     mutationFn: () => toolsApi.nucleiRuntimeUpdate({}),
-    onSuccess: () => {
-      toast({ title: 'nuclei 已更新' })
+    onSuccess: (res) => {
+      const sync = (res as any)?.data?.templates_sync ?? (res as any)?.templates_sync
+      const desc = sync ? templatesSyncDetail({ TemplatesSync: sync }).replace(' · ', '') : undefined
+      toast({ title: 'nuclei 已更新', description: desc })
       load()
     },
     onError: (e: Error) => toast({ title: 'nuclei 更新失败', description: e.message, variant: 'destructive' }),
@@ -323,7 +336,7 @@ export default function ToolUpdatePanel() {
         description="独立运行时自更新（二进制 + 官方模板）"
         installed={!!nuclei?.BinaryExists || !!(nuclei as any)?.binary_exists}
         version={nuclei?.BinaryVersion || (nuclei as any)?.binary_version}
-        detail={`自动更新 ${(nuclei?.AutoUpdate ?? (nuclei as any)?.auto_update) ? '开' : '关'} · 模板 ${(nuclei?.TemplateCount ?? (nuclei as any)?.template_count) ?? 0} 个 · 自定义 ${(nuclei?.CustomTemplateCount ?? (nuclei as any)?.custom_template_count) ?? 0} 个`}
+        detail={`自动更新 ${(nuclei?.AutoUpdate ?? (nuclei as any)?.auto_update) ? '开' : '关'} · 模板 ${(nuclei?.TemplateCount ?? (nuclei as any)?.template_count) ?? 0} 个 · 自定义 ${(nuclei?.CustomTemplateCount ?? (nuclei as any)?.custom_template_count) ?? 0} 个${templatesSyncDetail(nuclei)}`}
         updateBusy={nucleiUpd.isPending}
         updateLabel="更新"
         onUpdate={() => nucleiUpd.mutate()}

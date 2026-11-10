@@ -66,7 +66,7 @@ func (s *MCPService) assetTools() []mcpToolHandler {
 			Tool: mcpTool{
 				Name:        "get_asset",
 				Title:       "资产详情",
-				Description: "读取单个站点的完整证据链：站点属性、全部入口、验证历史、指纹命中、原始记录、变更事件与关系边。site_id 来自 list_assets 的返回。",
+				Description: "读取单个站点的完整证据链：站点属性、全部入口、验证历史、指纹命中、原始记录、变更事件、关系边与命中该站点的漏洞摘要。site_id 来自 list_assets 的返回。",
 				InputSchema: inputSchema(map[string]any{
 					"site_id": map[string]any{"type": "integer", "minimum": 1, "description": "站点 ID（sites.id）"},
 				}, "site_id"),

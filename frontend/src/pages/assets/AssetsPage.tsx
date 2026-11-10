@@ -37,7 +37,7 @@ import {
   Info,
 } from 'lucide-react'
 import { statusTagClass } from '@/components/ui/StatusTag'
-import AssetDetailDrawer, { stateLabel } from './components/AssetDetailDrawer'
+import AssetDetailDrawer, { stateLabel, type DrawerTab } from './components/AssetDetailDrawer'
 import ClusterView from './components/ClusterView'
 import {
   DEFAULT_SITE_COLUMNS,
@@ -146,7 +146,11 @@ function csvCell(value: unknown): string {
 
 function downloadCSV(filename: string, rows: unknown[][]) {
   const csv = '\uFEFF' + rows.map((row) => row.map(csvCell).join(',')).join('\n')
-  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+  saveBlob(filename, new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+}
+
+function saveBlob(filename: string, blob: Blob) {
+  const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
   a.download = filename
@@ -276,7 +280,7 @@ export default function AssetsPage() {
   })
   const [cursorStack, setCursorStack] = useState<Array<string | undefined>>([undefined])
   const [detailSite, setDetailSite] = useState<Site | null>(null)
-  const [detailTab, setDetailTab] = useState<'overview' | 'endpoints' | 'records' | 'fingerprints' | 'verifications'>('overview')
+  const [detailTab, setDetailTab] = useState<DrawerTab>('overview')
   const [savedViews, setSavedViews] = useState<SavedAssetView[]>(loadSavedViews)
   const [saveViewOpen, setSaveViewOpen] = useState(false)
   const [viewName, setViewName] = useState('')
@@ -739,6 +743,22 @@ export default function AssetsPage() {
     downloadCSV(`assets-${kind}-${stamp}.csv`, rows)
   }
 
+  // 导出全部：走服务端 CSV（分页遍历 + 公式注入消毒），不受当前页限制。
+  const exportAll = useMutation({
+    mutationFn: () => {
+      const q: Record<string, unknown> = { q: appliedQ || undefined, starred: starredOnly || undefined }
+      if (projectId && projectId !== '0') q.project_id = Number(projectId)
+      return assetApi.exportCsv(q)
+    },
+    onSuccess: (res) => {
+      saveBlob(`assets-all-${new Date().toISOString().slice(0, 10)}.csv`, new Blob([res as unknown as BlobPart], { type: 'text/csv;charset=utf-8' }))
+      toast({ title: '全量导出完成' })
+    },
+    onError: () => {
+      toast({ title: '导出失败', variant: 'destructive' })
+    },
+  })
+
   // 资产多选：选中后可直接对这些资产派新任务（选资产 → 选类型 → 起任务）
   const [selectedHosts, setSelectedHosts] = useState<Set<string>>(new Set())
   const [createOpen, setCreateOpen] = useState(false)
@@ -1000,6 +1020,10 @@ export default function AssetsPage() {
           </Dropdown>
           <Button onClick={() => exportCurrent()} disabled={items.length === 0}>
             <Download className="mr-2 h-4 w-4" /> 导出本页
+          </Button>
+          <Button onClick={() => exportAll.mutate()} disabled={exportAll.isPending}>
+            <Download className="mr-2 h-4 w-4" />
+            {exportAll.isPending ? '导出中…' : '导出全部'}
           </Button>
           <Button onClick={() => list.refetch()}>
             <RefreshCw className="mr-2 h-4 w-4" /> 刷新

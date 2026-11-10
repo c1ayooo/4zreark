@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/c1ayooo/4zreark/config"
 	"github.com/c1ayooo/4zreark/internal/useragent"
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/repo"
@@ -194,6 +195,8 @@ type TaskExecutor struct {
 	// 正在运行的任务，用于取消
 	runningTasks map[string]*runningTask
 	runningMutex sync.RWMutex
+	// processStart 是本进程启动时间；用于识别服务重启后遗留的 running 任务。
+	processStart time.Time
 }
 
 // NewTaskExecutor 创建任务执行器。workers=0 表示只跑状态监控/租约回收（role=master）。
@@ -211,6 +214,7 @@ func NewTaskExecutor(workers int) *TaskExecutor {
 		workers:       workers,
 		stopCh:        make(chan struct{}),
 		runningTasks:  make(map[string]*runningTask),
+		processStart:  time.Now(),
 	}
 	e.maxTasks.Store(int64(workers))
 	return e
@@ -249,6 +253,7 @@ func NewRemoteTaskExecutor(workers int, remote *RemoteClient) *TaskExecutor {
 		workers:       workers,
 		stopCh:        make(chan struct{}),
 		runningTasks:  make(map[string]*runningTask),
+		processStart:  time.Now(),
 	}
 	e.maxTasks.Store(int64(workers))
 	return e
@@ -462,6 +467,14 @@ func (e *TaskExecutor) RunScanJob(ctx context.Context, taskID string, riverJobID
 	return e.runLocalScan(ctx, taskID, riverJobID)
 }
 
+// isResumedTask 判断 running 任务是否是本进程启动前遗留的。
+func isResumedTask(task *models.Task, processStart time.Time) bool {
+	return task != nil &&
+		task.Status == models.TaskStatusRunning &&
+		!task.StartedAt.IsZero() &&
+		task.StartedAt.Before(processStart)
+}
+
 // runLocalScan 在本进程执行流水线（单机模式，或 all 模式下没有远程节点时的回退）。
 func (e *TaskExecutor) runLocalScan(ctx context.Context, taskID string, riverJobID int64) error {
 	task, err := e.taskService.GetTaskByID(taskID)
@@ -475,6 +488,25 @@ func (e *TaskExecutor) runLocalScan(ctx context.Context, taskID string, riverJob
 		models.TaskStatusCancelled, models.TaskStatusPaused:
 		log.Printf("[TaskExecutor] River job %d dropped: task %s status=%s", riverJobID, taskID, task.Status)
 		return nil
+	}
+
+	// 服务重启后 River 会把 running job 重新拉起。先清理本任务上次未完成的结果，
+	// 避免端口/指纹/URL 重复写入；sites 是聚合资产，保留并由 upsert 去重。
+	if isResumedTask(task, e.processStart) {
+		// 已有进度说明上次已经跑了一部分：保留结果，靠 result_dedup/upsert 续跑。
+		// 每次重启都清空会让大任务永远跑不完；只有 0 进度才清理残片。
+		if task.Progress == 0 {
+			log.Printf("[TaskExecutor] 检测到服务重启后的任务 %s（0 进度），清理未完成结果后重跑", taskID)
+			e.logAction(task, "system", "warn", "检测到服务重启（0 进度），清理本任务未完成结果后重跑")
+			if ts, ok := e.taskService.(*TaskService); ok {
+				if err := ts.ResetTaskRun(taskID); err != nil {
+					log.Printf("[TaskExecutor] 清理重启任务 %s 未完成结果失败: %v", taskID, err)
+				}
+			}
+		} else {
+			log.Printf("[TaskExecutor] 检测到服务重启后的任务 %s（进度 %d%%），保留已有结果继续执行", taskID, task.Progress)
+			e.logAction(task, "system", "warn", fmt.Sprintf("检测到服务重启（进度 %d%%），保留已有结果继续执行", task.Progress))
+		}
 	}
 
 	// 节点被管理员停用或并发已满：把作业 snooze 回队列，不占用也不丢失。
@@ -880,11 +912,14 @@ func (e *TaskExecutor) buildCustomConfig(task *models.Task) *pipeline.PipelineCo
 // 用户显式给的 scan_types 仍会在 executeStreamingPipeline 里覆盖本预设
 // （高级自定义场景）；空列表则保留这里的全集。
 func buildCollectionConfig(task *models.Task) *pipeline.PipelineConfig {
+	collectionMaxPorts := config.GetConfig().Collection.MaxPortsPerHost
 	config := pipeline.DefaultPipelineConfig()
 	pipeline.CollectionModuleSet().ApplyTo(config)
 	// 信息收集优先 naabu 做端口发现；naabu 缺失/失败时 port_module 回退 gogo/纯 Go。
 	config.PortBackend = "naabu"
-	config.PortScanMode = "top1000"
+	config.MaxPortsPerHost = collectionMaxPorts
+	// 信息收集默认只扫常见端口；top1000 对 CDN 目标会被 naabu 判成全开。
+	config.PortScanMode = "quick"
 	config.PortRange = "1-1000"
 	config.SkipCDN = true
 	config.SubdomainMaxEnumTime = 15
@@ -944,6 +979,11 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 	// 任务下发的引擎查询上限（master 建任务时按当日余额收紧）
 	if task.Config.EngineQueryMaxPerEngine > 0 {
 		config.SubdomainEngineQueryMax = task.Config.EngineQueryMaxPerEngine
+	}
+	// nuclei 误报黑名单：master 创建任务时把平台生效值盖章进 task.Config，
+	// worker 只消费下发的清单，不读平台设置。
+	if len(task.Config.DenyTemplateIDs) > 0 {
+		config.VulnDenyTemplateIDs = task.Config.DenyTemplateIDs
 	}
 	ctx, cancel := context.WithTimeout(parent, 24*time.Hour)
 	// 任务级 UA seed：下游所有 HTTP 请求按 URL host 自动派生同站一致的 UA。
@@ -1555,6 +1595,56 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 					"location":   r.Location,
 					"severity":   r.Severity,
 					"confidence": r.Confidence,
+				},
+				CreatedAt: time.Now(),
+			}
+
+		case pipeline.VhostResult:
+			// vhost 绑定发现：只落结果页供人工确认，不自动建站点
+			//（"响应不同形"是弱证据，进资产域要走指纹/爬虫的正式链路）。
+			scanResult = &models.ScanResult{
+				TaskID:      task.ID,
+				WorkspaceID: task.WorkspaceID,
+				Type:        models.ResultTypeVhost,
+				Source:      r.Source,
+				Data: map[string]interface{}{
+					"ip":          r.IP,
+					"port":        r.Port,
+					"domain":      r.Domain,
+					"host":        r.Domain,
+					"url":         r.URL,
+					"target":      r.Domain,
+					"title":       r.Title,
+					"status_code": r.StatusCode,
+					"status":      r.StatusCode,
+					"length":      r.Length,
+					"source":      r.Source,
+				},
+				CreatedAt: time.Now(),
+			}
+
+		case pipeline.FileLeakResult:
+			// 文件泄露检测：强特征命中的备份/敏感文件，直接落结果页。
+			normalizedTarget := normalizeURL(r.Target)
+			normalizedURL := normalizeURL(r.URL)
+			scanResult = &models.ScanResult{
+				TaskID:      task.ID,
+				WorkspaceID: task.WorkspaceID,
+				Type:        models.ResultTypeFileLeak,
+				Source:      r.Source,
+				Data: map[string]interface{}{
+					"target":      normalizedTarget,
+					"url":         normalizedURL,
+					"input":       normalizedTarget,
+					"kind":        r.Kind,
+					"name":        r.Name,
+					"evidence":    r.Evidence,
+					"severity":    r.Severity,
+					"status_code": r.StatusCode,
+					"status":      r.StatusCode,
+					"length":      r.Length,
+					"size":        r.Length,
+					"source":      r.Source,
 				},
 				CreatedAt: time.Now(),
 			}

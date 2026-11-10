@@ -53,7 +53,8 @@ func (h *NetworkProxyHandler) UpdateConfig(c *gin.Context) {
 	utils.Success(c, gin.H{"config": norm, "modules": outbound.Modules()})
 }
 
-// TestProxy 经指定代理测连通性（url 为空 = 测直连）
+// TestProxy 测连通性（category 非空 = 按模块生效配置测真实下载链路；
+// 否则 url 非空测指定代理，url 为空测直连）
 // @Summary 测试代理连通性
 // @Tags network-proxy
 // @Accept json
@@ -62,11 +63,12 @@ func (h *NetworkProxyHandler) UpdateConfig(c *gin.Context) {
 // @Router /api/network/proxy/test [post]
 func (h *NetworkProxyHandler) TestProxy(c *gin.Context) {
 	var in struct {
-		URL string `json:"url"`
+		URL      string `json:"url"`
+		Category string `json:"category"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		utils.BadRequest(c, "请求体不是合法 JSON")
 		return
 	}
-	utils.Success(c, h.svc.TestProxy(c.Request.Context(), in.URL))
+	utils.Success(c, h.svc.TestProxy(c.Request.Context(), in.URL, in.Category))
 }

@@ -172,6 +172,9 @@ type intelSettings struct {
 	LastPoll        time.Time
 	LastResult      vulnmonitor.PollResult
 	Sources         int
+	// 威胁雷达目标：逗号分隔的 "owner/repo"（工具 Release 监听）与 GitHub 用户名（研究员仓库监听）。
+	ToolsTargets   string
+	HackersTargets string
 }
 
 func NewIntelService() *IntelService {
@@ -231,7 +234,21 @@ func (s *IntelService) loadSettings(ctx context.Context) (intelSettings, error) 
 	if v, ok := kv["vulnintel.notify_enabled"]; ok {
 		out.NotifyEnabled = v == "true"
 	}
+	out.ToolsTargets = kv["vulnintel.threat_tools_targets"]
+	out.HackersTargets = kv["vulnintel.threat_hackers_targets"]
 	return out, nil
+}
+
+// splitTargets 解析逗号分隔的雷达目标列表。
+func splitTargets(raw string) []string {
+	var out []string
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // build 按设置构造轮询器。Caller 必须持有 s.mu。
@@ -246,6 +263,22 @@ func (s *IntelService) build(cfg intelSettings) error {
 		// 硬编码 Medium 是刻意的：低危情报量大、信噪比低，默认不进库。
 		// 要放宽就改这里，不暴露成用户设置——避免出现「库里突然多出几万条低危」。
 		vulnmonitor.WithMinSeverity(grab.Medium),
+		// GitHub CVE 雷达：监听当日新出现的 CVE 相关仓库，复用本服务的
+		// GitHub 凭据解析（环境变量/sources 表/token 池）。
+		vulnmonitor.WithExtraSources(grab.NewGithubCVECrawler().WithTokenFn(func(ctx context.Context) string {
+			return s.tokenFn(ctx)
+		})),
+	}
+	// 工具 Release / 研究员仓库两路雷达：配置了目标才挂载，避免空跑。
+	if len(splitTargets(cfg.ToolsTargets)) > 0 || len(splitTargets(cfg.HackersTargets)) > 0 {
+		opts = append(opts, vulnmonitor.WithExtraSources(
+			grab.NewGithubToolsCrawler(func() []string { return splitTargets(cfg.ToolsTargets) }).WithTokenFn(func(ctx context.Context) string {
+				return s.tokenFn(ctx)
+			}),
+			grab.NewGithubHackersCrawler(func() []string { return splitTargets(cfg.HackersTargets) }).WithTokenFn(func(ctx context.Context) string {
+				return s.tokenFn(ctx)
+			}),
+		))
 	}
 	if cfg.NotifyEnabled {
 		opts = append(opts, vulnmonitor.WithNotifyHook(func(newHigh []string) {
@@ -254,6 +287,7 @@ func (s *IntelService) build(cfg intelSettings) error {
 			}
 			log.Printf("[intel] 本轮新增高危/严重情报 %d 条，首条: %s", len(newHigh), newHigh[0])
 			notifyIntelHigh(newHigh)
+			go runIntelAssetMatch()
 		}))
 	}
 	s.monitor = vulnmonitor.New(&intelStore{repo: st, stats: s.counter}, opts...)
@@ -346,7 +380,26 @@ func (s *IntelService) PollNow() (vulnmonitor.PollResult, error) {
 	ctx, cancel := dbCtxPoll()
 	defer cancel()
 	res := m.Poll(ctx)
+	if res.New > 0 || res.Updated > 0 {
+		go runIntelAssetMatch()
+	}
 	return res, nil
+}
+
+// runIntelAssetMatch 轮询落库后异步跑一轮情报×资产匹配（对齐 ARL 的
+// 「情报 → 关联资产告警」思路）。失败只记日志，不影响情报主链。
+func runIntelAssetMatch() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	n, matches, err := NewIntelAssetMatchService().MatchRecent(ctx, 0, false)
+	if err != nil {
+		log.Printf("[intel-match] 匹配失败: %v", err)
+		return
+	}
+	if n > 0 {
+		log.Printf("[intel-match] 本轮命中 %d 条情报关联资产", n)
+		NotifyMatches(matches)
+	}
 }
 
 // Refresh 插队一次异步轮询（用于从页面点「立即刷新」后不阻塞请求）。
@@ -401,9 +454,11 @@ func (s *IntelService) GetSettings() (map[string]any, error) {
 		return nil, err
 	}
 	out := map[string]any{
-		"enabled":          cfg.Enabled,
-		"interval_minutes": cfg.IntervalMinutes,
-		"notify_enabled":   cfg.NotifyEnabled,
+		"enabled":                cfg.Enabled,
+		"interval_minutes":       cfg.IntervalMinutes,
+		"notify_enabled":         cfg.NotifyEnabled,
+		"threat_tools_targets":   cfg.ToolsTargets,
+		"threat_hackers_targets": cfg.HackersTargets,
 	}
 	for k, v := range s.Status() {
 		out[k] = v
@@ -420,7 +475,10 @@ func (s *IntelService) UpdateSettings(in map[string]any) error {
 		return err
 	}
 
-	writable := []string{"vulnintel.enabled", "vulnintel.interval_minutes", "vulnintel.notify_enabled"}
+	writable := []string{
+		"vulnintel.enabled", "vulnintel.interval_minutes", "vulnintel.notify_enabled",
+		"vulnintel.threat_tools_targets", "vulnintel.threat_hackers_targets",
+	}
 	for _, key := range writable {
 		raw, ok := in[key]
 		if !ok {
@@ -472,7 +530,7 @@ func timeToNullable(t time.Time) any {
 	return t
 }
 
-// ListIntel / GetIntel / IntelStats 是查询入口，供 api 层使用。
+// ListIntel / IntelStats 是查询入口，供 api 层使用。
 func (s *IntelService) ListIntel(f repo.IntelFilter) ([]*repo.IntelRow, int64, error) {
 	ctx, cancel := dbCtx()
 	defer cancel()
@@ -481,16 +539,6 @@ func (s *IntelService) ListIntel(f repo.IntelFilter) ([]*repo.IntelRow, int64, e
 		return nil, 0, err
 	}
 	return st.List(ctx, f)
-}
-
-func (s *IntelService) GetIntel(uniqueKey string) (*repo.IntelRow, error) {
-	ctx, cancel := dbCtx()
-	defer cancel()
-	st, err := s.store()
-	if err != nil {
-		return nil, err
-	}
-	return st.GetByUniqueKey(ctx, uniqueKey)
 }
 
 func (s *IntelService) IntelStats() (map[string]any, error) {

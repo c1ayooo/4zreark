@@ -24,6 +24,8 @@ type RunOptions struct {
 	Tags         []string
 	Severity     []string
 	ExcludeTags  []string
+	// ExcludeIDs 是误报黑名单：按 template-id 排除（nuclei -eid）。
+	ExcludeIDs   []string
 	TemplateType string
 	Automatic    bool
 
@@ -243,6 +245,9 @@ func (m *Manager) buildArgs(opts RunOptions, targetFile, resultFile string, temp
 	}
 	if len(opts.ExcludeTags) > 0 {
 		args = append(args, "-exclude-tags", strings.Join(opts.ExcludeTags, ","))
+	}
+	if len(opts.ExcludeIDs) > 0 {
+		args = append(args, "-eid", strings.Join(opts.ExcludeIDs, ","))
 	}
 	if strings.TrimSpace(opts.TemplateType) != "" {
 		args = append(args, "-type", strings.TrimSpace(opts.TemplateType))

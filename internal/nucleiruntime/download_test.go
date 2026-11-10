@@ -58,15 +58,23 @@ func TestDownloadCandidates(t *testing.T) {
 	u := "https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/a.zip"
 	t.Setenv("ZRE_GH_MIRROR", "https://m1.example, https://m2.example/")
 	got := downloadCandidates([]string{u, u})
-	if len(got) != 3 || got[0] != u ||
-		got[1] != "https://m1.example/"+u || got[2] != "https://m2.example/"+u {
-		t.Fatalf("自定义镜像候选/去重失败: %v", got)
+	want := []string{"https://m1.example/" + u, "https://m2.example/" + u, u}
+	if len(got) != len(want) {
+		t.Fatalf("显式镜像应优先且去重（3 个候选）: %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("候选顺序错误: %v, want %v", got, want)
+		}
 	}
 
 	t.Setenv("ZRE_GH_MIRROR", "")
 	got = downloadCandidates([]string{u})
-	if len(got) != 4 {
+	if len(got) != 4 || got[0] != u {
 		t.Fatalf("未配置时应为直连 + 3 个内置镜像: %v", got)
+	}
+	if !strings.HasPrefix(got[1], "https://gh-proxy.com/") {
+		t.Errorf("实测可用的 gh-proxy.com 应排内置镜像首位: %v", got)
 	}
 	for _, c := range got[1:] {
 		if !strings.HasSuffix(c, "/"+u) {
@@ -75,17 +83,24 @@ func TestDownloadCandidates(t *testing.T) {
 	}
 }
 
-// 连接中途 EOF 不应让自动安装直接失败：同一候选重试后应完整落盘。
+// 响应体传了一半被掐断（phase=body）时同源重试；连接级失败则直接换源，
+// 不会在一个坏源上耗光后台 ctx。
 func TestDownloadAnyRetriesEOF(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if atomic.AddInt32(&calls, 1) == 1 {
-			if hj, ok := w.(http.Hijacker); ok {
-				conn, _, err := hj.Hijack()
-				if err == nil {
-					_ = conn.Close() // 模拟代理/CDN 中途 EOF
-				}
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				return
 			}
+			conn, buf, err := hj.Hijack()
+			if err != nil {
+				return
+			}
+			// 声明 100 字节却只写 7 字节再断连：Do 成功、io.Copy 报 unexpected EOF。
+			_, _ = buf.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\npartial")
+			_ = buf.Flush()
+			_ = conn.Close()
 			return
 		}
 		_, _ = w.Write([]byte("nuclei-payload"))

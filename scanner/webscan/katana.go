@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -96,14 +95,7 @@ func katanaCrawledURL(out KatanaJSONOutput) KatanaCrawledURL {
 
 // siteKey 从目标 URL 取站点键（host:port）；没有协议时按原串处理。
 func siteKey(target string) string {
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return ""
-	}
-	if u, err := url.Parse(target); err == nil && u.Host != "" {
-		return u.Host
-	}
-	return target
+	return useragent.NormalizeSiteKey(target)
 }
 
 func headerValue(headers map[string]string, name string) string {

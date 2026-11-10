@@ -1,7 +1,7 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {keepPreviousData, useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import { intelApi, IntelItem } from '@/api/intel'
-import { Button, Card, Input, Modal, Pagination, Select, Skeleton, Table, Tag } from 'antd'
+import { Button, Card, Input, Modal, Pagination, Select, Skeleton, Switch, Table, Tag } from 'antd'
 import type { TableProps } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate, getSeverityColor } from '@/lib/utils'
@@ -47,6 +47,7 @@ export default function IntelPage() {
   const [keyword, setKeyword] = useState('')
   const [searchInput, setSearchInput] = useState('')
   const [selected, setSelected] = useState<IntelItem | null>(null)
+  const [showSettings, setShowSettings] = useState(false)
 
   const { data, isLoading, isFetching, refetch } = useQuery({
     queryKey: ['intel', page, severity, sourceName, keyword],
@@ -120,6 +121,50 @@ export default function IntelPage() {
     onError: (err: unknown) => {
       const msg = (err as { message?: string })?.message || '轮询失败'
       toast({ title: msg, variant: 'destructive' })
+    },
+  })
+
+  // 情报设置（轮询开关/间隔/通知 + 威胁雷达目标）
+  const [settings, setSettings] = useState<Record<string, unknown>>({})
+  const settingsQuery = useQuery({
+    queryKey: ['intel-settings'],
+    queryFn: () => intelApi.settings(),
+    enabled: showSettings,
+  })
+  useEffect(() => {
+    if (settingsQuery.data) setSettings(settingsQuery.data)
+  }, [settingsQuery.data])
+
+  const saveSettings = useMutation({
+    mutationFn: () =>
+      intelApi.saveSettings({
+        'vulnintel.enabled': !!settings.enabled,
+        'vulnintel.interval_minutes': Number(settings.interval_minutes) || 60,
+        'vulnintel.notify_enabled': !!settings.notify_enabled,
+        'vulnintel.threat_tools_targets': String(settings.threat_tools_targets || ''),
+        'vulnintel.threat_hackers_targets': String(settings.threat_hackers_targets || ''),
+      }),
+    onSuccess: () => {
+      toast({ title: '情报设置已保存，轮询器已重启' })
+      setShowSettings(false)
+      queryClient.invalidateQueries({ queryKey: ['intel-settings'] })
+    },
+    onError: (err: unknown) => {
+      toast({ title: (err as { message?: string })?.message || '保存失败', variant: 'destructive' })
+    },
+  })
+
+  const matchAssets = useMutation({
+    mutationFn: () => intelApi.matchAssets(7, false),
+    onSuccess: (res) => {
+      if (res.matched === 0) {
+        toast({ title: '本轮没有情报命中资产' })
+      } else {
+        toast({ title: `命中 ${res.matched} 条情报关联资产`, description: '明细见资产变更时间线（event=intel_match）' })
+      }
+    },
+    onError: (err: unknown) => {
+      toast({ title: (err as { message?: string })?.message || '匹配失败', variant: 'destructive' })
     },
   })
 
@@ -248,6 +293,13 @@ export default function IntelPage() {
           <Button size="small" onClick={() => refetch()} disabled={isFetching}>
             <RefreshCw className={cn('h-4 w-4 mr-2', isFetching && 'animate-spin')} />
             刷新
+          </Button>
+          <Button size="small" onClick={() => matchAssets.mutate()} disabled={matchAssets.isPending}>
+            <Sparkles className={cn('h-4 w-4 mr-2', matchAssets.isPending && 'animate-spin')} />
+            资产匹配
+          </Button>
+          <Button size="small" onClick={() => setShowSettings(true)}>
+            设置
           </Button>
           <Button
             type="primary"
@@ -378,6 +430,53 @@ export default function IntelPage() {
         onEnrich={(key) => enrich.mutate(key)}
         enriching={enrich.isPending && enrich.variables === selected?.unique_key}
       />
+
+      <Modal
+        open={showSettings}
+        title="情报设置"
+        onCancel={() => setShowSettings(false)}
+        onOk={() => saveSettings.mutate()}
+        confirmLoading={saveSettings.isPending}
+        okText="保存"
+        cancelText="取消"
+        width={560}
+      >
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium">定时轮询</span>
+            <Switch checked={!!settings.enabled} onChange={(v) => setSettings((p) => ({ ...p, enabled: v }))} />
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium">高危/严重情报通知</span>
+            <Switch checked={!!settings.notify_enabled} onChange={(v) => setSettings((p) => ({ ...p, notify_enabled: v }))} />
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium">轮询间隔（分钟，5–1440）</label>
+            <Input
+              value={String(settings.interval_minutes ?? 60)}
+              onChange={(e) => setSettings((p) => ({ ...p, interval_minutes: e.target.value }))}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium">安全工具 Release 雷达目标</label>
+            <Input
+              placeholder="owner/repo，逗号分隔，留空关闭"
+              value={String(settings.threat_tools_targets ?? '')}
+              onChange={(e) => setSettings((p) => ({ ...p, threat_tools_targets: e.target.value }))}
+            />
+            <p className="text-xs text-muted-foreground">监听这些仓库最近 24h 内发布的 Release，发现后进情报库。</p>
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium">研究员仓库雷达目标</label>
+            <Input
+              placeholder="GitHub 用户名，逗号分隔，留空关闭"
+              value={String(settings.threat_hackers_targets ?? '')}
+              onChange={(e) => setSettings((p) => ({ ...p, threat_hackers_targets: e.target.value }))}
+            />
+            <p className="text-xs text-muted-foreground">监听这些用户新建的仓库（0day/PoC 首发常见位置）。</p>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }

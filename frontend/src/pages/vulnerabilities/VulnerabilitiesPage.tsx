@@ -268,6 +268,30 @@ export default function VulnerabilitiesPage() {
       }),
   })
 
+  // 服务端 CSV 导出：分页遍历全量（上限 10 万行），带当前筛选参数。
+  const exportAll = useMutation({
+    mutationFn: () =>
+      vulnApi.exportCsv({
+        keyword: debouncedSearch || undefined,
+        severity: severityFilter === 'all' ? undefined : severityFilter,
+        status: statusFilter === 'all' ? undefined : statusFilter,
+        project_id: projectId || undefined,
+      }),
+    onSuccess: (res) => {
+      const blob = new Blob([res as unknown as BlobPart], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `vulnerabilities-${new Date().toISOString().slice(0, 10)}.csv`
+      a.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+      toast({ title: '全量导出完成' })
+    },
+    onError: () => {
+      toast({ title: '导出失败', variant: 'destructive' })
+    },
+  })
+
   const verifyMutation = useMutation({
     mutationFn: vulnApi.verifyVulnerability,
     onSuccess: (result) => {
@@ -331,6 +355,10 @@ export default function VulnerabilitiesPage() {
           >
             <Download className="h-4 w-4 mr-2" />
             导出报告
+          </Button>
+          <Button size="small" onClick={() => exportAll.mutate()} disabled={exportAll.isPending}>
+            <Download className="h-4 w-4 mr-2" />
+            {exportAll.isPending ? '导出中…' : '导出 CSV'}
           </Button>
         </div>
       </div>

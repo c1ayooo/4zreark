@@ -45,6 +45,9 @@ type PipelineConfig struct {
 
 	// 漏洞扫描
 	VulnScan bool `json:"vuln_scan"`
+	// VulnDenyTemplateIDs 是 nuclei 误报黑名单（template-id），
+	// master 创建任务时从平台设置盖章到 task.Config，这里随任务进来。
+	VulnDenyTemplateIDs []string `json:"vuln_deny_template_ids,omitempty"`
 
 	// GogoPOC 控制端口扫描是否把 gogo 内置 poc 命中写成漏洞结果。
 	// 默认 false：信息收集任务不应通过端口模块旁路产出漏洞条目。
@@ -73,6 +76,10 @@ type PipelineConfig struct {
 
 	// 敏感信息检测
 	SensitiveScan bool `json:"sensitive_scan"`
+	// FileLeak 备份/敏感文件泄露检测（强特征 + 软 404 基线，路径固定预算小）。
+	FileLeak bool `json:"file_leak"`
+	// Vhost 虚拟主机绑定发现（主动探测，默认关，scan_types 显式开）。
+	Vhost bool `json:"vhost"`
 
 	// WIH 接口候选探测：从页面/JS 词法提取接口候选，同源受控探测后落档
 	ApiProbe bool `json:"api_probe"`
@@ -103,6 +110,9 @@ type PipelineConfig struct {
 	// PortBackend 选择端口发现后端：auto（默认）/naabu/gogo/native。
 	// auto：信息收集优先 naabu，漏洞/服务识别任务保留 gogo，缺失逐级回退。
 	PortBackend string `json:"port_backend,omitempty"`
+
+	// MaxPortsPerHost 单站开放端口阈值；0 表示不做二次复核。
+	MaxPortsPerHost int `json:"max_ports_per_host,omitempty"`
 }
 
 // rate 返回生效的每秒请求上限。默认 10：目标面大的项目（集团子公司批量
@@ -184,6 +194,8 @@ type StreamingPipeline struct {
 	jsAuditModule     *JSAuditModule
 	dirScanModule     *DirScanModule
 	sensitiveModule   *SensitiveModule
+	fileLeakModule  *FileLeakModule
+	vhostModule     *VhostModule
 	wihModule         *WihProbeModule
 	httpProbeModule   *HttpProbeModule
 
@@ -440,6 +452,15 @@ func (p *StreamingPipeline) buildModuleChain() error {
 		lastModule = p.sensitiveModule
 	}
 
+	// 文件泄露检测模块：与敏感信息同层，消费 HTTP 资产做专项探测。
+	if p.config.FileLeak {
+		p.fileLeakModule = NewFileLeakModule(p.ctx, lastModule, p.config.moduleConcurrency(4))
+		p.fileLeakModule.SetScope(p.scope)
+		p.fileLeakModule.SetInput(make(chan interface{}, 500))
+		p.fileLeakModule.SetProgressTracker(p.progressTracker)
+		lastModule = p.fileLeakModule
+	}
+
 	// 目录扫描模块
 	if p.config.DirScan {
 		p.dirScanModule = NewDirScanModule(p.ctx, lastModule, p.config.moduleConcurrency(4), p.config.DirWordlist)
@@ -501,6 +522,7 @@ func (p *StreamingPipeline) buildModuleChain() error {
 	if p.config.VulnScan {
 		// 并发走 moduleConcurrency 统一口径（任务「并发」配置可覆盖），此前硬编码 4。
 		p.vulnScanModule = NewVulnScanModule(p.ctx, lastModule, p.config.moduleConcurrency(4))
+		p.vulnScanModule.SetDenyTemplateIDs(p.config.VulnDenyTemplateIDs)
 		p.vulnScanModule.SetInput(make(chan interface{}, 500))
 		p.vulnScanModule.SetProgressTracker(p.progressTracker)
 		lastModule = p.vulnScanModule
@@ -516,11 +538,20 @@ func (p *StreamingPipeline) buildModuleChain() error {
 		lastModule = p.fingerprintModule
 	}
 
+	// vhost 绑定发现模块：链位置在端口扫描与指纹之间，吃 PortAlive。
+	if p.config.Vhost {
+		p.vhostModule = NewVhostModule(p.ctx, lastModule)
+		p.vhostModule.SetInput(make(chan interface{}, 500))
+		p.vhostModule.SetProgressTracker(p.progressTracker)
+		lastModule = p.vhostModule
+	}
+
 	// 端口扫描模块
 	if p.config.PortScan {
 		p.portScanModule = NewPortScanModule(p.ctx, lastModule, p.config.PortRange, p.config.PortScanMode)
 		p.portScanModule.SetGogoPOC(p.config.GogoPOC)
 		p.portScanModule.SetPortBackend(p.config.PortBackend)
+		p.portScanModule.SetMaxPortsPerHost(p.config.MaxPortsPerHost)
 		p.portScanModule.SetRate(p.config.rate(), p.config.moduleConcurrency(2), p.config.targetDelay())
 		p.portScanModule.SetInput(make(chan interface{}, 500))
 		p.portScanModule.SetProgressTracker(p.progressTracker)

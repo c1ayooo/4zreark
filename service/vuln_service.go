@@ -396,11 +396,6 @@ func (s *VulnService) DeletePOC(pocID string) error {
 	return nil
 }
 
-// TogglePOC 启用或停用 POC
-func (s *VulnService) TogglePOC(pocID string, enabled bool) error {
-	return s.UpdatePOC(pocID, map[string]interface{}{"enabled": enabled})
-}
-
 // ---------------------------------------------------------------- 报告
 
 // CreateReport 创建报告

@@ -95,7 +95,8 @@ export function ProxyPanel() {
   })
 
   const test = useMutation({
-    mutationFn: ({ url }: { key: string; url: string }) => proxyApi.test(url),
+    mutationFn: ({ url, category }: { key: string; url: string; category?: string }) =>
+      proxyApi.test(url, category),
     onMutate: ({ key }) => {
       setTestingKey(key)
       setTestResults((prev) => {
@@ -143,14 +144,17 @@ export function ProxyPanel() {
     if (!r) return null
     return r.ok ? (
       <Tag className="border-transparent bg-emerald-600 text-white">
-        连通正常 · {r.latency_ms}ms
+        连通正常 · {r.latency_ms}ms{r.proxy_used ? ` · ${r.proxy_used}` : ''}
       </Tag>
     ) : (
-      <Tag color="error">失败{r.error ? ` · ${r.error}` : ''}</Tag>
+      <Tag color="error">
+        失败{r.proxy_used ? ` · ${r.proxy_used}` : ''}{r.error ? ` · ${r.error}` : ''}
+      </Tag>
     )
   }
 
-  const runTest = (key: string, url: string) => test.mutate({ key, url })
+  const runTest = (key: string, url: string, category?: string) =>
+    test.mutate({ key, url, category })
 
   return (
     <div className="space-y-4">
@@ -182,8 +186,9 @@ export function ProxyPanel() {
             {renderTestResult('global')}
           </div>
           <div className="text-xs text-muted-foreground">
-            协议支持 http / https / socks5 / socks5h，凭据可直接写进 URL。测试默认探测
-            api.github.com，与规则同步、工具下载实际访问的域一致。
+            协议支持 http / https / socks5 / socks5h，凭据可直接写进 URL。全局「测试代理」探测 api.github.com；
+            工具下载 / Nuclei 请用「测试下载链路」——它按当前生效配置探测真实 GitHub release 资产
+            （含 302 到资产 CDN），结果会显示实际出口。
           </div>
         </div>
       </Card>
@@ -227,7 +232,17 @@ export function ProxyPanel() {
                       </Button>
                     </>
                   )}
+                  {(m.key === 'nuclei' || m.key === 'tool_download') && (
+                    <Button
+                      icon={<FlaskConical className="h-4 w-4" />}
+                      loading={testingKey === `${m.key}:download`}
+                      onClick={() => runTest(`${m.key}:download`, '', m.key)}
+                    >
+                      测试下载链路
+                    </Button>
+                  )}
                   {renderTestResult(m.key)}
+                  {renderTestResult(`${m.key}:download`)}
                 </div>
               </div>
             )

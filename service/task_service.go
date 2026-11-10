@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/c1ayooo/4zreark/internal/useragent"
 	"github.com/c1ayooo/4zreark/models"
 	"github.com/c1ayooo/4zreark/repo"
+	"github.com/c1ayooo/4zreark/scanner/scope"
 	"github.com/c1ayooo/4zreark/service/pipeline"
 
 	"github.com/c1ayooo/4zreark/oid"
@@ -73,6 +75,29 @@ func validateScanTargets(targets []string) error {
 	return nil
 }
 
+// deniedTargets 返回命中全局禁扫黑名单（scanner.deny_*）的目标。
+// 黑名单与项目种子授权边界独立生效：命中即拒绝；CIDR 目标整体落在
+// 禁扫网段内也拒绝（部分重叠交给 scope 在扫描期逐主机拦截）。
+func deniedTargets(targets []string) []string {
+	deny := scope.ParseDenyList(
+		config.GetConfig().Scanner.DenyDomainSuffixes,
+		config.GetConfig().Scanner.DenyCIDRs,
+	)
+	bad := make([]string, 0, 2)
+	for _, t := range targets {
+		if deny.DeniesHost(t) {
+			bad = append(bad, t)
+			continue
+		}
+		if strings.Contains(t, "/") {
+			if prefix, err := netip.ParsePrefix(t); err == nil && deny.DeniesPrefix(prefix) {
+				bad = append(bad, t)
+			}
+		}
+	}
+	return bad
+}
+
 // CreateTask creates a new task.
 //
 // 归属规则：一个任务必须属于且只属于一个项目；项目可以有多个任务。
@@ -109,6 +134,13 @@ func (s *TaskService) CreateTask(task *models.Task) error {
 	if err := validateScanTargets(task.Targets); err != nil {
 		return err
 	}
+	// 全局禁扫黑名单：命中即拒绝，无论目标是否在项目种子的授权范围内。
+	if denied := deniedTargets(task.Targets); len(denied) > 0 {
+		return fmt.Errorf("目标命中全局禁扫黑名单，拒绝创建任务：%s", strings.Join(denied, "、"))
+	}
+
+	// nuclei 误报黑名单：把平台生效值盖章随任务下发（worker 不读平台设置）。
+	task.Config.DenyTemplateIDs = ResolveNucleiDenyTemplateIDs(ctx)
 
 	// UA 会话种子必须由 master 物化：worker 不持库，只消费随任务下发的内容。
 	// 同一项目共享 seed，站点键（host）在请求侧再参与 HMAC，因此不同站仍不同 UA。
@@ -580,6 +612,34 @@ func (s *TaskService) GetTaskStats(workspaceID string) (map[string]interface{}, 
 		"by_status": counts,
 	}
 	return stats, nil
+}
+
+// ResetTaskRun 清理某个任务上次未完成的结果，用于服务重启后的重跑。
+// 只按 task_id 删除结果类行，不动 sites/seeds/projects。
+func (s *TaskService) ResetTaskRun(taskID string) error {
+	ctx, cancel := dbCtx()
+	defer cancel()
+	r := repo.Default()
+	if r == nil || r.Pool() == nil {
+		return nil
+	}
+	tx, err := r.Pool().Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	statements := []string{
+		`delete from zre.result_dedup where task_id = $1`,
+		`delete from zre.scan_results where task_id = $1`,
+		`delete from zre.raw_records where task_id = $1`,
+	}
+	for _, q := range statements {
+		if _, err := tx.Exec(ctx, q, taskID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 // enqueueScan 把扫描任务放进 River。River 未初始化时退回旧的 task_jobs 实现，

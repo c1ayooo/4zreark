@@ -11,6 +11,8 @@ package nucleiruntime
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -26,7 +28,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c1ayooo/4zreark/internal/datadir"
 	"github.com/c1ayooo/4zreark/internal/outbound"
+	"github.com/c1ayooo/4zreark/internal/toolruntime"
 )
 
 const (
@@ -154,7 +158,9 @@ func (m *Manager) SetProxy(v string) { m.setSetting(SettingProxy, strings.TrimSp
 // 优先级：代理设置页 DB 配置 > 遗留 settings.json 的 nuclei.proxy。
 // mode=direct 表示设置页显式直连（应压过一切代理环境变量）。
 func (m *Manager) effectiveProxy() (proxy string, direct bool) {
-	if u, err := outbound.ProxyFor("nuclei"); err == nil && u != nil {
+	if u, err := outbound.ProxyFor("nuclei"); err != nil {
+		log.Printf("[nuclei] 代理配置解析失败，回退环境变量: %v", err)
+	} else if u != nil {
 		return u.String(), false
 	}
 	if outbound.ModeFor("nuclei") == outbound.ModeDirect {
@@ -164,36 +170,27 @@ func (m *Manager) effectiveProxy() (proxy string, direct bool) {
 }
 
 // httpClient 每次按当前代理设置构造客户端，设置改动无需重启。
+// 默认让配置的代理覆盖 github.com 与资产 CDN 整条链路；只有
+// ZRE_GH_CDN_DIRECT=1 才恢复「资产 CDN 直连」的旧行为。
 func (m *Manager) httpClient() *http.Client {
 	c := *m.client
 	tr := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
+		Proxy:                 outbound.EnvironmentProxyWithCDN(),
 		ResponseHeaderTimeout: 30 * time.Second,
+		// 与 toolruntime 一致禁用 HTTP/2：7897 等代理节点对 h2 的 CONNECT/流
+		// 容易中途 EOF，h1 更稳。
+		TLSNextProto: map[string]func(string, *tls.Conn) http.RoundTripper{},
 	}
 	proxy, direct := m.effectiveProxy()
-	u, _ := url.Parse(proxy)
-	if proxy != "" && u != nil && u.Host != "" {
-		tr.Proxy = func(req *http.Request) (*url.URL, error) {
-			// GitHub release 的资产会 302 到 release-assets.githubusercontent.com。
-			// 部分代理节点对该 CDN 的 TLS 握手不兼容，直连反而可用；这里只对
-			// 资产 CDN 绕过代理，初始 github.com 请求仍走代理。
-			switch strings.ToLower(req.URL.Hostname()) {
-			case "release-assets.githubusercontent.com", "objects.githubusercontent.com":
-				return nil, nil
-			}
-			return u, nil
-		}
-	} else if direct {
+	switch {
+	case direct:
 		tr.Proxy = nil
-	} else {
-		// 未显式配置代理时，github.com 仍走环境变量代理，但 release 资产
-		// CDN 直连：部分代理节点对该 CDN 的长连接会中途 EOF/握手失败。
-		tr.Proxy = func(req *http.Request) (*url.URL, error) {
-			switch strings.ToLower(req.URL.Hostname()) {
-			case "release-assets.githubusercontent.com", "objects.githubusercontent.com":
-				return nil, nil
-			}
-			return http.ProxyFromEnvironment(req)
+	case proxy != "":
+		u, err := url.Parse(proxy)
+		if err != nil || u == nil || u.Host == "" {
+			log.Printf("[nuclei] 代理地址无效，回退环境变量: %q", proxy)
+		} else {
+			tr.Proxy = outbound.ProxyWithCDN(u)
 		}
 	}
 	c.Transport = tr
@@ -252,8 +249,10 @@ func (m *Manager) startAutoLoop() {
 	})
 }
 
-// BinaryPath 返回实际使用的二进制路径：设置 nuclei.binary_path 优先，否则
-// 使用项目内的 <root>/bin/nuclei[.exe]。
+// BinaryPath 返回实际使用的二进制路径：nuclei.binary_path 设置优先；默认与
+// 其他平台工具统一落在 <binRoot>/tools/<os>/nuclei[.exe]。
+// 兼容旧部署：统一位置没有文件、旧 <root>/bin/nuclei 仍在时回退旧路径；
+// 首次自动安装则直接装进统一工具目录。
 func (m *Manager) BinaryPath() string {
 	if p := m.setting(SettingBinaryPath, ""); p != "" {
 		return p
@@ -262,7 +261,15 @@ func (m *Manager) BinaryPath() string {
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	return filepath.Join(m.root, "bin", name)
+	unified := filepath.Join(datadir.Sub("tools"), toolruntime.OSDir(runtime.GOOS), name)
+	if fileExists(unified) {
+		return unified
+	}
+	legacy := filepath.Join(m.root, "bin", name)
+	if fileExists(legacy) {
+		return legacy
+	}
+	return unified
 }
 
 // TemplatesDir 返回官方模板目录：设置 nuclei.templates_dir 优先，否则
@@ -504,22 +511,24 @@ func (m *Manager) updateLocked(ctx context.Context, force, binaryOnly, templates
 	}
 	if !binaryOnly {
 		reportProgress(progress, "更新官方模板", 65, "模板较多时可能需要几分钟")
-		if err := m.updateTemplates(ctx, res.BinaryPath, res.TemplatesDir); err != nil {
+		syncInfo, terr := m.updateTemplatesObserved(ctx, res.BinaryPath, res.TemplatesDir)
+		if terr != nil {
 			if !hasTemplates(res.TemplatesDir) {
-				return nil, err
+				return nil, terr
 			}
 			// 已有模板时，更新失败只记警告：继续用现有模板扫描，
 			// 同时推进更新时钟，避免每次扫描前都卡在同一个网络错误上。
-			res.Warnings = append(res.Warnings, "官方模板更新失败，继续使用现有模板: "+err.Error())
+			res.Warnings = append(res.Warnings, "官方模板更新失败，继续使用现有模板: "+terr.Error())
 			res.LastUpdate = time.Now()
 			m.setSetting(SettingLastUpdate, res.LastUpdate.Format(time.RFC3339))
-			reportProgress(progress, "模板更新失败，使用现有模板", 95, err.Error())
+			reportProgress(progress, "模板更新失败，使用现有模板", 95, terr.Error())
 		} else {
 			res.Updated = true
 			// 只有模板更新成功才推进自动更新时钟；binary_only 不应把模板
 			// 也标记为“刚更新过”。
 			res.LastUpdate = time.Now()
 			m.setSetting(SettingLastUpdate, res.LastUpdate.Format(time.RFC3339))
+			res.TemplatesSync = syncInfo
 			reportProgress(progress, "模板更新完成", 95, "")
 		}
 	} else {
@@ -566,12 +575,20 @@ func (m *Manager) updateBinary(ctx context.Context, binary string) error {
 }
 
 func (m *Manager) updateTemplates(ctx context.Context, binary, templatesDir string) error {
+	_, err := m.updateTemplatesObserved(ctx, binary, templatesDir)
+	return err
+}
+
+// updateTemplatesObserved 执行模板更新并记录版本/增量观测。返回 nil info 表示
+// 命令失败（错误已在 err 里）。
+func (m *Manager) updateTemplatesObserved(ctx context.Context, binary, templatesDir string) (*TemplateSyncInfo, error) {
 	if !fileExists(binary) {
-		return ErrBinaryMissing
+		return nil, ErrBinaryMissing
 	}
 	if err := os.MkdirAll(templatesDir, 0o755); err != nil {
-		return fmt.Errorf("创建模板目录失败: %w", err)
+		return nil, fmt.Errorf("创建模板目录失败: %w", err)
 	}
+	before := snapshotTemplates(templatesDir)
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	// 不带 -duc：该标志会连显式 -update-templates 的版本检查一起跳过，
@@ -581,15 +598,30 @@ func (m *Manager) updateTemplates(ctx context.Context, binary, templatesDir stri
 	// <root>/templates——表现为「更新成功但模板数 0」。
 	out, err := m.runCommand(ctx, binary, "-update-templates", "-ud", m.absPath(templatesDir))
 	if err != nil {
-		return fmt.Errorf("%w: %s", err, tail(out))
+		return nil, fmt.Errorf("%w: %s", err, tail(out))
 	}
 	if !hasTemplates(templatesDir) {
-		return fmt.Errorf("模板更新命令结束但目录内没有可用模板: %s（输出: %s）", templatesDir, tail(out))
+		return nil, fmt.Errorf("模板更新命令结束但目录内没有可用模板: %s（输出: %s）", templatesDir, tail(out))
 	}
-	return nil
+
+	// 版本与增量观测：失败不影响主流程（面板少显示几个数字而已）。
+	after := snapshotTemplates(templatesDir)
+	added, removed := diffTemplateSnapshots(before, after)
+	info := &TemplateSyncInfo{
+		Version:  parseTemplatesVersion(out),
+		Total:    len(after),
+		Added:    added,
+		Removed:  removed,
+		SyncedAt: time.Now().Format(time.RFC3339),
+	}
+	if b, jerr := json.Marshal(info); jerr == nil {
+		m.setSetting(SettingTemplatesSync, string(b))
+	}
+	return info, nil
 }
 
-// binaryVersion 读取 nuclei -version 的首行；失败返回空串（状态展示用）。
+// binaryVersion 读取 nuclei -version；优先取版本行，避免 provider 报错或
+// banner 抢在首行导致面板显示错误信息。失败返回空串（状态展示用）。
 func (m *Manager) binaryVersion(ctx context.Context, binary string) string {
 	if !fileExists(binary) {
 		return ""
@@ -600,6 +632,7 @@ func (m *Manager) binaryVersion(ctx context.Context, binary string) string {
 	if err != nil {
 		return ""
 	}
+	first := ""
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(ansiEscape.ReplaceAllString(line, ""))
 		if line == "" {
@@ -608,9 +641,14 @@ func (m *Manager) binaryVersion(ctx context.Context, binary string) string {
 		if len(line) > 240 {
 			line = line[:240]
 		}
-		return line
+		if strings.Contains(line, "Nuclei Engine Version") {
+			return line
+		}
+		if first == "" {
+			first = line
+		}
 	}
-	return ""
+	return first
 }
 
 // Status 返回项目内 nuclei 的安装/更新状态。不会触发下载或更新。
@@ -635,6 +673,12 @@ func (m *Manager) Status(ctx context.Context) *Status {
 	}
 	if !m.lastUpdate().IsZero() {
 		st.LastUpdate = m.lastUpdate().Format(time.RFC3339)
+	}
+	if raw := strings.TrimSpace(m.setting(SettingTemplatesSync, "")); raw != "" {
+		var syncInfo TemplateSyncInfo
+		if err := json.Unmarshal([]byte(raw), &syncInfo); err == nil {
+			st.TemplatesSync = &syncInfo
+		}
 	}
 	if st.BinaryExists {
 		st.BinaryVersion = m.binaryVersion(ctx, st.BinaryPath)
@@ -700,10 +744,16 @@ func (m *Manager) env() []string {
 		keep = append(keep,
 			"HTTP_PROXY="+proxy, "HTTPS_PROXY="+proxy, "ALL_PROXY="+proxy,
 			"http_proxy="+proxy, "https_proxy="+proxy, "all_proxy="+proxy,
-			// GitHub release 资产 CDN 对部分代理节点不兼容，直连更稳。
-			"NO_PROXY=release-assets.githubusercontent.com,objects.githubusercontent.com",
-			"no_proxy=release-assets.githubusercontent.com,objects.githubusercontent.com",
 		)
+		if outbound.GHCDNDirect() {
+			// 兼容开关：资产 CDN 直连（旧行为）。
+			keep = append(keep,
+				"NO_PROXY=release-assets.githubusercontent.com,objects.githubusercontent.com",
+				"no_proxy=release-assets.githubusercontent.com,objects.githubusercontent.com",
+			)
+		} else {
+			keep = append(keep, "NO_PROXY=", "no_proxy=")
+		}
 	case direct:
 		keep = append(keep, "NO_PROXY=*", "no_proxy=*")
 	}
@@ -781,25 +831,29 @@ type UpdateResult struct {
 	CustomTemplateCount int       `json:"custom_template_count"`
 	Updated             bool      `json:"updated"`
 	LastUpdate          time.Time `json:"last_update"`
-	Warnings            []string  `json:"warnings,omitempty"`
+	// TemplatesSync 是本次官方模板同步的版本与增量观测（binary_only 时为 nil）。
+	TemplatesSync *TemplateSyncInfo `json:"templates_sync,omitempty"`
+	Warnings      []string          `json:"warnings,omitempty"`
 }
 
 // Status 是 nuclei_status 工具的返回结构。
 type Status struct {
-	Root                  string   `json:"root"`
-	BinaryPath            string   `json:"binary_path"`
-	BinaryExists          bool     `json:"binary_exists"`
-	BinaryVersion         string   `json:"binary_version,omitempty"`
-	TemplatesDir          string   `json:"templates_dir"`
-	CustomTemplatesDir    string   `json:"custom_templates_dir"`
-	TemplatesExists       bool     `json:"templates_exists"`
-	CustomTemplatesExists bool     `json:"custom_templates_exists"`
-	TemplateCount         int      `json:"template_count"`
-	CustomTemplateCount   int      `json:"custom_template_count"`
-	VersionSetting        string   `json:"version_setting"`
-	AutoUpdate            bool     `json:"auto_update"`
-	UpdateIntervalHours   int      `json:"update_interval_hours"`
-	LastUpdate            string   `json:"last_update,omitempty"`
-	Interactsh            bool     `json:"interactsh"`
-	Warnings              []string `json:"warnings,omitempty"`
+	Root string `json:"root"`
+	// TemplatesSync 是最近一次官方模板同步的版本与增量（从未同步过时为 nil）。
+	TemplatesSync         *TemplateSyncInfo `json:"templates_sync,omitempty"`
+	BinaryPath            string            `json:"binary_path"`
+	BinaryExists          bool              `json:"binary_exists"`
+	BinaryVersion         string            `json:"binary_version,omitempty"`
+	TemplatesDir          string            `json:"templates_dir"`
+	CustomTemplatesDir    string            `json:"custom_templates_dir"`
+	TemplatesExists       bool              `json:"templates_exists"`
+	CustomTemplatesExists bool              `json:"custom_templates_exists"`
+	TemplateCount         int               `json:"template_count"`
+	CustomTemplateCount   int               `json:"custom_template_count"`
+	VersionSetting        string            `json:"version_setting"`
+	AutoUpdate            bool              `json:"auto_update"`
+	UpdateIntervalHours   int               `json:"update_interval_hours"`
+	LastUpdate            string            `json:"last_update,omitempty"`
+	Interactsh            bool              `json:"interactsh"`
+	Warnings              []string          `json:"warnings,omitempty"`
 }

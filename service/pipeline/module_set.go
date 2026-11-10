@@ -1,6 +1,10 @@
 package pipeline
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/c1ayooo/4zreark/config"
+)
 
 // ModuleSet 是「扫什么」的单一真源。
 //
@@ -22,6 +26,8 @@ type ModuleSet struct {
 	APIProbe    bool
 	DirScan     bool
 	Sensitive   bool
+	FileLeak    bool
+	Vhost       bool
 	VulnScan    bool
 	GogoPOC     bool
 
@@ -31,10 +37,13 @@ type ModuleSet struct {
 
 // CollectionModuleSet 是「信息收集」默认模块集：除漏洞验证外全开。
 //
-// 明确排除：VulnScan（nuclei/PoC）、GogoPOC（端口模块内置 poc 旁路）。
-// 这两项只能由调用方显式打开，避免「信息收集」名义下产生漏洞条目。
+// 模块全集可被 config 的 collection.default_modules 收窄、collection.exclude_modules
+// 排除（名称与 scan_types 一致）。配置未写 default_modules/exclude_modules 时
+// Normalize 会填默认值，效果与这里的硬编码全集一致：默认排除
+// VulnScan（nuclei/PoC）与 GogoPOC（端口模块内置 poc 旁路）——这两项只能由
+// 调用方显式打开，避免「信息收集」名义下产生漏洞条目。
 func CollectionModuleSet() ModuleSet {
-	return ModuleSet{
+	ms := ModuleSet{
 		Subdomain:   true,
 		Takeover:    true,
 		HTTPProbe:   true,
@@ -45,9 +54,52 @@ func CollectionModuleSet() ModuleSet {
 		APIProbe:    true,
 		DirScan:     true,
 		Sensitive:   true,
+		FileLeak:    true,
 		VulnScan:    false,
 		GogoPOC:     false,
-	}.ResolveDependencies()
+	}
+	cfg := config.Loaded()
+	if cfg != nil {
+		applyModuleNames(&ms, cfg.Collection.DefaultModules, true)
+		applyModuleNames(&ms, cfg.Collection.ExcludeModules, false)
+	}
+	return ms.ResolveDependencies()
+}
+
+// applyModuleNames 按模块名批量置位/清位。未知名称忽略。
+func applyModuleNames(ms *ModuleSet, names []string, on bool) {
+	for _, raw := range names {
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "subdomain":
+			ms.Subdomain = on
+		case "takeover":
+			ms.Takeover = on
+		case "http_probe", "probe":
+			ms.HTTPProbe = on
+		case "port_scan", "portscan", "port":
+			ms.PortScan = on
+		case "fingerprint":
+			ms.Fingerprint = on
+		case "vuln_scan", "vulnscan", "vuln":
+			ms.VulnScan = on
+		case "crawler":
+			ms.Crawler = on
+		case "dir_scan", "dirscan", "directory":
+			ms.DirScan = on
+		case "sensitive":
+			ms.Sensitive = on
+		case "file_leak", "fileleak":
+			ms.FileLeak = on
+		case "vhost", "findvhost":
+			ms.Vhost = on
+		case "api_probe", "wih":
+			ms.APIProbe = on
+		case "js_audit", "js_secret", "jsaudit":
+			ms.JSAudit = on
+		case "gogo_poc", "port_poc":
+			ms.GogoPOC = on
+		}
+	}
 }
 
 // ModuleSetFromScanTypes 把任务配置里的模块列表映射为集合。
@@ -105,12 +157,13 @@ func (m ModuleSet) ResolveDependencies() ModuleSet {
 	if m.JSAudit {
 		m.Crawler = true
 	}
-	// 指纹/爬虫/目录/敏感/接口/JS 都要吃 HTTP 端点，依赖端口发现。
-	if m.Fingerprint || m.Crawler || m.DirScan || m.Sensitive || m.APIProbe || m.JSAudit || m.VulnScan {
+	// vhost 探测吃 PortAlive（端口扫描产物）；指纹/爬虫/目录/敏感/文件泄露/
+	// 接口/JS 都要吃 HTTP 端点，依赖端口发现。
+	if m.Vhost || m.Fingerprint || m.Crawler || m.DirScan || m.Sensitive || m.FileLeak || m.APIProbe || m.JSAudit || m.VulnScan {
 		m.PortScan = true
 	}
 	// 除端口/子域外的模块需要指纹结果做服务判断。
-	if m.Crawler || m.DirScan || m.Sensitive || m.APIProbe || m.JSAudit || m.VulnScan {
+	if m.Crawler || m.DirScan || m.Sensitive || m.FileLeak || m.APIProbe || m.JSAudit || m.VulnScan {
 		m.Fingerprint = true
 	}
 	return m
@@ -134,6 +187,8 @@ func (m ModuleSet) ApplyTo(cfg *PipelineConfig) {
 	cfg.WebCrawler = m.Crawler
 	cfg.DirScan = m.DirScan
 	cfg.SensitiveScan = m.Sensitive
+	cfg.FileLeak = m.FileLeak
+	cfg.Vhost = m.Vhost
 	cfg.ApiProbe = m.APIProbe
 	cfg.JsAudit = m.JSAudit
 	cfg.GogoPOC = m.GogoPOC

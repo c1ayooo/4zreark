@@ -134,15 +134,20 @@ func (s *ToolRuntimeService) InstalledTools(ctx context.Context, f toolruntime.I
 	if nst, err := GetNucleiRuntimeService().Status(ctx); err == nil && nst != nil {
 		nucleiVersion = nst.BinaryVersion
 		if nst.BinaryExists && nst.BinaryPath != "" {
-			if pathWithin(nst.BinaryPath, nst.Root) {
+			switch {
+			case s.mgr.ProjectToolPath("nuclei") != "":
+				// 已统一到平台工具目录，DiscoverInstalled 会把它和其他工具一起扫出，
+				// 这里不再单独登记，避免清单里出现两条 nuclei。
+			case pathWithin(nst.BinaryPath, nst.Root):
+				// 旧布局：二进制仍在独立运行时目录内，也算项目内安装。
 				opts.NucleiBin = nst.BinaryPath
-			} else {
+			default:
 				external = append(external, externalTool("nuclei", nst.BinaryPath,
 					toolruntime.SourceOverride, "nuclei.binary_path 指向项目外部，不算平台安装"))
 			}
 		} else if p, lookErr := exec.LookPath("nuclei"); lookErr == nil && !pathWithin(p, nst.Root) {
 			external = append(external, externalTool("nuclei", p,
-				toolruntime.SourceSystem, "系统 PATH 上的 nuclei 不算平台安装；独立运行时会自动下载到项目内 data/bin/nuclei/bin"))
+				toolruntime.SourceSystem, "系统 PATH 上的 nuclei 不算平台安装；独立运行时会自动下载到项目内统一工具目录"))
 		}
 	}
 

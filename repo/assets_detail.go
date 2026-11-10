@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -55,6 +56,19 @@ type AssetEvent struct {
 	CreatedAt time.Time      `json:"created_at"`
 }
 
+// AssetVuln 是资产详情里的漏洞摘要（不含 request/response 长文本）。
+type AssetVuln struct {
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Severity   string    `json:"severity"`
+	Status     string    `json:"status"`
+	Type       string    `json:"type"`
+	TemplateID string    `json:"template_id"`
+	Target     string    `json:"target"`
+	CVEIDs     []string  `json:"cve_ids"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 type RelationPeer struct {
 	ID    int64  `json:"id"`
 	Host  string `json:"host"`
@@ -87,6 +101,9 @@ type AssetDetail struct {
 	Records       []*AssetRecord       `json:"records"`
 	Events        []*AssetEvent        `json:"events"`
 	Relations     []*AssetRelation     `json:"relations"`
+	// Vulns 是命中该站点 host 的漏洞摘要：漏洞表没有可用的站点外键
+	//（asset_id 列历史上有名无实），按 target 的 host 边界匹配归并。
+	Vulns []*AssetVuln `json:"vulns"`
 }
 
 func (a *AssetRepo) GetAssetDetail(ctx context.Context, siteID int64) (*AssetDetail, error) {
@@ -127,7 +144,42 @@ func (a *AssetRepo) GetAssetDetail(ctx context.Context, siteID int64) (*AssetDet
 	if d.Relations, err = a.siteRelations(ctx, siteID); err != nil {
 		return nil, err
 	}
+	if d.Vulns, err = a.siteVulns(ctx, site); err != nil {
+		return nil, err
+	}
 	return d, nil
+}
+
+// siteVulns 归并站点 host 命中的漏洞。vulnerabilities.asset_id 列从未被
+// 摄取链路写入，这里按 target 的 host 词边界匹配（a.com 不会误吞 evil-a.com）。
+func (a *AssetRepo) siteVulns(ctx context.Context, site *Site) ([]*AssetVuln, error) {
+	host := strings.ToLower(strings.TrimSpace(site.Host))
+	if host == "" {
+		return nil, nil
+	}
+	// host 是域名/IP，只需转义正则元数据点号。
+	escaped := strings.ReplaceAll(host, ".", `\.`)
+	pattern := `(^|://|[^a-z0-9.-])` + escaped + `(:|/|$)`
+	rows, err := a.r.pool.Query(ctx, `
+		SELECT id, name, severity, status, type, template_id, target, cve_id, created_at
+		FROM vulnerabilities
+		WHERE target ~ $1
+		ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, created_at DESC
+		LIMIT 200`, pattern)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*AssetVuln, 0, 8)
+	for rows.Next() {
+		v := &AssetVuln{}
+		if err := rows.Scan(&v.ID, &v.Name, &v.Severity, &v.Status, &v.Type,
+			&v.TemplateID, &v.Target, &v.CVEIDs, &v.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }
 
 func (a *AssetRepo) siteVerifications(ctx context.Context, siteID int64) ([]*AssetVerification, error) {

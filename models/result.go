@@ -16,7 +16,9 @@ const (
 	ResultTypeMiniApp   ResultType = "miniapp"   // 小程序
 	ResultTypeURL       ResultType = "url"       // URL
 	ResultTypeCrawler   ResultType = "crawler"   // 爬虫
+	ResultTypeVhost     ResultType = "vhost"     // vhost 绑定发现
 	ResultTypeSensitive ResultType = "sensitive" // 敏感信息
+	ResultTypeFileLeak  ResultType = "fileleak"  // 备份/敏感文件泄露
 	ResultTypeDirScan   ResultType = "dirscan"   // 目录扫描
 	ResultTypeVuln      ResultType = "vuln"      // 漏洞
 	ResultTypeMonitor   ResultType = "monitor"   // 页面监控

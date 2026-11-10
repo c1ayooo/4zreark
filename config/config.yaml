@@ -72,6 +72,7 @@ collection:
     - api_probe
     - dir_scan
     - sensitive
+    - fileleak
   exclude_modules:
     - vuln_scan
     - bruteforce
@@ -79,9 +80,6 @@ collection:
   max_targets_for_full: 500
   # 单站开放端口超过该值时做纯 Go TCP 二次复核；复核后仍超阈值只保留常见端口。
   max_ports_per_host: 200
-  min_online_nodes: 1
-  max_fail_rate: 0.3
-  stage_timeout_minutes: 360
   site_scope: host
   # 收集侧 AI Gate：off 关闭；shadow 只判定不路由；enforce 允许规则层消费。
   # 默认 off，先离线/影子跑，避免模型不稳定影响收集主链。
@@ -183,8 +181,6 @@ sentinel:
       - "vulhub/"
       - "ghcr.io/"
     max_wait_seconds: 120
-  enable_audit_queue: false
-  queue_poll_seconds: 30
 
 # 模型接入：任意 OpenAI 兼容端点（OpenAI / DeepSeek / Qwen / 自建 vLLM）。
 # 密钥只从 api_key_env 指定的环境变量读取（默认 ZRE_LLM_API_KEY）。

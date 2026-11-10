@@ -107,11 +107,6 @@ export const intelApi = {
     return raw.data
   },
 
-  get: async (uniqueKey: string): Promise<IntelItem> => {
-    const raw = (await api.get(`/vuln-intel/${encodeURIComponent(uniqueKey)}`)) as unknown as ApiResponse<IntelItem>
-    return raw.data
-  },
-
   // 富化会真实访问 GitHub API，可能耗时几十秒；超时单独放大。
   enrich: async (uniqueKey: string): Promise<{
     poc_count: number
@@ -133,6 +128,21 @@ export const intelApi = {
       affected: string[]
       lab_only: boolean
     }>
+    return raw.data
+  },
+
+  settings: async (): Promise<Record<string, unknown>> => {
+    const raw = (await api.get('/vuln-intel/settings')) as unknown as ApiResponse<Record<string, unknown>>
+    return raw.data
+  },
+
+  saveSettings: async (patch: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    const raw = (await api.put('/vuln-intel/settings', patch)) as unknown as ApiResponse<Record<string, unknown>>
+    return raw.data
+  },
+
+  matchAssets: async (days = 7, force = false): Promise<{ matched: number; matches: { cve: string; title: string; severity: string; sites: { site_id: number; host: string; product: string; evidence: string }[] }[] }> => {
+    const raw = (await api.post('/vuln-intel/match-assets', { days, force }, { timeout: 120000 })) as unknown as ApiResponse<{ matched: number; matches: { cve: string; title: string; severity: string; sites: { site_id: number; host: string; product: string; evidence: string }[] }[] }>
     return raw.data
   },
 

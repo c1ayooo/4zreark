@@ -25,6 +25,7 @@ import {
   type AssetRawRecord,
   type AssetRelation,
   type AssetVerification,
+  type AssetVulnSummary,
   type Site,
 } from '@/api/assets'
 import { discoveryApi } from '@/api/discovery'
@@ -173,6 +174,36 @@ function SectionCard({
     >
       {children}
     </Card>
+  )
+}
+
+// AssetVulns 是命中该站点的漏洞摘要：只读列表，深入治理去 /vulnerabilities。
+function AssetVulns({ items }: { items: AssetVulnSummary[] }) {
+  const severityLabel: Record<string, string> = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '信息' }
+  const severityVariant: Record<string, BadgeVariant> = {
+    critical: 'destructive', high: 'destructive', medium: 'warning',
+  }
+  if (items.length === 0) {
+    return <p className="text-sm text-muted-foreground">该站点暂无命中漏洞。</p>
+  }
+  return (
+    <div className="space-y-2">
+      {items.map((v) => (
+        <div key={v.id} className="rounded-md border px-3 py-2 text-sm">
+          <div className="flex items-center justify-between gap-2">
+            <span className="min-w-0 break-all font-medium">{v.name}</span>
+            <Tag className={`${statusTagClass(severityVariant[v.severity] ?? 'secondary')} shrink-0`}>
+              {severityLabel[v.severity] ?? v.severity}
+            </Tag>
+          </div>
+          <div className="mt-1 break-all font-mono text-[11px] text-muted-foreground">{v.target}</div>
+          <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+            {v.cve_ids.length > 0 && <span>{v.cve_ids.join(' / ')}</span>}
+            <span>{formatDate(v.created_at)}</span>
+          </div>
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -799,6 +830,10 @@ export default function AssetDetailPage() {
                 ))}
               </div>
             )}
+          </SectionCard>
+
+          <SectionCard title={`命中漏洞（${detail.vulns.length}）`}>
+            <AssetVulns items={detail.vulns} />
           </SectionCard>
 
           <SectionCard title={`验证历史（${detail.verifications.length}）`}>

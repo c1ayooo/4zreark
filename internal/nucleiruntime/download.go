@@ -134,13 +134,30 @@ func (m *Manager) download(ctx context.Context, url string, dst *os.File, progre
 	return m.downloadAny(ctx, []string{url}, dst, progress)
 }
 
-// downloadAny 依次尝试「每个直连 URL → 该 URL 的镜像」，每个候选重试 2 次。
-// EOF / 连接重置往往只影响单次连接，换源重试后自动安装才能继续。
+const (
+	phaseConnect = "connect"
+	phaseStatus  = "status"
+	phaseBody    = "body"
+)
+
+// downloadError 标记失败发生在连接的哪个阶段：只有传输中途 EOF 值得同源自重试，
+// 连接/TLS/HTTP 错误应立刻换下一个候选，避免在一个坏源上耗光后台 ctx。
+type downloadError struct {
+	phase string
+	err   error
+}
+
+func (e *downloadError) Error() string { return e.err.Error() }
+func (e *downloadError) Unwrap() error { return e.err }
+
+// downloadAny 按候选顺序下载：每个源独立限时 3 分钟、失败 300ms 后换源；
+// 仅当已开始接收响应体却中断时，对同一源额外重试一次。
 func (m *Manager) downloadAny(ctx context.Context, urls []string, dst *os.File, progress func(done, total int64)) error {
 	candidates := downloadCandidates(urls)
 	var lastErr error
 	for _, u := range candidates {
-		for attempt := 0; attempt < 2; attempt++ {
+		maxAttempts := 1
+		for attempt := 0; attempt < maxAttempts; attempt++ {
 			if err := ctx.Err(); err != nil {
 				return fmt.Errorf("下载 nuclei 失败: %w", err)
 			}
@@ -150,17 +167,21 @@ func (m *Manager) downloadAny(ctx context.Context, urls []string, dst *os.File, 
 			if _, err := dst.Seek(0, io.SeekStart); err != nil {
 				return fmt.Errorf("重置下载文件失败: %w", err)
 			}
-			attemptCtx, cancel := context.WithTimeout(ctx, 8*time.Minute)
+			attemptCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 			err := m.downloadOnce(attemptCtx, u, dst, progress)
 			cancel()
 			if err == nil {
 				return nil
 			}
 			lastErr = err
+			var de *downloadError
+			if errors.As(err, &de) && de.phase == phaseBody && maxAttempts == 1 {
+				maxAttempts = 2
+			}
 			select {
 			case <-ctx.Done():
 				return fmt.Errorf("下载 nuclei 失败: %w", lastErr)
-			case <-time.After(time.Duration(attempt+1) * time.Second):
+			case <-time.After(300 * time.Millisecond):
 			}
 		}
 	}
@@ -170,17 +191,20 @@ func (m *Manager) downloadAny(ctx context.Context, urls []string, dst *os.File, 
 	return fmt.Errorf("下载 nuclei 失败: %w", lastErr)
 }
 
-// downloadCandidates 直连优先；其次 ZRE_GH_MIRROR（逗号分隔）或内置镜像。
+// downloadCandidates 显式 ZRE_GH_MIRROR 时镜像优先（用户配镜像通常意味着直连不通），
+// 直连最后兜底；否则直连优先、内置镜像按实测可用性排序。
 func downloadCandidates(urls []string) []string {
 	var mirrors []string
+	explicit := false
 	if raw := strings.TrimSpace(os.Getenv("ZRE_GH_MIRROR")); raw != "" {
+		explicit = true
 		for _, m := range strings.Split(raw, ",") {
 			if m = strings.TrimRight(strings.TrimSpace(m), "/"); m != "" {
 				mirrors = append(mirrors, m)
 			}
 		}
 	} else {
-		mirrors = []string{"https://ghfast.top", "https://gh-proxy.com", "https://ghproxy.net"}
+		mirrors = []string{"https://gh-proxy.com", "https://ghfast.top", "https://ghproxy.net"}
 	}
 	out := make([]string, 0, len(urls)*(len(mirrors)+1))
 	seen := map[string]bool{}
@@ -191,11 +215,14 @@ func downloadCandidates(urls []string) []string {
 		}
 	}
 	for _, u := range urls {
-		add(u)
-	}
-	for _, u := range urls {
+		if !explicit {
+			add(u)
+		}
 		for _, m := range mirrors {
 			add(m + "/" + u)
+		}
+		if explicit {
+			add(u)
 		}
 	}
 	return out
@@ -204,21 +231,21 @@ func downloadCandidates(urls []string) []string {
 func (m *Manager) downloadOnce(ctx context.Context, url string, dst *os.File, progress func(done, total int64)) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return fmt.Errorf("创建下载请求失败: %w", err)
+		return &downloadError{phase: phaseConnect, err: fmt.Errorf("创建下载请求失败: %w", err)}
 	}
 	useragent.Apply(req)
 	resp, err := m.httpClient().Do(req)
 	if err != nil {
-		return fmt.Errorf("GET %s: %w", url, err)
+		return &downloadError{phase: phaseConnect, err: fmt.Errorf("GET %s: %w", url, err)}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d (%s)", resp.StatusCode, url)
+		return &downloadError{phase: phaseStatus, err: fmt.Errorf("HTTP %d (%s)", resp.StatusCode, url)}
 	}
 	sink := &progressWriter{dst: dst, total: resp.ContentLength, cb: progress}
 	n, err := io.Copy(sink, io.LimitReader(resp.Body, downloadLimit+1))
 	if err != nil {
-		return fmt.Errorf("写入下载文件失败: %w", err)
+		return &downloadError{phase: phaseBody, err: fmt.Errorf("写入下载文件失败: %w", err)}
 	}
 	if n > downloadLimit {
 		return fmt.Errorf("nuclei release 超过 %d MB 上限", downloadLimit>>20)

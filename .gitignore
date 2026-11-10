@@ -55,3 +55,7 @@ frontend/UI_DESIGN.md
 dist/
 /zreark
 /pocsmith
+
+# 运行时导出与数据库转储（含敏感数据）不入库
+reports/
+*.dump

@@ -73,22 +73,6 @@ func (h *IntelHandler) ListIntel(c *gin.Context) {
 	utils.SuccessWithPagination(c, out, total, page, pageSize)
 }
 
-// GetIntel 单条情报
-// @Summary 情报详情
-// @Tags vuln-intel
-// @Produce json
-// @Param unique_key path string true "unique_key"
-// @Success 200 {object} map[string]interface{}
-// @Router /api/vuln-intel/{unique_key} [get]
-func (h *IntelHandler) GetIntel(c *gin.Context) {
-	it, err := h.intelService.GetIntel(c.Param("unique_key"))
-	if err != nil {
-		utils.NotFound(c, "情报不存在")
-		return
-	}
-	utils.Success(c, intelRowJSON(it))
-}
-
 // Stats 情报统计
 // @Summary 情报统计
 // @Tags vuln-intel
@@ -102,6 +86,25 @@ func (h *IntelHandler) Stats(c *gin.Context) {
 		return
 	}
 	utils.Success(c, stats)
+}
+
+// MatchAssets 手动触发一轮情报×资产匹配（同步等结果）。
+// @Summary 情报资产匹配
+// @Tags vuln-intel
+// @Produce json
+// @Router /api/vuln-intel/match-assets [post]
+func (h *IntelHandler) MatchAssets(c *gin.Context) {
+	var req struct {
+		Days  int  `json:"days"`
+		Force bool `json:"force"`
+	}
+	_ = c.ShouldBindJSON(&req) // body 可选
+	n, matches, err := service.NewIntelAssetMatchService().MatchRecent(c.Request.Context(), req.Days, req.Force)
+	if err != nil {
+		utils.InternalError(c, "匹配失败: "+err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"matched": n, "matches": matches})
 }
 
 // Poll 手动触发一轮轮询（同步等结果）
@@ -162,7 +165,10 @@ func (h *IntelHandler) UpdateSettings(c *gin.Context) {
 		return
 	}
 	// 只接受白名单里的键，未知键静默忽略——设置表里还有其他模块的行。
-	want := []string{"vulnintel.enabled", "vulnintel.interval_minutes", "vulnintel.notify_enabled"}
+	want := []string{
+		"vulnintel.enabled", "vulnintel.interval_minutes", "vulnintel.notify_enabled",
+		"vulnintel.threat_tools_targets", "vulnintel.threat_hackers_targets",
+	}
 	accepted := make(map[string]any, len(want))
 	for _, k := range want {
 		if v, ok := in[k]; ok {

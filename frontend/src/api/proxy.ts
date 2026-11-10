@@ -29,6 +29,8 @@ export interface ProxyTestResult {
   status?: number
   latency_ms: number
   target: string
+  category?: string
+  proxy_used?: string
   error?: string
 }
 
@@ -39,7 +41,7 @@ export const proxyApi = {
     config: ProxyConfig
   ): Promise<ApiResponse<{ config: ProxyConfig; modules: string[] }>> =>
     api.put('/network/proxy', config),
-  // url 为空 = 测直连
-  test: (url: string): Promise<ApiResponse<ProxyTestResult>> =>
-    api.post('/network/proxy/test', { url }),
+  // category 非空 = 按该模块生效配置测真实下载链路；否则 url 为空 = 测直连
+  test: (url: string, category?: string): Promise<ApiResponse<ProxyTestResult>> =>
+    api.post('/network/proxy/test', { url, category }),
 }

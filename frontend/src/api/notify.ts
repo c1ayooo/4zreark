@@ -113,17 +113,9 @@ export const notifyApi = {
   testConfig: (config: NotifyConfig): Promise<ApiResponse<{ success: boolean; message: string }>> =>
     api.post('/notify/test', config),
 
-  // 发送通知
-  sendNotification: (data: { level: string; title: string; content: string; source: string }): Promise<ApiResponse<null>> =>
-    api.post('/notify/send', data),
-
   // 获取通知历史
   getHistory: (params?: { page?: number; limit?: number }): Promise<ApiResponse<NotifyHistory[]>> =>
     api.get('/notify/history', { params }),
-
-  // 获取支持的通知类型
-  getTypes: (): Promise<ApiResponse<NotifyType[]>> =>
-    api.get('/notify/types'),
 
   // 通知对象（事件源开关）
   listSources: (): Promise<ApiResponse<NotifySourceItem[]>> =>

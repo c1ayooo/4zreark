@@ -157,7 +157,7 @@ var Specs = []ToolSpec{
 		Name:           "naabu",
 		Repo:           "projectdiscovery/naabu",
 		Description:    "端口发现（connect 模式，JSON 输出）",
-		DefaultVersion: "2.3.0",
+		DefaultVersion: "2.6.1",
 
 		AssetName: func(version, goos, goarch string) (string, error) {
 			if goos == "darwin" && (goarch == "386" || goarch == "arm") {

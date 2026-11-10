@@ -160,6 +160,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				protected.POST("/system/update", middleware.RequirePermission("settings:write"), api.NewSystemUpdateHandler().StartUpdate)
 				protected.DELETE("/projects/:id", middleware.RequirePermission("project:delete"), projectOpsHandler.DeleteProject)
 				protected.GET("/assets", middleware.RequirePermission("asset:read"), assetHandler.ListAssets)
+				protected.GET("/assets/export", middleware.RequirePermission("asset:read"), assetHandler.ExportAssets)
 				protected.GET("/assets/graph", middleware.RequirePermission("asset:read"), assetHandler.AssetGraph)
 				protected.GET("/assets/routes", middleware.RequirePermission("asset:read"), assetHandler.ListSiteRoutes)
 				protected.GET("/dns/status", statusHandler.DNSStatus)
@@ -379,6 +380,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 			{
 				vulnGroup.GET("", vulnHandler.ListVulnerabilities)
 				vulnGroup.GET("/stats", vulnHandler.GetVulnStats)
+				vulnGroup.GET("/export", vulnHandler.ExportVulnerabilities)
 				vulnGroup.GET("/review-stats", vulnHandler.ReviewStats)                                                        // 复核分布
 				vulnGroup.GET("/statistics", vulnHandler.GetVulnStatistics)                                                    // 详细统计
 				vulnGroup.POST("/batch-update", middleware.RequirePermission("vuln:write"), vulnHandler.BatchUpdateVulnStatus) // 批量更新
@@ -470,6 +472,7 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				// 轮询触发与设置写要走管理员：轮询会真实访问外部源，
 				// 高频触发等于替别人扛爬取压力。
 				intelGroup.POST("/poll", middleware.AdminMiddleware(), intelHandler.Poll)
+				intelGroup.POST("/match-assets", middleware.AdminMiddleware(), intelHandler.MatchAssets)
 				intelGroup.GET("/settings", intelHandler.GetSettings)
 				intelGroup.PUT("/settings", middleware.AdminMiddleware(), intelHandler.UpdateSettings)
 				// 富化会真实访问 GitHub API 并消耗配额，只给管理员。
@@ -763,6 +766,14 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				nucleiGroup.POST("/runtime/ensure", middleware.AdminMiddleware(), nucleiRuntimeHandler.Ensure)
 				nucleiGroup.POST("/runtime/update", middleware.AdminMiddleware(), nucleiRuntimeHandler.Update)
 				nucleiGroup.PUT("/runtime/settings", middleware.AdminMiddleware(), nucleiRuntimeHandler.UpdateSettings)
+
+				// 误报黑名单：按 template-id 排除，KV 层可运行时增删
+				scannerDenyHandler := api.NewScannerDenylistHandler()
+				nucleiGroup.GET("/denylist", scannerDenyHandler.GetNucleiDenylist)
+				nucleiGroup.PUT("/denylist", middleware.RequirePermission("poc:write"), scannerDenyHandler.UpdateNucleiDenylist)
+
+				// 全局禁扫黑名单（config 只读展示）
+				protected.GET("/scanner/denylist", scannerDenyHandler.GetScannerDenylist)
 			}
 
 			// 工具运行时（gogo/spray/katana/rem 的版本与更新管理）
@@ -777,25 +788,6 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 				toolsGroup.POST("/:name/rollback", middleware.AdminMiddleware(), toolHandler.Rollback)
 				toolsGroup.GET("/:name/history", toolHandler.History)
 				toolsGroup.PUT("/:name/settings", middleware.AdminMiddleware(), toolHandler.UpdateSettings)
-			}
-
-			// 页面变化监控
-			monitorHandler := api.NewMonitorHandler(notifyHandler.GetManager())
-			monitorGroup := protected.Group("/monitor")
-			{
-				// 监控类型
-				monitorGroup.GET("/types", monitorHandler.GetMonitorTypes)
-
-				// 页面管理
-				monitorGroup.GET("/pages", monitorHandler.ListMonitoredPages)
-				monitorGroup.GET("/pages/:id", monitorHandler.GetMonitoredPage)
-				monitorGroup.POST("/pages", middleware.RequirePermission("monitor:write"), monitorHandler.AddMonitoredPage)
-				monitorGroup.DELETE("/pages/:id", middleware.RequirePermission("monitor:write"), monitorHandler.RemoveMonitoredPage)
-				monitorGroup.PUT("/pages/:id/enable", middleware.RequirePermission("monitor:write"), monitorHandler.EnableMonitoredPage)
-				monitorGroup.POST("/pages/:id/check", middleware.RequirePermission("monitor:write"), monitorHandler.CheckPageNow)
-
-				// 变化历史
-				monitorGroup.GET("/changes", monitorHandler.GetChanges)
 			}
 
 			// 提交哨兵（CommitSentinel）：采集公开仓库提交，判定是否为安全修复
@@ -901,7 +893,6 @@ func setupRouter(nodeHub *api.NodeHub) *gin.Engine {
 					queueGroup.GET("/stats", queueHandler.GetStats)
 					queueGroup.GET("/types", queueHandler.GetTaskTypes)
 					queueGroup.GET("/workers", queueHandler.GetWorkerStatus)
-					queueGroup.POST("/tasks", middleware.RequirePermission("task:write"), queueHandler.EnqueueTask)
 					queueGroup.GET("/tasks/:id/result", middleware.RequirePermission("task:read"), queueHandler.GetTaskResult)
 					queueGroup.GET("/tasks/pending", middleware.RequirePermission("task:read"), queueHandler.GetPendingTasks)
 					queueGroup.GET("/tasks/processing", middleware.RequirePermission("task:read"), queueHandler.GetProcessingTasks)

@@ -97,6 +97,18 @@ func WithSources(sources ...grab.Grabber) Option {
 	}
 }
 
+// WithExtraSources 在默认源之外追加源（如 GitHub CVE 雷达这类需要注入
+// 调用方凭据的适配器），不影响 DefaultGrabbers 的内置清单。
+func WithExtraSources(sources ...grab.Grabber) Option {
+	return func(m *Monitor) {
+		if !m.sourcesSet {
+			m.grabbers = DefaultGrabbers()
+			m.sourcesSet = true
+		}
+		m.grabbers = append(m.grabbers, sources...)
+	}
+}
+
 // WithInterval sets the polling interval (default 30m).
 func WithInterval(d time.Duration) Option {
 	return func(m *Monitor) {

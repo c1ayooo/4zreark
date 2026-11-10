@@ -10,8 +10,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/c1ayooo/4zreark/internal/datadir"
 	"io"
+	"log"
+
+	"github.com/c1ayooo/4zreark/internal/datadir"
 	"net/http"
 	"os"
 	"os/exec"
@@ -577,14 +579,36 @@ func (m *Manager) EnsureInstalled(ctx context.Context, name string) (string, err
 	if p := m.ProjectToolPath(name); p != "" {
 		return p, nil
 	}
-	if _, ok := Spec(name); !ok {
+	spec, ok := Spec(name)
+	if !ok {
 		return "", fmt.Errorf("未知工具: %s", name)
 	}
+	// 系统 PATH 已有不低于默认版本的二进制时，不再触发项目内补装。
+	// 这样没有 checksums 清单的工具（如当前 naabu）不会反复安装失败、
+	// 也不会因为补装失败阻断运行时。
+	if p := m.ResolveToolPath(name); p != "" {
+		minVersion := spec.MinVersion
+		if minVersion == "" {
+			minVersion = spec.DefaultVersion
+		}
+		if v := m.probeVersion(ctx, name, p); v != "" {
+			if cmp, err := compareVersion(v, minVersion); err == nil && cmp >= 0 {
+				log.Printf("[toolruntime] %s 已由 PATH 提供（%s，version=%s），跳过项目内补装", name, p, v)
+				return p, nil
+			}
+		}
+	}
+
 	st := m.loadState(ctx, name)
 	if !st.AutoUpdate {
 		return "", fmt.Errorf("%s 未安装到项目内且 auto_update 关闭", name)
 	}
 	if _, err := m.install(ctx, name, st.PinnedVersion, false); err != nil {
+		// 补装失败但 PATH 仍可用：降级使用系统版本，不阻断扫描。
+		if p := m.ResolveToolPath(name); p != "" {
+			log.Printf("[toolruntime] 补装 %s 失败（%v），继续使用 PATH 版本 %s", name, err, p)
+			return p, nil
+		}
 		return "", err
 	}
 	return m.BinaryPath(name), nil

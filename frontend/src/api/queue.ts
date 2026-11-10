@@ -88,18 +88,6 @@ export const queueApi = {
     }
   },
 
-  // 添加任务到队列
-  enqueueTask: (data: {
-    type: string
-    payload: Record<string, unknown>
-    priority?: number
-  }): Promise<ApiResponse<QueueTask>> =>
-    api.post('/queue/tasks', data),
-
-  // 获取任务结果
-  getTaskResult: (id: string): Promise<ApiResponse<QueueTask>> =>
-    api.get(`/queue/tasks/${id}/result`),
-
   // 获取待处理任务
   getPendingTasks: async (params?: { page?: number; pageSize?: number; type?: string }): Promise<ApiResponse<{ list: QueueTask[]; total: number }>> => {
     try {

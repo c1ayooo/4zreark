@@ -75,6 +75,7 @@ type VulnScanModule struct {
 	templates   []string // 指定模板 ID
 	severity    []string // 过滤严重级别
 	tags        []string // 过滤标签
+	denyIDs     []string // 误报黑名单：按 template-id 排除
 
 	invOnce sync.Once
 	inv     []templateEntry
@@ -128,6 +129,11 @@ func (m *VulnScanModule) SetSeverity(severity []string) {
 // SetTags 设置过滤标签
 func (m *VulnScanModule) SetTags(tags []string) {
 	m.tags = tags
+}
+
+// SetDenyTemplateIDs 设置误报黑名单（nuclei -eid）。
+func (m *VulnScanModule) SetDenyTemplateIDs(ids []string) {
+	m.denyIDs = ids
 }
 
 // ModuleRun 运行模块
@@ -482,6 +488,7 @@ func (m *VulnScanModule) scanVulnerabilities(target string, techs []string) {
 		Concurrency: 25,
 		RateLimit:   50, // 与自动链路 nucleiruntime 的 50 硬顶对齐：150rps 对小目标是 DoS 级
 		Timeout:     30 * time.Minute,
+		ExcludeIDs:  m.denyIDs,
 	})
 	if err != nil {
 		log.Printf("[%s] nuclei scan error for %s: %v", m.name, target, err)

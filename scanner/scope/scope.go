@@ -19,10 +19,19 @@ type Scope struct {
 	domains  []string
 	exactIP  map[string]bool
 	prefixes []netip.Prefix
+	// deny 是全局禁扫黑名单，与授权范围独立生效（命中即拒绝）。
+	// nil 表示不拦截；New 会自动带上全局配置的黑名单。
+	deny *DenyList
 }
 
 func New(targets []string) *Scope {
-	s := &Scope{exactIP: map[string]bool{}}
+	return NewWithDeny(targets, denyFromConfig())
+}
+
+// NewWithDeny 用显式黑名单构建授权边界。deny 传 nil 表示不做黑名单拦截。
+// 任务下发方（master）把生效黑名单随任务盖章下发时走这里。
+func NewWithDeny(targets []string, deny *DenyList) *Scope {
+	s := &Scope{exactIP: map[string]bool{}, deny: deny}
 	for _, raw := range targets {
 		host := normalizeTarget(raw)
 		if host == "" {
@@ -49,6 +58,9 @@ func New(targets []string) *Scope {
 
 // AllowsHost 判断主机是否在授权范围内。空 scope 放行。
 func (s *Scope) AllowsHost(host string) bool {
+	if s != nil && s.deny.DeniesHost(host) {
+		return false
+	}
 	if s == nil || (len(s.domains) == 0 && len(s.exactIP) == 0 && len(s.prefixes) == 0) {
 		return true
 	}

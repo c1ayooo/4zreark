@@ -24,6 +24,8 @@ export const scanTypeLabels: Record<string, string> = {
   crawler: 'Web 爬虫',
   dir_scan: '目录扫描',
   sensitive: '敏感信息',
+  file_leak: '文件泄露',
+  vhost: 'Vhost 绑定',
   vuln_scan: '漏洞扫描',
   service_detect: '服务识别',
   exposure_scan: '暴露面探测',

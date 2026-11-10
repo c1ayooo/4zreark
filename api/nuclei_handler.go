@@ -229,6 +229,7 @@ func (h *NucleiHandler) ScanTarget(c *gin.Context) {
 		Concurrency: 25,
 		RateLimit:   50, // 与自动链路 nucleiruntime 的 50 硬顶对齐：150rps 对小目标是 DoS 级
 		Timeout:     timeout,
+		ExcludeIDs:  service.ResolveNucleiDenyTemplateIDs(ctx),
 	})
 	if err != nil {
 		utils.InternalError(c, "扫描失败: "+err.Error())

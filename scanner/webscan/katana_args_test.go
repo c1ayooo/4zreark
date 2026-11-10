@@ -10,7 +10,7 @@ import (
 // 工具仍会把站外链接抓回来，浪费配额并污染日志。
 func TestKatanaCommonArgsIncludeFieldScope(t *testing.T) {
 	k := &KatanaScanner{Depth: 3, Concurrency: 10, Timeout: 30, RateLimit: 150}
-	args := k.commonArgs("/tmp/katana.json")
+	args := k.commonArgs("https://example.com", "/tmp/katana.json")
 
 	var scope, rdn, output, jsCrawl, jsluice bool
 	for i, a := range args {
@@ -67,7 +67,7 @@ func TestKatanaCrawledURLKeepsDiscoverySource(t *testing.T) {
 
 func TestKatanaExtensionFilterKeepsJS(t *testing.T) {
 	k := &KatanaScanner{Depth: 3, Concurrency: 10, Timeout: 30, RateLimit: 150}
-	args := k.commonArgs("/tmp/katana.json")
+	args := k.commonArgs("https://example.com", "/tmp/katana.json")
 	var filter string
 	for i, a := range args {
 		if a == "-ef" && i+1 < len(args) {
@@ -93,8 +93,8 @@ func TestKatanaHeadlessArgs(t *testing.T) {
 	plain := &KatanaScanner{Depth: 3, Concurrency: 5, Timeout: 30, RateLimit: 10}
 	headless := &KatanaScanner{Depth: 3, Concurrency: 5, Timeout: 30, RateLimit: 10, Headless: true}
 
-	plainArgs := plain.commonArgs("/tmp/katana.json")
-	headlessArgs := headless.commonArgs("/tmp/katana.json")
+	plainArgs := plain.commonArgs("https://example.com", "/tmp/katana.json")
+	headlessArgs := headless.commonArgs("https://example.com", "/tmp/katana.json")
 
 	// 验收口径：headless 关闭时参数与旧行为一致（不带任何 headless 系参数）
 	t.Logf("headless=off: katana %s", strings.Join(plainArgs, " "))

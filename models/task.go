@@ -133,6 +133,9 @@ type TaskConfig struct {
 	POCIDs         []string `json:"poc_ids,omitempty" bson:"poc_ids,omitempty"`
 	POCTags        []string `json:"poc_tags,omitempty" bson:"poc_tags,omitempty"`
 	SeverityFilter []string `json:"severity_filter,omitempty" bson:"severity_filter,omitempty"`
+	// DenyTemplateIDs 是 nuclei 误报黑名单（template-id）：master 创建任务时把
+	// 全局生效值盖章随任务下发——worker 不连数据库，读不到平台侧设置。
+	DenyTemplateIDs []string `json:"deny_template_ids,omitempty" bson:"deny_template_ids,omitempty"`
 
 	// Dir Scan Config
 	DirDict string `json:"dir_dict,omitempty" bson:"dir_dict,omitempty"`

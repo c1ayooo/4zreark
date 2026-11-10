@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/csv"
+	"time"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -26,6 +28,50 @@ func NewVulnHandler() *VulnHandler {
 
 // ListVulnerabilities lists vulnerabilities with filtering and pagination
 // GET /api/vulnerabilities
+// ExportVulnerabilities 服务端 CSV 导出（GET /api/vulnerabilities/export）。
+// 复用列表筛选参数，分页遍历，上限 10 万行；公式注入服务端统一消毒。
+// @Router /api/vulnerabilities/export [get]
+func (h *VulnHandler) ExportVulnerabilities(c *gin.Context) {
+	workspaceID := c.Query("workspace_id")
+	severity := c.Query("severity")
+	status := c.Query("status")
+	keyword := c.Query("keyword")
+	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
+
+	csvFile := "vulnerabilities-" + time.Now().Format("20060102-150405") + ".csv"
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", `attachment; filename="`+csvFile+`"`)
+
+	w := csv.NewWriter(c.Writer)
+	_ = w.Write([]string{"id", "name", "severity", "status", "type", "target", "cve", "template_id", "description", "solution", "created_at"})
+
+	const pageSize = 100
+	const maxRows = 100000
+	written := 0
+	for page := 1; written < maxRows; page++ {
+		vulns, _, err := h.vulnService.ListVulnerabilities(workspaceID, severity, status, keyword, projectID, page, pageSize)
+		if err != nil || len(vulns) == 0 {
+			break
+		}
+		for _, v := range vulns {
+			if written >= maxRows {
+				break
+			}
+			written++
+			_ = w.Write([]string{
+				v.ID.Hex(), sanitizeCSVCell(v.Name), string(v.Severity), string(v.Status), v.Type,
+				sanitizeCSVCell(v.Target), sanitizeCSVCell(strings.Join(v.CVEID, "|")),
+				v.TemplateID, sanitizeCSVCell(v.Description), sanitizeCSVCell(v.Solution),
+				csvTime(v.CreatedAt),
+			})
+		}
+		if len(vulns) < pageSize {
+			break
+		}
+	}
+	w.Flush()
+}
+
 func (h *VulnHandler) ListVulnerabilities(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
@@ -372,28 +418,6 @@ func (h *VulnHandler) DeletePOC(c *gin.Context) {
 	utils.SuccessWithMessage(c, "删除成功", nil)
 }
 
-// TogglePOC enables or disables a POC
-// PUT /api/pocs/:id/toggle
-func (h *VulnHandler) TogglePOC(c *gin.Context) {
-	pocID := c.Param("id")
-
-	var req struct {
-		Enabled bool `json:"enabled"`
-	}
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		utils.BadRequest(c, "参数错误")
-		return
-	}
-
-	if err := h.vulnService.TogglePOC(pocID, req.Enabled); err != nil {
-		utils.Error(c, utils.ErrCodeInternalError, err.Error())
-		return
-	}
-
-	utils.SuccessWithMessage(c, "状态更新成功", nil)
-}
-
 // ListReports lists vulnerability reports
 // GET /api/reports
 func (h *VulnHandler) ListReports(c *gin.Context) {
@@ -594,22 +618,6 @@ func (h *VulnHandler) BatchUpdateVulnStatus(c *gin.Context) {
 		msg += fmt.Sprintf("，跳过 %d 条（状态不允许流转或不存在）", skipped)
 	}
 	utils.SuccessWithMessage(c, msg, gin.H{"updated": updated, "skipped": skipped})
-}
-
-// GetVulnsByTask 获取任务的漏洞列表
-// GET /api/tasks/:id/vulnerabilities
-func (h *VulnHandler) GetVulnsByTask(c *gin.Context) {
-	taskID := c.Param("id")
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
-
-	vulns, total, err := h.vulnService.GetVulnsByTaskID(taskID, page, pageSize)
-	if err != nil {
-		utils.Error(c, utils.ErrCodeInternalError, err.Error())
-		return
-	}
-
-	utils.SuccessWithPagination(c, vulns, total, page, pageSize)
 }
 
 // firstUnsafeReference 返回第一个协议不合规的参考链接（安全审计 M16）：

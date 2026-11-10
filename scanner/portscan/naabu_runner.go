@@ -75,25 +75,16 @@ func (n *NaabuScanner) ScanPorts(ctx context.Context, target, ports string) (*co
 		Ports:     make([]core.PortResult, 0, 16),
 	}
 
-	dir := n.TempDir
-	if dir == "" {
-		dir = datadir.TmpDir()
-	}
-	outFile, err := os.CreateTemp(dir, "naabu-out-*.jsonl")
-	if err != nil {
-		return nil, fmt.Errorf("create naabu output: %w", err)
-	}
-	outPath := outFile.Name()
-	outFile.Close()
-	defer os.Remove(outPath)
-
-	args := n.buildArgs(target, ports, outPath)
+	args := n.buildArgs(target, ports)
 	cmd := exec.CommandContext(ctx, n.BinPath, args...)
-	var stderr bytes.Buffer
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	runErr := cmd.Run()
 
-	parsed, parseErr := parseNaabuFile(outPath)
+	// naabu 2.6.1 的 -o 文件在 -json/-silent 组合下可能为 0 字节，
+	// 但 stdout 仍是 JSONL；直接解析 stdout，避免“永远未发现端口”。
+	parsed, parseErr := parseNaabuOutput(stdout.Bytes())
 	if ctx.Err() != nil {
 		result.EndTime = time.Now()
 		result.Ports = parsed
@@ -114,7 +105,7 @@ func (n *NaabuScanner) ScanPorts(ctx context.Context, target, ports string) (*co
 	return result, nil
 }
 
-func (n *NaabuScanner) buildArgs(target, ports, outPath string) []string {
+func (n *NaabuScanner) buildArgs(target, ports string) []string {
 	scanType := n.ScanType
 	if scanType == "" {
 		scanType = "connect"
@@ -130,7 +121,6 @@ func (n *NaabuScanner) buildArgs(target, ports, outPath string) []string {
 		// -verify 再做一次 TCP 复核。
 		"-exclude-cdn",
 		"-verify",
-		"-o", outPath,
 	}
 	if n.Rate > 0 {
 		args = append(args, "-rate", fmt.Sprintf("%d", n.Rate))
@@ -144,19 +134,10 @@ func (n *NaabuScanner) buildArgs(target, ports, outPath string) []string {
 	return args
 }
 
-func parseNaabuFile(path string) ([]core.PortResult, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("open naabu output: %w", err)
-	}
-	defer f.Close()
-
+func parseNaabuOutput(data []byte) ([]core.PortResult, error) {
 	results := make([]core.PortResult, 0, 16)
 	seen := make(map[int]bool)
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	scanner.Buffer(make([]byte, 0, 64*1024), 1*1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())

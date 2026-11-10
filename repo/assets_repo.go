@@ -1155,3 +1155,41 @@ func nullIfZeroTime(t time.Time) any {
 	}
 	return t
 }
+
+// IntelMatchSite 是情报资产匹配查询的一行：命中某指纹规则的站点。
+type IntelMatchSite struct {
+	SiteID   int64
+	Host     string
+	ProjectID int64
+	RuleID   string
+}
+
+// ListSitesForRules 返回命中任一指纹规则的站点（去重后上限 limit 条）。
+func (a *AssetRepo) ListSitesForRules(ctx context.Context, ruleIDs []string, limit int) ([]*IntelMatchSite, error) {
+	if a == nil || a.r == nil || len(ruleIDs) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := a.r.pool.Query(ctx, `
+		SELECT DISTINCT s.id, s.host, s.project_id, f.rule_id
+		FROM fingerprint_hits f
+		JOIN sites s ON s.id = f.site_id
+		WHERE f.rule_id = ANY($1)
+		ORDER BY s.id
+		LIMIT $2`, ruleIDs, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*IntelMatchSite, 0, 8)
+	for rows.Next() {
+		st := &IntelMatchSite{}
+		if err := rows.Scan(&st.SiteID, &st.Host, &st.ProjectID, &st.RuleID); err != nil {
+			return nil, err
+		}
+		out = append(out, st)
+	}
+	return out, rows.Err()
+}

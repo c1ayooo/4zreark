@@ -292,6 +292,10 @@ export const assetApi = {
     api.get<unknown, { code: number; data: { items: AppOption[] } }>('/assets/apps', { params }),
   /** 图标字节地址（公开路由，可直接放 <img src>） */
   iconURL: (sha256: string) => `/api/asset-icons/${sha256}`,
+  /** 服务端 CSV 导出：分页遍历全量（上限 10 万行），带当前筛选参数 */
+  exportCsv: (params: { project_id?: number; q?: string; starred?: boolean; tag?: string } = {}) =>
+    api.get('/assets/export', { params, responseType: 'blob' }),
+
   /** 资产星图：不分页、保留父子关系，供分层布局 */
   graph: (params: { project_id?: number; q?: string; mode?: 'summary' | 'full' } = {}) =>
     api.get<unknown, { code: number; data: AssetGraphData }>('/assets/graph', { params }),
@@ -451,6 +455,18 @@ export interface AssetRelation {
   evidence: AssetRelationEvidence[]
 }
 
+export interface AssetVulnSummary {
+  id: string
+  name: string
+  severity: string
+  status: string
+  type: string
+  template_id: string
+  target: string
+  cve_ids: string[]
+  created_at: string
+}
+
 export interface AssetDetail {
   site: Site
   verifications: AssetVerification[]
@@ -458,6 +474,7 @@ export interface AssetDetail {
   records: AssetRawRecord[]
   events: AssetEvent[]
   relations: AssetRelation[]
+  vulns: AssetVulnSummary[]
 }
 
 export interface AssetRecordsPage {

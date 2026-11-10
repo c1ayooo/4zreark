@@ -3,7 +3,6 @@ package api
 import (
 	"strconv"
 
-	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/service"
 	"github.com/c1ayooo/4zreark/utils"
 
@@ -33,20 +32,3 @@ func (h *CompatHandler) Changes(c *gin.Context) {
 	utils.Success(c, gin.H{"items": items, "total": len(items), "limit": limit})
 }
 
-// RecentAssets 最近发现的资产（按 first_seen 倒序，缺省 10 条）。
-// GET /api/dashboard/recent-assets?project_id=&limit=
-func (h *CompatHandler) RecentAssets(c *gin.Context) {
-	projectID, _ := strconv.ParseInt(c.Query("project_id"), 10, 64)
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
-	if limit <= 0 || limit > 100 {
-		limit = 10
-	}
-	page, err := h.assets.ListAssets(c.Request.Context(), repo.AssetQuery{
-		ProjectID: projectID, Page: 1, PageSize: limit,
-	})
-	if err != nil {
-		utils.Error(c, utils.ErrCodeDatabaseError, err.Error())
-		return
-	}
-	utils.Success(c, gin.H{"items": page.Items, "total": page.Total, "limit": limit})
-}

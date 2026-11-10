@@ -124,6 +124,32 @@ type SensitiveInfoResult struct {
 	Source     string   `json:"source"`     // 来源
 }
 
+// FileLeakResult 备份/敏感文件泄露检测结果
+type FileLeakResult struct {
+	Target     string `json:"target"`      // 站点 origin
+	URL        string `json:"url"`         // 泄露文件完整 URL
+	Kind       string `json:"kind"`        // git / svn / env / backup / docs / debug
+	Name       string `json:"name"`        // 规则名
+	Evidence   string `json:"evidence"`    // 命中证据摘要
+	Severity   string `json:"severity"`    // high / medium / low / critical
+	StatusCode int    `json:"status_code"` // HTTP 状态码
+	Length     int64  `json:"length"`      // 响应长度
+	Source     string `json:"source"`      // 固定 fileleak
+}
+
+// VhostResult 虚拟主机绑定发现结果：
+// 某 IP:端口 的默认站点之外，用已知候选域名改 Host 头探测出的隐藏绑定。
+type VhostResult struct {
+	IP         string `json:"ip"`          // 服务 IP
+	Port       string `json:"port"`        // 服务端口
+	Domain     string `json:"domain"`      // Host 绑定的域名
+	URL        string `json:"url"`         // 形如 http://ip:port/（Host 由 domain 决定）
+	Title      string `json:"title"`       // 响应标题
+	StatusCode int    `json:"status_code"` // HTTP 状态码
+	Length     int64  `json:"length"`      // 响应长度
+	Source     string `json:"source"`      // 固定 vhost
+}
+
 // SubTakeResult 子域名接管检测结果 (旧版，保留兼容)
 type SubTakeResult struct {
 	Input    string `json:"input"`    // 输入子域名

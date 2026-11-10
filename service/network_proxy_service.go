@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -87,32 +88,70 @@ type ProxyTestResult struct {
 	Status    int    `json:"status,omitempty"`
 	LatencyMS int64  `json:"latency_ms"`
 	Target    string `json:"target"`
+	Category  string `json:"category,omitempty"`
+	ProxyUsed string `json:"proxy_used,omitempty"`
 	Error     string `json:"error,omitempty"`
 }
 
-// proxyProbeTarget 测试用的探测地址：轻量，且与规则同步/工具下载真实访问的
-// GitHub 域一致，测试通过基本等价于同步链路可用。
-const proxyProbeTarget = "https://api.github.com/zen"
+// api.github.com/zen 只能证明 API 域通；工具下载真正访问的是 GitHub release
+// 资产（github.com → 302 到资产 CDN）。只测前者会误报「连通正常」。
+const (
+	proxyProbeZen   = "https://api.github.com/zen"
+	proxyProbeAsset = "https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_checksums.txt"
+)
 
-// TestProxy 经指定代理探测连通性。proxyURL 为空表示测直连。
-func (s *NetworkProxyService) TestProxy(ctx context.Context, proxyURL string) ProxyTestResult {
-	res := ProxyTestResult{Target: proxyProbeTarget}
-	tr := &http.Transport{}
-	if proxyURL = strings.TrimSpace(proxyURL); proxyURL != "" {
-		u, err := outbound.ParseProxyURL(proxyURL)
+// TestProxy 测连通性：
+//   - category 非空：按该模块「实际生效」的代理配置测真实下载链路（工具/模板资产）；
+//   - url 非空：测指定代理（旧行为，测 api.github.com/zen）；
+//   - 都为空：显式测直连。
+func (s *NetworkProxyService) TestProxy(ctx context.Context, proxyURL, category string) ProxyTestResult {
+	cat := strings.TrimSpace(category)
+	probeURL := proxyProbeZen
+	res := ProxyTestResult{Target: proxyProbeZen, Category: cat}
+	tr := &http.Transport{
+		TLSNextProto: map[string]func(string, *tls.Conn) http.RoundTripper{},
+	}
+	switch {
+	case cat != "":
+		probeURL = proxyProbeAsset
+		res.Target = proxyProbeAsset
+		if !outbound.ValidModule(cat) {
+			res.Error = "未知出网模块 " + cat
+			return res
+		}
+		u, err := outbound.ProxyFor(cat)
+		if err != nil {
+			res.Error = "代理配置无效: " + err.Error()
+			return res
+		}
+		switch {
+		case outbound.ModeFor(cat) == outbound.ModeDirect:
+			tr.Proxy = nil
+			res.ProxyUsed = "直连"
+		case u != nil:
+			tr.Proxy = outbound.ProxyWithCDN(u)
+			res.ProxyUsed = outbound.RedactProxy(u)
+		default:
+			tr.Proxy = outbound.EnvironmentProxyWithCDN()
+			res.ProxyUsed = "环境变量 HTTP(S)_PROXY"
+		}
+	case strings.TrimSpace(proxyURL) != "":
+		u, err := outbound.ParseProxyURL(strings.TrimSpace(proxyURL))
 		if err != nil {
 			res.Error = err.Error()
 			return res
 		}
 		tr.Proxy = http.ProxyURL(u)
-	} else {
-		// 显式测直连：不走环境变量，和「强制直连」语义一致。
-		res.Target = proxyProbeTarget + "（直连）"
+		res.ProxyUsed = outbound.RedactProxy(u)
+	default:
+		tr.Proxy = nil
+		res.Target = proxyProbeZen + "（直连）"
+		res.ProxyUsed = "直连"
 	}
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, proxyProbeTarget, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 	if err != nil {
 		res.Error = err.Error()
 		return res

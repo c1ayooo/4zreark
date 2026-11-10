@@ -35,10 +35,13 @@ type CollectionConfig struct {
 	DefaultModules    []string `mapstructure:"default_modules"`
 	ExcludeModules    []string `mapstructure:"exclude_modules"`
 	MaxTargetsForFull int      `mapstructure:"max_targets_for_full"`
-	MinOnlineNodes    int      `mapstructure:"min_online_nodes"`
-	MaxFailRate       float64  `mapstructure:"max_fail_rate"`
-	StageTimeoutMin   int      `mapstructure:"stage_timeout_minutes"`
-	SiteScope         string   `mapstructure:"site_scope"` // host | registrable_domain | project
+	// MaxPortsPerHost 单站开放端口阈值：超过后先做 TCP 二次复核，
+	// 复核后仍超阈值则只保留常见端口。0 表示不复核。
+	MaxPortsPerHost int     `mapstructure:"max_ports_per_host"`
+	MinOnlineNodes  int     `mapstructure:"min_online_nodes"`
+	MaxFailRate     float64 `mapstructure:"max_fail_rate"`
+	StageTimeoutMin int     `mapstructure:"stage_timeout_minutes"`
+	SiteScope       string  `mapstructure:"site_scope"` // host | registrable_domain | project
 	// GateMode：off 关闭；shadow 只判定不路由；enforce 允许规则层消费判定结果。
 	GateMode    string `mapstructure:"gate_mode"`
 	GateWorkers int    `mapstructure:"gate_workers"`
@@ -57,7 +60,7 @@ func (c *CollectionConfig) Normalize() {
 	if len(c.DefaultModules) == 0 {
 		c.DefaultModules = []string{
 			"subdomain", "takeover", "http_probe", "port_scan", "fingerprint",
-			"crawler", "js_audit", "api_probe", "dir_scan", "sensitive",
+			"crawler", "js_audit", "api_probe", "dir_scan", "sensitive", "fileleak",
 		}
 	}
 	if len(c.ExcludeModules) == 0 {
@@ -66,14 +69,8 @@ func (c *CollectionConfig) Normalize() {
 	if c.MaxTargetsForFull <= 0 {
 		c.MaxTargetsForFull = 500
 	}
-	if c.MinOnlineNodes <= 0 {
-		c.MinOnlineNodes = 1
-	}
-	if c.MaxFailRate <= 0 || c.MaxFailRate > 1 {
-		c.MaxFailRate = 0.3
-	}
-	if c.StageTimeoutMin <= 0 {
-		c.StageTimeoutMin = 360
+	if c.MaxPortsPerHost < 0 {
+		c.MaxPortsPerHost = 0
 	}
 	if c.SiteScope == "" {
 		c.SiteScope = "host"
@@ -101,8 +98,6 @@ type SentinelConfig struct {
 	TokenBudget         int      `mapstructure:"token_budget"`
 	MaxHunkLines        int      `mapstructure:"max_hunk_lines"`
 	JudgeModel          string   `mapstructure:"judge_model"`
-	EnableAuditQueue    bool     `mapstructure:"enable_audit_queue"`
-	QueuePollIntervalSy int      `mapstructure:"queue_poll_seconds"`
 	// DeepAnalysis 高危发现二轮深审开关（Tier 2）：high/critical 命中后从本地
 	// mirror 读变更文件全文做一次 LLM 细查，落 deep-analysis 草稿产物。
 	// 未配置默认开启；会为每个高危发现多消耗一次 LLM 调用。
@@ -306,6 +301,30 @@ type ScannerConfig struct {
 	// ForceCleanTerminalJobs 默认 false：终态任务的僵尸 River job 只 JobCancel，
 	// 由 River 的 RescueStuckJobsAfter 回收；显式开启才保留旧强删（运维兜底）。
 	ForceCleanTerminalJobs bool `mapstructure:"force_clean_terminal_jobs"`
+	// DenyDomainSuffixes / DenyCIDRs 是全局禁扫黑名单（对齐 ARL 的 security_policy）。
+	// 与任务级授权边界（scope）叠加：命中黑名单一律拒绝，无论任务目标怎么写。
+	// 域名后缀匹配的是后缀本身及所有子域（gov.cn 覆盖 *.gov.cn）。
+	// master 与 worker 读同一份 config，保证两端判定一致；默认保护 gov.cn，
+	// 用户显式写空列表（[]）可整体关闭。
+	DenyDomainSuffixes []string `mapstructure:"deny_domain_suffixes"`
+	DenyCIDRs          []string `mapstructure:"deny_cidrs"`
+	// NucleiDenyTemplateIDs 是 nuclei 误报黑名单：按 template-id 永久排除。
+	// 任务的 config.deny_template_ids 盖章值优先于这里的兜底值。
+	NucleiDenyTemplateIDs []string `mapstructure:"nuclei_deny_template_ids"`
+}
+
+// NormalizeScanner 补齐扫描安全默认值。必须在启动时调用一次。
+func (c *ScannerConfig) NormalizeScanner() {
+	// nil = 用户没写这个键，套默认保护；显式 [] 表示用户刻意关闭。
+	if c.DenyDomainSuffixes == nil {
+		c.DenyDomainSuffixes = []string{"gov.cn"}
+	}
+	if c.DenyCIDRs == nil {
+		c.DenyCIDRs = []string{}
+	}
+	if c.NucleiDenyTemplateIDs == nil {
+		c.NucleiDenyTemplateIDs = []string{}
+	}
 }
 
 // 节点角色。all 是单机默认值：控制面 + 本机扫描 worker。
@@ -316,7 +335,7 @@ const (
 )
 
 // DefaultNodeCapabilities 是节点默认上报的能力集合。
-// 目前只用于展示与运维筛选，作业领取仍由 PG 队列决定。
+// 只用于节点注册信息的展示与运维筛选，作业领取仍由 PG 队列决定。
 var DefaultNodeCapabilities = []string{
 	"subdomain", "port_scan", "fingerprint", "vuln_scan", "crawler", "dir_scan", "sensitive",
 }
@@ -341,10 +360,10 @@ type NodeConfig struct {
 	WindowsBinary     string   `mapstructure:"windows_binary"`
 	RemBinary         string   `mapstructure:"rem_binary"`
 	TunnelDir         string   `mapstructure:"tunnel_dir"`
-	MaxTasks          int      `mapstructure:"max_tasks"`
-	HeartbeatInterval int      `mapstructure:"heartbeat_interval"`
 	Tags              []string `mapstructure:"tags"`
 	Capabilities      []string `mapstructure:"capabilities"`
+	MaxTasks          int      `mapstructure:"max_tasks"`
+	HeartbeatInterval int      `mapstructure:"heartbeat_interval"`
 }
 
 // Normalize 填充节点默认值。必须在启动时调用一次。
@@ -372,9 +391,6 @@ func (n *NodeConfig) Normalize() {
 	}
 	if n.TLSDir == "" {
 		n.TLSDir = "data/node-tls"
-	}
-	if len(n.Capabilities) == 0 {
-		n.Capabilities = append([]string(nil), DefaultNodeCapabilities...)
 	}
 }
 
@@ -463,6 +479,7 @@ func LoadConfig(path string) *Config {
 		applySentinelEnv(cfg)
 		applyCollectionConfig(cfg)
 		applyLLMEnv(cfg)
+		cfg.Scanner.NormalizeScanner()
 	})
 
 	return cfg
@@ -490,6 +507,7 @@ func LoadConfigRaw(raw []byte) *Config {
 		applySentinelEnv(cfg)
 		applyCollectionConfig(cfg)
 		applyLLMEnv(cfg)
+		cfg.Scanner.NormalizeScanner()
 	})
 
 	return cfg

@@ -16,9 +16,10 @@ import { MCPGovernancePanel } from './components/MCPGovernancePanel'
 import { ToolRuntimePanel } from '@/components/settings/ToolRuntimePanel'
 import { ProxyPanel } from '@/components/settings/ProxyPanel'
 import { GitHubTokenPanel } from '@/components/settings/GitHubTokenPanel'
+import { ScanSafetyPanel } from '@/components/settings/ScanSafetyPanel'
 import { LLMSettingsPanel } from '@/components/settings/LLMSettingsPanel'
 import DatasourceSessionsTab from '@/components/settings/DatasourceSessionsTab'
-import { Moon, Sun, Monitor, Palette, User, Lock, Key, KeyRound, CheckCircle, XCircle, Plug, Database, Plus, Pencil, Trash2, Gauge, Globe, ShieldCheck, Sparkles } from 'lucide-react'
+import { Moon, Sun, Monitor, Palette, User, Lock, Key, KeyRound, CheckCircle, XCircle, Plug, Database, Plus, Pencil, Trash2, Gauge, Globe, ShieldCheck, ShieldAlert, Sparkles } from 'lucide-react'
 
 export default function SettingsPage() {
   const confirm = useConfirm()
@@ -878,6 +879,16 @@ export default function SettingsPage() {
                     </span>
                   ),
                   children: <ToolRuntimePanel />,
+                },
+                {
+                  key: 'scan-safety',
+                  label: (
+                    <span className="flex items-center gap-2">
+                      <ShieldAlert className="h-4 w-4" />
+                      扫描安全
+                    </span>
+                  ),
+                  children: <ScanSafetyPanel />,
                 },
                 {
                   key: 'network-proxy',

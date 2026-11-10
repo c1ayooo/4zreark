@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -103,41 +105,60 @@ func findAsset(r ghRelease, name string) (ghAsset, bool) {
 	return ghAsset{}, false
 }
 
-// mirrorCandidates 返回下载候选 URL 序列：直连在前，镜像按序兜底。
-// ZRE_GH_MIRROR 支持逗号分隔多个镜像前缀；未设置时用内置序列
-// （国内网络实测 ghfast.top / gh-proxy.com 可用，ghproxy.net 的 h2 不稳）。
+// mirrorCandidates 返回下载候选 URL 序列。显式设置 ZRE_GH_MIRROR 时镜像优先
+// （用户配镜像通常意味着直连不通），直连放最后兜底；否则直连优先、内置镜像兜底。
 func mirrorCandidates(direct string) []string {
-	urls := []string{direct}
+	out := make([]string, 0, 4)
+	seen := map[string]bool{}
+	add := func(u string) {
+		if u != "" && !seen[u] {
+			seen[u] = true
+			out = append(out, u)
+		}
+	}
 	if raw := strings.TrimSpace(os.Getenv(ghMirrorEnv)); raw != "" {
 		for _, m := range strings.Split(raw, ",") {
 			if m = strings.TrimRight(strings.TrimSpace(m), "/"); m != "" {
-				urls = append(urls, m+"/"+direct)
+				add(m + "/" + direct)
 			}
 		}
-		return urls
+		add(direct)
+		return out
 	}
+	add(direct)
 	for _, m := range defaultMirrors {
-		urls = append(urls, m+"/"+direct)
+		add(m + "/" + direct)
 	}
-	return urls
+	return out
 }
 
+// 实测 gh-proxy.com 在直连/代理下均可用，放内置镜像首位；
+// ghfast.top 经部分代理 TLS 不稳，ghproxy.net 的 h2 流会被中途打断。
 var defaultMirrors = []string{
-	"https://ghfast.top",
 	"https://gh-proxy.com",
+	"https://ghfast.top",
 	"https://ghproxy.net",
 }
 
-// downloadToFile 下载 release 资产到本地文件；直连失败依次走镜像。
+// downloadToFile 下载 release 资产到本地文件；每个候选独立限时，失败立刻换源，
+// 避免直连卡住时把 15 分钟的 client 超时耗光、镜像一个都轮不到。
 func (m *Manager) downloadToFile(ctx context.Context, repo, tag, asset string, dstPath string) error {
 	direct := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", repo, tag, asset)
 	var lastErr error
 	for _, u := range mirrorCandidates(direct) {
-		if err := m.downloadURL(ctx, u, dstPath); err != nil {
-			lastErr = err
-			continue
+		attemptCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+		err := m.downloadURL(attemptCtx, u, dstPath)
+		cancel()
+		if err == nil {
+			return nil
 		}
-		return nil
+		lastErr = err
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("没有可用的下载地址")
 	}
 	return fmt.Errorf("下载 %s 失败: %w", asset, lastErr)
 }
@@ -199,30 +220,28 @@ func parseChecksums(data []byte) map[string]string {
 func (m *Manager) httpClient() *http.Client {
 	c := *m.client
 	tr := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
+		Proxy:                 outbound.EnvironmentProxyWithCDN(),
 		ResponseHeaderTimeout: 60 * time.Second,
 		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
 	}
-	if u, err := outbound.ProxyFor("tool_download"); err == nil && u != nil {
-		tr.Proxy = assetCDNDirectProxy(u)
+	if u, err := outbound.ProxyFor("tool_download"); err != nil {
+		log.Printf("[toolruntime] 工具下载代理配置无效，回退环境变量: %v", err)
+	} else if u != nil {
+		tr.Proxy = outbound.ProxyWithCDN(u)
 	} else if outbound.ModeFor("tool_download") == outbound.ModeDirect {
 		tr.Proxy = nil // 设置页显式直连，压过 ZRE_TOOL_PROXY / HTTP(S)_PROXY
 	} else if p := strings.TrimSpace(os.Getenv(ghProxyEnv)); p != "" {
 		if u, err := url.Parse(p); err == nil && u.Host != "" {
-			tr.Proxy = assetCDNDirectProxy(u)
+			tr.Proxy = outbound.ProxyWithCDN(u)
+		} else {
+			log.Printf("[toolruntime] %s 不是合法代理地址: %q", ghProxyEnv, p)
 		}
 	}
 	c.Transport = tr
 	return &c
 }
 
-// assetCDNDirectProxy 对 GitHub release 资产 CDN 绕过代理直连。
+// assetCDNDirectProxy 保留旧入口；CDN 直连只在 ZRE_GH_CDN_DIRECT=1 时生效。
 func assetCDNDirectProxy(u *url.URL) func(*http.Request) (*url.URL, error) {
-	return func(req *http.Request) (*url.URL, error) {
-		switch strings.ToLower(req.URL.Hostname()) {
-		case "release-assets.githubusercontent.com", "objects.githubusercontent.com":
-			return nil, nil
-		}
-		return u, nil
-	}
+	return outbound.ProxyWithCDN(u)
 }

@@ -7,6 +7,21 @@ type Config struct {
 	RecheckDays int  `json:"recheck_days"`
 	Concurrency int  `json:"concurrency"`
 	RateLimit   int  `json:"rate_limit"`
+	// DenyTemplateIDs 是 nuclei 误报黑名单：召回出的模板先按 id 过滤再执行。
+	DenyTemplateIDs []string `json:"deny_template_ids,omitempty"`
+}
+
+// Denied 查 template-id 是否在黑名单内。
+func (c Config) Denied(templateID string) bool {
+	if len(c.DenyTemplateIDs) == 0 || templateID == "" {
+		return false
+	}
+	for _, id := range c.DenyTemplateIDs {
+		if id == templateID {
+			return true
+		}
+	}
+	return false
 }
 
 // EnabledOrDefault 未显式配置时默认开启（与 4zreco 语义一致）。

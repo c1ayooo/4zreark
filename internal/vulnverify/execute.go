@@ -61,6 +61,16 @@ func (s *Service) process(ctx context.Context, task Task) {
 		finish("failed", "", err.Error(), nil)
 		return
 	}
+	// 误报黑名单：召回出的模板先按 template-id 过滤，被拉黑的不再验证。
+	if n := len(refs); n > 0 && len(cfg.DenyTemplateIDs) > 0 {
+		kept := refs[:0:0]
+		for _, ref := range refs {
+			if !cfg.Denied(ref.ID) {
+				kept = append(kept, ref)
+			}
+		}
+		refs = kept
+	}
 	if len(refs) == 0 {
 		finish("miss", "", "", nil) // 无召回：无已知模板可验证
 		return

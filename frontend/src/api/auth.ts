@@ -37,12 +37,6 @@ export const authApi = {
   logout: (): Promise<ApiResponse<null>> =>
     api.post('/auth/logout'),
 
-  getCurrentUser: (): Promise<ApiResponse<User>> =>
-    api.get('/auth/me'),
-
-  refreshToken: (): Promise<ApiResponse<{ token: string }>> =>
-    api.post('/auth/refresh'),
-
   changePassword: (data: {
     oldPassword: string
     newPassword: string

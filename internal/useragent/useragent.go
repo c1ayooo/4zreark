@@ -16,7 +16,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/rand/v2"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -73,9 +75,34 @@ func (s Session) Apply(req *http.Request) {
 	}
 }
 
+// NormalizeSiteKey 归一化站点键：去 scheme/path/userinfo，只保留 host[:port]；
+// 小写、去尾点；去掉默认 80/443 端口，非默认端口保留。
+// 这样 http://a.example.com 与 https://a.example.com:443 会得到同一个键。
+func NormalizeSiteKey(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if strings.Contains(raw, "://") {
+		if u, err := url.Parse(raw); err == nil && u.Host != "" {
+			raw = u.Host
+		}
+	}
+	raw = strings.ToLower(strings.TrimSuffix(raw, "."))
+	if host, port, err := net.SplitHostPort(raw); err == nil {
+		switch port {
+		case "80", "443":
+			raw = host
+		default:
+			raw = net.JoinHostPort(host, port)
+		}
+	}
+	return raw
+}
+
 // ForSite 按 seed + 站点键确定性生成会话。相同入参永远得到相同 UA。
 func ForSite(seed, siteKey string) Session {
-	key := strings.TrimSpace(siteKey)
+	key := NormalizeSiteKey(siteKey)
 	if key == "" {
 		return Session{
 			UserAgent:      Pick(),

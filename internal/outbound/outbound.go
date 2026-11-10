@@ -33,6 +33,50 @@ import (
 // SettingsKey 配置在 app_settings 里的键。
 const SettingsKey = "network.proxy"
 
+// GHCDNDirectEnv=1 时恢复旧行为：GitHub release 资产 CDN 绕过代理直连。
+// 默认关闭：显式配置的代理应当覆盖 github.com 与资产 CDN 的整条下载链路，
+// 否则设置页配了代理、302 到 CDN 后却被静默改回直连。
+const GHCDNDirectEnv = "ZRE_GH_CDN_DIRECT"
+
+func GHCDNDirect() bool { return strings.TrimSpace(os.Getenv(GHCDNDirectEnv)) == "1" }
+
+// IsGitHubAssetCDN 判断 host 是否为 GitHub release 资产 CDN。
+func IsGitHubAssetCDN(host string) bool {
+	switch strings.ToLower(host) {
+	case "release-assets.githubusercontent.com", "objects.githubusercontent.com":
+		return true
+	}
+	return false
+}
+
+// ProxyWithCDN 按请求选择代理：默认全部走显式代理，仅开关开启时对资产 CDN 直连。
+func ProxyWithCDN(u *url.URL) func(*http.Request) (*url.URL, error) {
+	return func(req *http.Request) (*url.URL, error) {
+		if GHCDNDirect() && IsGitHubAssetCDN(req.URL.Hostname()) {
+			return nil, nil
+		}
+		return u, nil
+	}
+}
+
+// EnvironmentProxyWithCDN 跟随环境变量代理，CDN 例外同样只在开关开启时生效。
+func EnvironmentProxyWithCDN() func(*http.Request) (*url.URL, error) {
+	return func(req *http.Request) (*url.URL, error) {
+		if GHCDNDirect() && IsGitHubAssetCDN(req.URL.Hostname()) {
+			return nil, nil
+		}
+		return http.ProxyFromEnvironment(req)
+	}
+}
+
+// RedactProxy 去掉 URL 里的凭据，只留 scheme://host:port，供状态展示/日志用。
+func RedactProxy(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
+
 // 模块覆盖模式。
 const (
 	ModeGlobal = "global"

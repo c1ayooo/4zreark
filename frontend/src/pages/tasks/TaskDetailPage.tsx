@@ -28,6 +28,8 @@ import {
   GenericResultsTable,
   PortResultsTable,
   SensitiveResultsTable,
+  FileLeakResultsTable,
+  VhostResultsTable,
   ServiceResultsTable,
   SubdomainResultsTable,
   TakeoverResultsTable,
@@ -53,6 +55,8 @@ const tabConfig: { id: TaskTabId; label: string }[] = [
   { id: 'url', label: 'URL' },
   { id: 'crawler', label: '爬虫' },
   { id: 'sensitive', label: '敏感信息' },
+  { id: 'fileleak', label: '文件泄露' },
+  { id: 'vhost', label: 'Vhost 绑定' },
   { id: 'dirscan', label: '目录扫描' },
   { id: 'vuln', label: '漏洞' },
   { id: 'port', label: '端口' },
@@ -265,6 +269,8 @@ export default function TaskDetailPage() {
     url: ['crawler', 'dir_scan', 'sensitive'],
     crawler: ['crawler'],
     sensitive: ['sensitive'],
+    fileleak: ['file_leak'],
+    vhost: ['vhost'],
     dirscan: ['dir_scan'],
     vuln: ['vuln_scan'],
     port: ['port_scan', 'fingerprint', 'crawler', 'dir_scan', 'vuln_scan', 'sensitive'],
@@ -385,6 +391,10 @@ export default function TaskDetailPage() {
         return <PortResultsTable ctx={resultsCtx} />
       case 'service':
         return <ServiceResultsTable ctx={resultsCtx} />
+      case 'fileleak':
+        return <FileLeakResultsTable ctx={resultsCtx} />
+      case 'vhost':
+        return <VhostResultsTable ctx={resultsCtx} />
       case 'dirscan':
         return <DirScanResultsTable ctx={resultsCtx} />
       case 'crawler':

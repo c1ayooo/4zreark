@@ -38,7 +38,7 @@ var collectionStageOrder = []collectionStageSpec{
 	{name: CollectionStageProbe, scanTypes: []string{"http_probe"}},
 	{name: CollectionStageCrawl, scanTypes: []string{"crawler"}},
 	{name: CollectionStagePorts, scanTypes: []string{"port_scan", "fingerprint"}, portMode: "top1000"},
-	{name: CollectionStageEnrich, scanTypes: []string{"fingerprint", "js_audit", "api_probe", "dir_scan", "sensitive"}, portMode: "quick"},
+	{name: CollectionStageEnrich, scanTypes: []string{"fingerprint", "js_audit", "api_probe", "dir_scan", "sensitive", "file_leak"}, portMode: "quick"},
 }
 
 // CollectionPlanService 负责计划创建、阶段推进与兜底对账。

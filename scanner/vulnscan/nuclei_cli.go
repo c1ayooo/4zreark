@@ -77,6 +77,8 @@ type NucleiScanConfig struct {
 	Templates       []string      // 模板路径或 ID
 	Tags            []string      // 标签过滤
 	ExcludeTags     []string      // 排除标签
+	// ExcludeIDs 是误报黑名单：按 template-id 排除（nuclei -eid）。
+	ExcludeIDs      []string
 	Severity        string        // 严重程度过滤: critical,high,medium,low,info
 	ExcludeSeverity string        // 排除严重程度
 	Concurrency     int           // 并发数
@@ -211,6 +213,11 @@ func (s *NucleiCLIScanner) buildArgs(targets []string, config *NucleiScanConfig)
 		}
 	} else if s.templatesDir != "" {
 		args = append(args, "-t", s.templatesDir)
+	}
+
+	// 误报黑名单：按 template-id 永久排除。
+	if config != nil && len(config.ExcludeIDs) > 0 {
+		args = append(args, "-eid", strings.Join(config.ExcludeIDs, ","))
 	}
 
 	// 标签过滤

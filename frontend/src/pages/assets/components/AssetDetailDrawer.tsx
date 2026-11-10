@@ -7,7 +7,20 @@ import { formatDate } from '@/lib/utils'
 import { statusTagClass, type BadgeVariant } from '@/components/ui/StatusTag'
 import { CertExpiryTag } from './GovernanceCard'
 
-export type DrawerTab = 'overview' | 'endpoints' | 'records' | 'fingerprints' | 'verifications'
+export type DrawerTab = 'overview' | 'endpoints' | 'records' | 'fingerprints' | 'verifications' | 'vulns'
+
+// 漏洞等级的展示口径与漏洞库页一致：颜色只区分高危及以下两档，
+// 避免抽屉里出现一排高饱和色块。
+export function severityLabel(sev: string): string {
+  const labels: Record<string, string> = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '信息' }
+  return labels[sev] ?? sev
+}
+
+function severityVariant(sev: string): BadgeVariant {
+  if (sev === 'critical' || sev === 'high') return 'destructive'
+  if (sev === 'medium') return 'warning'
+  return 'secondary'
+}
 
 export const stateLabel: Record<string, string> = {
   reachable: '可访问',
@@ -110,6 +123,7 @@ export default function AssetDetailDrawer({
           ['records', '原始记录'],
           ['fingerprints', '指纹'],
           ['verifications', '验证'],
+          ['vulns', '漏洞'],
         ] as const).map(([id, label]) => (
           <button
             key={id}
@@ -301,6 +315,30 @@ export default function AssetDetailDrawer({
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {tab === 'vulns' && (
+              <div className="space-y-2">
+                {detail.vulns.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">该站点暂无命中漏洞。</p>
+                ) : (
+                  detail.vulns.map((v) => (
+                    <div key={v.id} className="rounded-md border px-3 py-2 text-sm">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="min-w-0 break-all font-medium">{v.name}</span>
+                        <Tag className={`${statusTagClass(severityVariant(v.severity))} shrink-0 text-[10px]`}>
+                          {severityLabel(v.severity)}
+                        </Tag>
+                      </div>
+                      <div className="mt-1 break-all font-mono text-[11px] text-muted-foreground">{v.target}</div>
+                      <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+                        {v.cve_ids.length > 0 && <span>{v.cve_ids.join(' / ')}</span>}
+                        <span>{formatDate(v.created_at)}</span>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             )}
 

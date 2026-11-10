@@ -189,8 +189,12 @@ func newInstalledTool(name, path, source string, fi os.FileInfo) InstalledTool {
 	}
 	switch name {
 	case "nuclei":
+		// 统一工具目录下的 nuclei 是独立运行时二进制的软链，来源仍标 nuclei，
+		// 与普通受管工具区分，但和其他工具一起出现在同一份检索清单里。
+		it.Source = SourceNuclei
 		it.Description = "漏洞模板执行 / 自动验证（独立运行时）"
 	case "browser":
+		it.Source = SourceBrowser
 		it.Description = "Chromium（报告渲染 / SPA 爬虫）"
 	}
 	if source == SourceVendored {

@@ -1,27 +1,18 @@
 import { useState } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { takeoverApi, TakeoverResult } from '@/api/takeover'
+import { takeoverApi, TakeoverFingerprint, TakeoverResult } from '@/api/takeover'
 import { Button, Card, Input, Progress, Table, Tabs, Tag } from 'antd'
 import type { TableProps } from 'antd'
 import { useToast } from '@/components/ui/use-toast'
-import EmptyState from '@/components/common/EmptyState'
 import RecordDetailDrawer from '@/components/common/RecordDetailDrawer'
-import { formatDate } from '@/lib/utils'
 import {
   Globe,
   Play,
   AlertTriangle,
   CheckCircle,
-  RefreshCw,
   Shield,
   Target,
 } from 'lucide-react'
-
-const confidenceConfig: Record<string, { label: string; color: string }> = {
-  high: { label: '高', color: 'text-red-500' },
-  medium: { label: '中', color: 'text-orange-500' },
-  low: { label: '低', color: 'text-yellow-500' },
-}
 
 export default function TakeoverPage() {
   const { toast } = useToast()
@@ -34,17 +25,10 @@ export default function TakeoverPage() {
   // 历史记录表与扫描结果表共用一个详情抽屉，行点击打开
   const [detail, setDetail] = useState<TakeoverResult | null>(null)
 
-  // 获取服务商列表
-  const { data: providersData } = useQuery({
-    queryKey: ['takeover-providers'],
-    queryFn: takeoverApi.getProviders,
-  })
-
-  // 获取历史记录
-  const { data: historyData, isLoading: historyLoading, refetch: refetchHistory } = useQuery({
-    queryKey: ['takeover-history'],
-    queryFn: () => takeoverApi.getHistory({ pageSize: 20 }),
-    enabled: activeTab === 'history',
+  // 接管指纹库：展示当前可识别的服务与判定方式
+  const { data: fingerprintsData } = useQuery({
+    queryKey: ['takeover-fingerprints'],
+    queryFn: takeoverApi.getFingerprints,
   })
 
   // 单域名扫描
@@ -55,7 +39,7 @@ export default function TakeoverPage() {
       if (res.data.vulnerable) {
         toast({
           title: '发现可接管域名!',
-          description: `${res.data.domain} - ${res.data.provider}`,
+          description: `${res.data.domain} - ${res.data.service || '未知服务'}`,
           variant: 'destructive',
         })
       } else {
@@ -93,8 +77,7 @@ export default function TakeoverPage() {
     },
   })
 
-  const providers = providersData?.data || []
-  const history = historyData?.data?.list || []
+  const fingerprints: TakeoverFingerprint[] = fingerprintsData?.data || []
 
   const handleSingleScan = () => {
     if (!singleDomain) {
@@ -146,64 +129,13 @@ export default function TakeoverPage() {
     ? [
         { label: '域名', value: detail.domain },
         { label: '状态', value: detail.vulnerable ? '可接管' : '安全' },
-        { label: '服务商', value: detail.provider || '' },
-        { label: 'CNAME', value: detail.cnames?.join('\n') || '' },
-        {
-          label: '置信度',
-          value: detail.vulnerable
-            ? (confidenceConfig[detail.confidence] || confidenceConfig.low).label
-            : '',
-        },
-        { label: '指纹', value: detail.fingerprint || '' },
-        { label: '检测时间', value: formatDate(detail.checkedAt) },
+        { label: '服务', value: detail.service || '' },
+        { label: 'CNAME', value: detail.cname || '' },
+        { label: '指纹', value: detail.fingerprints?.join(', ') || '' },
+        { label: '判定原因', value: detail.reason || '' },
+        ...(detail.discussion ? [{ label: '说明', value: detail.discussion }] : []),
       ]
     : []
-
-  const historyColumns: TableProps<TakeoverResult>['columns'] = [
-    {
-      title: '域名',
-      dataIndex: 'domain',
-      key: 'domain',
-      render: (_, result) => <span className="font-medium">{result.domain}</span>,
-    },
-    {
-      title: '状态',
-      dataIndex: 'vulnerable',
-      key: 'vulnerable',
-      width: 90,
-      render: (_, result) => renderVulnerableTag(result.vulnerable),
-    },
-    {
-      title: '服务商',
-      dataIndex: 'provider',
-      key: 'provider',
-      render: (_, result) => result.provider || '-',
-    },
-    {
-      title: 'CNAME',
-      dataIndex: 'cnames',
-      key: 'cnames',
-      ellipsis: true,
-      render: (_, result) => result.cnames?.join(', ') || '-',
-    },
-    {
-      title: '置信度',
-      dataIndex: 'confidence',
-      key: 'confidence',
-      width: 80,
-      render: (_, result) => {
-        const conf = confidenceConfig[result.confidence] || confidenceConfig.low
-        return result.vulnerable ? <span className={conf.color}>{conf.label}</span> : null
-      },
-    },
-    {
-      title: '检测时间',
-      dataIndex: 'checkedAt',
-      key: 'checkedAt',
-      width: 170,
-      render: (_, result) => formatDate(result.checkedAt),
-    },
-  ]
 
   const resultColumns: TableProps<TakeoverResult>['columns'] = [
     {
@@ -220,35 +152,25 @@ export default function TakeoverPage() {
       render: (_, result) => renderVulnerableTag(result.vulnerable),
     },
     {
-      title: '服务商',
-      dataIndex: 'provider',
-      key: 'provider',
-      render: (_, result) => result.provider || '-',
+      title: '服务',
+      dataIndex: 'service',
+      key: 'service',
+      render: (_, result) => result.service || '-',
     },
     {
       title: 'CNAME',
-      dataIndex: 'cnames',
-      key: 'cnames',
+      dataIndex: 'cname',
+      key: 'cname',
       ellipsis: true,
-      render: (_, result) => result.cnames?.join(', ') || '-',
+      render: (_, result) => result.cname || '-',
     },
     {
-      title: '置信度',
-      dataIndex: 'confidence',
-      key: 'confidence',
-      width: 80,
-      render: (_, result) => {
-        const conf = confidenceConfig[result.confidence] || confidenceConfig.low
-        return result.vulnerable ? <span className={conf.color}>{conf.label}</span> : null
-      },
-    },
-    {
-      title: '指纹',
-      dataIndex: 'fingerprint',
-      key: 'fingerprint',
+      title: '判定原因',
+      dataIndex: 'reason',
+      key: 'reason',
       ellipsis: true,
       render: (_, result) => (
-        <span className="text-xs text-muted-foreground">{result.fingerprint || '-'}</span>
+        <span className="text-xs text-muted-foreground">{result.reason || '-'}</span>
       ),
     },
   ]
@@ -263,22 +185,16 @@ export default function TakeoverPage() {
         </div>
       </div>
 
-      {/* 支持的服务商 */}
-      <Card
-        title={<span className="text-sm font-medium">支持检测的服务商</span>}
-      >
+      {/* 指纹库概览 */}
+      <Card title={<span className="text-sm font-medium">接管指纹库</span>}>
         <p className="text-sm text-muted-foreground">
-          共支持 {providers.length} 个云服务商的接管检测
+          共内置 {fingerprints.length} 个服务的接管指纹，命中 CNAME 尾缀或响应特征即判定可接管
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
-          {providers.slice(0, 20).map((provider) => (
-            <Tag key={provider.name}>
-              {provider.name}
-            </Tag>
+          {fingerprints.slice(0, 20).map((fp) => (
+            <Tag key={fp.service}>{fp.service}</Tag>
           ))}
-          {providers.length > 20 && (
-            <Tag>+{providers.length - 20} 更多</Tag>
-          )}
+          {fingerprints.length > 20 && <Tag>+{fingerprints.length - 20} 更多</Tag>}
         </div>
       </Card>
 
@@ -348,33 +264,6 @@ export default function TakeoverPage() {
                   </Button>
                 </div>
               </Card>
-            ),
-          },
-          {
-            key: 'history',
-            label: '历史记录',
-            children: (
-              <>
-                <div className="flex justify-end mb-4">
-                  <Button size="small" onClick={() => refetchHistory()}>
-                    <RefreshCw className="h-4 w-4 mr-2" />
-                    刷新
-                  </Button>
-                </div>
-                <div className="rounded-lg border">
-                  <Table<TakeoverResult>
-                    columns={historyColumns}
-                    dataSource={history}
-                    rowKey={(_, index) => String(index)}
-                    onRow={onRow}
-                    loading={historyLoading}
-                    locale={{
-                      emptyText: <EmptyState title="暂无历史记录" className="border-0" />,
-                    }}
-                    pagination={false}
-                  />
-                </div>
-              </>
             ),
           },
         ]}

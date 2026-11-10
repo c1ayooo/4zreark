@@ -33,7 +33,9 @@ type PortScanModule struct {
 	maxThreads  int
 	ratePerSec  int
 	concurrency int
-	targetDelay time.Duration
+	// maxPortsPerHost 单站开放端口阈值；超过后做 TCP 二次复核。0 表示不复核。
+	maxPortsPerHost int
+	targetDelay     time.Duration
 	// enableGogoPOC 控制是否把 gogo 内置 poc 命中写成漏洞结果。
 	// 默认 false：信息收集任务不应通过端口模块旁路产出漏洞条目。
 	enableGogoPOC bool
@@ -46,6 +48,13 @@ func (m *PortScanModule) SetGogoPOC(enabled bool) { m.enableGogoPOC = enabled }
 // native 强制纯 Go TCP。无法识别的值按 gogo 处理。
 func (m *PortScanModule) SetPortBackend(backend string) {
 	m.portBackend = strings.ToLower(strings.TrimSpace(backend))
+}
+
+// SetMaxPortsPerHost 设置单站端口复核阈值。0 = 不复核。
+func (m *PortScanModule) SetMaxPortsPerHost(n int) {
+	if n > 0 {
+		m.maxPortsPerHost = n
+	}
 }
 
 // SetRate 设置端口扫描的速率、并发与单目标间隔。
@@ -469,6 +478,10 @@ func (m *PortScanModule) naabuPorts() string {
 		if s := strings.TrimSpace(m.portRange); s != "" {
 			return s
 		}
+	case "quick":
+		// 信息收集默认只扫常见端口：naabu connect 对 CDN/全响应目标
+		// 用 top1000 会把大量高端口误判为 open（997 端口问题）。
+		return "80,443,8080,8443,8000,8888,3000,5000,9000,22,21,25,3306,6379,5432,9200,11211"
 	case "top1000", "top2000", "top5000":
 		if s := topNPorts(m.scanMode); s != "" {
 			return s
@@ -498,6 +511,36 @@ func (m *PortScanModule) scanPortsWithNaabu(ds DomainSkip) bool {
 		return true
 	}
 	m.Logf("info", "%s naabu 发现 %d 个开放端口", ds.Domain, len(res.Ports))
+
+	// 单站端口数异常时做纯 Go TCP 二次复核：naabu 的 connect 模式对
+	// CDN/全响应目标会把 filtered 判成 open，997 端口就是这样来的。
+	// 信息收集阶段对所有 naabu 结果都复核：CDN 目标会对常见端口也全响应，
+	// 仅靠“超过 200 才复核”挡不住 25/3306/6379 这类假 open。
+	if max := m.maxPortsPerHost; max > 0 && len(res.Ports) > 0 {
+		verifyHost := ds.Domain
+		if ds.CIDR && res.Ports[0].IP != "" {
+			verifyHost = res.Ports[0].IP
+		}
+		if verifyHost != "" {
+			verified := verifyTCPPorts(verifyHost, res.Ports, 2*time.Second)
+			passRate := len(verified) * 100 / len(res.Ports)
+			if passRate < 10 {
+				m.Logf("warn", "%s 疑似全端口响应（TCP 复核通过 %d/%d），丢弃端口结果",
+					ds.Domain, len(verified), len(res.Ports))
+				return true
+			}
+			if len(verified) > max {
+				verified = filterCommonPorts(verified, max)
+			}
+			m.Logf("warn", "%s naabu 报告 %d 个端口，TCP 复核保留 %d",
+				ds.Domain, len(res.Ports), len(verified))
+			res.Ports = verified
+		}
+	}
+	if len(res.Ports) == 0 {
+		m.Logf("warn", "%s 复核后无有效端口，跳过", ds.Domain)
+		return true
+	}
 	for _, p := range res.Ports {
 		host := ds.Domain
 		ip := p.IP
@@ -513,6 +556,61 @@ func (m *PortScanModule) scanPortsWithNaabu(ds DomainSkip) bool {
 		}
 	}
 	return true
+}
+
+// verifyTCPPorts 用纯 Go TCP connect 复核端口，只保留真正可连接的。
+// 并发 16、单端口超时由调用方指定，避免复核本身放大流量。
+func verifyTCPPorts(host string, ports []core.PortResult, timeout time.Duration) []core.PortResult {
+	if len(ports) == 0 || strings.TrimSpace(host) == "" {
+		return nil
+	}
+	const workers = 16
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	kept := make([]core.PortResult, 0, len(ports))
+	for _, p := range ports {
+		p := p
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			addr := net.JoinHostPort(host, strconv.Itoa(p.Port))
+			conn, err := net.DialTimeout("tcp", addr, timeout)
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+			mu.Lock()
+			kept = append(kept, p)
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	return kept
+}
+
+var commonPortSet = map[int]bool{
+	21: true, 22: true, 25: true, 53: true, 80: true, 110: true, 139: true,
+	143: true, 443: true, 445: true, 3306: true, 3389: true, 5432: true,
+	6379: true, 8000: true, 8080: true, 8443: true, 8888: true, 9000: true,
+	9200: true, 11211: true,
+}
+
+// filterCommonPorts 优先保留常见端口；若一个常见端口都没有，保留前 max 个，
+// 避免把目标真实的非标准端口全部丢掉。
+func filterCommonPorts(ports []core.PortResult, max int) []core.PortResult {
+	kept := make([]core.PortResult, 0, len(ports))
+	for _, p := range ports {
+		if commonPortSet[p.Port] {
+			kept = append(kept, p)
+		}
+	}
+	if len(kept) == 0 && max > 0 && len(ports) > max {
+		kept = ports[:max]
+	}
+	return kept
 }
 
 // scanPortsFallback 在 gogo 不可用时用纯 Go TCP connect 扫描。

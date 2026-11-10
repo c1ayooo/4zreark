@@ -177,16 +177,4 @@ export const dashboardApi = {
   getTrends: (days?: number): Promise<ApiResponse<TrendData[]>> =>
     api.get('/dashboard/trends', { params: { days: days || 7 } }),
 
-  getTopVulnerabilities: (limit?: number): Promise<ApiResponse<Array<{
-    type: string
-    count: number
-    severity: string
-  }>>> =>
-    api.get('/dashboard/top-vulnerabilities', { params: { limit: limit || 10 } }),
-
-  getAssetDistribution: (): Promise<ApiResponse<Array<{
-    type: string
-    count: number
-  }>>> =>
-    api.get('/dashboard/asset-distribution'),
 }
