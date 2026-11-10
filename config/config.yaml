@@ -75,7 +75,6 @@ collection:
     - fileleak
   exclude_modules:
     - vuln_scan
-    - bruteforce
     - gogo_poc
   max_targets_for_full: 500
   # 单站开放端口超过该值时做纯 Go TCP 二次复核；复核后仍超阈值只保留常见端口。

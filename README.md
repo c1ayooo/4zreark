@@ -39,7 +39,6 @@
 
 - 提交采集：按仓库镜像/克隆拉取，按 `sentinel.collect_*` 配置限流与并发。
 - AI 判定：`sentinel.judge_model` 指定的模型，配合 `llm` 统一接入层；预算、hunk 行数、每次提交数均可配。
-- 审计队列：`sentinel.enable_audit_queue` 打开后由 worker 轮询消费。
 - 产出物不外发：PoC 与审计结论只落库，人工确认后才进入后续流程。
 
 ### 概览与资产

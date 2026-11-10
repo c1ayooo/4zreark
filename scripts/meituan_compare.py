@@ -124,12 +124,16 @@ def main():
         "failed_tasks": [t.get("id") for t in failed_tasks],
         "limitations": [
             "漏洞验证默认关闭，本次未复测漏洞；vulnerabilities 为空表示未执行，不代表已修复",
-            "外部工具 gogo/katana/spray/nuclei/httpx/naabu 在本机未安装，端口/爬虫/目录结果可能降级或缺失",
-            "raw_records 未由扫描任务写入，分阶段编排所需 raw 快照为空",
-            "JSAudit 因 nuclei keys 规则目录缺失被跳过（data/bin/nuclei/custom-templates/keys）",
-            "gogo/spray 已复制到 data/tools/linux；本轮若在任务启动后才重启，部分模块可能仍走旧路径",
+            "外部工具以 data/tools/linux 为准；gogo/katana/spray/httpx/nuclei 任一缺失时对应模块会降级或跳过",
+            "raw_records 由扫描任务写入，分阶段编排的 task_id 口径仍需核对",
+            "JSAudit 已从信息收集预设移除（nuclei keys 规则目录缺失）",
+            "端口扫描统一走 gogo，gogo 不可用时纯 Go TCP 兜底；naabu 已移除",
         ],
     }
+    if failed_tasks:
+        diff["limitations"].append(
+            "任务终态为 failed/cancelled：本报告是部分完成快照，数据不完整，不能作为完整基线"
+        )
     with open(DIFF, "w", encoding="utf-8") as f:
         json.dump(diff, f, ensure_ascii=False, indent=2)
 
@@ -161,7 +165,8 @@ def main():
 - 端点：新增 {len(added_eps)}、消失 {len(removed_eps)}
 - 结果行：新增 {len(added_res)}、消失 {len(removed_res)}
 - 任务失败/取消：{len(failed_tasks)} 个
-- 说明：若任务仍在运行，本报告为中间快照；后台会在终态后覆盖为最终版。
+- 任务状态：{'failed（数据不完整，不可作为完整基线）' if failed_tasks else 'completed / 未知'}
+- 说明：本次任务若为 failed/cancelled，报告仅代表已落库的部分结果，不能当作完整重建基线。
 
 ## 基线 / 重扫计数
 
@@ -208,7 +213,7 @@ def main():
 - 清空仅针对 project_id=1，保留项目行、用户、角色、字典、全局设置、API Key、监控规则。
 - 重新从主域 `meituan.com` 开始，未重新导入旧 502 个子域。
 - 漏洞验证、弱口令、PoC、gogo 内置 POC 默认关闭。
-- 本机未安装 gogo/katana/spray/nuclei/httpx/naabu，相关模块可能降级或缺失；子域/纯 Go 探活/指纹仍可产出。
+- 外部工具以 `data/tools/linux` 为准；gogo/katana/spray/httpx/nuclei 缺失时对应模块降级或跳过；端口统一走 gogo，naabu 已移除。
 - 原始 JSON 与 diff：`{DIFF}`。
 
 ## 结论

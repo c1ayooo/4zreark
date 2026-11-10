@@ -107,12 +107,17 @@ type PipelineConfig struct {
 	// worker 不持库也能复现同一站点在跨阶段/跨任务使用同一 UA。
 	UASeed string `json:"ua_seed,omitempty"`
 
-	// PortBackend 选择端口发现后端：auto（默认）/naabu/gogo/native。
-	// auto：信息收集优先 naabu，漏洞/服务识别任务保留 gogo，缺失逐级回退。
+	// PortBackend 选择端口发现后端：gogo（默认）/native（强制纯 Go）。
+	// naabu 已移除；gogo 缺失时 port_module 自动回退纯 Go TCP。
 	PortBackend string `json:"port_backend,omitempty"`
 
 	// MaxPortsPerHost 单站开放端口阈值；0 表示不做二次复核。
 	MaxPortsPerHost int `json:"max_ports_per_host,omitempty"`
+
+	// 项目级爬虫预算：防止「100 页 × N 站」无限膨胀。
+	// CrawlTotalPages=0 表示不限制总页数；CrawlDeadlineMinutes=0 表示不设时间上限。
+	CrawlTotalPages      int `json:"crawl_total_pages,omitempty"`
+	CrawlDeadlineMinutes int `json:"crawl_deadline_minutes,omitempty"`
 }
 
 // rate 返回生效的每秒请求上限。默认 10：目标面大的项目（集团子公司批量
@@ -194,8 +199,8 @@ type StreamingPipeline struct {
 	jsAuditModule     *JSAuditModule
 	dirScanModule     *DirScanModule
 	sensitiveModule   *SensitiveModule
-	fileLeakModule  *FileLeakModule
-	vhostModule     *VhostModule
+	fileLeakModule    *FileLeakModule
+	vhostModule       *VhostModule
 	wihModule         *WihProbeModule
 	httpProbeModule   *HttpProbeModule
 
@@ -511,6 +516,13 @@ func (p *StreamingPipeline) buildModuleChain() error {
 				p.crawlerModule.katanaScanner.MaxDomainPages = p.config.MaxPages
 			}
 		}
+		if p.config.CrawlTotalPages > 0 || p.config.CrawlDeadlineMinutes > 0 {
+			var deadline time.Time
+			if p.config.CrawlDeadlineMinutes > 0 {
+				deadline = time.Now().Add(time.Duration(p.config.CrawlDeadlineMinutes) * time.Minute)
+			}
+			p.crawlerModule.SetCrawlBudget(p.config.CrawlTotalPages, deadline)
+		}
 		p.crawlerModule.SetScope(p.scope)
 		p.crawlerModule.SetUASeed(p.config.UASeed)
 		p.crawlerModule.SetInput(make(chan interface{}, 500))
@@ -541,6 +553,7 @@ func (p *StreamingPipeline) buildModuleChain() error {
 	// vhost 绑定发现模块：链位置在端口扫描与指纹之间，吃 PortAlive。
 	if p.config.Vhost {
 		p.vhostModule = NewVhostModule(p.ctx, lastModule)
+		p.vhostModule.SetScope(p.scope)
 		p.vhostModule.SetInput(make(chan interface{}, 500))
 		p.vhostModule.SetProgressTracker(p.progressTracker)
 		lastModule = p.vhostModule

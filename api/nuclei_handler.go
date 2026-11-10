@@ -219,6 +219,11 @@ func (h *NucleiHandler) ScanTarget(c *gin.Context) {
 		return
 	}
 
+	if bad := service.DeniedTargets([]string{req.Target}); len(bad) > 0 {
+		utils.BadRequest(c, "目标命中全局禁扫黑名单，拒绝扫描: "+strings.Join(bad, "、"))
+		return
+	}
+
 	scanner := vulnscan.NewNucleiCLIScanner(dir)
 	if !scanner.IsAvailable() {
 		utils.InternalError(c, "nuclei CLI 不可用")

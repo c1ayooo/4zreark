@@ -50,13 +50,15 @@ func CollectionModuleSet() ModuleSet {
 		PortScan:    true,
 		Fingerprint: true,
 		Crawler:     true,
-		JSAudit:     true,
-		APIProbe:    true,
-		DirScan:     true,
-		Sensitive:   true,
-		FileLeak:    true,
-		VulnScan:    false,
-		GogoPOC:     false,
+		// JSAudit 使用 nuclei 官方 file/keys 规则（156 条），
+		// 执行器会按 custom-templates/keys → templates/file/keys 回退解析。
+		JSAudit:   true,
+		APIProbe:  true,
+		DirScan:   true,
+		Sensitive: true,
+		FileLeak:  true,
+		VulnScan:  false,
+		GogoPOC:   false,
 	}
 	cfg := config.Loaded()
 	if cfg != nil {
@@ -135,6 +137,10 @@ func ModuleSetFromScanTypes(scanTypes []string) ModuleSet {
 			ms.DirScan = true
 		case "sensitive":
 			ms.Sensitive = true
+		case "vhost", "findvhost":
+			ms.Vhost = true
+		case "file_leak", "fileleak":
+			ms.FileLeak = true
 		case "api_probe", "wih":
 			ms.APIProbe = true
 		case "js_audit", "js_secret", "jsaudit":

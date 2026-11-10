@@ -258,21 +258,6 @@ func (h *GitHubMonitorHandler) ListFindings(c *gin.Context) {
 	if !ok {
 		return
 	}
-	r := repo.Default().GitHubMonitor()
-	rules, err := r.ListRules(c.Request.Context(), projectID)
-	if err != nil {
-		utils.InternalError(c, err.Error())
-		return
-	}
-	projectName, err := r.ProjectName(c.Request.Context(), projectID)
-	if err != nil {
-		utils.InternalError(c, err.Error())
-		return
-	}
-	names := make([]string, 0, len(rules))
-	for _, rule := range rules {
-		names = append(names, projectName+": "+rule.Name)
-	}
 	store := service.GitHubMonitorStore()
 	if store == nil {
 		utils.InternalError(c, "监控服务未就绪")
@@ -280,13 +265,15 @@ func (h *GitHubMonitorHandler) ListFindings(c *gin.Context) {
 	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	// 项目隔离以 findings.project_id 为准；不再依赖“项目名: 规则名”前缀，
+	// 规则改名/删除后历史命中仍归属原项目。
 	filter := githubleak.ListFilter{
+		ProjectID: projectID,
 		Status:    c.Query("status"),
 		Keyword:   c.Query("keyword"),
 		Query:     c.Query("q"),
 		Page:      page,
 		PageSize:  pageSize,
-		RuleNames: names,
 	}
 	result, err := store.List(c.Request.Context(), filter)
 	if err != nil {
@@ -307,14 +294,22 @@ func (h *GitHubMonitorHandler) UpdateFindingStatus(c *gin.Context) {
 		utils.BadRequest(c, "请求体不合法")
 		return
 	}
+	projectID, ok := h.projectID(c)
+	if !ok {
+		return
+	}
 	leakSvc := service.GitHubLeakService()
 	store := service.GitHubMonitorStore()
 	if store == nil || leakSvc == nil {
 		utils.InternalError(c, "监控服务未就绪")
 		return
 	}
-	finding, err := store.UpdateStatus(c.Request.Context(), c.Param("fid"), req.Status)
+	finding, err := store.UpdateStatusForProject(c.Request.Context(), c.Param("fid"), req.Status, projectID)
 	if err != nil {
+		if err == githubleak.ErrNotFound {
+			utils.BadRequest(c, "命中不存在或不属于当前项目")
+			return
+		}
 		utils.InternalError(c, err.Error())
 		return
 	}

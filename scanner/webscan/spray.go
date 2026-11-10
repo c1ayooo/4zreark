@@ -87,7 +87,7 @@ type SprayJSONOutput struct {
 
 // NewSprayScanner 创建 Spray 扫描器
 func NewSprayScanner() *SprayScanner {
-	// 与 gogo/katana/naabu 共用 toolruntime，确保统一托管目录优先。
+	// 与 gogo/katana 共用 toolruntime，确保统一托管目录优先。
 	binPath := toolruntime.Default().ResolveToolPath("spray")
 
 	return &SprayScanner{

@@ -154,29 +154,6 @@ var Specs = []ToolSpec{
 		AutoUpdateByDefault: true,
 	},
 	{
-		Name:           "naabu",
-		Repo:           "projectdiscovery/naabu",
-		Description:    "端口发现（connect 模式，JSON 输出）",
-		DefaultVersion: "2.6.1",
-
-		AssetName: func(version, goos, goarch string) (string, error) {
-			if goos == "darwin" && (goarch == "386" || goarch == "arm") {
-				return "", fmt.Errorf("naabu 没有 darwin/%s 官方构建", goarch)
-			}
-			return fmt.Sprintf("naabu_%s_%s_%s.zip", trimV(version), goos, goarch), nil
-		},
-		ChecksumAsset:    "", // 清单名带版本号，checksumAssetName 动态拼
-		Archive:          ArchiveZip,
-		VersionProbeArgs: []string{"-version"},
-		HelpArgs:         []string{"-h"},
-
-		// scanner/portscan/naabu_runner.go buildArgs；connect 模式不需要 root。
-		RequiredFlags: []string{"-host", "-p", "-json", "-silent", "-o",
-			"-rate", "-c", "-timeout", "-scan-type", "-no-color",
-			"-verify", "-exclude-cdn"},
-		AutoUpdateByDefault: true,
-	},
-	{
 		Name:           "rem",
 		Repo:           "chainreactors/rem",
 		Description:    "节点部署反向隧道（gost 替代）",
@@ -229,7 +206,7 @@ func (t ToolSpec) checksumAssetName(version string) string {
 	switch t.Name {
 	case "katana":
 		return fmt.Sprintf("katana-%s-checksums.txt", trimV(version))
-	case "httpx", "naabu":
+	case "httpx":
 		// projectdiscovery 系的清单名是 <tool>_<ver>_checksums.txt。
 		return fmt.Sprintf("%s_%s_checksums.txt", t.Name, trimV(version))
 	}

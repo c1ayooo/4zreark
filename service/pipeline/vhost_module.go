@@ -27,14 +27,15 @@ import (
 	"time"
 
 	"github.com/c1ayooo/4zreark/internal/useragent"
+	"github.com/c1ayooo/4zreark/scanner/scope"
 )
 
 var vhostTitleRe = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 
 const (
 	vhostTimeout   = 8 * time.Second
-	vhostMaxProbes = 300  // 单任务探测预算
-	vhostMaxCands  = 100  // 单 IP:端口 候选域名上限
+	vhostMaxProbes = 300 // 单任务探测预算
+	vhostMaxCands  = 100 // 单 IP:端口 候选域名上限
 	vhostConns     = 4
 )
 
@@ -54,7 +55,12 @@ type VhostModule struct {
 	cands     map[string]bool
 	ownHostIP map[string]map[string]bool // host -> ip 集合：已是真实绑定的组合不重复报
 	probes    int
+	// scope 是任务授权边界（含全局黑名单）；候选域名越界/命中黑名单直接不探测。
+	scope *scope.Scope
 }
+
+// SetScope 设置任务授权边界，vhost 必须继承全局禁扫黑名单。
+func (m *VhostModule) SetScope(s *scope.Scope) { m.scope = s }
 
 func NewVhostModule(ctx context.Context, nextModule ModuleRunner) *VhostModule {
 	return &VhostModule{
@@ -141,6 +147,9 @@ func (m *VhostModule) observe(data interface{}) {
 		if v.IP == "" || v.Port == "" {
 			return
 		}
+		if m.scope != nil && !m.scope.AllowsHost(v.Host) {
+			return
+		}
 		if vhostWebPorts[v.Port] {
 			m.targets[v.IP+"|"+v.Port] = vhostTarget{ip: v.IP, port: v.Port}
 		}
@@ -150,6 +159,9 @@ func (m *VhostModule) observe(data interface{}) {
 		}
 		m.ownHostIP[v.Host][v.IP] = true
 	case DomainResolve:
+		if m.scope != nil && !m.scope.AllowsHost(v.Domain) {
+			return
+		}
 		for _, ip := range v.IP {
 			if ip == "" {
 				continue
@@ -161,6 +173,9 @@ func (m *VhostModule) observe(data interface{}) {
 			m.ownHostIP[v.Domain][ip] = true
 		}
 	case DomainSkip:
+		if m.scope != nil && !m.scope.AllowsHost(v.Domain) {
+			return
+		}
 		m.cands[strings.ToLower(strings.TrimSuffix(v.Domain, "."))] = true
 	}
 }
@@ -172,9 +187,13 @@ func (m *VhostModule) probeAll() {
 	delete(m.cands, "")
 	candidates := make([]string, 0, len(m.cands))
 	for c := range m.cands {
-		if !strings.HasSuffix(c, ".invalid") {
-			candidates = append(candidates, c)
+		if strings.HasSuffix(c, ".invalid") {
+			continue
 		}
+		if m.scope != nil && !m.scope.AllowsHost(c) {
+			continue
+		}
+		candidates = append(candidates, c)
 	}
 	targets := make([]vhostTarget, 0, len(m.targets))
 	for _, t := range m.targets {

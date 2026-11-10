@@ -160,12 +160,15 @@ func (a *AssetRepo) siteVulns(ctx context.Context, site *Site) ([]*AssetVuln, er
 	// host 是域名/IP，只需转义正则元数据点号。
 	escaped := strings.ReplaceAll(host, ".", `\.`)
 	pattern := `(^|://|[^a-z0-9.-])` + escaped + `(:|/|$)`
+	// vulnerabilities 没有 project_id 列，只有 task_id；用任务归属做项目隔离。
+	// 手工扫描产生的无 task_id 漏洞不进入资产摘要，避免跨项目串数据。
 	rows, err := a.r.pool.Query(ctx, `
-		SELECT id, name, severity, status, type, template_id, target, cve_id, created_at
-		FROM vulnerabilities
-		WHERE target ~ $1
-		ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, created_at DESC
-		LIMIT 200`, pattern)
+		SELECT v.id, v.name, v.severity, v.status, v.type, v.template_id, v.target, v.cve_id, v.created_at
+		FROM vulnerabilities v
+		JOIN tasks t ON t.id = v.task_id
+		WHERE v.target ~ $1 AND t.project_id::text = $2
+		ORDER BY CASE v.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, v.created_at DESC
+		LIMIT 200`, pattern, fmt.Sprintf("%d", site.ProjectID))
 	if err != nil {
 		return nil, err
 	}

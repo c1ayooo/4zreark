@@ -890,6 +890,25 @@ func (e *TaskExecutor) buildCustomConfig(task *models.Task) *pipeline.PipelineCo
 		config.SensitiveScan = true
 	}
 
+	if scanTypes["vhost"] || scanTypes["findvhost"] {
+		config.Vhost = true
+		// vhost 吃 PortAlive，必须有端口和 HTTP 端点做基线。
+		if !config.PortScan {
+			config.PortScan = true
+			config.PortScanMode = "quick"
+		}
+		config.Fingerprint = true
+	}
+
+	if scanTypes["file_leak"] || scanTypes["fileleak"] {
+		config.FileLeak = true
+		if !config.PortScan {
+			config.PortScan = true
+			config.PortScanMode = "quick"
+		}
+		config.Fingerprint = true
+	}
+
 	if scanTypes["api_probe"] || scanTypes["wih"] {
 		config.ApiProbe = true
 	}
@@ -915,12 +934,15 @@ func buildCollectionConfig(task *models.Task) *pipeline.PipelineConfig {
 	collectionMaxPorts := config.GetConfig().Collection.MaxPortsPerHost
 	config := pipeline.DefaultPipelineConfig()
 	pipeline.CollectionModuleSet().ApplyTo(config)
-	// 信息收集优先 naabu 做端口发现；naabu 缺失/失败时 port_module 回退 gogo/纯 Go。
-	config.PortBackend = "naabu"
+	// 端口统一走 gogo（缺失时纯 Go TCP 兜底），不再使用 naabu。
+	config.PortBackend = "gogo"
 	config.MaxPortsPerHost = collectionMaxPorts
-	// 信息收集默认只扫常见端口；top1000 对 CDN 目标会被 naabu 判成全开。
 	config.PortScanMode = "quick"
 	config.PortRange = "1-1000"
+	// 爬虫可以慢，但要覆盖全部站点：总页数预算给到 20 万页、时间 12 小时，
+	// 足够 482 站 × 100 页，同时防止异常站点无限膨胀。
+	config.CrawlTotalPages = 200000
+	config.CrawlDeadlineMinutes = 720
 	config.SkipCDN = true
 	config.SubdomainMaxEnumTime = 15
 	config.SubdomainResolveIP = true
@@ -929,6 +951,35 @@ func buildCollectionConfig(task *models.Task) *pipeline.PipelineConfig {
 		config.PortScan, config.Fingerprint, config.WebCrawler, config.JsAudit, config.ApiProbe,
 		config.DirScan, config.SensitiveScan, config.VulnScan)
 	return config
+}
+
+// resolveJSAuditTemplatesDir 按优先级找 JS 密钥规则目录：
+// 1) 用户自定义 custom-templates/keys；2) nuclei 官方 templates/file/keys；3) templates/keys。
+// 官方模板随 nuclei 更新，优先回退到它，避免把 156 条规则复制进 custom 目录。
+func resolveJSAuditTemplatesDir(rt *NucleiRuntimeService) string {
+	if rt == nil {
+		return ""
+	}
+	candidates := []string{
+		filepath.Join(rt.CustomTemplatesDir(), "keys"),
+		filepath.Join(rt.TemplatesDir(), "file", "keys"),
+		filepath.Join(rt.TemplatesDir(), "keys"),
+	}
+	for _, dir := range candidates {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() && (strings.HasSuffix(e.Name(), ".yaml") || strings.HasSuffix(e.Name(), ".yml")) {
+				return dir
+			}
+		}
+	}
+	return ""
 }
 
 // executeStreamingPipeline 使用 StreamingPipeline 执行任务
@@ -1098,12 +1149,12 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 	// 相对路径在这里不成立，必须用运行时算出的绝对路径。
 	if config.JsAudit {
 		if rt := GetNucleiRuntimeService(); rt != nil {
-			keysDir := filepath.Join(rt.CustomTemplatesDir(), "keys")
-			if st, serr := os.Stat(keysDir); serr == nil && st.IsDir() {
+			if keysDir := resolveJSAuditTemplatesDir(rt); keysDir != "" {
 				config.NucleiCustomTemplatesDir = keysDir
+				log.Printf("[TaskExecutor] JS 审计使用 keys 规则目录: %s", keysDir)
 			} else {
-				log.Printf("[TaskExecutor] JS 审计已开启但 keys 规则目录不存在: %s", keysDir)
-				e.logAction(task, "JSAudit", "warn", "JS 审计已开启但 keys 规则目录不存在，已跳过该模块: "+keysDir)
+				log.Printf("[TaskExecutor] JS 审计已开启但未找到 keys 规则目录（custom-templates/keys 或 templates/file/keys）")
+				e.logAction(task, "JSAudit", "warn", "JS 审计已开启但未找到 keys 规则目录，已跳过该模块")
 				config.JsAudit = false
 			}
 		} else {
@@ -1301,7 +1352,7 @@ func (e *TaskExecutor) executeStreamingPipeline(parent context.Context, task *mo
 	touchStop := make(chan struct{})
 	defer close(touchStop)
 	go func() {
-		touch := time.NewTicker(4 * time.Minute)
+		touch := time.NewTicker(time.Minute)
 		defer touch.Stop()
 		for {
 			select {

@@ -584,7 +584,7 @@ func (m *Manager) EnsureInstalled(ctx context.Context, name string) (string, err
 		return "", fmt.Errorf("未知工具: %s", name)
 	}
 	// 系统 PATH 已有不低于默认版本的二进制时，不再触发项目内补装。
-	// 这样没有 checksums 清单的工具（如当前 naabu）不会反复安装失败、
+	// 这样没有 checksums 清单的工具不会反复安装失败、
 	// 也不会因为补装失败阻断运行时。
 	if p := m.ResolveToolPath(name); p != "" {
 		minVersion := spec.MinVersion

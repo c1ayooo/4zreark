@@ -1,7 +1,6 @@
 package api
 
 import (
-
 	"github.com/c1ayooo/4zreark/repo"
 	"github.com/c1ayooo/4zreark/service/queue"
 	"github.com/c1ayooo/4zreark/utils"
@@ -190,46 +189,21 @@ func (h *QueueHandler) ClearDeadLetter(c *gin.Context) {
 	utils.SuccessWithMessage(c, "死信队列已清空", nil)
 }
 
-// GetTaskTypes 获取支持的任务类型
-// 只列已注册 handler 的类型：此前宣告的 fingerprint_scan/dir_scan 没有
-// handler，提交后只会空转进死信。注意 port_scan/vuln_scan/subdomain_enum
-// 目前是演示实现（直接返回 completed）；真实扫描走 /api/tasks。
+// GetTaskTypes 获取支持的任务类型。
+// 只返回真实注册过的 handler；通用队列没有内置 demo handler，
+// 未注册时返回空列表，避免前端把演示类型当成可执行任务。
 // @Summary 获取支持的任务类型
 // @Tags Queue
 // @Security ApiKeyAuth
 // @Success 200 {object} utils.Response
 // @Router /api/queue/types [get]
 func (h *QueueHandler) GetTaskTypes(c *gin.Context) {
-	registered := map[string]map[string]interface{}{
-		"port_scan": {
-			"type":           "port_scan",
-			"name":           "端口扫描",
-			"description":    "对目标进行端口扫描（演示实现，真实扫描走 /api/tasks）",
-			"payload_schema": map[string]string{"target": "目标IP或域名", "ports": "端口范围，如 1-1000"},
-		},
-		"vuln_scan": {
-			"type":           "vuln_scan",
-			"name":           "漏洞扫描",
-			"description":    "对目标进行漏洞扫描（演示实现，真实扫描走 /api/tasks）",
-			"payload_schema": map[string]string{"target": "目标URL", "poc_ids": "POC ID列表 (可选)"},
-		},
-		"subdomain_enum": {
-			"type":           "subdomain_enum",
-			"name":           "子域名枚举",
-			"description":    "对域名进行子域名枚举（演示实现，真实扫描走 /api/tasks）",
-			"payload_schema": map[string]string{"domain": "目标域名", "mode": "扫描模式: quick/full"},
-		},
-	}
-
-	types := make([]map[string]interface{}, 0, len(registered))
+	types := make([]map[string]interface{}, 0)
 	for _, t := range h.taskQueue.RegisteredTypes() {
-		if meta, ok := registered[t]; ok {
-			types = append(types, meta)
-		} else {
-			types = append(types, map[string]interface{}{"type": t, "name": t, "description": "自定义任务类型"})
-		}
+		types = append(types, map[string]interface{}{
+			"type": t, "name": t, "description": "已注册任务类型",
+		})
 	}
-
 	utils.Success(c, types)
 }
 

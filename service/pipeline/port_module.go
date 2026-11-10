@@ -20,10 +20,9 @@ import (
 // 接收预处理后的域名，执行端口扫描，输出存活端口
 type PortScanModule struct {
 	BaseModule
-	gogoScanner  *portscan.GoGoScanner
-	naabuScanner *portscan.NaabuScanner
-	// portBackend: "" / gogo（默认，服务识别与漏洞）| naabu | auto | native。
-	// 信息收集预设由 executor 设为 naabu，端口发现优先用它；失败自动回退。
+	gogoScanner *portscan.GoGoScanner
+	// portBackend: "" / gogo（默认，服务识别与漏洞）| native（强制纯 Go）。
+	// naabu 已移除，端口统一由 gogo 负责，缺失时纯 Go TCP 兜底。
 	portBackend string
 	resultChan  chan interface{}
 	portRange   string
@@ -44,8 +43,8 @@ type PortScanModule struct {
 // SetGogoPOC 设置是否启用 gogo 内置 poc 命中转漏洞结果。
 func (m *PortScanModule) SetGogoPOC(enabled bool) { m.enableGogoPOC = enabled }
 
-// SetPortBackend 选择端口发现后端：naabu/auto 优先 naabu，gogo/空保持旧路径，
-// native 强制纯 Go TCP。无法识别的值按 gogo 处理。
+// SetPortBackend 选择端口发现后端：gogo/空走 gogo，native 强制纯 Go TCP。
+// naabu 已移除，无法识别的值按 gogo 处理。
 func (m *PortScanModule) SetPortBackend(backend string) {
 	m.portBackend = strings.ToLower(strings.TrimSpace(backend))
 }
@@ -113,12 +112,11 @@ func NewPortScanModule(ctx context.Context, nextModule ModuleRunner, portRange, 
 			nextModule: nextModule,
 			dupChecker: NewDuplicateChecker(),
 		},
-		gogoScanner:  portscan.NewGoGoScanner(),
-		naabuScanner: portscan.NewNaabuScanner(),
-		resultChan:   make(chan interface{}, 1000),
-		portRange:    portRange,
-		scanMode:     scanMode,
-		maxThreads:   portThreadCap(scanMode),
+		gogoScanner: portscan.NewGoGoScanner(),
+		resultChan:  make(chan interface{}, 1000),
+		portRange:   portRange,
+		scanMode:    scanMode,
+		maxThreads:  portThreadCap(scanMode),
 	}
 	m.applyThreadCap()
 	return m
@@ -311,16 +309,9 @@ func (m *PortScanModule) scanPorts(ds DomainSkip) {
 		return
 	}
 
-	// 端口发现后端：信息收集预设优先 naabu（L4 connect），
-	// gogo 继续负责服务/协议识别与内置 poc；naabu 缺失或失败时回退 gogo。
-	if m.useNaabu() {
-		if m.scanPortsWithNaabu(ds) {
-			return
-		}
-		log.Printf("[%s] naabu 未产出结果，回退 gogo", m.name)
-	}
-
+	// 端口统一走 gogo；gogo 不可用时纯 Go TCP 兜底，不再维护 naabu 分支。
 	if !m.gogoScanner.IsAvailable() {
+		m.Logf("warn", "%s gogo 不可用，端口扫描回退纯 Go TCP", ds.Domain)
 		m.scanPortsFallback(ctx, ds)
 		return
 	}
@@ -456,108 +447,6 @@ func intToString(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-// useNaabu 判断当前任务是否走 naabu 端口发现。
-func (m *PortScanModule) useNaabu() bool {
-	if m.naabuScanner == nil || !m.naabuScanner.IsAvailable() {
-		return false
-	}
-	switch m.portBackend {
-	case "naabu", "auto":
-		return true
-	}
-	return false
-}
-
-// naabuPorts 把平台档位映射成 naabu -p 的参数。
-// naabu 不像 gogo 有 top1/top2 别名，直接给范围或内置端口表。
-func (m *PortScanModule) naabuPorts() string {
-	switch m.scanMode {
-	case "full":
-		return "1-65535"
-	case "custom":
-		if s := strings.TrimSpace(m.portRange); s != "" {
-			return s
-		}
-	case "quick":
-		// 信息收集默认只扫常见端口：naabu connect 对 CDN/全响应目标
-		// 用 top1000 会把大量高端口误判为 open（997 端口问题）。
-		return "80,443,8080,8443,8000,8888,3000,5000,9000,22,21,25,3306,6379,5432,9200,11211"
-	case "top1000", "top2000", "top5000":
-		if s := topNPorts(m.scanMode); s != "" {
-			return s
-		}
-	}
-	return "1-1000"
-}
-
-// scanPortsWithNaabu 用 naabu 做端口发现。返回 true 表示已处理（成功或无开放
-// 端口），调用方不再回退 gogo；返回 false 时由调用方继续走 gogo/纯 Go。
-func (m *PortScanModule) scanPortsWithNaabu(ds DomainSkip) bool {
-	ports := m.naabuPorts()
-	if ports == "" {
-		return false
-	}
-	ctx, cancel := context.WithTimeout(m.ctx, 10*time.Minute)
-	defer cancel()
-
-	res, err := m.naabuScanner.ScanPorts(ctx, ds.Domain, ports)
-	if err != nil {
-		m.Logf("warn", "%s naabu 端口发现失败，回退 gogo：%v", ds.Domain, err)
-		return false
-	}
-	if res == nil || len(res.Ports) == 0 {
-		// 无开放端口也是有效结论：不回退 gogo 再扫一遍，避免重复流量。
-		m.Logf("info", "%s naabu 未发现开放端口", ds.Domain)
-		return true
-	}
-	m.Logf("info", "%s naabu 发现 %d 个开放端口", ds.Domain, len(res.Ports))
-
-	// 单站端口数异常时做纯 Go TCP 二次复核：naabu 的 connect 模式对
-	// CDN/全响应目标会把 filtered 判成 open，997 端口就是这样来的。
-	// 信息收集阶段对所有 naabu 结果都复核：CDN 目标会对常见端口也全响应，
-	// 仅靠“超过 200 才复核”挡不住 25/3306/6379 这类假 open。
-	if max := m.maxPortsPerHost; max > 0 && len(res.Ports) > 0 {
-		verifyHost := ds.Domain
-		if ds.CIDR && res.Ports[0].IP != "" {
-			verifyHost = res.Ports[0].IP
-		}
-		if verifyHost != "" {
-			verified := verifyTCPPorts(verifyHost, res.Ports, 2*time.Second)
-			passRate := len(verified) * 100 / len(res.Ports)
-			if passRate < 10 {
-				m.Logf("warn", "%s 疑似全端口响应（TCP 复核通过 %d/%d），丢弃端口结果",
-					ds.Domain, len(verified), len(res.Ports))
-				return true
-			}
-			if len(verified) > max {
-				verified = filterCommonPorts(verified, max)
-			}
-			m.Logf("warn", "%s naabu 报告 %d 个端口，TCP 复核保留 %d",
-				ds.Domain, len(res.Ports), len(verified))
-			res.Ports = verified
-		}
-	}
-	if len(res.Ports) == 0 {
-		m.Logf("warn", "%s 复核后无有效端口，跳过", ds.Domain)
-		return true
-	}
-	for _, p := range res.Ports {
-		host := ds.Domain
-		ip := p.IP
-		if ds.CIDR && ip != "" {
-			host = ip
-		}
-		select {
-		case <-m.ctx.Done():
-			return true
-		case m.resultChan <- PortAlive{
-			Host: host, IP: ip, Port: intToString(p.Port), Service: p.Service,
-		}:
-		}
-	}
-	return true
-}
-
 // verifyTCPPorts 用纯 Go TCP connect 复核端口，只保留真正可连接的。
 // 并发 16、单端口超时由调用方指定，避免复核本身放大流量。
 func verifyTCPPorts(host string, ports []core.PortResult, timeout time.Duration) []core.PortResult {
@@ -626,11 +515,13 @@ func (m *PortScanModule) scanPortsFallback(ctx context.Context, ds DomainSkip) {
 		ips = resolved
 	}
 	if len(ips) == 0 {
+		m.Logf("warn", "%s 端口扫描无可用 IP，已跳过", ds.Domain)
 		return
 	}
 
 	ports := m.fallbackPorts()
 	if len(ports) == 0 {
+		m.Logf("warn", "%s 端口扫描无端口集，已跳过", ds.Domain)
 		return
 	}
 

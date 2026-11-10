@@ -64,7 +64,7 @@ S1 域名收集（不主动探目标） → S2 探活（httpx / 纯 Go）
 ## 扫描器与工具
 
 - 子域枚举、DNS、指纹、存活验证为纯 Go 实现（不调 subfinder/ksubdomain）。
-- 外部二进制：`gogo`（端口/协议）、`naabu`（端口发现）、`spray`（目录）、`katana`（爬虫）、
+- 外部二进制：`gogo`（端口/协议）、`spray`（目录）、`katana`（爬虫）、
   `nuclei`（漏洞）、`httpx`（探活）、`rem`（反连）、`chromium`（报告渲染）。
 - 统一路径：`ZRE_TOOL_<NAME>_PATH` → `data/tools/<os>/<name>`（托管）→
   `tools/<os>/<name>`（vendored）→ `PATH`；节点经清单自动同步。

@@ -280,16 +280,19 @@ func (s *IntelService) build(cfg intelSettings) error {
 			}),
 		))
 	}
-	if cfg.NotifyEnabled {
-		opts = append(opts, vulnmonitor.WithNotifyHook(func(newHigh []string) {
-			if len(newHigh) == 0 {
-				return
-			}
-			log.Printf("[intel] 本轮新增高危/严重情报 %d 条，首条: %s", len(newHigh), newHigh[0])
+	// 资产匹配不依赖通知开关：每轮有新增高危情报就异步匹配；
+	// 通知开关只控制是否发消息。此前匹配被裹在 NotifyEnabled 分支里，
+	// 关闭通知时定时轮询不会触发匹配。
+	opts = append(opts, vulnmonitor.WithNotifyHook(func(newHigh []string) {
+		if len(newHigh) == 0 {
+			return
+		}
+		log.Printf("[intel] 本轮新增高危/严重情报 %d 条，首条: %s", len(newHigh), newHigh[0])
+		if cfg.NotifyEnabled {
 			notifyIntelHigh(newHigh)
-			go runIntelAssetMatch()
-		}))
-	}
+		}
+		go runIntelAssetMatch()
+	}))
 	s.monitor = vulnmonitor.New(&intelStore{repo: st, stats: s.counter}, opts...)
 	return nil
 }

@@ -22,7 +22,7 @@ type CollectionEnv struct {
 func EvaluateCollectionEnv(targets int, modeOverride ...string) CollectionEnv {
 	cfg := config.GetConfig().Collection
 	env := CollectionEnv{Tools: make(map[string]bool)}
-	for _, name := range []string{"gogo", "naabu", "katana", "spray", "httpx", "nuclei"} {
+	for _, name := range []string{"gogo", "katana", "spray", "httpx", "nuclei"} {
 		env.Tools[name] = strings.TrimSpace(toolruntime.Default().ResolveToolPath(name)) != ""
 	}
 
@@ -47,11 +47,11 @@ func EvaluateCollectionEnv(targets int, modeOverride ...string) CollectionEnv {
 		env.Stage = true
 		env.Reasons = append(env.Reasons, "katana 不可用")
 	}
-	if !env.Tools["gogo"] && !env.Tools["naabu"] {
+	if !env.Tools["gogo"] {
 		env.Stage = true
-		env.Reasons = append(env.Reasons, "gogo/naabu 均不可用，端口阶段需要纯 Go 兜底并降档")
+		env.Reasons = append(env.Reasons, "gogo 不可用，端口阶段需要纯 Go 兜底并降档")
 	}
-	if !env.Tools["httpx"] && !env.Tools["gogo"] && !env.Tools["naabu"] {
+	if !env.Tools["httpx"] && !env.Tools["gogo"] {
 		env.Stage = true
 		env.Reasons = append(env.Reasons, "探活工具全部缺失")
 	}

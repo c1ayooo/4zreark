@@ -88,9 +88,9 @@ func TestAssetNames(t *testing.T) {
 		t.Errorf("katana checksum asset = %s", got)
 	}
 
-	// httpx/naabu 走 projectdiscovery 的 <tool>_<ver>_<os>_<arch>.zip 与
-	// <tool>_<ver>_checksums.txt 命名；这两个断言防止上游资产名漂移后静默装不上。
-	for _, name := range []string{"httpx", "naabu"} {
+	// httpx 走 projectdiscovery 的 <tool>_<ver>_<os>_<arch>.zip 与
+	// <tool>_<ver>_checksums.txt 命名；断言防止上游资产名漂移后静默装不上。
+	for _, name := range []string{"httpx"} {
 		spec, ok := Spec(name)
 		if !ok {
 			t.Fatalf("缺少受管工具 %s 的 Spec", name)

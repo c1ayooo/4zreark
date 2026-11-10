@@ -74,8 +74,20 @@ ALTER TABLE github_leak_findings ADD COLUMN IF NOT EXISTS secret_key TEXT NOT NU
 ALTER TABLE github_leak_findings ADD COLUMN IF NOT EXISTS verify_status TEXT NOT NULL DEFAULT '';
 ALTER TABLE github_leak_findings ADD COLUMN IF NOT EXISTS verify_evidence TEXT NOT NULL DEFAULT '';
 ALTER TABLE github_leak_findings ADD COLUMN IF NOT EXISTS source_updated_at TIMESTAMPTZ;
+-- 项目隔离：命中必须归属到产生它的项目规则，避免全局表跨项目串数据。
+ALTER TABLE github_leak_findings ADD COLUMN IF NOT EXISTS project_id BIGINT NOT NULL DEFAULT 0;
+-- 存量数据按“项目名: 规则名”前缀回填；回填不到的历史行保留 project_id=0，
+-- 仅全局管理视图可见，不再进入任何项目面板。
+UPDATE github_leak_findings f
+   SET project_id = p.id
+  FROM projects p
+ WHERE f.project_id = 0
+   AND f.rule_name LIKE p.name || ':%';
+CREATE INDEX IF NOT EXISTS github_leak_findings_project_idx
+ ON github_leak_findings(project_id, last_seen_at DESC);
+DROP INDEX IF EXISTS github_leak_findings_identity_idx;
 CREATE UNIQUE INDEX IF NOT EXISTS github_leak_findings_identity_idx
- ON github_leak_findings(repository,path,blob_sha,keyword,secret_type,line_number,fingerprint);
+ ON github_leak_findings(project_id,repository,path,blob_sha,keyword,secret_type,line_number,fingerprint);
 CREATE INDEX IF NOT EXISTS github_leak_findings_status_idx ON github_leak_findings(status,last_seen_at DESC);
 CREATE INDEX IF NOT EXISTS github_leak_findings_keyword_idx ON github_leak_findings(keyword,last_seen_at DESC);
 CREATE INDEX IF NOT EXISTS github_leak_findings_confidence_idx ON github_leak_findings(confidence,last_seen_at DESC);
@@ -230,9 +242,10 @@ func (s *Store) UpsertCandidates(ctx context.Context, candidates []Candidate, se
 	defer func() { _ = tx.Rollback() }()
 	stmt, err := tx.PrepareContext(ctx, `
 INSERT INTO github_leak_findings
- (id,status,rule_name,keyword,repository,path,blob_sha,line_number,secret_type,confidence,severity,fingerprint,masked_excerpt,html_url,secret_value,secret_key,source_updated_at,first_seen_at,last_seen_at)
-VALUES($1,'new',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17)
-ON CONFLICT(repository,path,blob_sha,keyword,secret_type,line_number,fingerprint) DO UPDATE SET
+ (id,project_id,status,rule_name,keyword,repository,path,blob_sha,line_number,secret_type,confidence,severity,fingerprint,masked_excerpt,html_url,secret_value,secret_key,source_updated_at,first_seen_at,last_seen_at)
+VALUES($1,$2,'new',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18)
+ON CONFLICT(project_id,repository,path,blob_sha,keyword,secret_type,line_number,fingerprint) DO UPDATE SET
+	project_id=EXCLUDED.project_id,
 	rule_name=EXCLUDED.rule_name,
  confidence=EXCLUDED.confidence,severity=EXCLUDED.severity,
  fingerprint=EXCLUDED.fingerprint,masked_excerpt=EXCLUDED.masked_excerpt,html_url=EXCLUDED.html_url,
@@ -252,7 +265,7 @@ RETURNING (xmax=0)`)
 			return nil, 0, err
 		}
 		var created bool
-		err = stmt.QueryRowContext(ctx, uuid.NewString(), candidate.RuleName, candidate.Keyword, candidate.Repository, candidate.Path,
+		err = stmt.QueryRowContext(ctx, uuid.NewString(), candidate.ProjectID, candidate.RuleName, candidate.Keyword, candidate.Repository, candidate.Path,
 			candidate.BlobSHA, candidate.Line, candidate.SecretType, candidate.Confidence, candidate.Severity,
 			candidate.Fingerprint, candidate.MaskedExcerpt, candidate.HTMLURL, candidate.SecretValue, candidate.SecretKey,
 			candidate.SourceUpdatedAt.UTC(), seenAt.UTC()).Scan(&created)
@@ -353,13 +366,13 @@ func containsControl(value string) bool {
 	return false
 }
 
-const findingColumns = `id,status,rule_name,keyword,repository,path,blob_sha,line_number,secret_type,confidence,severity,fingerprint,masked_excerpt,html_url,secret_value,secret_key,verify_status,verify_evidence,source_updated_at,first_seen_at,last_seen_at`
+const findingColumns = `id,project_id,status,rule_name,keyword,repository,path,blob_sha,line_number,secret_type,confidence,severity,fingerprint,masked_excerpt,html_url,secret_value,secret_key,verify_status,verify_evidence,source_updated_at,first_seen_at,last_seen_at`
 
 type rowScanner interface{ Scan(...any) error }
 
 func scanFinding(row rowScanner) (Finding, error) {
 	var finding Finding
-	err := row.Scan(&finding.ID, &finding.Status, &finding.RuleName, &finding.Keyword, &finding.Repository, &finding.Path, &finding.BlobSHA,
+	err := row.Scan(&finding.ID, &finding.ProjectID, &finding.Status, &finding.RuleName, &finding.Keyword, &finding.Repository, &finding.Path, &finding.BlobSHA,
 		&finding.Line, &finding.SecretType, &finding.Confidence, &finding.Severity, &finding.Fingerprint,
 		&finding.MaskedExcerpt, &finding.HTMLURL, &finding.SecretValue, &finding.SecretKey, &finding.VerifyStatus,
 		&finding.VerifyEvidence, &finding.SourceUpdatedAt, &finding.FirstSeenAt, &finding.LastSeenAt)
@@ -447,6 +460,9 @@ func buildListWhere(filter ListFilter) (string, []any) {
 		args = append(args, value)
 		where += " AND " + fmt.Sprintf(expression, len(args))
 	}
+	if filter.ProjectID > 0 {
+		add("project_id = $%d", filter.ProjectID)
+	}
 	if filter.Status != "" {
 		add("status=$%d", filter.Status)
 	}
@@ -533,11 +549,29 @@ func (s *Store) Get(ctx context.Context, id string) (Finding, error) {
 }
 
 func (s *Store) UpdateStatus(ctx context.Context, id, status string) (Finding, error) {
+	return s.updateStatus(ctx, id, status, 0)
+}
+
+// UpdateStatusForProject 只允许处置当前项目规则产生的命中，防止跨项目 IDOR。
+func (s *Store) UpdateStatusForProject(ctx context.Context, id, status string, projectID int64) (Finding, error) {
+	if projectID <= 0 {
+		return Finding{}, ErrNotFound
+	}
+	return s.updateStatus(ctx, id, status, projectID)
+}
+
+func (s *Store) updateStatus(ctx context.Context, id, status string, projectID int64) (Finding, error) {
 	status = strings.ToLower(strings.TrimSpace(status))
 	if !ValidStatus(status) {
 		return Finding{}, errors.New("invalid finding status")
 	}
-	finding, err := scanFinding(s.db.QueryRowContext(ctx, `UPDATE github_leak_findings SET status=$2 WHERE id=$1 RETURNING `+findingColumns, strings.TrimSpace(id), status))
+	query := `UPDATE github_leak_findings SET status=$2 WHERE id=$1`
+	args := []any{strings.TrimSpace(id), status}
+	if projectID > 0 {
+		query += ` AND project_id=$3`
+		args = append(args, projectID)
+	}
+	finding, err := scanFinding(s.db.QueryRowContext(ctx, query+` RETURNING `+findingColumns, args...))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Finding{}, ErrNotFound
 	}

@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/c1ayooo/4zreark/internal/browser"
@@ -22,13 +23,16 @@ import (
 // 支持批量模式：收集所有URL后批量调用Katana
 type CrawlerModule struct {
 	BaseModule
-	katanaScanner *webscan.KatanaScanner
-	resultChan    chan interface{}
-	concurrency   int
-	useKatana     bool
-	crawlDepth    int
-	maxPages      int // 单目标爬取结果上限；0=不限
-	scope         *scope.Scope
+	katanaScanner  *webscan.KatanaScanner
+	resultChan     chan interface{}
+	concurrency    int
+	useKatana      bool
+	crawlDepth     int
+	maxPages       int   // 单目标爬取结果上限；0=不限
+	budgetMaxPages int64 // 项目级总页数预算；0=不限
+	budgetDeadline time.Time
+	emittedTotal   int64 // 已产出 URL 总数（项目级）
+	scope          *scope.Scope
 }
 
 // katana 并发钳制边界：模块并发会被任务模板压到 1（moduleConcurrency(8)
@@ -132,6 +136,22 @@ func (m *CrawlerModule) SetMaxPages(n int) {
 	if n > 0 {
 		m.maxPages = n
 	}
+}
+
+// SetCrawlBudget 设置项目级总页数/截止时间预算。
+// 预算只防止异常站点无限膨胀，不按站点数砍覆盖；0 表示不限制。
+func (m *CrawlerModule) SetCrawlBudget(maxPages int, deadline time.Time) {
+	if maxPages > 0 {
+		m.budgetMaxPages = int64(maxPages)
+	}
+	m.budgetDeadline = deadline
+}
+
+func (m *CrawlerModule) budgetExhausted() bool {
+	if !m.budgetDeadline.IsZero() && time.Now().After(m.budgetDeadline) {
+		return true
+	}
+	return m.budgetMaxPages > 0 && atomic.LoadInt64(&m.emittedTotal) >= m.budgetMaxPages
 }
 
 // ModuleRun 运行模块：流式模式，拿到一个可爬 URL 就开爬，结果边产出边落库。
@@ -312,6 +332,10 @@ func (m *CrawlerModule) crawlTarget(asset AssetHttp) {
 	}
 	target := asset.URL
 
+	if m.budgetExhausted() {
+		m.Logf("warn", "爬虫项目级预算已用尽，停止新增目标")
+		return
+	}
 	log.Printf("[%s] Crawling %s", m.name, target)
 
 	// 使用 Katana 爬取
@@ -355,6 +379,10 @@ func (m *CrawlerModule) crawlWithKatana(scanner *webscan.KatanaScanner, asset As
 	skipped := 0
 	emitted := 0
 	for _, url := range result.URLs {
+		if m.budgetExhausted() {
+			m.Logf("warn", "爬虫项目级预算已用尽，停止截取当前目标")
+			break
+		}
 		// 单目标页数上限：到量即停（站点巡检慢爬的「30 页」口径在这里生效）
 		if m.maxPages > 0 && emitted >= m.maxPages {
 			break
@@ -383,6 +411,7 @@ func (m *CrawlerModule) crawlWithKatana(scanner *webscan.KatanaScanner, asset As
 			Referrer:    url.Source,
 		}
 		emitted++
+		atomic.AddInt64(&m.emittedTotal, 1)
 
 		select {
 		case <-m.ctx.Done():
@@ -433,6 +462,7 @@ type DirScanModule struct {
 	enableBackup bool          // 扫描备份文件
 	enableCommon bool          // 扫描通用文件
 	scope        *scope.Scope
+	outputCount  int64
 }
 
 // SetLearnedPaths 注入学习热词（任务 config 随单下发）。
@@ -587,6 +617,7 @@ func (m *DirScanModule) SetScanOptions(enableBackup, enableCommon bool) {
 func (m *DirScanModule) ModuleRun() error {
 	// 检查 Spray 是否可用；不可用则透传，否则下游（结果收集器）永远收不到数据
 	if m.sprayScanner == nil || !m.sprayScanner.IsAvailable() {
+		m.Logf("warn", "Spray 不可用，目录扫描已跳过")
 		log.Printf("[%s] Spray not available, passing through", m.name)
 		return m.RunPassThrough()
 	}
@@ -594,6 +625,12 @@ func (m *DirScanModule) ModuleRun() error {
 	// 报告模块开始
 	m.ReportModuleStart(0)
 	defer m.ReportModuleComplete()
+	// 0 产出不能静默 running：spray 可用但全部请求失败/未命中时也要留事件。
+	defer func() {
+		if atomic.LoadInt64(&m.outputCount) == 0 {
+			m.Logf("warn", "目录扫描 0 产出（spray 可用但未命中或请求失败）")
+		}
+	}()
 
 	log.Printf("[%s] Using Spray for directory scanning (batch=%v)", m.name, m.batchMode)
 
@@ -789,6 +826,7 @@ func (m *DirScanModule) runStreamMode() error {
 		for result := range m.resultChan {
 			// 报告输出
 			m.ReportOutput(1)
+			atomic.AddInt64(&m.outputCount, 1)
 
 			if m.nextModule != nil {
 				select {

@@ -223,9 +223,10 @@ func (g *GitHubMonitorService) syncOnce(ctx context.Context) (bool, error) {
 		key = append(key, fmt.Sprintf("%d:%s:%s", r.ID, r.Name, strings.Join(r.Keywords, ",")))
 		keywords = append(keywords, r.Keywords...)
 		glRules = append(glRules, githubleak.Rule{
-			Enabled:  true,
-			Name:     r.Name,
-			Keywords: r.Keywords,
+			Enabled:   true,
+			Name:      r.Name,
+			Keywords:  r.Keywords,
+			ProjectID: r.ProjectID,
 		})
 	}
 	newKey := strings.Join(key, "|")

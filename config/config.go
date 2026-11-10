@@ -37,11 +37,8 @@ type CollectionConfig struct {
 	MaxTargetsForFull int      `mapstructure:"max_targets_for_full"`
 	// MaxPortsPerHost 单站开放端口阈值：超过后先做 TCP 二次复核，
 	// 复核后仍超阈值则只保留常见端口。0 表示不复核。
-	MaxPortsPerHost int     `mapstructure:"max_ports_per_host"`
-	MinOnlineNodes  int     `mapstructure:"min_online_nodes"`
-	MaxFailRate     float64 `mapstructure:"max_fail_rate"`
-	StageTimeoutMin int     `mapstructure:"stage_timeout_minutes"`
-	SiteScope       string  `mapstructure:"site_scope"` // host | registrable_domain | project
+	MaxPortsPerHost int    `mapstructure:"max_ports_per_host"`
+	SiteScope       string `mapstructure:"site_scope"` // host | registrable_domain | project
 	// GateMode：off 关闭；shadow 只判定不路由；enforce 允许规则层消费判定结果。
 	GateMode    string `mapstructure:"gate_mode"`
 	GateWorkers int    `mapstructure:"gate_workers"`
@@ -88,16 +85,16 @@ func (c *CollectionConfig) Normalize() {
 // SentinelConfig 是提交哨兵域的运行参数（v0.3 §8 / 附录 B）。
 // 密钥类配置不落在本结构里，LLM 的 key 统一从环境变量读取。
 type SentinelConfig struct {
-	Enabled             bool     `mapstructure:"enabled"`
-	MirrorDir           string   `mapstructure:"mirror_dir"`
-	CloneHosts          []string `mapstructure:"clone_hosts"`
-	CollectIntervalMin  int      `mapstructure:"collect_interval_minutes"`
-	CollectWorkers      int      `mapstructure:"collect_workers"`
-	JudgeWorkers        int      `mapstructure:"judge_workers"`
-	MaxCommitsPerRun    int      `mapstructure:"max_commits_per_run"`
-	TokenBudget         int      `mapstructure:"token_budget"`
-	MaxHunkLines        int      `mapstructure:"max_hunk_lines"`
-	JudgeModel          string   `mapstructure:"judge_model"`
+	Enabled            bool     `mapstructure:"enabled"`
+	MirrorDir          string   `mapstructure:"mirror_dir"`
+	CloneHosts         []string `mapstructure:"clone_hosts"`
+	CollectIntervalMin int      `mapstructure:"collect_interval_minutes"`
+	CollectWorkers     int      `mapstructure:"collect_workers"`
+	JudgeWorkers       int      `mapstructure:"judge_workers"`
+	MaxCommitsPerRun   int      `mapstructure:"max_commits_per_run"`
+	TokenBudget        int      `mapstructure:"token_budget"`
+	MaxHunkLines       int      `mapstructure:"max_hunk_lines"`
+	JudgeModel         string   `mapstructure:"judge_model"`
 	// DeepAnalysis 高危发现二轮深审开关（Tier 2）：high/critical 命中后从本地
 	// mirror 读变更文件全文做一次 LLM 细查，落 deep-analysis 草稿产物。
 	// 未配置默认开启；会为每个高危发现多消耗一次 LLM 调用。

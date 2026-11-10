@@ -195,9 +195,10 @@ func (s Settings) Normalize() (Settings, error) {
 // configuration order so operators can control the deterministic request
 // sequence. The legacy Settings.Keywords field is represented as "legacy".
 type Rule struct {
-	Enabled  bool     `json:"enabled" yaml:"enabled"`
-	Name     string   `json:"name" yaml:"name"`
-	Keywords []string `json:"keywords" yaml:"keywords"`
+	Enabled   bool     `json:"enabled" yaml:"enabled"`
+	Name      string   `json:"name" yaml:"name"`
+	Keywords  []string `json:"keywords" yaml:"keywords"`
+	ProjectID int64    `json:"project_id,omitempty" yaml:"project_id,omitempty"`
 }
 
 func validateAndNormalizeRules(settings *Settings) error {
@@ -306,10 +307,11 @@ func normalizeKeyword(value string) (string, error) {
 }
 
 type keywordRule struct {
-	Name     string
-	Enabled  bool
-	Keywords []string
-	Query    string
+	Name      string
+	Enabled   bool
+	Keywords  []string
+	Query     string
+	ProjectID int64
 }
 
 func newKeywordRule(values []string) (keywordRule, error) {
@@ -356,6 +358,7 @@ func compiledRules(settings Settings, includeDisabled bool) ([]keywordRule, erro
 			return nil, err
 		}
 		compiled.Name, compiled.Enabled = configured.Name, configured.Enabled
+		compiled.ProjectID = configured.ProjectID
 		rules = append(rules, compiled)
 	}
 	return rules, nil
@@ -415,6 +418,7 @@ func ValidStatus(status string) bool {
 
 type Finding struct {
 	ID            string `json:"id"`
+	ProjectID     int64  `json:"project_id,omitempty"`
 	Status        string `json:"status"`
 	RuleName      string `json:"rule_name"`
 	Keyword       string `json:"keyword"`
@@ -447,6 +451,7 @@ type Finding struct {
 // Candidate 由检测层产出，GitHub 原始响应不进入候选对象；明文经脏值过滤后
 // 与指纹、脱敏摘要一起进入 Upsert（SourceUpdatedAt 由时效校验填充）。
 type Candidate struct {
+	ProjectID       int64
 	RuleName        string
 	Keyword         string
 	Repository      string
@@ -470,7 +475,9 @@ type ListFilter struct {
 	Keyword  string
 	Page     int
 	PageSize int
-	// RuleNames 项目过滤（4zreark 迁移）：规则名带项目名前缀，按本项目规则名集合圈定。
+	// ProjectID 项目隔离：>0 时只返回该项目规则产生的命中。
+	ProjectID int64
+	// RuleNames 兼容旧数据：规则名带项目名前缀，按本项目规则名集合圈定。
 	RuleNames []string
 	// SourceUpdatedAfter 非空时只返回路径提交时间在窗口内的命中（服务层按
 	// lookback_days 注入；存量 NULL 行放行）。

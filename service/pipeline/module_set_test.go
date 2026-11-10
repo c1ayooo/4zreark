@@ -13,12 +13,36 @@ func TestCollectionModuleSetExcludesVuln(t *testing.T) {
 	for name, got := range map[string]bool{
 		"subdomain": ms.Subdomain, "takeover": ms.Takeover, "http_probe": ms.HTTPProbe,
 		"port_scan": ms.PortScan, "fingerprint": ms.Fingerprint, "crawler": ms.Crawler,
-		"js_audit": ms.JSAudit, "api_probe": ms.APIProbe, "dir_scan": ms.DirScan,
+		"api_probe": ms.APIProbe, "dir_scan": ms.DirScan,
 		"sensitive": ms.Sensitive,
 	} {
 		if !got {
 			t.Errorf("信息收集预设缺少模块 %s", name)
 		}
+	}
+	if !ms.JSAudit {
+		t.Fatal("JSAudit 应默认开启：执行器会回退到 nuclei 官方 file/keys 规则")
+	}
+	if !ms.FileLeak {
+		t.Fatal("信息收集预设应包含 fileLeak")
+	}
+}
+
+func TestModuleSetFromScanTypesVhostFileLeak(t *testing.T) {
+	vhost := ModuleSetFromScanTypes([]string{"vhost"})
+	if !vhost.Vhost || !vhost.PortScan {
+		t.Fatalf("vhost 应补齐端口依赖: %+v", vhost)
+	}
+	if vhost.FileLeak || vhost.Crawler {
+		t.Fatalf("vhost 不应顺带开启文件泄露/爬虫: %+v", vhost)
+	}
+
+	fileLeak := ModuleSetFromScanTypes([]string{"file_leak"})
+	if !fileLeak.FileLeak || !fileLeak.PortScan || !fileLeak.Fingerprint {
+		t.Fatalf("file_leak 应补齐端口/指纹依赖: %+v", fileLeak)
+	}
+	if fileLeak.Vhost {
+		t.Fatalf("file_leak 不应顺带开启 vhost: %+v", fileLeak)
 	}
 }
 

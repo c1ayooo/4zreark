@@ -61,12 +61,13 @@ func (s *VulnVerifyService) init() {
 			return vulnverify.Config{}
 		}
 		return vulnverify.Config{
-			Configured:      true,
-			Enabled:         cfg.FingerprintVerify.Enabled,
-			RecheckDays:     cfg.FingerprintVerify.RecheckDays,
-			Concurrency:     cfg.FingerprintVerify.Concurrency,
-			RateLimit:       cfg.FingerprintVerify.RateLimit,
-			DenyTemplateIDs: cfg.Scanner.NucleiDenyTemplateIDs,
+			Configured:  true,
+			Enabled:     cfg.FingerprintVerify.Enabled,
+			RecheckDays: cfg.FingerprintVerify.RecheckDays,
+			Concurrency: cfg.FingerprintVerify.Concurrency,
+			RateLimit:   cfg.FingerprintVerify.RateLimit,
+			// 用并集（KV 设置 ∪ config 兜底），设置页运行时增删对自动验证立即生效。
+			DenyTemplateIDs: ResolveNucleiDenyTemplateIDs(context.Background()),
 		}
 	}
 	s.svc = vulnverify.New(vulnverify.Options{

@@ -284,7 +284,7 @@ export function ToolRuntimePanel() {
           <div className="flex flex-col gap-1">
             <span>扫描工具运行时</span>
             <span className="text-xs font-normal leading-relaxed text-muted-foreground">
-              6 个受管工具（gogo / spray / katana / httpx / naabu / rem）的版本与更新管理：下载校验 checksums、换版前跑
+              5 个受管工具（gogo / spray / katana / httpx / rem）的版本与更新管理：下载校验 checksums、换版前跑
               flag 探针（上游改名会被拦下）、旧版本保留一键回滚。nuclei 与自带浏览器由独立运行时管理，也计入下方总数。
               只有装进项目内部目录的二进制算平台自身工具；系统 PATH 上的副本标为「环境外部」，自动补装会下载到项目目录。
             </span>

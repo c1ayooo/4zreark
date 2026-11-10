@@ -13,6 +13,7 @@ import (
 	"github.com/c1ayooo/4zreark/scanner/subdomain"
 	"github.com/c1ayooo/4zreark/scanner/vulnscan"
 	"github.com/c1ayooo/4zreark/scanner/webscan"
+	"github.com/c1ayooo/4zreark/service"
 	"github.com/c1ayooo/4zreark/utils"
 
 	"github.com/gin-gonic/gin"
@@ -896,6 +897,10 @@ func (h *ScanHandler) TakeoverScan(c *gin.Context) {
 		utils.BadRequest(c, "参数错误: "+err.Error())
 		return
 	}
+	if bad := service.DeniedTargets([]string{req.Domain}); len(bad) > 0 {
+		utils.BadRequest(c, "目标命中全局禁扫黑名单，拒绝扫描: "+strings.Join(bad, "、"))
+		return
+	}
 
 	timeout := 30 * time.Second
 	if req.Timeout > 0 {
@@ -929,6 +934,10 @@ func (h *ScanHandler) TakeoverBatchScan(c *gin.Context) {
 
 	if len(req.Domains) > 1000 {
 		utils.BadRequest(c, "一次最多支持1000个域名")
+		return
+	}
+	if bad := service.DeniedTargets(req.Domains); len(bad) > 0 {
+		utils.BadRequest(c, "目标命中全局禁扫黑名单，拒绝扫描: "+strings.Join(bad, "、"))
 		return
 	}
 

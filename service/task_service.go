@@ -78,6 +78,9 @@ func validateScanTargets(targets []string) error {
 // deniedTargets 返回命中全局禁扫黑名单（scanner.deny_*）的目标。
 // 黑名单与项目种子授权边界独立生效：命中即拒绝；CIDR 目标整体落在
 // 禁扫网段内也拒绝（部分重叠交给 scope 在扫描期逐主机拦截）。
+// DeniedTargets 返回命中全局禁扫黑名单的目标，供手动扫描入口复用。
+func DeniedTargets(targets []string) []string { return deniedTargets(targets) }
+
 func deniedTargets(targets []string) []string {
 	deny := scope.ParseDenyList(
 		config.GetConfig().Scanner.DenyDomainSuffixes,

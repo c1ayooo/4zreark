@@ -22,6 +22,8 @@ const scanTypes = [
   { id: 'takeover', label: '子域名接管', description: '检测子域名接管漏洞' },
   { id: 'crawler', label: 'Web爬虫', description: '爬取网站URL和接口' },
   { id: 'dir_scan', label: '目录扫描', description: '扫描敏感目录' },
+  { id: 'file_leak', label: '文件泄露', description: '.git/.env/备份等文件泄露探测（主动请求，默认不勾选）' },
+  { id: 'vhost', label: '虚拟主机', description: '同 IP 多域名 Host 绑定发现（主动探测，默认不勾选）' },
 ]
 
 // 页面入口默认配置：信息收集预设。

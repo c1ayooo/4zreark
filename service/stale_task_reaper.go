@@ -9,9 +9,11 @@ import (
 )
 
 const (
-	staleNodeHeartbeat = 2 * time.Minute
-	staleTaskIdle      = 5 * time.Minute
-	staleTaskHard      = 6 * time.Hour
+	// 节点心跳 10 分钟、任务 idle 30 分钟：服务重启/发布/编译期间不要误杀长任务。
+	// 硬上限 12 小时，给爬虫慢但要求全量的任务留足窗口。
+	staleNodeHeartbeat = 10 * time.Minute
+	staleTaskIdle      = 30 * time.Minute
+	staleTaskHard      = 12 * time.Hour
 )
 
 // StartStaleTaskReaper 定期回收「执行节点已离线」或「长时间无进展」的 running 任务。

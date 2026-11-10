@@ -462,6 +462,7 @@ func (s *Service) execute(parent context.Context, settings Settings, provider se
 			}
 			for i := range detected {
 				detected[i].RuleName = rule.Name
+				detected[i].ProjectID = rule.ProjectID
 			}
 			candidates = append(candidates, detected...)
 			visitedItems++

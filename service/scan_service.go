@@ -288,6 +288,9 @@ func (s *ScanService) NucleiScan(ctx context.Context, targets []string, severity
 	if len(targets) == 0 {
 		return nil, errors.New("targets 不能为空")
 	}
+	if bad := DeniedTargets(targets); len(bad) > 0 {
+		return nil, fmt.Errorf("目标命中全局禁扫黑名单，拒绝扫描: %s", strings.Join(bad, "、"))
+	}
 	var severities []string
 	for _, s := range strings.Split(severity, ",") {
 		if s = strings.TrimSpace(s); s != "" {

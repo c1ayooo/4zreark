@@ -143,10 +143,11 @@ func (k *KatanaScanner) commonArgs(target, outputPath string) []string {
 		"-fs", "rdn",
 		"-H", "User-Agent: " + useragent.ForSite(k.UASeed, siteKey(target)).UserAgent,
 		"-silent",
-		"-jsonl",                                                                                // 使用 JSON Lines 格式输出，包含状态码等信息
-		"-ob",                                                                                   // 不带响应体：默认会在每行塞完整 body，单行轻易超 64KB
-		"-or",                                                                                   // 不带原始请求/响应
-		"-ef", "css,map,wasm,png,jpg,jpeg,gif,svg,ico,webp,avif,woff,woff2,ttf,otf,eot,mp4,mp3", // 只跳过非 JS 静态资源；JS 要留给 -jc 和后续接口分析
+		"-jsonl", // 使用 JSON Lines 格式输出，包含状态码等信息
+		"-ob",    // 不带响应体：默认会在每行塞完整 body，单行轻易超 64KB
+		"-or",    // 不带原始请求/响应
+		// 前端只保留 HTML/JS/接口，其余静态资源与二进制全部跳过；JS 必须保留。
+		"-ef", "css,map,wasm,png,jpg,jpeg,gif,svg,ico,webp,avif,woff,woff2,ttf,otf,eot,mp4,mp3,pdf,zip,rar,7z,tar,gz,exe,dmg,apk,doc,docx,xls,xlsx,ppt,pptx",
 		"-jc",  // 解析 JS 里的链接与接口
 		"-jsl", // jsluice：从 JS 内容里提取 API/端点（内存占用高，流式单目标可接受）
 		"-kf", "all",
